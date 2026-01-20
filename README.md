@@ -2,7 +2,7 @@
 <img src="docs/_static/scallopsLogo.png" width="150" alt="logo">
 </h1><br>
 
-# Scalable Library for Optical Pooled Screens - SCALLOPS -
+# SCALLOPS
 
 ## Description
 SCALLOPS (Scalable Library for Optical Pooled Screens) is a comprehensive Python package designed to
