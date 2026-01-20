@@ -12,14 +12,14 @@ analyzing, and interpreting OPS data, leveraging modern distributed computing fr
 
 ## Installation
 
-1. Clone the repository and change to the scallops directory::
+1. Clone the repository and change to the scallops directory:
 
     ```
     git clone https://github.com/Genentech/scallops.git
     cd scallops
    ```
 
-1. Install SCALLOPS::
+1. Install SCALLOPS:
 
     ```pip install -r requirements.txt -e .```
 
