@@ -1,0 +1,4 @@
+scallops/tests/data/** filter=lfs diff=lfs merge=lfs -text
+scallops/tests/data/zarr/** filter=lfs diff=lfs merge=lfs -text
+*.ipynb filter=lfs diff=lfs merge=lfs -text
+docs/notebooks/img/* filter=lfs diff=lfs merge=lfs -text

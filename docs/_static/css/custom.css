@@ -1,0 +1,89 @@
+/* Increase space between Level 1 items (toctree-l1) */
+.rst-content div.toctree-wrapper ul > li.toctree-l1 {
+    margin-bottom: 15px !important;  /* Adjust to your desired spacing */
+}
+
+/* Reduce space between Level 1 and Level 2 items */
+.rst-content div.toctree-wrapper ul > li.toctree-l1 > ul > li.toctree-l2 {
+    margin-top: 1px !important;
+    margin-bottom: 1px !important;
+}
+
+html p {
+    line-height: 1.8;  /* Adjust this value to match your regular text line height */
+}
+
+/* Adjust the width of the sidebar and the main content area */
+@media (min-width: 769px) {
+    /* Ensure the sidebar has a fixed width */
+    .wy-nav-side {
+        width: 450px;
+    }
+
+    .wy-nav-side .wy-side-scroll {
+        width: 100%; /* Ensure it uses the entire sidebar width */
+    }
+
+    /* Adjust the content area to be responsive */
+    .wy-nav-content {
+        margin-left: 110px;
+        width: calc(100% - 110px);
+        max-width: none;
+    }
+
+    /* Adjust the content wrapper */
+    .wy-nav-content-wrap {
+        max-width: 100%;
+        padding: 20px;
+    }
+
+    /* Ensure the content area uses the full width */
+    .rst-content {
+        width: 100%;
+        max-width: 1200px;
+    }
+
+    /* Ensure the sidebar menu fits */
+    .wy-nav-side .wy-menu {
+        width: 100%;
+    }
+
+    /* Modify the logo section (blue part) */
+    .wy-side-nav-search {
+        width: 100%;
+        height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        padding: 10px;
+        background-color: #1e88e5; /* Optional: Blue background */
+    }
+
+    /* Ensure the logo scales properly within the section */
+    .wy-side-nav-search img {
+        width: 200px !important; /* Force logo width */
+        height: 200px !important; /* Force logo height */
+        object-fit: contain; /* Ensure proper scaling without distortion */
+        display: block; /* Remove inline spacing */
+        margin: 0 auto; /* Center horizontally */
+    }
+}
+
+/* Adjust for smaller screens */
+@media (max-width: 768px) {
+    /* Make the sidebar narrower on smaller screens */
+    .wy-nav-side {
+        width: 250px;
+    }
+
+    .wy-nav-content {
+        margin-left: 100px;
+        width: calc(100% - 250px);
+    }
+
+    /* Adjust the logo section */
+    .wy-side-nav-search {
+        height: 150px; /* Reduce height for smaller screens */
+    }
+}

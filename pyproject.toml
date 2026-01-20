@@ -1,0 +1,197 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [
+    "cython",
+    "numpy<2",
+    "setuptools>=42",
+    "setuptools_scm[toml]>=3.4",
+    "wheel"
+]
+
+[project]
+name = "scallops"
+description = "Comprehensive package for analysis of Optical Pooled Screens (OPS) for biological data"
+authors = [
+    { name = "Jose Sergio Hleap" },
+    { name = "Joshua Gould" },
+    { name = "Bo Li" }
+]
+dynamic = ["version"]
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.11"
+classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
+    "License :: OSI Approved :: BSD License",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+dependencies = [
+    "adjustText",
+    "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
+    "bioio<2",
+    "bioio-nd2",
+    "bioio-tifffile",
+    "centrosome",
+    "cp-measure",
+    "crick",
+    "dask-image",
+    "dask",
+    "decorator",
+    "filelock",
+    "flox",
+    "fsspec!=2023.9.0", # 2023.9.0 causes ome-zarr write image to fail
+    "igraph",
+    "itk-elastix",
+    "itk",
+    "joblib",
+    "kneed",
+    "mahotas",
+    "matplotlib",
+    "natsort",
+    "numcodecs",
+    "numpy<2",
+    "ome-zarr",
+    "pandas",
+    "pint",
+    "psutil",
+    "pyarrow",
+    "pydantic",
+    "pysam",
+    "scikit-image",
+    "scikit-learn",
+    "scipy",
+    "seaborn",
+    "shapely",
+    "stardist",
+    "statsmodels",
+    "tensorflow",
+    "tifffile==2024.8.30",
+    "xarray",
+    "zarr<3"
+]
+
+[project.optional-dependencies]
+napari = [
+    "napari",
+    "napari_ome_zarr"
+]
+dask-ml = [
+    "dask-ml"
+]
+cellpose = [
+    "cellpose<4"
+]
+ufish= [
+    "ufish"
+]
+test = [
+    "miniwdl",
+    "pytest",
+    "pytest-xdist"
+]
+
+dev = [
+    "pre-commit"
+]
+doc = [
+    "ipython",
+    "myst_parser",
+    "nbsphinx",
+    "sphinx-copybutton",
+    "sphinx",
+    "sphinx_argparse",
+    "sphinx_rtd_theme"
+]
+all = [
+    "napari",
+    "napari_ome_zarr",
+    "cellpose",
+    "dask-ml",
+    "ufish",
+    "pytest",
+    "pre-commit",
+    "ipython",
+    "myst_parser",
+    "nbsphinx",
+    "sphinx-copybutton",
+    "sphinx",
+    "sphinx_argparse",
+    "sphinx_rtd_theme"
+]
+[project.entry-points."miniwdl.plugin.container_backend"]
+miniwdl_test_local = "scallops.tests.miniwdl_local.local_runner:LocalRunner"
+
+[project.scripts]
+scallops = 'scallops.__main__:main'
+
+[project.urls]
+Repository = "https://github.com/Genentech/scallops.git"
+
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+include = ["scallops*"]
+exclude = ["docs*", "scallops/tests*"]
+
+[tool.setuptools_scm]
+write_to = "scallops/_version.py"
+tag_regex = "^(?P<version>v?[0-9]{1,2}\\.[0-9]+\\.[0-9]+)$"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+fix = true
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F",
+    # isort
+    "I001"]
+ignore = []
+
+[tool.pytest.ini_options]
+markers = [
+    "basecalls: marks tests that are related to basecalls",
+    "cli_e2e: marks tests for the CLI end to end",
+    "cli_segment: marks tests for the CLI segmentation",
+    "cli_spot: marks tests for the CLI spot calling",
+    "features: mark tests for IO",
+    "io: mark tests for IO",
+    "registration: tests for registration",
+    "segmentation_cellpose: tests for segmentation using cellpose",
+    "segmentation_propagation: tests for segmentation using propagation",
+    "segmentation_stardist: tests for segmentation using stardist",
+    "segmentation_watershed: tests for segmentation using watershed",
+    "stats: Tests in the stats module",
+    "utils: Test utils"
+]
+addopts = [
+    "--doctest-modules",
+    "--pyargs",
+    "--strict-markers"
+]
+python_files = "test_*.py"
+testpaths = [
+    "scallops/tests"
+]
+xfail_strict = true
+log_format = '%(asctime)s %(levelname)s %(message)s'
+log_date_format = '%Y-%m-%d %H:%M:%S'
+log_cli = true
+log_cli_level = 'INFO'
+filterwarnings = [
+    'ignore:.* MMStack file name is invalid',
+    'ignore:.* MMStack series is missing files .*'
+]
+
+[tool.distutils.bdist_wheel]
+universal = false # since we have cython we should not use universal wheels
