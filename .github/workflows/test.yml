@@ -25,7 +25,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt -r requirements.ufish.txt pytest miniwdl pre-commit
+        pip install -r requirements.txt pytest miniwdl pre-commit
         pip install -e .
     - name: Pre-commit
       run: |
