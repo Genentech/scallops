@@ -48,13 +48,16 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     intensity_image = da.from_array(intensity_image).rechunk((-1, -1, 50, 50))
     objects_df = find_objects(label_image).compute()
     crop_size = (30, 30)
-    to_label_crops(
+
+    result_df = to_label_crops(
         intensity_image=intensity_image,
         label_image=label_image,
-        objects_df=objects_df.query("index==2603"),
+        objects_df=objects_df.query("index==2603|index==17"),
         crop_size=crop_size,
         output_dir=output_dir_dask,
     )
+    # 17 should be filtered b/c on tile edge
+    assert len(result_df) == 1 and result_df.index.values[0] == 2603
 
     group = zarr.group()
     intensity_image_zarr = group.create_dataset(
@@ -82,9 +85,9 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     slice_2603_labels = label_image[
         ..., slice(1007 - 15, 1007 + 15), slice(579 - 15, 579 + 15)
     ].compute()
-    slice_2603 = slice_2603 * (slice_2603_labels != 2603)
+    slice_2603 = slice_2603 * (slice_2603_labels == 2603)
     assert slice_2603.shape == (2, 30, 30)
-    np.testing.assert_array_equal(img_dask, slice_2603)
+    np.testing.assert_array_equal(img_dask, slice_2603, strict=True)
 
 
 def _label_features(
