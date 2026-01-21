@@ -85,7 +85,7 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     slice_2603_labels = label_image[
         ..., slice(1007 - 15, 1007 + 15), slice(579 - 15, 579 + 15)
     ].compute()
-    slice_2603 = slice_2603 * (slice_2603_labels != 2603)
+    slice_2603 = slice_2603 * (slice_2603_labels == 2603)
     assert slice_2603.shape == (2, 30, 30)
     np.testing.assert_array_equal(img_dask, slice_2603, strict=True)
 
