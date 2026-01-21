@@ -228,7 +228,10 @@ task register_qc {
     command <<<
         set -ex
 
-        ulimit -n 100000
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
+            ulimit -n 100000
+        fi
+
 
         scallops features \
         --features-~{label_type} "correlationpearsonbox_~{image_channel_}_s~{stacked_image_channel_}" \
@@ -287,7 +290,9 @@ task intersects_boundary {
     command <<<
         set -ex
 
-        ulimit -n 100000
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
+            ulimit -n 100000
+        fi
 
         scallops features \
         --features-~{label_type} "intersects-boundary_0" \
@@ -340,7 +345,10 @@ task find_objects {
 
     command <<<
         set -ex
-        ulimit -n 100000
+
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
+            ulimit -n 100000
+        fi
 
         scallops find-objects \
         --labels "~{labels}" \
@@ -404,7 +412,9 @@ task features {
 
         export SCALLOPS_MODEL_DIR="~{model_dir}"
 
-        ulimit -n 100000
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
+            ulimit -n 100000
+        fi
 
         scallops features \
         ~{"--features-nuclei " + nuclei_features} \

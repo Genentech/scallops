@@ -69,6 +69,7 @@ def test_stitch_wdl_z_stack(tmp_path):
     ]
     env = os.environ.copy()
     env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
 
 
@@ -112,6 +113,7 @@ def test_stitch_wdl(tmp_path):
     ]
     env = os.environ.copy()
     env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
 
 
@@ -188,6 +190,7 @@ def test_ops_wdl(tmp_path):
     ]
     env = os.environ.copy()
     env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
     df = pd.read_parquet(output / "merge" / "A1-102.parquet")
 
