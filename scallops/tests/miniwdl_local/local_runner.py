@@ -1,4 +1,3 @@
-import multiprocessing
 import os
 import threading
 from contextlib import ExitStack
@@ -17,7 +16,7 @@ class LocalRunner(TaskContainer):
         Perform any necessary process-wide initialization of the container backend
         """
         cls._resource_limits = {
-            "cpu": multiprocessing.cpu_count(),
+            "cpu": psutil.cpu_count(),
             "mem_bytes": psutil.virtual_memory().total,
         }
 
