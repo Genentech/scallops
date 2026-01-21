@@ -30,4 +30,4 @@ jobs:
 
     - name: Test with pytest
       run: |
-        pytest -s scallops/tests/test_wdl.py
+        pytest

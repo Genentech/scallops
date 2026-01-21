@@ -228,7 +228,7 @@ task register_qc {
     command <<<
         set -ex
 
-        if [[ "SCALLOPS_TEST" != "1" ]]; then
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
             ulimit -n 100000
         fi
 
@@ -290,7 +290,7 @@ task intersects_boundary {
     command <<<
         set -ex
 
-        if [[ "SCALLOPS_TEST" != "1" ]]; then
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
             ulimit -n 100000
         fi
 
@@ -346,7 +346,7 @@ task find_objects {
     command <<<
         set -ex
 
-        if [[ "SCALLOPS_TEST" != "1" ]]; then
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
             ulimit -n 100000
         fi
 
@@ -412,7 +412,7 @@ task features {
 
         export SCALLOPS_MODEL_DIR="~{model_dir}"
 
-        if [[ "SCALLOPS_TEST" != "1" ]]; then
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
             ulimit -n 100000
         fi
 
