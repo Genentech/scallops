@@ -16,7 +16,7 @@ class LocalRunner(TaskContainer):
         Perform any necessary process-wide initialization of the container backend
         """
         cls._resource_limits = {
-            "cpu": 1,
+            "cpu": psutil.cpu_count(),
             "mem_bytes": psutil.virtual_memory().total,
         }
 
