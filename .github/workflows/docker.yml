@@ -3,9 +3,8 @@ name: CI/CD - Build and Push Docker Image to GHCR
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
+    tags:
+      - '*' # Matches any tag name
   # Optional: Allows manual triggering of the workflow from the GitHub Actions tab
   workflow_dispatch:
 
