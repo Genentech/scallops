@@ -2,7 +2,16 @@
 Installation
 ************
 
-.
+
+PyPI Release
+=========================
+Install SCALLOPS using your favorite environment manager::
+
+    pip install scallops
+
+
+Developer Instructions
+========================
 
 
 1. Clone the repository::
@@ -30,12 +39,3 @@ Installation
 
 .. _Mamba: https://mamba.readthedocs.io/en/latest/installation.html
 .. _Conda: https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
-
-
-
-Coming Soon: PyPI Release
-=========================
-We are planning to upload SCALLOPS to **PyPI** soon . Once available, you will
-be able to install the package using::
-
-    pip install scallops

@@ -88,5 +88,5 @@ complex biological systems data.
    example_commands
    workflows
    example_notebooks
-   api
    faq
+   api
