@@ -85,7 +85,7 @@ dask-ml = [
 cellpose = [
     "cellpose<4"
 ]
-ufish= [
+ufish = [
     "ufish"
 ]
 test = [
@@ -99,12 +99,11 @@ dev = [
 ]
 doc = [
     "ipython",
-    "myst_parser",
     "nbsphinx",
     "sphinx-copybutton",
     "sphinx",
     "sphinx_argparse",
-    "sphinx_rtd_theme"
+    "sphinx_rtd_theme",
 ]
 all = [
     "napari",
