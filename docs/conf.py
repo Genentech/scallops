@@ -11,7 +11,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent))
 import scallops  # noqa
 
-project = "SCALLOPS"
+project = "scallops"
 copyright = "2026, Genentech"
 author = "SCALLOPS team"
 
@@ -33,7 +33,7 @@ autosectionlabel_maxdepth = 2
 suppress_warnings = [
     "nbsphinx",
 ]
-autodoc_default_options = {"members": True, "member-order": "bysource"}
+autodoc_default_options = {"members": True}
 autodoc_typehints = "description"
 autosummary_generate = True
 todo_include_todos = False
