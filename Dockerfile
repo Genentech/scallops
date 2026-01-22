@@ -10,7 +10,7 @@ RUN apt-get update && \
       git \
       ca-certificates
 
-RUN pip install --upgrade pipe && pip install --no-cache-dir -r ./requirements.txt -r ./requirements.ufish.txt
+RUN pip install -q --upgrade pip && pip install -q --no-cache-dir -r ./requirements.txt -r ./requirements.ufish.txt
 RUN pip install .
 RUN apt-get remove -y build-essential git && \
     apt-get autoremove -y &&  apt-get clean && \
