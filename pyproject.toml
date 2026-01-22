@@ -37,7 +37,6 @@ dependencies = [
     "bioio-tifffile",
     "centrosome",
     "cp-measure",
-    "crick",
     "dask-image",
     "dask",
     "decorator",
