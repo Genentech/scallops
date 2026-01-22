@@ -8,13 +8,10 @@ Authors:
 - The SCALLOPS development team
 """
 
-import importlib
 import itertools
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Union
 
-import dask
-import dask.array as da
 import numpy as np
 import xarray as xr
 
@@ -90,73 +87,6 @@ def _get_dims(
         else:
             _dims.append(d)
     return _dims
-
-
-def dask_grouped_quantiles(
-    array: xr.DataArray, dims: list[str], q: list[float]
-) -> xr.DataArray:
-    """Compute quantiles for grouped data using Dask.
-
-    This function calculates the specified quantiles for the given dimensions in a
-    Dask-backed Xarray DataArray. It uses Dask's percentile computation to handle
-    large datasets efficiently.
-
-    :param array: The input DataArray containing the data.
-    :param dims: List of dimensions over which to compute the quantiles.
-    :param q: List of quantiles to compute, each value should be between 0 and 1.
-    :return: A DataArray containing the computed quantiles for the specified dimensions.
-
-    :raises AssertionError:
-        If no quantiles are provided in the `q` list.
-    :raises ValueError:
-        If a specified dimension is not found in the DataArray and `missing_dims`
-        is set to "error".
-
-    :example:
-
-        .. code-block:: python
-
-            import xarray as xr
-            import numpy as np
-            import dask.array as da
-
-            data = da.random.random((10, 20, 30), chunks=(5, 10, 15))
-            array = xr.DataArray(data, dims=["x", "y", "z"])
-
-            # Compute quantiles for dimensions 'x' and 'y'
-            quantiles = dask_grouped_quantiles(array, ["x", "y"], [0.25, 0.5, 0.75])
-            print(quantiles)
-    """
-    assert len(q) > 0, "No quantiles provided"
-    dims = _get_dims(array, dims)
-
-    coords = {d: array.coords[d] for d in dims}
-    coords["quantile"] = q
-
-    quantiles = [_q * 100 for _q in q]
-    results = xr.DataArray(
-        da.zeros((len(q),) + tuple([array.sizes[d] for d in dims])),
-        dims=["quantile"] + dims,
-        coords=coords,
-    )
-
-    dim_vals = [array[d].values for d in dims]
-    internal_method = "tdigest"
-
-    try:
-        importlib.import_module("crick")
-    except ModuleNotFoundError:
-        internal_method = "default"
-    with dask.config.set(**{"array.slicing.split_large_chunks": True}):
-        for dim_val in itertools.product(*dim_vals):
-            sel = dict(zip(dims, dim_val))
-            values = da.percentile(
-                array.sel(sel).data.reshape(-1),
-                quantiles,
-                internal_method=internal_method,
-            )
-            results.loc[sel] = values
-        return results
 
 
 def apply_data_array(
