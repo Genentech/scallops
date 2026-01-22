@@ -1,0 +1,10 @@
+# MANIFEST.in
+prune scallops/tests
+prune tests
+prune docs/notebooks
+prune docs/_static/uncorrected.png
+prune docs/_static/corrected.png
+prune docs/_static/flatfield.png
+prune docs/_static/css
+global-exclude .git*
+global-exclude .DS_Store
