@@ -1,5 +1,5 @@
 <h1 align="center">
-<img src="docs/_static/scallopsLogo.png" width="150" alt="logo">
+<img src="https://raw.githubusercontent.com/Genentech/scallops/62db13112dee13dc228bd2a458ada5a7a973d2bf/docs/_static/scallopsLogo.png" width="150" alt="logo">
 </h1><br>
 
 # SCALLOPS
