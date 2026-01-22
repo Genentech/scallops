@@ -148,7 +148,7 @@ def plot_registration(
             )
             plt.show()
     """
-    stacks = [x.isel(z=0).squeeze() for x in stacks]
+    stacks = [x.isel(z=0, missing_dims="ignore").squeeze() for x in stacks]
     axes = None
     all_rounds = [stack.coords["t"].values for stack in stacks]
     assert all(array_equal(all_rounds[0], x) for x in all_rounds), (
