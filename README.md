@@ -32,7 +32,7 @@ If you wish to contribute to the codebase or need the latest unreleased changes:
 
 1. Clone the repository and change to the scallops directory:
 ```bash
-git clone [https://github.com/Genentech/scallops.git](https://github.com/Genentech/scallops.git)
+git clone https://github.com/Genentech/scallops.git
 cd scallops
 
 ```
