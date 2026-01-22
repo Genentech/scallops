@@ -15,3 +15,4 @@ build:
       - pip install -e ".[doc]"
     post_checkout:
       - git fetch --unshallow || true
+      - git lfs pull
