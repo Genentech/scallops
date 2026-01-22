@@ -1,0 +1,82 @@
+name: Build and Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v0.0.1, v1.0.0
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # Mac (Intel & Silicon), Windows, and Linux
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for setuptools_scm versioning
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==2.22.0
+
+      # This prints the plan to the logs before building
+      - name: List intended builds
+        run: python -m cibuildwheel --print-build-identifiers
+        env:
+          CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
+          CIBW_SKIP: "pp* *-win32 *-manylinux_i686"
+
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir wheelhouse
+        env:
+          # Reads pyproject.toml to skip Python < 3.11 automatically
+          CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
+          # Skip PyPy (pp*) and 32-bit architectures to speed up build
+          CIBW_SKIP: "pp* *-win32 *-manylinux_i686"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build Source Distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build sdist
+        run: pipx run build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-sdist
+          path: dist/*.tar.gz
+
+  publish_to_pypi:
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    # Only run this job if the tag starts with 'v' (redundant safety check)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
