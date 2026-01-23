@@ -55,6 +55,7 @@ def test_stitch_wdl_z_stack(tmp_path):
         "z_index": "focus",
         "stitch_radial_correction_k": "none",
         "output_directory": str(tmp_path / "out"),
+        "docker": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:
@@ -99,6 +100,7 @@ def test_stitch_wdl(tmp_path):
         "stitch_workflow.urls": [str(input_path)],
         "stitch_workflow.image_pattern": "{well}-{skip}.zarr",
         "stitch_workflow.output_directory": str(tmp_path / "out"),
+        "stitch_workflow.docker": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:
@@ -176,6 +178,7 @@ def test_ops_wdl(tmp_path):
         "ops_workflow.mark_stitch_boundary_cells": False,
         "ops_workflow.reads_labels": "cell",
         "ops_workflow.merge_extra_arguments": "--format parquet",
+        "ops_workflow.docker": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:
