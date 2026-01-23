@@ -16,3 +16,15 @@ FAQ
     Please ensure TMPDIR has execution permissions or temporarily set TMPDIR to a directory that does::
 
         TMPDIR=. pip install scallops
+
+#. Unable to download model for Stardist or other deep learning models
+    Some workflow environments (e.g. AWS HealthOmics) prohibit accesssing public websites.
+    You need to download model files to an accessible location, and set the workflow input, `model_dir`
+    to this location.
+
+    Example::
+
+        wget https://github.com/stardist/stardist-models/releases/download/v0.1/python_2D_versatile_fluo.zip
+        aws s3 cp python_2D_versatile_fluo.zip s3://my-bucket/model/
+
+    In your OPS workflow input JSON, set `model_dir` to `s3://my-bucket/model/`
