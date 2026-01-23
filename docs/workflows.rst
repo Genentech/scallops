@@ -24,9 +24,9 @@ Workflow Steps
 3.  **Stitching**:
 
     * Applies the calculated flatfield to the raw tiles.
-    * Corrects for radial distortion (can be disabled or `k` can be provided).
+    * Corrects for radial distortion.
     * Aligns tiles using stage positions and cross-correlation.
-    * Stitches tiles into a multi-scale OME-Zarr image.
+    * Stitches tiles into an OME-Zarr image.
 
 Inputs
 ------
@@ -122,7 +122,7 @@ Below is the complete list of exposed options, including optional settings for g
      - Force re-run of stitching even if output exists.
    * - **Resources**
      - Various
-     - ``stitch_cpu``, ``stitch_memory``, ``stitch_disks``, etc. can be set to override defaults.
+     - ``stitch_cpu``, ``stitch_memory``, etc. can be set to override defaults.
 
 Outputs
 -------
@@ -233,9 +233,6 @@ Below is the complete list of exposed options covering registration, feature ext
    * - **subset**
      - Array[String]
      - Filter specific wells/plates.
-   * - **batch_size**
-     - Int
-     - Number of groups to process in one batch.
 
 **Segmentation & Registration**
 
@@ -321,7 +318,7 @@ Below is the complete list of exposed options covering registration, feature ext
      - Array[Float]
      - Sigma for Laplacian of Gaussian spot detection.
 
-**Control Flags (Force / Skip)**
+**Additional Parameters**
 
 .. list-table::
    :widths: 30 15 55
@@ -330,19 +327,21 @@ Below is the complete list of exposed options covering registration, feature ext
    * - Parameter
      - Type
      - Description
-   * - **run_spot_detect**
+   * - **model_dir**
+     - String
+     - Path containing deep learning model resouces (See :doc:`FAQ <faq>` for more details.)
+   * - **run_``task``**
      - Boolean
-     - Default ``true``.
-   * - **run_nuclei_segmentation**
+     - Set to ``false``, (e.g. run_nuclei_segmentation) to skip task
+   * - **force_``task``**
      - Boolean
-     - Default ``true``.
-   * - **run_cell_segmentation**
-     - Boolean
-     - Default ``true``.
-   * - **force_merge**
-     - Boolean
-     - Force re-merge even if output exists.
-
+     - Set to ``true``, to re-run task (e.g. force_segment_cell) even if output exists.
+   * - **Resources**
+     - Various
+     - ``segment_nuclei_cpu``, ``segment_nuclei_memory``, etc. can be set to override defaults.
+   * - **batch_size**
+     - Int
+     - Number of groups to process in one batch.
 Outputs
 -------
 
