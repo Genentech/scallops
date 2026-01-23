@@ -319,6 +319,15 @@ Utilities specifically for stitching operations.
     scallops.stitch.utils.tile_overlap_mask
 
 
+Datasets
+===================
+Builtin datasets for testing
+
+.. autosummary::
+    :toctree: .
+
+    scallops.datasets.example_feature_summary_stats
+    scallops.datasets.feldman_2019_small
 
 .. _`SKimage' phase cross correlation`: https://scikit-image.org/docs/stable/api/skimage.registration.html#skimage.registration.phase_cross_correlation
 .. _ITK: https://itk.org/Doxygen/html/RegistrationPage.html
