@@ -64,7 +64,7 @@ workflow ops_workflow {
         String? reads_threshold_peaks_crosstalk
         String? reads_extra_arguments
 
-        String model_dir = "s3://bigdipir-ctg-s3/models/"
+        String model_dir = ""
 
         # nuclei segment
         String? nuclei_segmentation
@@ -151,11 +151,11 @@ workflow ops_workflow {
         String cell_intersects_boundary_disks = "local-disk 200 HDD"
 
 
-        String docker = "563221710766.dkr.ecr.us-west-2.amazonaws.com/external/ctg/scallops:latest"
+        String docker
 
         Int preemptible = 0
         String zones = "us-west1-a us-west1-b us-west1-c"
-        String aws_queue_arn = "arn:aws:batch:us-west-2:752311211819:job-queue/gred"
+        String aws_queue_arn = ""
         Int max_retries = 0
 
         String segment_suffix = "segment.zarr"
