@@ -45,13 +45,16 @@ These are the absolute minimum parameters required to run the stitching workflow
      - Description
    * - **urls**
      - Array[String]
-     - List of directories containing raw images (S3 or local paths).
+     - List of directories containing raw images (e.g S3 URLs).
    * - **image_pattern**
      - String
      - Regex-like pattern to parse filenames (e.g., ``"Well{well}_Point{point}.nd2"``).
    * - **output_directory**
      - String
      - Base path for outputs.
+   * - **docker**
+     - String
+     - Workflow docker image.
 
 .. code-block:: json
    :caption: Minimal Stitching JSON
@@ -59,7 +62,8 @@ These are the absolute minimum parameters required to run the stitching workflow
    {
       "urls": ["s3://your-bucket/experiment_data/"],
       "image_pattern": "20231010_10x_6W_SBS_c{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2",
-      "output_directory": "s3://your-bucket/experiment_data/stitch/iss/"
+      "output_directory": "s3://your-bucket/experiment_data/stitch/iss/",
+      "docker":"772311241819.dkr.ecr.us-west-2.amazonaws.com/scallops:1.0.0"
    }
 
 Full Parameter Reference (Advanced)
@@ -186,6 +190,9 @@ These are the absolute minimum parameters required to run the OPS workflow.
    * - **reads_labels**
      - String
      - Which segmentation label to assign reads to (e.g., ``"cell"`` or ``"nuclei"``).
+   * - **docker**
+     - String
+     - Workflow docker image.
 
 .. code-block:: json
    :caption: Minimal OPS JSON
@@ -196,7 +203,8 @@ These are the absolute minimum parameters required to run the OPS workflow.
       "phenotype_url": "s3://your-bucket/experiment/stitch/pheno/stitch/stitch.zarr/",
       "phenotype_dapi_channel": 4,
       "phenotype_cyto_channel": [6],
-      "reads_labels": "cell"
+      "reads_labels": "cell",
+      "docker":"772311241819.dkr.ecr.us-west-2.amazonaws.com/scallops:1.0.0"
    }
 
 Full Parameter Reference (Advanced)
@@ -396,8 +404,7 @@ Create a JSON file (e.g., ``ops_input.json``) defining your inputs. Below is a m
       "segment_cell_threshold_correction_factor": 1.0,
       "cell_segmentation_extra_arguments": "--closing-radius 5",
 
-      "docker_registry": "123456789012.dkr.ecr.us-region-1.amazonaws.com",
-      "docker_version": "latest"
+      "docker": "123456789012.dkr.ecr.us-region-1.amazonaws.com/scallops:latest"
     }
 
 Step 2: Run with miniwdl-omics-run
@@ -451,7 +458,7 @@ Suppose you only need to perform image registration without the full segmentatio
             String moving_image
             String fixed_image
             String output_dir
-            String docker_registry
+            String docker
         }
 
         # Call the existing Scallops registration task
@@ -462,7 +469,7 @@ Suppose you only need to perform image registration without the full segmentatio
                 transform_output_directory = output_dir + "/transforms",
                 moving_output_directory = output_dir + "/registered_images",
                 # Pass through required runtime parameters
-                docker = docker_registry + "/scallops:latest",
+                docker = docker,
                 cpu = 4,
                 memory = "16 GiB",
                 # ... (other required inputs like zones, disks, etc.)
