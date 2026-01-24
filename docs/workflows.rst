@@ -330,10 +330,10 @@ Below is the complete list of exposed options covering registration, feature ext
    * - **model_dir**
      - String
      - Path containing deep learning model resouces (See :doc:`FAQ <faq>` for more details.)
-   * - **run_``task``**
+   * - **run_<task>**
      - Boolean
      - Set to ``false``, (e.g. run_nuclei_segmentation) to skip task
-   * - **force_``task``**
+   * - **force_<task>**
      - Boolean
      - Set to ``true``, to re-run task (e.g. force_segment_cell) even if output exists.
    * - **Resources**
