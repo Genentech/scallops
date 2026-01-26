@@ -964,7 +964,9 @@ def to_label_crops(
     :param gaussian_sigma: If not None, apply gaussian-smoothed mask to isolate target mask
     :return: Objects dataframe (with objects at well edges removed)
     """
-
+    assert not isinstance(objects_df.index, pd.RangeIndex), (
+        "Index should contain `label`"
+    )
     is_dask_array = isinstance(intensity_image, da.Array)
     image_shape = intensity_image.shape[-2:]
     if label_image is not None:
