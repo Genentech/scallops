@@ -18,6 +18,7 @@ def pca(
     batch_size: int | None = None,
     chunks: tuple[int, int] | bool = True,
     gpu: bool | None = None,
+    whiten: bool = False,
 ) -> anndata.AnnData:
     """Embed data using PCA.
 
@@ -29,6 +30,7 @@ def pca(
     :param batch_size: Batch size for incremental PCA.
     :param chunks: Rechunk dask array.
     :param gpu: Whether to use GPU.
+    :param whiten: Whether to use whitening.
     :return: PCA Embedding
     """
     X = adata.X
@@ -72,7 +74,7 @@ def pca(
         else:
             from sklearn.decomposition import IncrementalPCA
 
-        d = IncrementalPCA(n_components=n_components, copy=not is_dask)
+        d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
         batch_index = 0
         for batch in batches:
@@ -102,7 +104,7 @@ def pca(
         import inspect
 
         sig = inspect.signature(PCA)
-        kwargs = dict(n_components=n_components)
+        kwargs = dict(n_components=n_components, whiten=whiten)
         if "random_state" in sig.parameters.keys():
             kwargs["random_state"] = 239753
         d = PCA(**kwargs)
