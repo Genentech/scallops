@@ -30,7 +30,7 @@ def intersects_boundary(
         for index in range(len(props)):
             r = props[index]
             image = r.image.astype(np.uint8)
-            mask = r.intensity_image[..., channel] * image
+            mask = r.image_intensity[..., channel] * image
             values[index] = np.any(mask != image)
         channel_name = channel_names[channel]
         result[f"Location_IntersectsBoundary_{channel_name}"] = values
@@ -55,7 +55,7 @@ def corr_region(
     values = np.zeros(len(props))
     for index in range(len(props)):
         r = props[index]
-        img_slice = r.intensity_image
+        img_slice = r.image_intensity
         x1 = img_slice[..., c1].flatten()
         x2 = img_slice[..., c2].flatten()
         corr = np.corrcoef((x1, x2))[1, 0]
