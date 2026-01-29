@@ -30,22 +30,13 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
-
-
-
-
-
-
-
-
-
 dependencies = [
     "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
     "adjustText",
     "bioio-nd2",
     "bioio-tifffile",
-    "bioio-base",
     "bioio-ome-tiff",
+    "bioio-ome-zarr",
     "bioio",
     "centrosome",
     "cp-measure",
