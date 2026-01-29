@@ -30,16 +30,27 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
+
+
+
+
+
+
+
+
+
 dependencies = [
-    "adjustText",
     "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
-    "bioio",
+    "adjustText",
     "bioio-nd2",
     "bioio-tifffile",
+    "bioio-base",
+    "bioio-ome-tiff",
+    "bioio",
     "centrosome",
     "cp-measure",
-    "dask-image",
     "dask",
+    "dask-image",
     "decorator",
     "filelock",
     "flox",
@@ -60,7 +71,6 @@ dependencies = [
     "psutil",
     "pyarrow",
     "pydantic",
-    "pysam",
     "scikit-image",
     "scikit-learn",
     "scipy",
@@ -87,6 +97,9 @@ cellpose = [
 ]
 ufish = [
     "ufish"
+]
+pysam = [
+    "pysam"
 ]
 test = [
     "miniwdl",

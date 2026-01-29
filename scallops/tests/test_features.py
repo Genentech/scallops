@@ -60,12 +60,10 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     assert len(result_df) == 1 and result_df.index.values[0] == 2603
 
     group = zarr.group()
-    intensity_image_zarr = group.create_dataset(
-        name="image", shape=intensity_image.shape
-    )
+    intensity_image_zarr = group.create_array(name="image", shape=intensity_image.shape)
     intensity_image_zarr[:] = intensity_image.compute()
 
-    label_image_zarr = group.create_dataset(name="label", shape=label_image.shape)
+    label_image_zarr = group.create_array(name="label", shape=label_image.shape)
     label_image_zarr[:] = label_image.compute()
 
     to_label_crops(

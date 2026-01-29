@@ -1603,6 +1603,7 @@ def _set_up_experiment(
         lambda: []
     )  # key is tuple -> value is tuple of group, dict
     maxdepth = None
+
     for image_path in image_paths:
         if isinstance(image_path, Path):
             # IF URI DO NOT PROVIDE AS PATH
@@ -1615,6 +1616,7 @@ def _set_up_experiment(
                 pass
         else:
             root = image_path
+
         if root is not None:
             if "0" not in root:  # format: "path.zarr/images/"
                 if "images" in root:
@@ -1668,6 +1670,7 @@ def _set_up_experiment(
             if image_path in [".", "./"] and _get_fs_protocol(fs) == "file":
                 image_path = fs.info(image_path)["name"].rstrip(".")
             image_prefix = None
+
             if fs.isdir(image_path):
                 image_path = image_path.rstrip(fs.sep)
                 if maxdepth is None:
@@ -1685,6 +1688,7 @@ def _set_up_experiment(
                         withdirs=True,
                     )
                 )
+
                 paths = [p for p in all_paths if p.lower().endswith(extension)]
                 if len(paths) == 0:
                     # try with no maxdepth
@@ -1722,7 +1726,7 @@ def _set_up_experiment(
                         group_to_matches[group].append((x, d))
 
     if len(group_to_matches) == 0:
-        message = [f"No files found matching pattern: {file_regex.pattern}"]
+        message = [f"No files found matching pattern: {files_pattern}"]
         if subset_ is not None:
             message.append(f", subset: {', '.join([str(s) for s in subset_])}")
         if len(group_by) > 0:

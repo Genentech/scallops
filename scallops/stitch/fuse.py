@@ -22,6 +22,7 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.utils import dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
+from scallops.zarr_io import _zarr_v3
 
 logger = logging.getLogger("scallops")
 
@@ -223,17 +224,32 @@ def _fuse(
         locks = np.array(locks)
         partition_tree = shapely.STRtree(partition_boxes)
 
-    result = group.create_dataset(
-        shape=(
-            len(output_channels),  # c
-            fused_y_size,
-            fused_x_size,
-        ),
-        dtype=target_dtype,
-        chunks=(1,) + chunk_size,
-        name="0",
-        dimension_separator="/",
-        overwrite=True,
+    result = (
+        group.create_dataset(
+            shape=(
+                len(output_channels),  # c
+                fused_y_size,
+                fused_x_size,
+            ),
+            dtype=target_dtype,
+            chunks=(1,) + chunk_size,
+            name="0",
+            chunk_key_encoding="/",
+            overwrite=True,
+        )
+        if _zarr_v3()
+        else group.create_dataset(
+            shape=(
+                len(output_channels),  # c
+                fused_y_size,
+                fused_x_size,
+            ),
+            dtype=target_dtype,
+            chunks=(1,) + chunk_size,
+            name="0",
+            dimension_separator="/",
+            overwrite=True,
+        )
     )
 
     _fuse_image_delayed = delayed(_fuse_image)

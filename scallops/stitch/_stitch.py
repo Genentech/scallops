@@ -14,7 +14,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import zarr
 from sklearn.cluster import AgglomerativeClustering
-from zarr.errors import PathNotFoundError
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
 from scallops.io import is_parquet_file, read_image
@@ -32,7 +31,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import is_ome_zarr_array
+from scallops.zarr_io import _zarr_v3, is_ome_zarr_array
 
 logger = _get_cli_logger()
 
@@ -82,14 +81,14 @@ def _single_stitch(
                 if is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif not no_save_labels:
             try:
                 if is_ome_zarr_array(image_output_root.get(f"labels/{image_key}-mask")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif is_parquet_file(f"{other_output_path}{image_key}-positions.parquet"):
             logger.info(f"Skipping stitching for {image_key}.")
@@ -405,13 +404,24 @@ def _write_arrays(
         labels_group = image_output_root.require_group("labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
 
-        array = group.create_dataset(
-            name="0",
-            shape=(fused_y_size, fused_x_size),
-            chunks=chunk_size,
-            dtype=np.uint8,
-            dimension_separator="/",
-            overwrite=True,
+        array = (
+            group.create_array(
+                name="0",
+                shape=(fused_y_size, fused_x_size),
+                chunks=chunk_size,
+                dtype=np.uint8,
+                chunk_key_encoding="/",
+                overwrite=True,
+            )
+            if _zarr_v3()
+            else group.create_dataset(
+                name="0",
+                shape=(fused_y_size, fused_x_size),
+                chunks=chunk_size,
+                dtype=np.uint8,
+                dimension_separator="/",
+                overwrite=True,
+            )
         )
 
         da.to_zarr(

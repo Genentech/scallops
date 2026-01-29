@@ -10,6 +10,7 @@ Authors:
 
 import logging
 from collections.abc import Callable, Hashable
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,11 +25,12 @@ from dask.array import from_zarr
 from dask.delayed import Delayed
 from dask.graph_manipulation import bind
 from ome_zarr.axes import KNOWN_AXES
-from ome_zarr.format import CurrentFormat
+from ome_zarr.format import CurrentFormat, FormatV04
 from ome_zarr.io import parse_url
 from ome_zarr.scale import Scaler
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image
+from packaging.version import Version
 from xarray.core.coordinates import DataArrayCoordinates
 from zarr.storage import StoreLike
 
@@ -330,6 +332,16 @@ def _write_zarr_image(
     )
 
 
+@lru_cache
+def _zarr_v3() -> bool:
+    try:
+        import zarr
+    except ImportError:
+        return False
+    else:
+        return Version(zarr.__version__).major >= 3
+
+
 def write_zarr(
     grp: zarr.Group,
     data: np.ndarray | da.Array | xr.DataArray,
@@ -409,10 +421,9 @@ def write_zarr(
         )
     dask_delayed = []
     if zarr_format == "zarr":  # No axis validation
-        fmt = CurrentFormat()
-
         kwargs = dict()
-        zarr_version = 2 if not hasattr(fmt, "zarr_format") else fmt.zarr_format
+        zarr_version = 3 if _zarr_v3() else 2
+        fmt = CurrentFormat() if zarr_version else FormatV04()
         if zarr_version == 2:
             kwargs["dimension_separator"] = "/"
         else:
@@ -461,6 +472,7 @@ def write_zarr(
                     omero = zarr_attrs["ome"].get("omero", {})
                     omero.update(image_attrs.pop("omero"))
                     zarr_attrs["ome"]["omero"] = omero
+
             multiscales[0]["metadata"] = image_attrs
         if len(dask_delayed) > 0:
 
@@ -481,7 +493,7 @@ def write_zarr(
             scaler=scaler,
             axes=axes,
             compute=compute,
-            metadata=image_attrs,
+            metadata=image_attrs if image_attrs is not None else {},
             coordinate_transformations=(
                 [coordinate_transformations]
                 if coordinate_transformations is not None
