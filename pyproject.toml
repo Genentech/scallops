@@ -33,7 +33,7 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
 dependencies = [
     "adjustText",
     "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
-    "bioio<2",
+    "bioio",
     "bioio-nd2",
     "bioio-tifffile",
     "centrosome",
@@ -69,9 +69,9 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile==2024.8.30",
+    "tifffile",
     "xarray",
-    "zarr<3"
+    "zarr"
 ]
 
 [project.optional-dependencies]
