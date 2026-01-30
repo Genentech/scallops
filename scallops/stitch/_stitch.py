@@ -473,9 +473,12 @@ def _write_arrays(
             label_metadata = _create_label_ome_metadata(
                 image_spacing, image_key + "-tile"
             )
-            label_metadata["multiscales"][0]["metadata"] = {
-                "source": f"../../images/{image_key}"
-            }
+            label_multiscales = (
+                label_metadata["ome"]["multiscales"]
+                if "ome" in label_metadata
+                else label_metadata["multiscales"]
+            )
+            label_multiscales[0]["metadata"] = {"source": f"../../images/{image_key}"}
             group.attrs.update(label_metadata)
     cleanup_paths = []
     if not no_save_image:
