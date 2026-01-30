@@ -180,7 +180,7 @@ def _fix_attrs(d: dict) -> None:
         elif isinstance(value, ome_types.OME):
             # Hack to prevent OverflowError:
             # Overlong 4 byte UTF-8 sequence detected when encoding string
-            d[key] = d[key].model_dump()
+            d[key] = d[key].model_dump(mode="json")
         elif isinstance(value, zarr.Group):
             d[key] = str(value)
         elif isinstance(value, list):
@@ -188,7 +188,7 @@ def _fix_attrs(d: dict) -> None:
                 if isinstance(value[i], dict):
                     _fix_attrs(value[i])
                 elif isinstance(value[i], ome_types.OME):
-                    value[i] = value[i].dict()
+                    value[i] = value[i].model_dump(mode="json")
                 elif isinstance(value[i], zarr.Group):
                     value[i] = str(value)
 
@@ -209,33 +209,8 @@ def _attrs_axes_coordinates(
         - Updated image attributes dictionary.
         - List of axes dictionaries.
         - List of coordinate transformations dictionaries or None.
-
-    :example:
-
-        .. code-block:: python
-
-            import xarray as xr
-            import numpy as np
-            from scallops.zarr_io import _attrs_axes_coordinates
-
-            data = np.random.rand(5, 10, 512, 512)
-            dims = ("c", "z", "y", "x")
-            coords = {"c": ["DAPI", "FITC", "TRITC", "Cy5", "Cy7"]}
-            array = xr.DataArray(data, dims=dims, coords=coords)
-            image_attrs = {
-                "physical_pixel_sizes": [0.1, 0.1, 0.5],
-                "physical_pixel_units": ["um", "um", "um"],
-            }
-
-            # Prepare attributes, axes, and coordinate transformations
-            updated_attrs, axes, coord_transformations = _attrs_axes_coordinates(
-                image_attrs, array.coords, array.dims
-            )
-            print(updated_attrs)
-            print(axes)
-            print(coord_transformations)
     """
-    image_attrs = _fix_json(image_attrs)
+
     omero = _create_omero_metadata(coords, dims)
     if omero is not None:
         image_attrs["omero"] = omero
@@ -268,7 +243,9 @@ def _attrs_axes_coordinates(
             axis["unit"] = physical_pixel_units[space_index]
             space_index = space_index + 1
         axes.append(axis)
-
+    image_attrs = image_attrs.copy()
+    _fix_attrs(image_attrs)
+    image_attrs = _fix_json(image_attrs)
     return image_attrs, axes, coordinate_transformations
 
 
@@ -408,9 +385,10 @@ def write_zarr(
     if image_attrs is not None:
         # Metadata can't be numpy arrays or python classes so do a round trip
         # conversion to convert to JSON serializable
-        _fix_attrs(image_attrs)
+
         if metadata is not None:
             image_attrs.update(metadata)
+
         image_attrs, axes, coordinate_transformations = _attrs_axes_coordinates(
             image_attrs, coords, dims
         )
