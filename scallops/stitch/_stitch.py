@@ -340,10 +340,10 @@ def _single_stitch(
         tile_shape_no_crop[0] - fuse_crop_width * 2,
         tile_shape_no_crop[1] - fuse_crop_width * 2,
     )
-    fused_y_size = (
+    fused_y_size = int(
         np.round(stitch_positions_df["y"].max()).astype(int) + fused_tile_shape[0]
     )
-    fused_x_size = (
+    fused_x_size = int(
         np.round(stitch_positions_df["x"].max()).astype(int) + fused_tile_shape[1]
     )
 
@@ -410,7 +410,7 @@ def _write_arrays(
                 shape=(fused_y_size, fused_x_size),
                 chunks=chunk_size,
                 dtype=np.uint8,
-                chunk_key_encoding="/",
+                chunk_key_encoding={"name": "default", "separator": "/"},
                 overwrite=True,
             )
             if _zarr_v3()
@@ -442,13 +442,24 @@ def _write_arrays(
         )
         if blend == "none":
             group = labels_group.create_group(image_key + "-tile", overwrite=True)
-            array = group.create_dataset(
-                name="0",
-                shape=(fused_y_size, fused_x_size),
-                chunks=chunk_size,
-                dtype=np.uint16,
-                dimension_separator="/",
-                overwrite=True,
+            array = (
+                group.create_array(
+                    name="0",
+                    shape=(fused_y_size, fused_x_size),
+                    chunks=chunk_size,
+                    dtype=np.uint16,
+                    chunk_key_encoding={"name": "default", "separator": "/"},
+                    overwrite=True,
+                )
+                if _zarr_v3()
+                else group.create_dataset(
+                    name="0",
+                    shape=(fused_y_size, fused_x_size),
+                    chunks=chunk_size,
+                    dtype=np.uint16,
+                    dimension_separator="/",
+                    overwrite=True,
+                )
             )
 
             da.to_zarr(
@@ -458,7 +469,6 @@ def _write_arrays(
                 ),
                 url=array,
                 compute=True,
-                dimension_separator="/",
             )
             label_metadata = _create_label_ome_metadata(
                 image_spacing, image_key + "-tile"

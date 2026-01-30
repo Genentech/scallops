@@ -133,7 +133,7 @@ def _create_omero_metadata(
         # Napari requires that colors are specified if channel names are specified
         channels = (
             [
-                dict(label=channel_names[i], color=colors[i % len(colors)])
+                dict(label=str(channel_names[i]), color=colors[i % len(colors)])
                 for i in range(len(channel_names))
             ]
             if not np.isscalar(channel_names)
@@ -334,12 +334,7 @@ def _write_zarr_image(
 
 @lru_cache
 def _zarr_v3() -> bool:
-    try:
-        import zarr
-    except ImportError:
-        return False
-    else:
-        return Version(zarr.__version__).major >= 3
+    return Version(zarr.__version__).major >= 3
 
 
 def write_zarr(
@@ -419,6 +414,7 @@ def write_zarr(
         image_attrs, axes, coordinate_transformations = _attrs_axes_coordinates(
             image_attrs, coords, dims
         )
+
     dask_delayed = []
     if zarr_format == "zarr":  # No axis validation
         kwargs = dict()
@@ -474,6 +470,7 @@ def write_zarr(
                     zarr_attrs["ome"]["omero"] = omero
 
             multiscales[0]["metadata"] = image_attrs
+
         if len(dask_delayed) > 0:
 
             @dask.delayed
@@ -677,11 +674,7 @@ def _read_ome_zarr_array(
             raise ValueError(f"{_node} not found")
     # For zarr v3, everything is under the "ome" namespace
     if "ome" in node.attrs or "multiscales" in node.attrs:
-        dims = None
-        coords = {}
-        attrs = {}
         coords, attrs, dims = _read_zarr_attrs(node.attrs)
-
         array = node["0"]
         return array, dims, coords, attrs
     else:  # see if user passed test.zarr and zarr file only has one image
