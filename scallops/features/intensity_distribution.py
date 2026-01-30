@@ -543,7 +543,7 @@ def _intensity_distribution_old(
             / image_sum
         )
         frac_pixels_at_d = np.expand_dims(frac_pixels_at_d, 1)
-        intensity_image = r.intensity_image
+        intensity_image = r.image_intensity
 
         with np.errstate(divide="ignore", invalid="ignore"):
             # Calculate fractional signal intensity per channel
