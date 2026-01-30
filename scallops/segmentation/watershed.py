@@ -131,7 +131,7 @@ def segment_nuclei_watershed(
     labeled = (
         _filter_by_region(
             labeled,
-            lambda r: r.mean_intensity,
+            lambda r: r.intensity_mean,
             threshold,
             intensity_image=image_,
         )
