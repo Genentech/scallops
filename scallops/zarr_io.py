@@ -10,6 +10,7 @@ Authors:
 
 import logging
 from collections.abc import Callable, Hashable
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,11 +25,12 @@ from dask.array import from_zarr
 from dask.delayed import Delayed
 from dask.graph_manipulation import bind
 from ome_zarr.axes import KNOWN_AXES
-from ome_zarr.format import CurrentFormat
+from ome_zarr.format import CurrentFormat, FormatV04
 from ome_zarr.io import parse_url
 from ome_zarr.scale import Scaler
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image
+from packaging.version import Version
 from xarray.core.coordinates import DataArrayCoordinates
 from zarr.storage import StoreLike
 
@@ -65,13 +67,21 @@ def is_ome_zarr_array(node: zarr.Group) -> bool:
             result = is_ome_zarr_array(root)
             print(result)  # Output: True
     """
-    return node is not None and "multiscales" in node.attrs
+    return node is not None and ("ome" in node.attrs or "multiscales" in node.attrs)
 
 
 def _get_fs(group: zarr.Group):
     if hasattr(group.store, "fs"):
         return group.store.fs
-    return fsspec.url_to_fs(group.store.path)[0]
+    return fsspec.url_to_fs(_get_store_path(group))[0]
+
+
+def _get_store_path(group: zarr.Group):
+    if hasattr(group.store, "root"):
+        return str(group.store.root)
+    if hasattr(group.store, "path"):
+        return group.store.path
+    return ""
 
 
 def _get_sep(group: zarr.Group) -> str:
@@ -123,7 +133,7 @@ def _create_omero_metadata(
         # Napari requires that colors are specified if channel names are specified
         channels = (
             [
-                dict(label=channel_names[i], color=colors[i % len(colors)])
+                dict(label=str(channel_names[i]), color=colors[i % len(colors)])
                 for i in range(len(channel_names))
             ]
             if not np.isscalar(channel_names)
@@ -170,7 +180,7 @@ def _fix_attrs(d: dict) -> None:
         elif isinstance(value, ome_types.OME):
             # Hack to prevent OverflowError:
             # Overlong 4 byte UTF-8 sequence detected when encoding string
-            d[key] = d[key].dict()
+            d[key] = d[key].model_dump(mode="json")
         elif isinstance(value, zarr.Group):
             d[key] = str(value)
         elif isinstance(value, list):
@@ -178,7 +188,7 @@ def _fix_attrs(d: dict) -> None:
                 if isinstance(value[i], dict):
                     _fix_attrs(value[i])
                 elif isinstance(value[i], ome_types.OME):
-                    value[i] = value[i].dict()
+                    value[i] = value[i].model_dump(mode="json")
                 elif isinstance(value[i], zarr.Group):
                     value[i] = str(value)
 
@@ -199,33 +209,8 @@ def _attrs_axes_coordinates(
         - Updated image attributes dictionary.
         - List of axes dictionaries.
         - List of coordinate transformations dictionaries or None.
-
-    :example:
-
-        .. code-block:: python
-
-            import xarray as xr
-            import numpy as np
-            from scallops.zarr_io import _attrs_axes_coordinates
-
-            data = np.random.rand(5, 10, 512, 512)
-            dims = ("c", "z", "y", "x")
-            coords = {"c": ["DAPI", "FITC", "TRITC", "Cy5", "Cy7"]}
-            array = xr.DataArray(data, dims=dims, coords=coords)
-            image_attrs = {
-                "physical_pixel_sizes": [0.1, 0.1, 0.5],
-                "physical_pixel_units": ["um", "um", "um"],
-            }
-
-            # Prepare attributes, axes, and coordinate transformations
-            updated_attrs, axes, coord_transformations = _attrs_axes_coordinates(
-                image_attrs, array.coords, array.dims
-            )
-            print(updated_attrs)
-            print(axes)
-            print(coord_transformations)
     """
-    image_attrs = _fix_json(image_attrs)
+
     omero = _create_omero_metadata(coords, dims)
     if omero is not None:
         image_attrs["omero"] = omero
@@ -258,7 +243,9 @@ def _attrs_axes_coordinates(
             axis["unit"] = physical_pixel_units[space_index]
             space_index = space_index + 1
         axes.append(axis)
-
+    image_attrs = image_attrs.copy()
+    _fix_attrs(image_attrs)
+    image_attrs = _fix_json(image_attrs)
     return image_attrs, axes, coordinate_transformations
 
 
@@ -320,6 +307,11 @@ def _write_zarr_image(
         zarr_format=zarr_format,
         compute=compute,
     )
+
+
+@lru_cache
+def _zarr_v3() -> bool:
+    return Version(zarr.__version__).major >= 3
 
 
 def write_zarr(
@@ -393,49 +385,81 @@ def write_zarr(
     if image_attrs is not None:
         # Metadata can't be numpy arrays or python classes so do a round trip
         # conversion to convert to JSON serializable
-        _fix_attrs(image_attrs)
+
         if metadata is not None:
             image_attrs.update(metadata)
+
         image_attrs, axes, coordinate_transformations = _attrs_axes_coordinates(
             image_attrs, coords, dims
         )
+
     dask_delayed = []
     if zarr_format == "zarr":  # No axis validation
+        kwargs = dict()
+        zarr_version = 3 if _zarr_v3() else 2
+        fmt = CurrentFormat() if zarr_version else FormatV04()
+        if zarr_version == 2:
+            kwargs["dimension_separator"] = "/"
+        else:
+            kwargs["chunk_key_encoding"] = fmt.chunk_key_encoding
         if isinstance(data, da.Array):
             d = da.to_zarr(
                 arr=data,
                 url=grp.store,
                 component=str(Path(grp.path, "0")),
                 compute=compute,
-                dimension_separator=grp._store._dimension_separator,
+                **kwargs,
             )
             if not compute:
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
-            grp.create_dataset("0", data=data, overwrite=True)
+            if zarr_version == 2:
+                grp.create_dataset("0", data=data, overwrite=True, **kwargs)
+            else:
+                grp.create_array("0", data=data, overwrite=True, **kwargs)
+        # v3
+        # ome/omero for channel metadata
+        # ome/multiscales[0]/metadata for other metadata
 
+        # v2:
+        # omero for channel metadata
+        # multiscales[0]/metadata for other metadata
         datasets = [{"path": "0"}]
         if coordinate_transformations is not None:
             datasets[0]["coordinateTransformations"] = coordinate_transformations
-        multiscales = [
-            dict(version=CurrentFormat().version, datasets=datasets, name=grp.name)
-        ]
-        d = {"multiscales": multiscales}
+        multiscales = [dict(version=fmt.version, datasets=datasets, name=grp.name)]
+        zarr_attrs = (
+            {"multiscales": multiscales}
+            if zarr_version == 2
+            else {"ome": {"multiscales": multiscales}}
+        )
+
         if axes is not None:
             multiscales[0]["axes"] = axes
         if image_attrs is not None:
-            multiscales[0]["metadata"] = image_attrs
             if "omero" in image_attrs:
-                d["omero"] = image_attrs["omero"]
+                if zarr_version == 2:
+                    omero = zarr_attrs.get("omero", {})
+                    omero.update(image_attrs.pop("omero"))
+                    zarr_attrs["omero"] = omero
+                else:
+                    omero = zarr_attrs["ome"].get("omero", {})
+                    omero.update(image_attrs.pop("omero"))
+                    zarr_attrs["ome"]["omero"] = omero
+
+            multiscales[0]["metadata"] = image_attrs
+
         if len(dask_delayed) > 0:
 
             @dask.delayed
             def _write_metadata_delayed(grp, d):
                 grp.attrs.update(d)
 
-            return dask_delayed + [bind(_write_metadata_delayed, dask_delayed)(grp, d)]
+            return dask_delayed + [
+                bind(_write_metadata_delayed, dask_delayed)(grp, zarr_attrs)
+            ]
         else:
-            grp.attrs.update(d)
+            grp.attrs.update(zarr_attrs)
             return dask_delayed
     else:
         return write_image(
@@ -444,7 +468,7 @@ def write_zarr(
             scaler=scaler,
             axes=axes,
             compute=compute,
-            metadata=image_attrs,
+            metadata=image_attrs if image_attrs is not None else {},
             coordinate_transformations=(
                 [coordinate_transformations]
                 if coordinate_transformations is not None
@@ -550,53 +574,47 @@ def _write_zarr_labels(
         axes=label_axes,
         metadata=metadata,
         compute=compute,
+        coordinate_transformations=None,
         storage_options=storage_options,
     )
 
 
-def _read_zarr_attrs(multiscale0: zarr.Group) -> tuple[dict, dict, list[str]]:
-    """Read attributes from a Zarr multiscale group.
+def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:
+    """Read attributes from Zarr.
 
     This function reads and processes the attributes, coordinates, and dimensions from
     the first multiscale dataset in a Zarr group. It also handles physical pixel sizes
     and units if available.
 
-    :param multiscale0: The Zarr group containing the multiscale dataset.
+    :param attrs: Zarr attributes.
     :return: A tuple containing:
         - coords: Dictionary of coordinates.
         - attrs: Dictionary of attributes.
         - dims: List of dimension names.
-
-    :example:
-
-        .. code-block:: python
-
-            import zarr
-            from scallops.zarr_io import _read_zarr_attrs
-
-            # Create a Zarr group with multiscale attributes
-            store = zarr.DirectoryStore("example.zarr")
-            root = zarr.group(store=store)
-            multiscale0 = root.create_group("multiscales")
-            multiscale0.attrs["axes"] = [{"name": "x"}, {"name": "y"}, {"name": "z"}]
-            multiscale0.attrs["datasets"] = [
-                {"coordinateTransformations": [{"scale": [1.0, 0.5, 0.5]}]}
-            ]
-
-            # Read attributes from the multiscale group
-            coords, attrs, dims = _read_zarr_attrs(multiscale0)
-            print(coords)
-            print(attrs)
-            print(dims)
     """
-    attrs = multiscale0.get("metadata")
-    if attrs is None:
-        attrs = {}
+    # v3
+    # ome/omero for channel metadata
+    # ome/multiscales[0]/metadata for other metadata
+
+    # v2:
+    # omero for channel metadata
+    # multiscales[0]/metadata for other metadata
+
+    if "ome" in attrs:
+        attrs = attrs["ome"]
+    multiscales = attrs["multiscales"]
+    if len(multiscales) > 0:
+        multiscale0 = multiscales[0]
+    else:
+        return None, None, None
+
     axes = multiscale0["axes"]
     dims = [axis["name"] for axis in axes]
-
-    coords = {d: attrs[d] for d in dims if d in attrs and d != "c"}
-    if "omero" in attrs and "c" in dims:
+    metadata = multiscale0.get("metadata")
+    if metadata is None:
+        metadata = {}
+    coords = {d: metadata[d] for d in dims if d in metadata and d != "c"}
+    if "c" in dims and "omero" in attrs:
         channel_names = attrs["omero"].get("channels")
         if channel_names is not None:
             coords["c"] = [c["label"] for c in channel_names]
@@ -613,9 +631,9 @@ def _read_zarr_attrs(multiscale0: zarr.Group) -> tuple[dict, dict, list[str]]:
     if len(space_indices_with_units) > 0:
         scale = multiscale0["datasets"][0]["coordinateTransformations"][0]["scale"]
         physical_pixel_sizes = tuple([scale[d] for d in space_indices_with_units])
-        attrs["physical_pixel_sizes"] = physical_pixel_sizes
-        attrs["physical_pixel_units"] = tuple(units)
-    return coords, attrs, dims
+        metadata["physical_pixel_sizes"] = physical_pixel_sizes
+        metadata["physical_pixel_units"] = tuple(units)
+    return coords, metadata, dims
 
 
 def _read_ome_zarr_array(
@@ -632,14 +650,9 @@ def _read_ome_zarr_array(
         node = zarr.open(node, mode="r")
         if node is None:
             raise ValueError(f"{_node} not found")
-    if "multiscales" in node.attrs:
-        dims = None
-        coords = {}
-        attrs = {}
-        multiscales = node.attrs["multiscales"]
-        if len(multiscales) > 0:
-            multiscale0 = multiscales[0]
-            coords, attrs, dims = _read_zarr_attrs(multiscale0)
+    # For zarr v3, everything is under the "ome" namespace
+    if "ome" in node.attrs or "multiscales" in node.attrs:
+        coords, attrs, dims = _read_zarr_attrs(node.attrs)
         array = node["0"]
         return array, dims, coords, attrs
     else:  # see if user passed test.zarr and zarr file only has one image
@@ -648,7 +661,7 @@ def _read_ome_zarr_array(
             image_keys = list(images.keys())
             if len(image_keys) == 1:
                 return _read_ome_zarr_array(images[image_keys[0]])
-        logger.warning("multiscales not found in attrs")
+        logger.warning(f"multiscales not found in attrs for {node} ")
 
 
 def read_ome_zarr_array(

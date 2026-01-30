@@ -76,6 +76,7 @@ from scallops.xr import _z_projection
 from scallops.zarr_io import (
     _get_fs,
     _get_sep,
+    _get_store_path,
     _write_zarr_image,
     open_ome_zarr,
     read_ome_zarr_array,
@@ -226,7 +227,9 @@ def spot_detection_pipeline(
     _, file_list, metadata = image_tuple
     image_key = metadata["id"]
     if not force:
-        points_path = f"{root.store.path.rstrip(_get_sep(root))}{_get_sep(root)}points"
+        points_path = (
+            f"{_get_store_path(root).rstrip(_get_sep(root))}{_get_sep(root)}points"
+        )
         points_protocol = _get_fs_protocol(_get_fs(root))
         if points_protocol != "file":
             points_path = f"{points_protocol}://{points_path}"
@@ -334,7 +337,9 @@ def spot_detection_pipeline(
     else:
         del maxed
     if "peaks" in save_keys:
-        points_path = f"{root.store.path.rstrip(_get_sep(root))}{_get_sep(root)}points"
+        points_path = (
+            f"{_get_store_path(root).rstrip(_get_sep(root))}{_get_sep(root)}points"
+        )
         protocol = _get_fs_protocol(_get_fs(root))
         if protocol != "file":
             points_path = f"{protocol}://{points_path}"
@@ -913,7 +918,7 @@ def reads_pipeline(
 
     logger.info(f"Running reads for {image_key}")
     spots_sep = _get_sep(spots_root)
-    points_path = f"{spots_root.store.path.rstrip(spots_sep)}{spots_sep}points"
+    points_path = f"{_get_store_path(spots_root).rstrip(spots_sep)}{spots_sep}points"
     spots_protocol = _get_fs_protocol(_get_fs(spots_root))
     if spots_protocol != "file":
         points_path = f"{spots_protocol}://{points_path}"
@@ -1231,8 +1236,8 @@ def reads_main(arguments: argparse.Namespace):
         for key in image_keys:
             reads_pipeline(
                 key,
-                spots_root=zarr.open(spots, "r"),
-                labels_root=zarr.open(labels + labels_fs.sep + "labels", "r"),
+                spots_root=zarr.open(spots, mode="r"),
+                labels_root=zarr.open(labels + labels_fs.sep + "labels", mode="r"),
                 barcodes_file=barcodes_file,
                 file_separator=output_fs.sep,
                 threshold_peaks=threshold_peaks,
