@@ -986,13 +986,9 @@ def to_label_crops(
             objects_df.columns.str.contains("AreaShape_Center_Y")
             | objects_df.columns.str.contains("AreaShape_Center_X")
         ]
-        if len(centroid_cols) > 2:
-            centroid_cols = objects_df.columns[
-                objects_df.columns.str.contains("Nuclei_AreaShape_Center_Y")
-                | objects_df.columns.str.contains("Nuclei_AreaShape_Center_X")
-            ]
-        centroid_cols = sorted(centroid_cols, reverse=True)  # y before x
         assert len(centroid_cols) == 2, "Unable to infer centroid columns."
+        centroid_cols = sorted(centroid_cols, reverse=True)  # y before x
+
     centroid_cols = list(centroid_cols)
     objects_df = objects_df[centroid_cols].copy()
     crop1 = crop_size[0] // 2
