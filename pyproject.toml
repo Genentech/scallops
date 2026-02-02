@@ -40,7 +40,7 @@ dependencies = [
     "bioio",
     "centrosome",
     "cp-measure",
-    "dask",
+    "dask!=2026.1.2",# https://github.com/dask/dask/issues/12265
     "dask-image",
     "decorator",
     "filelock",
