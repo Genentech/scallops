@@ -93,7 +93,9 @@ def _read_image(file_list: list[str], metadata: dict) -> xr.DataArray:
             # Try using swap_dims instead or use set_index after rename to create an indexed coordinate.
             warnings.filterwarnings("ignore", "rename .*", UserWarning)
             image = image.rename({"t_c_z": "c"})
-
+    else:
+        # add trailing c dimension
+        image = image.expand_dims("c", -1)
     return image
 
 
