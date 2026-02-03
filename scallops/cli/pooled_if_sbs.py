@@ -179,7 +179,6 @@ def _peaks_to_bases(
 def spot_detection_pipeline(
     image_tuple: tuple[tuple[str, ...], list[str], dict],
     iss_channels: list[int],
-    file_separator: str,
     root: zarr.Group | str,
     max_filter_width: int,
     sigma_log: float | list[float],
@@ -205,7 +204,6 @@ def spot_detection_pipeline(
 
     :param image_tuple: A tuple containing information about the images.
     :param iss_channels: List of channel indices used for ISS sequencing.
-    :param file_separator: Separator used in file paths.
     :param root: Root path or zarr group where the results will be stored.
     :param max_filter_width: Maximum filter width used in spot detection.
     :param z_index: Either 'max' or z-index
@@ -299,7 +297,6 @@ def spot_detection_pipeline(
                 root=root,
                 image=loged,
                 output_format=output_image_format,
-                file_separator=file_separator,
                 zarr_format="zarr",
                 compute=compute,
             )
@@ -314,7 +311,6 @@ def spot_detection_pipeline(
                 root=root,
                 image=std_arr,
                 output_format=output_image_format,
-                file_separator=file_separator,
                 metadata=dict(parent=image_key),
                 compute=compute,
             )
@@ -329,7 +325,6 @@ def spot_detection_pipeline(
                 root=root,
                 image=maxed,
                 output_format=output_image_format,
-                file_separator=file_separator,
                 zarr_format="zarr",
                 compute=compute,
             )
@@ -821,7 +816,6 @@ def spot_detect_main(arguments: argparse.Namespace):
             delayed_results += spot_detection_pipeline(
                 img,
                 iss_channels=channels,
-                file_separator=None,
                 root=root,
                 z_index=z_index,
                 output_image_format="zarr",
