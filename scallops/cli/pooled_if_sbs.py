@@ -25,7 +25,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import xarray as xr
 import zarr
-from dask.delayed import Delayed, delayed
+from dask.delayed import delayed
 from matplotlib import pyplot as plt
 from skimage.segmentation import expand_labels
 
@@ -179,7 +179,7 @@ def _peaks_to_bases(
 def spot_detection_pipeline(
     image_tuple: tuple[tuple[str, ...], list[str], dict],
     iss_channels: list[int],
-    root: zarr.Group | str,
+    output: str,
     max_filter_width: int,
     sigma_log: float | list[float],
     z_index: int | str,
@@ -196,7 +196,7 @@ def spot_detection_pipeline(
     spot_detection_method: Literal["log", "spotiflow", "u-fish", "piscis"] = "log",
     spot_detection_n_cycles: int | None = None,
     expected_cycles: int | None = None,
-) -> list[Delayed]:
+):
     """Run the spot detection pipeline.
 
     This function processes a set of images, performs spot detection, and saves the
@@ -204,7 +204,7 @@ def spot_detection_pipeline(
 
     :param image_tuple: A tuple containing information about the images.
     :param iss_channels: List of channel indices used for ISS sequencing.
-    :param root: Root path or zarr group where the results will be stored.
+    :param output: Root path to where the results will be stored.
     :param max_filter_width: Maximum filter width used in spot detection.
     :param z_index: Either 'max' or z-index
     :param sigma_log: Sigma parameter for log transformation in spot detection.
@@ -224,17 +224,19 @@ def spot_detection_pipeline(
     """
     _, file_list, metadata = image_tuple
     image_key = metadata["id"]
+    output_fs = fsspec.url_to_fs(output)[0]
+    output_sep = output_fs.sep
+    output = output.rstrip(output_sep)
+    points_path = f"{output}{output_sep}points"
+
+    points_protocol = _get_fs_protocol(output_fs)
+    if points_protocol != "file":
+        points_path = f"{points_protocol}://{points_path}"
+    peaks_path = f"{points_path}{output_sep}{image_key}-peaks.parquet"
     if not force:
-        points_path = (
-            f"{_get_store_path(root).rstrip(_get_sep(root))}{_get_sep(root)}points"
-        )
-        points_protocol = _get_fs_protocol(_get_fs(root))
-        if points_protocol != "file":
-            points_path = f"{points_protocol}://{points_path}"
-        peaks_path = f"{points_path}{_get_sep(root)}{image_key}-peaks.parquet"
         if is_parquet_file(peaks_path):
             logger.info(f"Skipping spot detection for {image_key}")
-            return []
+            return
     image = _images2fov(file_list, metadata, dask=True)
     image = _z_projection(image, z_index)
     if expected_cycles is not None:
@@ -294,7 +296,7 @@ def spot_detection_pipeline(
         dask_delayed.append(
             _write_image(
                 name=f"{image_key}-log",
-                root=root,
+                root=open_ome_zarr(output, mode="a"),
                 image=loged,
                 output_format=output_image_format,
                 zarr_format="zarr",
@@ -308,7 +310,7 @@ def spot_detection_pipeline(
         dask_delayed.append(
             _write_image(
                 name=f"{image_key}-std",
-                root=root,
+                root=open_ome_zarr(output, mode="a"),
                 image=std_arr,
                 output_format=output_image_format,
                 metadata=dict(parent=image_key),
@@ -322,7 +324,7 @@ def spot_detection_pipeline(
         dask_delayed.append(
             _write_image(
                 name=f"{image_key}-max",
-                root=root,
+                root=open_ome_zarr(output, mode="a"),
                 image=maxed,
                 output_format=output_image_format,
                 zarr_format="zarr",
@@ -332,16 +334,10 @@ def spot_detection_pipeline(
     else:
         del maxed
     if "peaks" in save_keys:
-        root_sep = _get_sep(root)
-        points_path = f"{_get_store_path(root).rstrip(root_sep)}{root_sep}points"
-        root_fs = _get_fs(root)
-        protocol = _get_fs_protocol(root_fs)
-        if protocol != "file":
-            points_path = f"{protocol}://{points_path}"
-        root_fs.makedirs(points_path, exist_ok=True)
-        peaks_path = f"{points_path}{root_sep}{image_key}-peaks.parquet"
-        if root_fs.exists(peaks_path):
-            root_fs.rm(peaks_path, recursive=True)
+        output_fs.makedirs(points_path, exist_ok=True)
+
+        if output_fs.exists(peaks_path):
+            output_fs.rm(peaks_path, recursive=True)
 
         dask_delayed.append(
             _to_parquet(
@@ -353,7 +349,6 @@ def spot_detection_pipeline(
         )
     if not compute and len(dask_delayed) > 0:
         dask.compute(*dask_delayed)
-    return []
 
 
 def _fix_cycles(sbs_cycles):
@@ -805,7 +800,7 @@ def spot_detect_main(arguments: argparse.Namespace):
         chunks = (chunks, chunks)
 
     output = _add_suffix(output, ".zarr")
-    root = open_ome_zarr(output, mode="a")
+
     exp_gen = _set_up_experiment(images, image_pattern, group_by, subset=subset)
     with (
         _create_default_dask_config(),
@@ -815,7 +810,7 @@ def spot_detect_main(arguments: argparse.Namespace):
             spot_detection_pipeline(
                 img,
                 iss_channels=channels,
-                root=root,
+                output=output,
                 z_index=z_index,
                 output_image_format="zarr",
                 max_filter_width=max_filter_width,
