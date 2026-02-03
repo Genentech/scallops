@@ -332,16 +332,16 @@ def spot_detection_pipeline(
     else:
         del maxed
     if "peaks" in save_keys:
-        points_path = (
-            f"{_get_store_path(root).rstrip(_get_sep(root))}{_get_sep(root)}points"
-        )
-        protocol = _get_fs_protocol(_get_fs(root))
+        root_sep = _get_sep(root)
+        points_path = f"{_get_store_path(root).rstrip(root_sep)}{root_sep}points"
+        root_fs = _get_fs(root)
+        protocol = _get_fs_protocol()
         if protocol != "file":
             points_path = f"{protocol}://{points_path}"
-        _get_fs(root).makedirs(points_path, exist_ok=True)
-        peaks_path = f"{points_path}{_get_sep(root)}{image_key}-peaks.parquet"
-        if _get_fs(root).exists(peaks_path):
-            _get_fs(root).rm(peaks_path, recursive=True)
+        root_fs.makedirs(points_path, exist_ok=True)
+        peaks_path = f"{points_path}{root_sep}{image_key}-peaks.parquet"
+        if root_fs.exists(peaks_path):
+            root_fs.rm(peaks_path, recursive=True)
 
         dask_delayed.append(
             _to_parquet(
