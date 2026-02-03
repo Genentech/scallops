@@ -811,9 +811,8 @@ def spot_detect_main(arguments: argparse.Namespace):
         _create_default_dask_config(),
         _create_dask_client(dask_scheduler_url, **dask_cluster_parameters),
     ):
-        delayed_results = []
         for img in exp_gen:
-            delayed_results += spot_detection_pipeline(
+            spot_detection_pipeline(
                 img,
                 iss_channels=channels,
                 root=root,
@@ -834,8 +833,6 @@ def spot_detect_main(arguments: argparse.Namespace):
                 spot_detection_n_cycles=spot_detection_n_cycles,
                 expected_cycles=expected_cycles,
             )
-        if len(delayed_results) > 0:
-            dask.compute(*delayed_results)
 
 
 def reads_pipeline(
