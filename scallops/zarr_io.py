@@ -395,28 +395,28 @@ def write_zarr(
 
     dask_delayed = []
     if zarr_format == "zarr":  # No axis validation
-        kwargs = dict()
         zarr_version = 3 if _zarr_v3() else 2
         fmt = CurrentFormat() if zarr_version else FormatV04()
+        zarr_array_kwargs = dict()
         if zarr_version == 2:
-            kwargs["dimension_separator"] = "/"
+            zarr_array_kwargs["chunk_key_encoding"] = {"name": "v2", "separator": "/"}
         else:
-            kwargs["chunk_key_encoding"] = fmt.chunk_key_encoding
+            zarr_array_kwargs["chunk_key_encoding"] = fmt.chunk_key_encoding
         if isinstance(data, da.Array):
             d = da.to_zarr(
                 arr=data,
                 url=grp.store,
                 component=str(Path(grp.path, "0")),
                 compute=compute,
-                **kwargs,
+                zarr_array_kwargs=zarr_array_kwargs,
             )
             if not compute:
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
             if zarr_version == 2:
-                grp.create_dataset("0", data=data, overwrite=True, **kwargs)
+                grp.create_dataset("0", data=data, overwrite=True, **zarr_array_kwargs)
             else:
-                grp.create_array("0", data=data, overwrite=True, **kwargs)
+                grp.create_array("0", data=data, overwrite=True, **zarr_array_kwargs)
         # v3
         # ome/omero for channel metadata
         # ome/multiscales[0]/metadata for other metadata
