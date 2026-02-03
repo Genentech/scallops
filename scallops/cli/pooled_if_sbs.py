@@ -335,7 +335,7 @@ def spot_detection_pipeline(
         root_sep = _get_sep(root)
         points_path = f"{_get_store_path(root).rstrip(root_sep)}{root_sep}points"
         root_fs = _get_fs(root)
-        protocol = _get_fs_protocol()
+        protocol = _get_fs_protocol(root_fs)
         if protocol != "file":
             points_path = f"{protocol}://{points_path}"
         root_fs.makedirs(points_path, exist_ok=True)
