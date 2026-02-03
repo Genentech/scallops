@@ -449,7 +449,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
         dask_cluster_parameters = _dask_workers_threads(
             threads_per_worker=4 if "sizeshape" in unique_features else 1
         )
-
+    zarr.config.set({"async.concurrency": 1, "threading.max_workers": 1})
     objects_dir_sep = None
     if objects_dir is not None:
         objects_dir_sep = fsspec.core.url_to_fs(objects_dir)[0].sep
