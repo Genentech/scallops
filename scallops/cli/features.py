@@ -194,12 +194,12 @@ def single_feature(
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     join_df = False
     features_output_suffix = "" if join_df else "-features"
-    zarr_inputs = True
+    zarr_inputs = False  # using zarr as input fails with zarr3 with credentials errors
 
-    for f in file_list:
-        if not isinstance(f, (zarr.Group, zarr.Array)):
-            zarr_inputs = False
-            break
+    # for f in file_list:
+    #     if not isinstance(f, (zarr.Group, zarr.Array)):
+    #         zarr_inputs = False
+    #         break
 
     if zarr_inputs and stacked_image_tuple is not None:
         for f in stacked_file_list:
@@ -449,7 +449,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
         dask_cluster_parameters = _dask_workers_threads(
             threads_per_worker=4 if "sizeshape" in unique_features else 1
         )
-    zarr.config.set({"async.concurrency": 1, "threading.max_workers": 1})
+
     objects_dir_sep = None
     if objects_dir is not None:
         objects_dir_sep = fsspec.core.url_to_fs(objects_dir)[0].sep
