@@ -36,9 +36,12 @@ def pca(
     X = adata.X
     is_dask = isinstance(X, da.Array)
     if gpu is None:
-        import torch
+        try:
+            import torch
 
-        gpu = torch.cuda.is_available()
+            gpu = torch.cuda.is_available()
+        except ModuleNotFoundError:
+            gpu = False
     means = None
     stds = None
     if standardize or min_std is not None:
