@@ -79,15 +79,18 @@ def pca(
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
-        batch_index = 0
-        for batch in batches:
-            if batch_index % 5 == 0:
-                logger.info(f"PCA batch {batch_index + 1}/{len(batches)}")
+        try:
+            from tqdm import tqdm
+        except ImportError:
+
+            def tqdm(iterator, *args, **kwargs):
+                return iterator
+
+        for batch in tqdm(batches):
             X_batch = X[batch]
             if is_dask:
                 X_batch = X_batch.compute()
             d.partial_fit(X_batch)
-            batch_index = batch_index + 1
 
         #  x = d.transform(X)  # loads everything into memory
 
