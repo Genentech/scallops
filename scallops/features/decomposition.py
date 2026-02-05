@@ -19,6 +19,7 @@ def pca(
     chunks: tuple[int, int] | bool = True,
     gpu: bool | None = None,
     whiten: bool = False,
+    progress: bool = True,
 ) -> anndata.AnnData:
     """Embed data using PCA.
 
@@ -31,6 +32,7 @@ def pca(
     :param chunks: Rechunk dask array.
     :param gpu: Whether to use GPU.
     :param whiten: Whether to use whitening.
+    :param progress: Whether to show progress bar for incremental PCA.
     :return: PCA Embedding
     """
     X = adata.X
@@ -79,15 +81,18 @@ def pca(
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
-        batch_index = 0
-        for batch in batches:
-            if batch_index % 5 == 0:
-                logger.info(f"PCA batch {batch_index + 1}/{len(batches)}")
+        if progress:
+            try:
+                from tqdm import tqdm
+            except ImportError:
+                from scallops.utils import _tqdm_shim as tqdm
+        else:
+            from scallops.utils import _tqdm_shim as tqdm
+        for batch in tqdm(batches):
             X_batch = X[batch]
             if is_dask:
                 X_batch = X_batch.compute()
             d.partial_fit(X_batch)
-            batch_index = batch_index + 1
 
         #  x = d.transform(X)  # loads everything into memory
 
