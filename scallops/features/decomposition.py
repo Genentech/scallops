@@ -42,6 +42,8 @@ def pca(
             import torch
 
             gpu = torch.cuda.is_available()
+            if gpu:
+                logger.info("Using GPU for PCA")
         except ModuleNotFoundError:
             gpu = False
     means = None
