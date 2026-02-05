@@ -60,6 +60,10 @@ def _cpu_count():
     return CPU_COUNT
 
 
+def _tqdm_shim(iterator, *args, **kwargs):
+    return iterator
+
+
 def _fix_json(d):
     """Attempts to serialize and deserialize a dictionary to ensure it can be safely converted to
     JSON.
