@@ -194,9 +194,11 @@ def normalize_features(
     :param reference_query: Query to extract reference observations
         (e.g. "gene_symbol=='NTC'")
     :param normalize_groups: Column(s) in `data.obs` to stratify by.
-    :param normalize: Normalization method to use.
+    :param normalize: Normalization method to use where `local` uses nearest
+        neighbors by location and `nn` uses nearest neighbors by `neighbors_metric`.
     :param n_neighbors: Number of neighbors for local and nearest neighbor zscore.
-    :param neighbors_metric: Nearest neighbor metric to use.
+    :param neighbors_metric: Nearest neighbor metric to use when normalize is
+        `nn-zscore`.
     :param robust: Use robust statistics.
     :param mad_scale: Numerical scale factor to divide median absolute deviation. The
         string “normal” is also accepted, and results in scale being the inverse of the
@@ -209,38 +211,14 @@ def normalize_features(
 
     mad_scale = _convert_scale(mad_scale)
     coords = dict()
-    group_by_multi = (
-        normalize_groups is not None
-        and not isinstance(normalize_groups, str)
-        and isinstance(normalize_groups, Sequence)
-        and len(normalize_groups) > 1
-    )
-    tmp_column_name = None
     obs = data.obs
-    if group_by_multi:
-        # https://github.com/pydata/xarray/issues/11004
-        obs = obs.copy()
-        tmp_column_name = "__tmp"
-        counter = 0
-        while tmp_column_name in obs.columns:
-            counter += 1
-            tmp_column_name = f"__tmp{counter}"
-        obs[tmp_column_name] = (
-            obs[normalize_groups[0]]
-            .astype(str)
-            .str.cat(
-                [obs[field].astype(str) for field in normalize_groups[1:]], sep="-"
-            )
-        )
     coords["obs"] = obs.index
-    for c in obs.columns:
+    for c in data.obs.columns:
         coords[c] = ("obs", obs[c])
-    x_data = xr.DataArray(data.X, dims=["obs", "var"], coords=coords, name="")
 
+    x_data = xr.DataArray(data.X, dims=["obs", "var"], name="", coords=coords)
     if normalize_groups is not None:
-        group_result = x_data.groupby(
-            normalize_groups if tmp_column_name is None else tmp_column_name
-        ).map(
+        group_result = x_data.groupby(normalize_groups).map(
             lambda x: _normalize_group(
                 x,
                 reference_query=reference_query,
@@ -254,10 +232,8 @@ def normalize_features(
                 scaling=scaling,
             )
         )
-        drop_cols = ["obs"]
-        if tmp_column_name is not None:
-            drop_cols.append(tmp_column_name)
-        group_obs = group_result.coords["obs"].to_dataframe().drop(drop_cols, axis=1)
+
+        group_obs = obs.loc[group_result.coords["obs"].values]
         data = anndata.AnnData(X=group_result.data, obs=group_obs, var=data.var.copy())
     else:
         result = _normalize_group(
