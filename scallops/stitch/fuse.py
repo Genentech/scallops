@@ -22,12 +22,13 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.utils import dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
+from scallops.zarr_io import _zarr_v3
 
 logger = logging.getLogger("scallops")
 
 
 def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: str):
-    return {
+    d = {
         "multiscales": [
             {
                 "axes": [
@@ -38,10 +39,10 @@ def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: s
                     {
                         "coordinateTransformations": [
                             {
-                                "scale": [
+                                "scale": (
                                     float(image_spacing[0]),
                                     float(image_spacing[1]),
-                                ],
+                                ),
                                 "type": "scale",
                             }
                         ],
@@ -49,10 +50,13 @@ def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: s
                     }
                 ],
                 "name": f"/labels/{label_name}",
-                "version": "0.4",
+                "version": "0.5" if _zarr_v3() else "0.4",
             }
         ]
     }
+    if _zarr_v3():
+        return {"ome": d}
+    return d
 
 
 def _create_ome_metadata(
@@ -66,7 +70,7 @@ def _create_ome_metadata(
     metadata["stitch_coords"] = dict()
     for c in stitch_coords:  # convert to dict
         metadata["stitch_coords"][c] = stitch_coords[c].to_list()
-    return {
+    d = {
         "multiscales": [
             {
                 "metadata": metadata,
@@ -79,11 +83,11 @@ def _create_ome_metadata(
                     {
                         "coordinateTransformations": [
                             {
-                                "scale": [
+                                "scale": (
                                     1.0,
                                     float(image_spacing[0]),
                                     float(image_spacing[1]),
-                                ],
+                                ),
                                 "type": "scale",
                             }
                         ],
@@ -91,10 +95,13 @@ def _create_ome_metadata(
                     }
                 ],
                 "name": f"/images/{image_key}",
-                "version": "0.4",
+                "version": "0.5" if _zarr_v3() else "0.4",
             }
         ]
     }
+    if _zarr_v3():
+        return {"ome": d}
+    return d
 
 
 def _fuse(
@@ -174,8 +181,8 @@ def _fuse(
 
     df["x"] = df["x"].round().values.astype(int)
     df["y"] = df["y"].round().values.astype(int)
-    fused_y_size = (df["y"] + ysize).max()
-    fused_x_size = (df["x"] + xsize).max()
+    fused_y_size = int((df["y"] + ysize).max())
+    fused_x_size = int((df["x"] + xsize).max())
 
     if channels_per_batch is None:
         if blend == "none":
@@ -222,18 +229,26 @@ def _fuse(
             locks.append(threading.Lock())
         locks = np.array(locks)
         partition_tree = shapely.STRtree(partition_boxes)
+    output_shape = (len(output_channels), fused_y_size, fused_x_size)
 
-    result = group.create_dataset(
-        shape=(
-            len(output_channels),  # c
-            fused_y_size,
-            fused_x_size,
-        ),
-        dtype=target_dtype,
-        chunks=(1,) + chunk_size,
-        name="0",
-        dimension_separator="/",
-        overwrite=True,
+    result = (
+        group.create_array(
+            shape=output_shape,
+            dtype=target_dtype,
+            chunks=(1,) + chunk_size,
+            name="0",
+            chunk_key_encoding={"name": "default", "separator": "/"},
+            overwrite=True,
+        )
+        if _zarr_v3()
+        else group.create_dataset(
+            shape=output_shape,
+            dtype=target_dtype,
+            chunks=(1,) + chunk_size,
+            name="0",
+            dimension_separator="/",
+            overwrite=True,
+        )
     )
 
     _fuse_image_delayed = delayed(_fuse_image)
