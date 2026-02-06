@@ -276,7 +276,9 @@ def _normalize_group(
     if normalize == "nn-zscore":
         # nearest neighbors in PCA space
         nn_query = data.data
-        nn_ref = nn_query if reference_data is not None else reference_data.data
+        nn_ref = nn_query
+        if reference_data is not None:
+            nn_ref = reference_data.data
         indices = _nearest_neighbors_indices(
             nn_ref, nn_query, n_neighbors=n_neighbors, metric=neighbors_metric
         )
