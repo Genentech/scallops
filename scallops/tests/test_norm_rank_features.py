@@ -37,7 +37,7 @@ def robust(request):
     return request.param
 
 
-@pytest.fixture(params=["zscore", "local-zscore"])
+@pytest.fixture(params=["zscore", "local-zscore", "nn-zscore"])
 def normalize(request):
     return request.param
 
@@ -81,25 +81,28 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
             else np.std(ref_values, axis=0)
         )
     else:
-        query_centroids = np.stack(
-            (
-                ds.obs[_centroid_column_names[0]].values,
-                ds.obs[_centroid_column_names[1]].values,
-            ),
-            axis=1,
-        )
+        if normalize == "nn-zscore":
+            query = ds.X
+            ref = ref_ds.X
 
-        ref_centroids = np.stack(
-            (
-                ref_ds.obs[_centroid_column_names[0]].values,
-                ref_ds.obs[_centroid_column_names[1]].values,
-            ),
-            axis=1,
-        )
+        elif normalize == "local-zscore":
+            query = np.stack(
+                (
+                    ds.obs[_centroid_column_names[0]].values,
+                    ds.obs[_centroid_column_names[1]].values,
+                ),
+                axis=1,
+            )
 
-        indices = _nearest_neighbors_indices(
-            ref_centroids, query_centroids, n_neighbors=n_neighbors
-        )
+            ref = np.stack(
+                (
+                    ref_ds.obs[_centroid_column_names[0]].values,
+                    ref_ds.obs[_centroid_column_names[1]].values,
+                ),
+                axis=1,
+            )
+
+        indices = _nearest_neighbors_indices(ref, query, n_neighbors=n_neighbors)
         ref_values = ref_values[indices]
         # ref_values dims are (labels,neighbors,features)
         if robust:
@@ -120,7 +123,9 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
 
 
 @pytest.mark.features
-def test_norm_features(client, data, normalize, normalize_groups, robust, reference):
+def test_norm_features(
+    client, data, normalize, normalize_groups, robust, reference, tmp_path
+):
     n_neighbors = 2 if normalize_groups is None else 1
     scaling = n_neighbors > 1
     normed_data = normalize_features(
