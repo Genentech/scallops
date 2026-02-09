@@ -38,6 +38,13 @@ from scallops.utils import _fix_json
 logger = logging.getLogger("scallops")
 
 
+def is_anndata_zarr(store: StoreLike):
+    try:
+        return isinstance(zarr.open(store, mode="r", path="uns"), zarr.Group)
+    except:  # noqa: E722
+        return False
+
+
 def is_ome_zarr_array(node: zarr.Group) -> bool:
     """Check if a Zarr node is an OME-Zarr array.
 
