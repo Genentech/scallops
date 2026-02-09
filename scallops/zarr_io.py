@@ -38,7 +38,11 @@ from scallops.utils import _fix_json
 logger = logging.getLogger("scallops")
 
 
-def is_anndata_zarr(store: StoreLike):
+def is_anndata_zarr(store: StoreLike) -> bool:
+    """Determines whether store is an AnnData Zarr .
+
+    :param store: Zarr store
+    """
     try:
         return isinstance(zarr.open(store, mode="r", path="uns"), zarr.Group)
     except:  # noqa: E722
