@@ -27,7 +27,7 @@ def pca(
     :param standardize: Whether to standardize the data.
     :param n_components: Number of PCA components.
     :param min_std: Remove features with standard deviation <= `min_std`.
-    :param max_value: Truncate to this value after scaling
+    :param max_value: Clip to this value after standardizing
     :param batch_size: Batch size for incremental PCA.
     :param chunks: Rechunk dask array.
     :param gpu: Whether to use GPU.
@@ -64,8 +64,7 @@ def pca(
     if standardize:
         X = (X - means) / stds
         if max_value is not None:
-            X[X > max_value] = max_value
-            X[X < -max_value] = -max_value
+            X = get_namespace(X).clip(X, -max_value, max_value)
     if is_dask and chunks:
         if isinstance(chunks, bool):
             if batch_size is not None:
