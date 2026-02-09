@@ -3,6 +3,7 @@ import os
 import shutil
 
 import anndata
+import dask.array as da
 import dask.dataframe as dd
 import numpy as np
 import ome_types
@@ -31,6 +32,7 @@ from scallops.io import (
 from scallops.zarr_io import (
     _write_zarr_image,
     _write_zarr_labels,
+    is_anndata_zarr,
     open_ome_zarr,
     read_ome_zarr_array,
 )
@@ -56,6 +58,36 @@ def test_is_scallops_zarr(tmp_path):
     store.attrs["scallops"] = "test"
     assert is_scallops_zarr(path)
     assert anndata.read_zarr(path).shape == (2, 2)
+
+
+@pytest.mark.io
+def test_is_anndata_zarr(tmp_path):
+    d = anndata.AnnData(
+        X=np.ones((2, 2)),
+    )
+    path1 = tmp_path / "test1.zarr"
+    d.write_zarr(path1, convert_strings_to_categoricals=False)
+    assert is_anndata_zarr(path1)
+
+    @delayed
+    def create_array(fail):
+        if fail:
+            raise ValueError("fail")
+        return np.ones((3, 3), dtype=int)
+
+    path2 = tmp_path / "test2.zarr"
+    X = da.concatenate(
+        [
+            da.from_delayed(create_array(False), shape=(3, 3), dtype=int),
+            da.from_delayed(create_array(True), shape=(3, 3), dtype=int),
+        ]
+    )
+    d = anndata.AnnData(X=X)
+    try:
+        d.write_zarr(path2, convert_strings_to_categoricals=False)
+    except ValueError:
+        pass
+    assert not is_anndata_zarr(path2)
 
 
 @pytest.mark.io

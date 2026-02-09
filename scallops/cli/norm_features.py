@@ -13,7 +13,6 @@ import dask.dataframe as dd
 import fsspec
 import pyarrow as pa
 import pyarrow.parquet as pq
-import zarr
 
 from scallops.cli.util import (
     _create_dask_client,
@@ -30,8 +29,9 @@ from scallops.features.util import (
     _read_data,
     _slice_anndata,
 )
-from scallops.io import is_parquet_file, is_scallops_zarr
+from scallops.io import is_parquet_file
 from scallops.utils import _fix_json
+from scallops.zarr_io import is_anndata_zarr
 
 logger = _get_cli_logger()
 
@@ -73,7 +73,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
     output_format = "zarr" if norm_output.lower().endswith("zarr") else "parquet"
     if not force:
         skip = False
-        if output_format == "zarr" and is_scallops_zarr(norm_output):
+        if output_format == "zarr" and is_anndata_zarr(norm_output):
             skip = True
 
         elif output_format == "parquet" and is_parquet_file(norm_output):
@@ -131,9 +131,9 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
                 chunks = list(data.X.chunksize)
                 chunks[0] = "auto"
                 data.X = data.X.rechunk(tuple(chunks))
+            data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(norm_output, convert_strings_to_categoricals=False)
-            store = zarr.open(norm_output, mode="r+")
-            store.attrs["scallops"] = _fix_json(metadata)
+
         else:
             data.X = data.X.compute()
             df = data.to_df().join(data.obs)
