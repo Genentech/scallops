@@ -416,7 +416,7 @@ def _merged_to_matrix(
                     dtype=np.float64,
                 )
             )
-    data = da.concatenate(arrays, axis=1).rechunk(("auto", 10))
+    data = da.concatenate(arrays, axis=1).rechunk(("auto", "auto"))
     rename = dict()
     _replace_chars = " |-"
     for c in merged_df.columns:
