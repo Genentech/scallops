@@ -340,12 +340,14 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
         )
     else:
         image_metadata = _get_image_metadata(image)
+
         if "ome" in image_metadata or "multiscales" in image_metadata:
             metadata = (
                 image_metadata["ome"]["multiscales"][0]["metadata"]
                 if "ome" in image_metadata
-                else image.metadata["multiscales"][0]["metadata"]
+                else image_metadata["multiscales"][0]["metadata"]
             )
+
             values = [metadata["position_y"], metadata["position_x"]]
             physical_size_y_unit = metadata["position_y_unit"]
             physical_size_x_unit = metadata["position_x_unit"]

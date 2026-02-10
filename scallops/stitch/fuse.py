@@ -22,12 +22,13 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.utils import dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
-from scallops.zarr_io import _zarr_v3
+from scallops.zarr_io import _zarr_v3, default_zarr_format, get_zarr_array_kwargs
 
 logger = logging.getLogger("scallops")
 
 
 def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: str):
+    fmt = default_zarr_format()
     d = {
         "multiscales": [
             {
@@ -50,13 +51,14 @@ def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: s
                     }
                 ],
                 "name": f"/labels/{label_name}",
-                "version": "0.5" if _zarr_v3() else "0.4",
+                "version": fmt.version,
             }
         ]
     }
-    if _zarr_v3():
-        return {"ome": d}
-    return d
+    if fmt.version in ("0.1", "0.2", "0.3", "0.4"):
+        return d
+
+    return {"ome": d}
 
 
 def _create_ome_metadata(
@@ -68,6 +70,7 @@ def _create_ome_metadata(
     metadata = {}
     metadata.update(**kwargs)
     metadata["stitch_coords"] = dict()
+    fmt = default_zarr_format()
     for c in stitch_coords:  # convert to dict
         metadata["stitch_coords"][c] = stitch_coords[c].to_list()
     d = {
@@ -95,13 +98,13 @@ def _create_ome_metadata(
                     }
                 ],
                 "name": f"/images/{image_key}",
-                "version": "0.5" if _zarr_v3() else "0.4",
+                "version": fmt.version,
             }
         ]
     }
-    if _zarr_v3():
-        return {"ome": d}
-    return d
+    if fmt.version in ("0.1", "0.2", "0.3", "0.4"):
+        return d
+    return {"ome": d}
 
 
 def _fuse(
@@ -230,6 +233,7 @@ def _fuse(
         locks = np.array(locks)
         partition_tree = shapely.STRtree(partition_boxes)
     output_shape = (len(output_channels), fused_y_size, fused_x_size)
+    fmt = default_zarr_format()
 
     result = (
         group.create_array(
@@ -237,8 +241,8 @@ def _fuse(
             dtype=target_dtype,
             chunks=(1,) + chunk_size,
             name="0",
-            chunk_key_encoding={"name": "default", "separator": "/"},
             overwrite=True,
+            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
         )
         if _zarr_v3()
         else group.create_dataset(
@@ -246,8 +250,8 @@ def _fuse(
             dtype=target_dtype,
             chunks=(1,) + chunk_size,
             name="0",
-            dimension_separator="/",
             overwrite=True,
+            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
         )
     )
 

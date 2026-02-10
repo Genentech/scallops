@@ -6,7 +6,6 @@ import shutil
 from collections.abc import Sequence
 from typing import Literal
 
-import dask.array as da
 import fsspec
 import numpy as np
 import pandas as pd
@@ -31,7 +30,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import _zarr_v3, is_ome_zarr_array
+from scallops.zarr_io import is_ome_zarr_array, write_zarr
 
 logger = _get_cli_logger()
 
@@ -357,8 +356,6 @@ def _single_stitch(
         blend,
         image_output_root,
         image_key,
-        fused_y_size,
-        fused_x_size,
         fused_tile_shape,
         chunk_size,
         image_spacing,
@@ -383,8 +380,6 @@ def _write_arrays(
     blend,
     image_output_root,
     image_key,
-    fused_y_size,
-    fused_x_size,
     fused_tile_shape,
     chunk_size,
     image_spacing,
@@ -404,28 +399,8 @@ def _write_arrays(
         labels_group = image_output_root.require_group("labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
 
-        array = (
-            group.create_array(
-                name="0",
-                shape=(fused_y_size, fused_x_size),
-                chunks=chunk_size,
-                dtype=np.uint8,
-                chunk_key_encoding={"name": "default", "separator": "/"},
-                overwrite=True,
-            )
-            if _zarr_v3()
-            else group.create_dataset(
-                name="0",
-                shape=(fused_y_size, fused_x_size),
-                chunks=chunk_size,
-                dtype=np.uint8,
-                dimension_separator="/",
-                overwrite=True,
-            )
-        )
-
-        da.to_zarr(
-            arr=_dask_from_array_no_copy(
+        write_zarr(
+            data=_dask_from_array_no_copy(
                 tile_overlap_mask(
                     stitch_positions_df,
                     fill=blend != "none",
@@ -433,41 +408,28 @@ def _write_arrays(
                 ),
                 chunks=chunk_size,
             ),
-            url=array,
+            grp=group,
+            image_attrs=None,
+            coords=None,
+            dims=None,
+            scaler=None,
             compute=True,
-            dimension_separator="/",
         )
         group.attrs.update(
             _create_label_ome_metadata(image_spacing, image_key + "-mask")
         )
         if blend == "none":
             group = labels_group.create_group(image_key + "-tile", overwrite=True)
-            array = (
-                group.create_array(
-                    name="0",
-                    shape=(fused_y_size, fused_x_size),
-                    chunks=chunk_size,
-                    dtype=np.uint16,
-                    chunk_key_encoding={"name": "default", "separator": "/"},
-                    overwrite=True,
-                )
-                if _zarr_v3()
-                else group.create_dataset(
-                    name="0",
-                    shape=(fused_y_size, fused_x_size),
-                    chunks=chunk_size,
-                    dtype=np.uint16,
-                    dimension_separator="/",
-                    overwrite=True,
-                )
-            )
-
-            da.to_zarr(
-                arr=_dask_from_array_no_copy(
+            write_zarr(
+                data=_dask_from_array_no_copy(
                     tile_source_labels(stitch_positions_df, fused_tile_shape),
                     chunks=chunk_size,
                 ),
-                url=array,
+                grp=group,
+                image_attrs=None,
+                coords=None,
+                dims=None,
+                scaler=None,
                 compute=True,
             )
             label_metadata = _create_label_ome_metadata(
