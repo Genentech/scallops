@@ -242,7 +242,7 @@ def _fuse(
             chunks=(1,) + chunk_size,
             name="0",
             overwrite=True,
-            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
+            **get_zarr_array_kwargs(fmt),
         )
         if _zarr_v3()
         else group.create_dataset(
@@ -251,7 +251,7 @@ def _fuse(
             chunks=(1,) + chunk_size,
             name="0",
             overwrite=True,
-            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
+            **get_zarr_array_kwargs(fmt),
         )
     )
 

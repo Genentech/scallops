@@ -346,7 +346,7 @@ def _itk_align_reference_time_zarr(
                     chunks=(1,) * (len(shape) - 2) + chunk_size,
                     dtype=dtype,
                     overwrite=True,
-                    zarr_array_kwargs=get_zarr_array_kwargs(fmt),
+                    **get_zarr_array_kwargs(fmt),
                 )
                 if _zarr_v3()
                 else group.create_dataset(
@@ -355,7 +355,7 @@ def _itk_align_reference_time_zarr(
                     chunks=(1,) * (len(shape) - 2) + chunk_size,
                     dtype=dtype,
                     overwrite=True,
-                    zarr_array_kwargs=get_zarr_array_kwargs(fmt),
+                    **get_zarr_array_kwargs(fmt),
                 )
             )
 
@@ -1193,7 +1193,7 @@ def _itk_transform_image_zarr(
             chunks=chunks,
             dtype=image.dtype,
             overwrite=True,
-            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
+            **get_zarr_array_kwargs(fmt),
         )
         if _zarr_v3()
         else group.create_dataset(
@@ -1202,7 +1202,7 @@ def _itk_transform_image_zarr(
             chunks=chunks,
             dtype=image.dtype,
             overwrite=True,
-            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
+            **get_zarr_array_kwargs(fmt),
         )
     )
 
