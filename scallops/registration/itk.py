@@ -34,7 +34,6 @@ from scallops.registration.landmarks import _get_translation, find_landmarks
 from scallops.utils import _dask_from_array_no_copy
 from scallops.xr import _get_dims
 from scallops.zarr_io import (
-    _zarr_v3,
     default_zarr_format,
     get_zarr_array_kwargs,
     open_ome_zarr,
@@ -339,24 +338,13 @@ def _itk_align_reference_time_zarr(
                 image_name.replace("/", "-"), overwrite=True
             )
 
-            zarr_dataset = (
-                group.create_array(
-                    "0",
-                    shape=shape,
-                    chunks=(1,) * (len(shape) - 2) + chunk_size,
-                    dtype=dtype,
-                    overwrite=True,
-                    **get_zarr_array_kwargs(fmt),
-                )
-                if _zarr_v3()
-                else group.create_dataset(
-                    "0",
-                    shape=shape,
-                    chunks=(1,) * (len(shape) - 2) + chunk_size,
-                    dtype=dtype,
-                    overwrite=True,
-                    **get_zarr_array_kwargs(fmt),
-                )
+            zarr_dataset = group.create_array(
+                "0",
+                shape=shape,
+                chunks=(1,) * (len(shape) - 2) + chunk_size,
+                dtype=dtype,
+                overwrite=True,
+                **get_zarr_array_kwargs(fmt),
             )
 
         return {
@@ -1186,24 +1174,13 @@ def _itk_transform_image_zarr(
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
     fmt = default_zarr_format()
 
-    data = (
-        group.create_array(
-            "0",
-            shape=dim_sizes + output_size,
-            chunks=chunks,
-            dtype=image.dtype,
-            overwrite=True,
-            **get_zarr_array_kwargs(fmt),
-        )
-        if _zarr_v3()
-        else group.create_dataset(
-            "0",
-            shape=dim_sizes + output_size,
-            chunks=chunks,
-            dtype=image.dtype,
-            overwrite=True,
-            **get_zarr_array_kwargs(fmt),
-        )
+    data = group.create_array(
+        "0",
+        shape=dim_sizes + output_size,
+        chunks=chunks,
+        dtype=image.dtype,
+        overwrite=True,
+        **get_zarr_array_kwargs(fmt),
     )
 
     _itk_transform_image(

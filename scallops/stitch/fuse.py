@@ -22,7 +22,7 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.utils import dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
-from scallops.zarr_io import _zarr_v3, default_zarr_format, get_zarr_array_kwargs
+from scallops.zarr_io import default_zarr_format, get_zarr_array_kwargs
 
 logger = logging.getLogger("scallops")
 
@@ -235,24 +235,13 @@ def _fuse(
     output_shape = (len(output_channels), fused_y_size, fused_x_size)
     fmt = default_zarr_format()
 
-    result = (
-        group.create_array(
-            shape=output_shape,
-            dtype=target_dtype,
-            chunks=(1,) + chunk_size,
-            name="0",
-            overwrite=True,
-            **get_zarr_array_kwargs(fmt),
-        )
-        if _zarr_v3()
-        else group.create_dataset(
-            shape=output_shape,
-            dtype=target_dtype,
-            chunks=(1,) + chunk_size,
-            name="0",
-            overwrite=True,
-            **get_zarr_array_kwargs(fmt),
-        )
+    result = group.create_array(
+        shape=output_shape,
+        dtype=target_dtype,
+        chunks=(1,) + chunk_size,
+        name="0",
+        overwrite=True,
+        **get_zarr_array_kwargs(fmt),
     )
 
     _fuse_image_delayed = delayed(_fuse_image)

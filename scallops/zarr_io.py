@@ -10,7 +10,6 @@ Authors:
 
 import logging
 from collections.abc import Callable, Hashable
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,7 +29,6 @@ from ome_zarr.io import parse_url
 from ome_zarr.scale import Scaler
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image
-from packaging.version import Version
 from xarray.core.coordinates import DataArrayCoordinates
 from zarr.storage import StoreLike
 
@@ -42,11 +40,6 @@ logger = logging.getLogger("scallops")
 
 def default_zarr_format():
     return FormatV04()
-
-
-@lru_cache
-def _zarr_v3() -> bool:
-    return Version(zarr.__version__).major >= 3
 
 
 def get_zarr_array_kwargs(fmt):
@@ -431,10 +424,7 @@ def write_zarr(
             if not compute:
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
-            if not _zarr_v3():
-                grp.create_dataset("0", data=data, overwrite=True, **zarr_array_kwargs)
-            else:
-                grp.create_array("0", data=data, overwrite=True, **zarr_array_kwargs)
+            grp.create_array("0", data=data, overwrite=True, **zarr_array_kwargs)
         # v3
         # ome/omero for channel metadata
         # ome/multiscales[0]/metadata for other metadata
