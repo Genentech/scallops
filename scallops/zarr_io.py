@@ -25,7 +25,7 @@ from dask.array import from_zarr
 from dask.delayed import Delayed
 from dask.graph_manipulation import bind
 from ome_zarr.axes import KNOWN_AXES
-from ome_zarr.format import CurrentFormat, FormatV04
+from ome_zarr.format import FormatV04
 from ome_zarr.io import parse_url
 from ome_zarr.scale import Scaler
 from ome_zarr.types import JSONDict
@@ -38,6 +38,23 @@ from scallops.experiment.abc import _LazyLoadData
 from scallops.utils import _fix_json
 
 logger = logging.getLogger("scallops")
+
+
+def default_zarr_format():
+    return FormatV04()
+
+
+@lru_cache
+def _zarr_v3() -> bool:
+    return Version(zarr.__version__).major >= 3
+
+
+def get_zarr_array_kwargs(fmt):
+    return (
+        {"dimension_separator": "/"}
+        if fmt.version == 2
+        else {"chunk_key_encoding": fmt.chunk_key_encoding}
+    )
 
 
 def is_anndata_zarr(store: StoreLike) -> bool:
@@ -320,11 +337,6 @@ def _write_zarr_image(
     )
 
 
-@lru_cache
-def _zarr_v3() -> bool:
-    return Version(zarr.__version__).major >= 3
-
-
 def write_zarr(
     grp: zarr.Group,
     data: np.ndarray | da.Array | xr.DataArray,
@@ -405,14 +417,9 @@ def write_zarr(
         )
 
     dask_delayed = []
+    fmt = default_zarr_format()
     if zarr_format == "zarr":  # No axis validation
-        zarr_version = 3 if _zarr_v3() else 2
-        fmt = CurrentFormat() if zarr_version else FormatV04()
-        zarr_array_kwargs = dict()
-        if zarr_version == 2:
-            zarr_array_kwargs["chunk_key_encoding"] = {"name": "v2", "separator": "/"}
-        else:
-            zarr_array_kwargs["chunk_key_encoding"] = fmt.chunk_key_encoding
+        zarr_array_kwargs = get_zarr_array_kwargs(fmt)
         if isinstance(data, da.Array):
             d = da.to_zarr(
                 arr=data,
@@ -424,7 +431,7 @@ def write_zarr(
             if not compute:
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
-            if zarr_version == 2:
+            if not _zarr_v3():
                 grp.create_dataset("0", data=data, overwrite=True, **zarr_array_kwargs)
             else:
                 grp.create_array("0", data=data, overwrite=True, **zarr_array_kwargs)
@@ -441,7 +448,7 @@ def write_zarr(
         multiscales = [dict(version=fmt.version, datasets=datasets, name=grp.name)]
         zarr_attrs = (
             {"multiscales": multiscales}
-            if zarr_version == 2
+            if fmt.zarr_format == 2
             else {"ome": {"multiscales": multiscales}}
         )
 
@@ -449,7 +456,7 @@ def write_zarr(
             multiscales[0]["axes"] = axes
         if image_attrs is not None:
             if "omero" in image_attrs:
-                if zarr_version == 2:
+                if fmt.zarr_format == 2:
                     omero = zarr_attrs.get("omero", {})
                     omero.update(image_attrs.pop("omero"))
                     zarr_attrs["omero"] = omero
@@ -478,6 +485,7 @@ def write_zarr(
             group=grp,
             scaler=scaler,
             axes=axes,
+            fmt=fmt,
             compute=compute,
             metadata=image_attrs if image_attrs is not None else {},
             coordinate_transformations=(
@@ -578,11 +586,13 @@ def _write_zarr_labels(
         isinstance(labels, xr.DataArray) and isinstance(labels.data, da.Array)
     ):
         labels = rechunk(labels)
+    fmt = default_zarr_format()
     return write_image(
         labels,
         grp,
         scaler=scaler,
         axes=label_axes,
+        fmt=fmt,
         metadata=metadata,
         compute=compute,
         coordinate_transformations=None,
@@ -718,10 +728,11 @@ def open_ome_zarr(url: Path | str, mode: str = "a") -> zarr.Group | None:
     """
 
     try:
-        loc = parse_url(url, mode=mode)
+        fmt = default_zarr_format()
+        loc = parse_url(url, mode=mode, fmt=fmt)
         if loc is None:
             return None
-        return zarr.open(loc.store, mode=mode)
+        return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
     except Exception as e:
         logger.error(f"Failed to open OME-Zarr store: {url}")
         raise e

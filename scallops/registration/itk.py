@@ -33,7 +33,13 @@ from scallops.io import _download_file, _get_fs_protocol, get_image_spacing
 from scallops.registration.landmarks import _get_translation, find_landmarks
 from scallops.utils import _dask_from_array_no_copy
 from scallops.xr import _get_dims
-from scallops.zarr_io import _zarr_v3, open_ome_zarr, write_zarr
+from scallops.zarr_io import (
+    _zarr_v3,
+    default_zarr_format,
+    get_zarr_array_kwargs,
+    open_ome_zarr,
+    write_zarr,
+)
 
 logger = logging.getLogger("scallops")
 
@@ -328,6 +334,7 @@ def _itk_align_reference_time_zarr(
         group = None
         if image_root is not None:
             images_group = image_root.require_group("images", overwrite=False)
+            fmt = default_zarr_format()
             group = images_group.create_group(
                 image_name.replace("/", "-"), overwrite=True
             )
@@ -339,6 +346,7 @@ def _itk_align_reference_time_zarr(
                     chunks=(1,) * (len(shape) - 2) + chunk_size,
                     dtype=dtype,
                     overwrite=True,
+                    zarr_array_kwargs=get_zarr_array_kwargs(fmt),
                 )
                 if _zarr_v3()
                 else group.create_dataset(
@@ -347,6 +355,7 @@ def _itk_align_reference_time_zarr(
                     chunks=(1,) * (len(shape) - 2) + chunk_size,
                     dtype=dtype,
                     overwrite=True,
+                    zarr_array_kwargs=get_zarr_array_kwargs(fmt),
                 )
             )
 
@@ -1175,6 +1184,7 @@ def _itk_transform_image_zarr(
         image_name.replace("/", "-"), overwrite=True
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
+    fmt = default_zarr_format()
 
     data = (
         group.create_array(
@@ -1183,6 +1193,7 @@ def _itk_transform_image_zarr(
             chunks=chunks,
             dtype=image.dtype,
             overwrite=True,
+            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
         )
         if _zarr_v3()
         else group.create_dataset(
@@ -1191,6 +1202,7 @@ def _itk_transform_image_zarr(
             chunks=chunks,
             dtype=image.dtype,
             overwrite=True,
+            zarr_array_kwargs=get_zarr_array_kwargs(fmt),
         )
     )
 
