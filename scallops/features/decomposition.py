@@ -64,7 +64,7 @@ def pca(
             return x
 
         xdata = xdata.groupby(standardize_by).map(
-            partial(_standardize, min_std, max_value)
+            partial(_standardize, min_std=min_std, max_value=max_value)
         )
         X = xdata.data
         non_nan_features = ~xp.isnan(X, axis=0)
