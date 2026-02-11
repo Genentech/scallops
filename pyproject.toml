@@ -55,7 +55,7 @@ dependencies = [
     "matplotlib",
     "natsort",
     "numcodecs",
-    "numpy<2",
+    "numpy",
     "ome-zarr",
     "pandas",
     "pint",
@@ -72,7 +72,7 @@ dependencies = [
     "tensorflow",
     "tifffile",
     "xarray",
-    "zarr"
+    "zarr>=3"
 ]
 
 [project.optional-dependencies]
