@@ -159,4 +159,4 @@ def pca(
         }
     }
 
-    return anndata.AnnData(X=X_transformed, obs=obs, uns=uns)
+    return anndata.AnnData(X=X_transformed, obs=obs.copy(), uns=uns)
