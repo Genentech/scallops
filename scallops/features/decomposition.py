@@ -67,10 +67,11 @@ def pca(
             partial(_standardize, min_std=min_std, max_value=max_value)
         )
         X = xdata.data
-        non_nan_features = ~xp.isnan(X, axis=0)
+        no_nans_per_feature = xp.isnan(X).sum(axis=0) == 0
+
         if is_dask:
-            non_nan_features = non_nan_features.compute()
-        X = X[:, non_nan_features]
+            no_nans_per_feature = no_nans_per_feature.compute()
+        X = X[:, no_nans_per_feature]
         logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
         obs = adata.obs.loc[xdata.coords["obs"].values]
     else:
