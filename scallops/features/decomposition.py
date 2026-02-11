@@ -67,7 +67,7 @@ def pca(
             partial(_standardize, min_std, max_value)
         )
         X = xdata.data
-        non_nan_features = ~xp.isnan(X, axis=1)
+        non_nan_features = ~xp.isnan(X, axis=0)
         if is_dask:
             non_nan_features = non_nan_features.compute()
         X = X[:, non_nan_features]
@@ -104,6 +104,7 @@ def pca(
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
+
         if progress:
             try:
                 from tqdm import tqdm
