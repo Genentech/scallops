@@ -381,7 +381,6 @@ def _fuse(
                 url=result,
                 region=(slice(channel_batch, channel_batch + channels_per_batch),),
                 compute=True,
-                dimension_separator="/",
             )
 
 
