@@ -36,7 +36,7 @@ dependencies = [
     "bioio-nd2",
     "bioio-tifffile",
     "bioio-ome-tiff",
-    "bioio-ome-zarr",
+    "bioio-ome-zarr>=3.2.2",
     "bioio",
     "centrosome",
     "cp-measure",

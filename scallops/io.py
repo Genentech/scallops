@@ -29,6 +29,7 @@ from typing import Any, Dict, Generator, Literal, Mapping, Sequence
 
 import anndata
 import bioio
+import bioio_ome_zarr
 import bioio_tifffile
 import dask
 import dask.array as da
@@ -54,7 +55,6 @@ from tifffile import tifffile
 from xarray.core.utils import equivalent
 from zarr.storage import StoreLike
 
-from scallops._bioio_zarr_reader import ScallopsZarrReader
 from scallops.experiment.elements import Experiment, _LazyLoadData
 from scallops.externals.tifffile2014 import imsave
 from scallops.utils import forceTCZYX, mlcs
@@ -234,7 +234,7 @@ def _create_image(path: str, **kwargs) -> bioio.BioImage:
     base_path_lc, ext = os.path.splitext(path_lc)
     if "reader" not in img_args:
         if ext in ["", ".zarr", "/", ".zarr/"]:
-            img_args["reader"] = ScallopsZarrReader
+            img_args["reader"] = bioio_ome_zarr.Reader
         elif ext in [".tiff", ".tif"] and os.path.splitext(base_path_lc)[1] != ".ome":
             img_args["reader"] = bioio_tifffile.Reader
     return bioio.BioImage(path, **img_args)

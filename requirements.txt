@@ -3,7 +3,7 @@ adjustText==1.3.0
 bioio==3.2.0
 bioio-nd2==1.6.2
 bioio-ome-tiff==1.4.0
-bioio-ome-zarr==3.2.1
+bioio-ome-zarr==3.2.2
 bioio-tifffile==1.3.0
 centrosome==1.3.3
 cp-measure==0.1.13
@@ -15,7 +15,7 @@ filelock==3.20.3
 flox==0.11.1
 fsspec==2026.2.0
 igraph==1.0.0
-itk-elastix==0.23.0
+itk-elastix==0.24.0
 itk==5.4.5
 joblib==1.5.3
 kneed==0.8.5
