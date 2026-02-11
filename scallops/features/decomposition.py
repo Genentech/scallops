@@ -76,7 +76,7 @@ def pca(
         obs = adata.obs.loc[xdata.coords["obs"].values]
     else:
         X = adata.X
-        obs = adata.obs
+        obs = adata.obs.copy()
         means = None
         stds = None
         if standardize or min_std is not None:
@@ -159,4 +159,4 @@ def pca(
         }
     }
 
-    return anndata.AnnData(X=X_transformed, obs=obs.copy(), uns=uns)
+    return anndata.AnnData(X=X_transformed, obs=obs, uns=uns)
