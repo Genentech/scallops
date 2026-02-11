@@ -94,8 +94,7 @@ pysam = [
 ]
 test = [
     "miniwdl",
-    "pytest",
-    "pytest-xdist"
+    "pytest"
 ]
 
 dev = [
@@ -109,22 +108,7 @@ doc = [
     "sphinx_argparse",
     "sphinx_rtd_theme",
 ]
-all = [
-    "napari",
-    "napari_ome_zarr",
-    "cellpose",
-    "dask-ml",
-    "ufish",
-    "pytest",
-    "pre-commit",
-    "ipython",
-    "myst_parser",
-    "nbsphinx",
-    "sphinx-copybutton",
-    "sphinx",
-    "sphinx_argparse",
-    "sphinx_rtd_theme"
-]
+
 [project.entry-points."miniwdl.plugin.container_backend"]
 miniwdl_test_local = "scallops.tests.miniwdl_local.local_runner:LocalRunner"
 
