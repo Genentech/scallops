@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Sequence
+from functools import partial
 
 import anndata
 import dask
@@ -53,13 +54,18 @@ def pca(
     if standardize_by is not None:
         xdata = _anndata_to_xr(adata)
 
-        def _standardize(x):
-            x = (x - x.mean(dim="obs")) / x.std(dim="obs")
+        def _standardize(x, min_std, max_value):
+            std = x.std(dim="obs")
+            if min_std is not None and min_std > 0:
+                std = std.where(std.data > min_std)
+            x = (x - x.mean(dim="obs")) / std
             if max_value is not None:
                 x = x.clip(-max_value, max_value)
             return x
 
-        xdata = xdata.groupby(standardize_by).map(_standardize)
+        xdata = xdata.groupby(standardize_by).map(
+            partial(_standardize, min_std, max_value)
+        )
         X = xdata.data
         non_nan_features = ~xp.isnan(X, axis=1)
         if is_dask:
