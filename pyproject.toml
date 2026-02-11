@@ -36,11 +36,11 @@ dependencies = [
     "bioio-nd2",
     "bioio-tifffile",
     "bioio-ome-tiff",
-    "bioio-ome-zarr>=3.2.2",
+    "bioio-ome-zarr>=3.2.2", # https://github.com/bioio-devs/bioio-ome-zarr/pull/130, https://github.com/bioio-devs/bioio-ome-zarr/issues/128
     "bioio",
     "centrosome",
     "cp-measure",
-    "dask!=2026.1.2",# https://github.com/dask/dask/issues/12265
+    "dask!=2026.1.2", # https://github.com/dask/dask/issues/12265
     "dask-image",
     "decorator",
     "filelock",
