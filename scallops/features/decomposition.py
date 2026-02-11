@@ -51,7 +51,7 @@ def pca(
         except ModuleNotFoundError:
             gpu = False
     xp = get_namespace(adata.X)
-    if standardize_by is not None:
+    if standardize and standardize_by is not None:
         xdata = _anndata_to_xr(adata)
 
         def _standardize(x, min_std, max_value):
