@@ -7,6 +7,7 @@ import dask.array as da
 import dask.dataframe as dd
 import numpy as np
 import pandas as pd
+import xarray as xr
 from pandas.core.computation.parsing import BACKTICK_QUOTED_STRING, tokenize_string
 
 from scallops.features.constants import _metadata_columns_whitelist_str
@@ -106,6 +107,22 @@ def _slice_anndata(
     obs = data.obs.iloc[obs_indices] if obs_indices is not None else data.obs
     var = data.var.iloc[var_indices] if var_indices is not None else data.var
     return anndata.AnnData(X=X, obs=obs, var=var)
+
+
+def _anndata_to_xr(
+    adata: anndata.AnnData, obs_coords: bool = True, var_coords: bool = False
+) -> xr.DataArray:
+    coords = dict()
+    if obs_coords:
+        coords["obs"] = adata.obs.index
+        for c in adata.obs.columns:
+            coords[c] = ("obs", adata.obs[c])
+    if var_coords:
+        coords["var"] = adata.var.index
+        for c in adata.var.columns:
+            coords[c] = ("var", adata.var[c])
+
+    return xr.DataArray(adata.X, dims=["obs", "var"], name="", coords=coords)
 
 
 def _join_metadata(
