@@ -100,12 +100,3 @@ _metadata_columns_whitelist = [
 
 _metadata_columns_whitelist_str = "|".join(_metadata_columns_whitelist)
 _centroid_column_names = ["Nuclei_AreaShape_Center_Y", "Nuclei_AreaShape_Center_X"]
-
-# see pycytominer/data/blocklist_features.txt
-_blacklist = {
-    "Nuclei_Correlation_Manders",
-    "Nuclei_Correlation_RWC",
-    "Nuclei_Granularity_14",
-    "Nuclei_Granularity_15",
-    "Nuclei_Granularity_16",
-}
