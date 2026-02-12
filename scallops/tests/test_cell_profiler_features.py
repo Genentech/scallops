@@ -23,7 +23,10 @@ from scallops.features.cp_measure_wrapper import (
 from scallops.features.find_objects import find_objects
 from scallops.features.generate import label_features
 from scallops.features.intensity import intensity
-from scallops.features.intensity_distribution import intensity_distribution
+from scallops.features.intensity_distribution import (
+    intensity_distribution_radial,
+    intensity_distribution_zernike,
+)
 from scallops.features.neighbors import neighbors
 from scallops.features.texture import haralick
 from scallops.segmentation.util import relabel_sequential
@@ -345,13 +348,21 @@ def test_intensity_distribution(array_A1_102_cells, array_A1_102_pheno):
         calculate_zernike=True,
     )
 
-    features_scallops = intensity_distribution(
+    features_scallops = intensity_distribution_radial(
         c=c,
         channel_names=channel_names,
         unique_labels=unique_labels,
         label_image=label_image,
         intensity_image=intensity_image,
-        calculate_zernike=True,
+    )
+    features_scallops.update(
+        intensity_distribution_zernike(
+            c=c,
+            channel_names=channel_names,
+            unique_labels=unique_labels,
+            label_image=label_image,
+            intensity_image=intensity_image,
+        )
     )
 
     for key in features_cp:

@@ -20,13 +20,23 @@ CellProfiler Features
      1. c:  Channel index.
 
 * intensity-distribution
-     Measures several intensity features for identified objects.
+     Measures radial intensity distribution features for identified objects.
      Parameters:
 
      1. c: Channel index.
 
-     2. calculate zernike: Whether to compute Zernike moments (default
-        false).
+     2. bins: Number of bins to measure the distribution (default 4).
+
+
+* intensity-distribution-zernike
+     Measures zernike intensity distribution features for identified objects.
+     Parameters:
+
+     1. c: Channel index.
+
+     2. moment: Maximum zernike moment (default 9)
+
+
 
 * haralick
      Measures the degree and nature of textures within objects to

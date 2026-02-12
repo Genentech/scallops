@@ -17,10 +17,16 @@ CellProfiler Features
     #. c:  Channel index.
 
 * `intensity-distribution <https://cellprofiler-manual.s3.amazonaws.com/CellProfiler-4.2.8/modules/measurement.html#measureobjectintensitydistribution>`_
-    Measures several intensity features for identified objects. Parameters:
+    Measures radial intensity features for identified objects. Parameters:
 
     #. c: Channel index.
-    #. calculate zernike: Whether to compute Zernike moments (default false).
+    #. bins: Number of bins to measure the distribution (default 4)
+
+* `intensity-distribution-zernike <https://cellprofiler-manual.s3.amazonaws.com/CellProfiler-4.2.8/modules/measurement.html#measureobjectintensitydistribution>`_
+    Measures zernike intensity features for identified objects. Parameters:
+
+    #. c: Channel index.
+    #. moment: Maximum zernike moment (default 9)
 
 * `haralick <https://cellprofiler-manual.s3.amazonaws.com/CellProfiler-4.2.8/modules/measurement.html#measuretexture>`_
     Measures the degree and nature of textures within objects to quantify their roughness and smoothness. Parameters:
