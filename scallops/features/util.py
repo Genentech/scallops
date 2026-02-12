@@ -113,16 +113,30 @@ def _anndata_to_xr(
     adata: anndata.AnnData, obs_coords: bool = True, var_coords: bool = False
 ) -> xr.DataArray:
     coords = dict()
+    coords_keys = {"obs", "var"}
+
     if obs_coords:
         coords["obs"] = adata.obs.index
         for c in adata.obs.columns:
-            coords[c] = ("obs", adata.obs[c])
+            counter = 1
+            coord = c
+            while coord in coords_keys:
+                coord = f"{c}_{counter}"
+                counter += 1
+            coords_keys.add(coord)
+            coords[coord] = ("obs", adata.obs.columns[c].to_numpy(copy=False))
+
     if var_coords:
         coords["var"] = adata.var.index
         for c in adata.var.columns:
-            coords[c] = ("var", adata.var[c])
-
-    return xr.DataArray(adata.X, dims=["obs", "var"], name="", coords=coords)
+            counter = 1
+            coord = c
+            while coord in coords_keys:
+                coord = f"{c}_{counter}"
+                counter += 1
+            coords_keys.add(coord)
+            coords[coord] = ("var", adata.var.columns[c].to_numpy(copy=False))
+    return xr.DataArray(adata.X, dims=("obs", "var"), name="", coords=coords)
 
 
 def _join_metadata(
