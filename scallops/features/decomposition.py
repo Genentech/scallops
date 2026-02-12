@@ -1,10 +1,15 @@
 import logging
+import random
+from collections.abc import Sequence
+from functools import partial
 
 import anndata
 import dask
 import dask.array as da
 from array_api_compat import get_namespace
 from sklearn.utils import gen_batches
+
+from scallops.features.util import _anndata_to_xr
 
 logger = logging.getLogger("scallops")
 
@@ -14,9 +19,9 @@ def pca(
     n_components: int | float | None = None,
     min_std: float | None = 0,
     standardize: bool = True,
+    standardize_by: str | Sequence[str] | None = None,
     max_value: float | None = None,
     batch_size: int | None = None,
-    chunks: tuple[int, int] | bool = True,
     gpu: bool | None = None,
     whiten: bool = False,
     progress: bool = True,
@@ -25,18 +30,18 @@ def pca(
 
     :param adata: AnnData object.
     :param standardize: Whether to standardize the data.
+    :param standardize_by: Standardize the data specified groups
     :param n_components: Number of PCA components.
     :param min_std: Remove features with standard deviation <= `min_std`.
     :param max_value: Clip to this value after standardizing
     :param batch_size: Batch size for incremental PCA.
-    :param chunks: Rechunk dask array.
     :param gpu: Whether to use GPU.
     :param whiten: Whether to use whitening.
     :param progress: Whether to show progress bar for incremental PCA.
     :return: PCA Embedding
     """
-    X = adata.X
-    is_dask = isinstance(X, da.Array)
+
+    is_dask = isinstance(adata.X, da.Array)
     if gpu is None:
         try:
             import torch
@@ -46,34 +51,53 @@ def pca(
                 logger.info("Using GPU for PCA")
         except ModuleNotFoundError:
             gpu = False
-    means = None
-    stds = None
-    if standardize or min_std is not None:
-        means = X.mean(axis=0, keepdims=True)
-        stds = X.std(axis=0, keepdims=True)
+    xp = get_namespace(adata.X)
+    if standardize and standardize_by is not None:
+        xdata = _anndata_to_xr(adata)
 
-    if min_std is not None:
+        def _standardize(x, min_std, max_value):
+            std = x.std(dim="obs")
+            if min_std is not None and min_std > 0:
+                std = std.where(std.data > min_std)
+            x = (x - x.mean(dim="obs")) / std
+            if max_value is not None:
+                x = x.clip(-max_value, max_value)
+            return x
+
+        xdata = xdata.groupby(standardize_by).map(
+            partial(_standardize, min_std=min_std, max_value=max_value)
+        )
+        X = xdata.data
+        no_nans_per_feature = xp.isnan(X).sum(axis=0) == 0
+
         if is_dask:
-            means, stds = dask.compute(means, stds)
-        features_keep = stds > min_std
-        features_keep = features_keep.squeeze()
-        logger.info(f"# of features {features_keep.sum():,} / {X.shape[1]:,}")
-        X = X[:, features_keep]
-        stds = stds[:, features_keep]
-        means = means[:, features_keep]
-    if standardize:
-        X = (X - means) / stds
-        if max_value is not None:
-            X = get_namespace(X).clip(X, -max_value, max_value)
-    if is_dask and chunks:
-        if isinstance(chunks, bool):
-            if batch_size is not None:
-                chunks = (batch_size, -1)
-            else:
-                chunks = (100000, -1)
-                # TODO determine chunk size using available memory
-                # total_memory = torch.cuda.get_device_properties(0).total_memory
-        X = X.rechunk(chunks)
+            no_nans_per_feature = no_nans_per_feature.compute()
+        X = X[:, no_nans_per_feature]
+        logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
+        obs = adata.obs.loc[xdata.coords["obs"].values]
+    else:
+        X = adata.X
+        obs = adata.obs.copy()
+        means = None
+        stds = None
+        if standardize or min_std is not None:
+            means = X.mean(axis=0, keepdims=True)
+            stds = X.std(axis=0, keepdims=True)
+        if min_std is not None:
+            if is_dask:
+                means, stds = dask.compute(means, stds)
+            features_keep = stds > min_std
+            features_keep = features_keep.squeeze()
+
+            X = X[:, features_keep]
+            logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
+            stds = stds[:, features_keep]
+            means = means[:, features_keep]
+        if standardize:
+            X = (X - means) / stds
+            if max_value is not None:
+                X = xp.clip(X, -max_value, max_value)
+
     if batch_size is not None:
         if gpu:
             from cuml.decomposition import IncrementalPCA
@@ -82,6 +106,8 @@ def pca(
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
+        random.seed(239753)
+        random.shuffle(batches)
         if progress:
             try:
                 from tqdm import tqdm
@@ -135,4 +161,4 @@ def pca(
         }
     }
 
-    return anndata.AnnData(X=X_transformed, obs=adata.obs.copy(), uns=uns)
+    return anndata.AnnData(X=X_transformed, obs=obs, uns=uns)
