@@ -314,6 +314,11 @@ def test_create_funcs():
     assert requires_intensity
     assert len(funcs) == 2
 
+    funcs, requires_intensity = _create_funcs(["intensitydistribution_*_4"], 3)
+    assert funcs[0].keywords == {"c": (0, 1, 2), "bin_count": 4}
+    assert requires_intensity
+    assert len(funcs) == 1
+
 
 @pytest.mark.features
 def test_features_cli_multi_images(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
