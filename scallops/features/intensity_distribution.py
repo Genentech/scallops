@@ -74,37 +74,42 @@ MEASUREMENT_ALIASES = {
 }
 
 
-def intensity_distribution(
+def intensity_distribution_zernike(
     c: Sequence[int],
-    calculate_zernike: bool = False,
+    zernike_degree: int = 9,
     channel_names: Sequence[str] = None,
     unique_labels: np.ndarray = None,
     label_image: np.ndarray = None,
     intensity_image: np.ndarray = None,
     **kwargs,
 ) -> dict[str, np.ndarray]:
-    results = {}
-    results.update(
-        _radial_distribution(
-            c=c,
-            channel_names=channel_names,
-            unique_labels=unique_labels,
-            label_image=label_image,
-            intensity_image=intensity_image,
-        )
+    return _radial_zernikes(
+        c=c,
+        zernike_degree=zernike_degree,
+        channel_names=channel_names,
+        unique_labels=unique_labels,
+        label_image=label_image,
+        intensity_image=intensity_image,
     )
-    if calculate_zernike:
-        results.update(
-            _radial_zernikes(
-                c=c,
-                channel_names=channel_names,
-                unique_labels=unique_labels,
-                label_image=label_image,
-                intensity_image=intensity_image,
-            )
-        )
 
-    return results
+
+def intensity_distribution_radial(
+    c: Sequence[int],
+    bin_count: int = 4,
+    channel_names: Sequence[str] = None,
+    unique_labels: np.ndarray = None,
+    label_image: np.ndarray = None,
+    intensity_image: np.ndarray = None,
+    **kwargs,
+) -> dict[str, np.ndarray]:
+    return _radial_distribution(
+        c=c,
+        channel_names=channel_names,
+        bin_count=bin_count,
+        unique_labels=unique_labels,
+        label_image=label_image,
+        intensity_image=intensity_image,
+    )
 
 
 def _radial_distribution(
