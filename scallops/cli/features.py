@@ -196,12 +196,12 @@ def single_feature(
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     join_df = False
     features_output_suffix = "" if join_df else "-features"
-    zarr_inputs = False  # using zarr as input fails with zarr3 with credentials errors
+    zarr_inputs = True
 
-    # for f in file_list:
-    #     if not isinstance(f, (zarr.Group, zarr.Array)):
-    #         zarr_inputs = False
-    #         break
+    for f in file_list:
+        if not isinstance(f, (zarr.Group, zarr.Array)):
+            zarr_inputs = False
+            break
 
     if zarr_inputs and stacked_image_tuple is not None:
         for f in stacked_file_list:
