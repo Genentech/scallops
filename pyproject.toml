@@ -2,7 +2,7 @@
 build-backend = "setuptools.build_meta"
 requires = [
     "cython",
-    "numpy<2",
+    "numpy",
     "setuptools>=42",
     "setuptools_scm[toml]>=3.4",
     "wheel"
@@ -31,15 +31,17 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
 ]
 
 dependencies = [
-    "adjustText",
     "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
-    "bioio<2",
+    "adjustText",
     "bioio-nd2",
     "bioio-tifffile",
+    "bioio-ome-tiff",
+    "bioio-ome-zarr>=3.2.2", # https://github.com/bioio-devs/bioio-ome-zarr/pull/130, https://github.com/bioio-devs/bioio-ome-zarr/issues/128
+    "bioio",
     "centrosome",
     "cp-measure",
+    "dask!=2026.1.2", # https://github.com/dask/dask/issues/12265
     "dask-image",
-    "dask",
     "decorator",
     "filelock",
     "flox",
@@ -53,14 +55,13 @@ dependencies = [
     "matplotlib",
     "natsort",
     "numcodecs",
-    "numpy<2",
+    "numpy",
     "ome-zarr",
     "pandas",
     "pint",
     "psutil",
     "pyarrow",
     "pydantic",
-    "pysam",
     "scikit-image",
     "scikit-learn",
     "scipy",
@@ -69,9 +70,9 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile==2024.8.30",
+    "tifffile",
     "xarray",
-    "zarr<3"
+    "zarr>=3"
 ]
 
 [project.optional-dependencies]
@@ -88,10 +89,12 @@ cellpose = [
 ufish = [
     "ufish"
 ]
+pysam = [
+    "pysam"
+]
 test = [
     "miniwdl",
-    "pytest",
-    "pytest-xdist"
+    "pytest"
 ]
 
 dev = [
@@ -105,22 +108,7 @@ doc = [
     "sphinx_argparse",
     "sphinx_rtd_theme",
 ]
-all = [
-    "napari",
-    "napari_ome_zarr",
-    "cellpose",
-    "dask-ml",
-    "ufish",
-    "pytest",
-    "pre-commit",
-    "ipython",
-    "myst_parser",
-    "nbsphinx",
-    "sphinx-copybutton",
-    "sphinx",
-    "sphinx_argparse",
-    "sphinx_rtd_theme"
-]
+
 [project.entry-points."miniwdl.plugin.container_backend"]
 miniwdl_test_local = "scallops.tests.miniwdl_local.local_runner:LocalRunner"
 

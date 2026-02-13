@@ -199,7 +199,7 @@ def _write_image(
     root: zarr.Group | str,
     image: np.ndarray | xr.DataArray | da.Array,
     output_format: str,
-    file_separator: str,
+    file_separator: str = "/",
     metadata: dict | None = None,
     compute: bool = True,
     **kwargs,

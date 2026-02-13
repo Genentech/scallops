@@ -6,7 +6,6 @@ import shutil
 from collections.abc import Sequence
 from typing import Literal
 
-import dask.array as da
 import fsspec
 import numpy as np
 import pandas as pd
@@ -14,7 +13,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import zarr
 from sklearn.cluster import AgglomerativeClustering
-from zarr.errors import PathNotFoundError
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
 from scallops.io import is_parquet_file, read_image
@@ -32,7 +30,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import is_ome_zarr_array
+from scallops.zarr_io import is_ome_zarr_array, write_zarr
 
 logger = _get_cli_logger()
 
@@ -82,14 +80,14 @@ def _single_stitch(
                 if is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif not no_save_labels:
             try:
                 if is_ome_zarr_array(image_output_root.get(f"labels/{image_key}-mask")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif is_parquet_file(f"{other_output_path}{image_key}-positions.parquet"):
             logger.info(f"Skipping stitching for {image_key}.")
@@ -341,10 +339,10 @@ def _single_stitch(
         tile_shape_no_crop[0] - fuse_crop_width * 2,
         tile_shape_no_crop[1] - fuse_crop_width * 2,
     )
-    fused_y_size = (
+    fused_y_size = int(
         np.round(stitch_positions_df["y"].max()).astype(int) + fused_tile_shape[0]
     )
-    fused_x_size = (
+    fused_x_size = int(
         np.round(stitch_positions_df["x"].max()).astype(int) + fused_tile_shape[1]
     )
 
@@ -358,8 +356,6 @@ def _single_stitch(
         blend,
         image_output_root,
         image_key,
-        fused_y_size,
-        fused_x_size,
         fused_tile_shape,
         chunk_size,
         image_spacing,
@@ -384,8 +380,6 @@ def _write_arrays(
     blend,
     image_output_root,
     image_key,
-    fused_y_size,
-    fused_x_size,
     fused_tile_shape,
     chunk_size,
     image_spacing,
@@ -405,17 +399,8 @@ def _write_arrays(
         labels_group = image_output_root.require_group("labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
 
-        array = group.create_dataset(
-            name="0",
-            shape=(fused_y_size, fused_x_size),
-            chunks=chunk_size,
-            dtype=np.uint8,
-            dimension_separator="/",
-            overwrite=True,
-        )
-
-        da.to_zarr(
-            arr=_dask_from_array_no_copy(
+        write_zarr(
+            data=_dask_from_array_no_copy(
                 tile_overlap_mask(
                     stitch_positions_df,
                     fill=blend != "none",
@@ -423,39 +408,39 @@ def _write_arrays(
                 ),
                 chunks=chunk_size,
             ),
-            url=array,
+            grp=group,
+            image_attrs=None,
+            coords=None,
+            dims=None,
+            scaler=None,
             compute=True,
-            dimension_separator="/",
         )
         group.attrs.update(
             _create_label_ome_metadata(image_spacing, image_key + "-mask")
         )
         if blend == "none":
             group = labels_group.create_group(image_key + "-tile", overwrite=True)
-            array = group.create_dataset(
-                name="0",
-                shape=(fused_y_size, fused_x_size),
-                chunks=chunk_size,
-                dtype=np.uint16,
-                dimension_separator="/",
-                overwrite=True,
-            )
-
-            da.to_zarr(
-                arr=_dask_from_array_no_copy(
+            write_zarr(
+                data=_dask_from_array_no_copy(
                     tile_source_labels(stitch_positions_df, fused_tile_shape),
                     chunks=chunk_size,
                 ),
-                url=array,
+                grp=group,
+                image_attrs=None,
+                coords=None,
+                dims=None,
+                scaler=None,
                 compute=True,
-                dimension_separator="/",
             )
             label_metadata = _create_label_ome_metadata(
                 image_spacing, image_key + "-tile"
             )
-            label_metadata["multiscales"][0]["metadata"] = {
-                "source": f"../../images/{image_key}"
-            }
+            label_multiscales = (
+                label_metadata["ome"]["multiscales"]
+                if "ome" in label_metadata
+                else label_metadata["multiscales"]
+            )
+            label_multiscales[0]["metadata"] = {"source": f"../../images/{image_key}"}
             group.attrs.update(label_metadata)
     cleanup_paths = []
     if not no_save_image:

@@ -464,7 +464,7 @@ def get_matching_names(
     results = []
     for path in paths:
         name = os.path.basename(path)
-        if not name.startswith(".") and is_ome_zarr_array(zarr.open(path, "r")):
+        if not name.startswith(".") and is_ome_zarr_array(zarr.open(path, mode="r")):
             results.append(path)
     return results
 
