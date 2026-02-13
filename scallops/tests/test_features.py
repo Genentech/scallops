@@ -250,7 +250,10 @@ def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
         val1 = val1[keep]
         val2 = val2[keep]
         cor = np.corrcoef(val1, val2)[0, 1]
-        assert cor > 0.8, f"{col}, {cor}"
+        if not np.isnan(cor):  # no variance
+            assert cor > 0.8, f"{col}, {cor}"
+        else:
+            np.testing.assert_array_equal(val1, val2)
     pd.testing.assert_frame_equal(
         test_df.drop(drop_cols, axis=1), test_df_no_chunking.drop(drop_cols, axis=1)
     )
@@ -310,6 +313,11 @@ def test_create_funcs():
     funcs, requires_intensity = _create_funcs(["haralick_*_3", "haralick_*_5"], 3)
     assert requires_intensity
     assert len(funcs) == 2
+
+    funcs, requires_intensity = _create_funcs(["intensitydistribution_*_4"], 3)
+    assert funcs[0].keywords == {"c": (0, 1, 2), "bin_count": 4}
+    assert requires_intensity
+    assert len(funcs) == 1
 
 
 @pytest.mark.features
