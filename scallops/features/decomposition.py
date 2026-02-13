@@ -1,5 +1,4 @@
 import logging
-import random
 from collections.abc import Sequence
 from functools import partial
 
@@ -105,9 +104,16 @@ def pca(
             from sklearn.decomposition import IncrementalPCA
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
+        if is_dask:  # shuffle chunks
+            X = da.concatenate(
+                [
+                    X[chunk_slice]
+                    for chunk_slice in da.core.slices_from_chunks((X.chunks[0],))
+                ]
+            )
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
-        random.seed(239753)
-        random.shuffle(batches)
+        # random.seed(239753)
+        # random.shuffle(batches)
         if progress:
             try:
                 from tqdm import tqdm
