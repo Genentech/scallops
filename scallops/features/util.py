@@ -124,7 +124,7 @@ def _anndata_to_xr(
                 coord = f"{c}_{counter}"
                 counter += 1
             coords_keys.add(coord)
-            coords[coord] = ("obs", adata.obs.columns[c].to_numpy(copy=False))
+            coords[coord] = ("obs", adata.obs[c].to_numpy(copy=False))
 
     if var_coords:
         coords["var"] = adata.var.index
@@ -135,7 +135,7 @@ def _anndata_to_xr(
                 coord = f"{c}_{counter}"
                 counter += 1
             coords_keys.add(coord)
-            coords[coord] = ("var", adata.var.columns[c].to_numpy(copy=False))
+            coords[coord] = ("var", adata.var[c].to_numpy(copy=False))
     return xr.DataArray(adata.X, dims=("obs", "var"), name="", coords=coords)
 
 
