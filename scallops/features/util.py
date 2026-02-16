@@ -8,6 +8,7 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from anndata._core.index import _normalize_index
 from pandas.core.computation.parsing import BACKTICK_QUOTED_STRING, tokenize_string
 
 from scallops.features.constants import _metadata_columns_whitelist_str
@@ -76,29 +77,24 @@ def _query_anndata(data: anndata.AnnData, query: str):
 
 
 def _slice_anndata(
-    data: anndata.AnnData, obs: pd.DataFrame | None, var: pd.DataFrame | None = None
-):
+    data: anndata.AnnData,
+    obs: pd.DataFrame | Sequence | np.ndarray | None,
+    var: pd.DataFrame | Sequence | np.ndarray | None = None,
+) -> anndata.AnnData:
+    """Slice an AnnData object without copy-on-write AnnData's behavior.
+
+    :param data: AnnData object
+    :param obs: Slice for observations
+    :param var: Slice for variables
+    :return: Sliced AnnData object
+    """
     obs_indices = None
     var_indices = None
 
     if obs is not None:
-        if isinstance(obs, pd.DataFrame):
-            obs_indices = data.obs.index.get_indexer_for(obs.index)
-            if np.any(obs_indices < 0):
-                raise ValueError()
-        elif isinstance(obs, (Sequence, np.ndarray)):
-            obs_indices = obs
-        else:
-            raise ValueError()
+        obs_indices = _normalize_index(obs.index, data.obs.index)
     if var is not None:
-        if isinstance(var, pd.DataFrame):
-            var_indices = data.var.index.get_indexer_for(var.index)
-            if np.any(var_indices < 0):
-                raise ValueError()
-        elif isinstance(var, (Sequence, np.ndarray)):
-            var_indices = var
-        else:
-            raise ValueError()
+        var_indices = _normalize_index(var.index, data.var.index)
     X = data.X
     if obs_indices is not None:
         X = X[obs_indices]
