@@ -52,6 +52,7 @@ def pca(
         except ModuleNotFoundError:
             gpu = False
     xp = get_namespace(adata.X)
+    features = None
     if standardize and standardize_by is not None:
         xdata = _anndata_to_xr(adata)
 
@@ -75,6 +76,7 @@ def pca(
         X = X[:, no_nans_per_feature]
         logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
         obs = adata.obs.loc[xdata.coords["obs"].values]
+        features = adata.var.index[no_nans_per_feature].values
     else:
         X = adata.X
         obs = adata.obs.copy()
@@ -93,6 +95,7 @@ def pca(
             logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
             stds = stds[:, features_keep]
             means = means[:, features_keep]
+            features = adata.var.index[features_keep].values
         if standardize:
             X = (X - means) / stds
             if max_value is not None:
@@ -151,13 +154,15 @@ def pca(
     variance = d.explained_variance_
     X_transformed = X @ components_.T  # (n_components, n_features)
     X_transformed -= get_namespace(mean_).reshape(mean_, (1, -1)) @ components_.T
-
+    if features is None:
+        features = adata.var.index.values
     uns = {
         "pca": {
             "variance_ratio": variance_ratio,
             "variance": variance,
             "mean": mean_,
             "PCs": components_,
+            "features": features,
         }
     }
 
