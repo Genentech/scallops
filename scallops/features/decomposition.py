@@ -14,6 +14,70 @@ from scallops.features.util import _anndata_to_xr
 logger = logging.getLogger("scallops")
 
 
+def _centerscale(
+    adata: anndata.AnnData,
+    min_std: float | None = 0,
+    standardize: bool = True,
+    standardize_by: str | Sequence[str] | None = None,
+    max_value: float | None = None,
+) -> anndata.AnnData:
+    is_dask = isinstance(adata.X, da.Array)
+    xp = get_namespace(adata.X)
+    if standardize and standardize_by is not None:
+        xdata = _anndata_to_xr(adata)
+
+        def _standardize(x, min_std, max_value):
+            std = x.std(dim="obs")
+            if min_std is not None and min_std > 0:
+                std = std.where(std.data > min_std)
+            x = (x - x.mean(dim="obs")) / std
+            if max_value is not None:
+                x = x.clip(-max_value, max_value)
+            return x
+
+        xdata = xdata.groupby(standardize_by).map(
+            partial(_standardize, min_std=min_std, max_value=max_value)
+        )
+        X = xdata.data
+        no_nans_per_feature = xp.isnan(X).sum(axis=0) == 0
+
+        if is_dask:
+            no_nans_per_feature = no_nans_per_feature.compute()
+        X = X[:, no_nans_per_feature]
+        logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
+        return anndata.AnnData(
+            X=X,
+            obs=adata.obs.loc[xdata.coords["obs"].values],
+            var=adata.var[no_nans_per_feature],
+        )
+    else:
+        X = adata.X
+        var = adata.var
+        means = None
+        stds = None
+        if standardize or min_std is not None:
+            means = X.mean(axis=0, keepdims=True)
+            stds = X.std(axis=0, keepdims=True)
+        if min_std is not None:
+            if is_dask:
+                means, stds = dask.compute(means, stds)
+            features_keep = stds > min_std
+            features_keep = features_keep.squeeze()
+
+            X = X[:, features_keep]
+
+            stds = stds[:, features_keep]
+            means = means[:, features_keep]
+            var = adata.var[features_keep]
+            logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
+        if standardize:
+            X = (X - means) / stds
+            if max_value is not None:
+                X = xp.clip(X, -max_value, max_value)
+
+        return anndata.AnnData(X=X, obs=adata.obs.copy(), var=var)
+
+
 def pca(
     adata: anndata.AnnData,
     n_components: int | float | None = None,
@@ -40,7 +104,14 @@ def pca(
     :param progress: Whether to show progress bar for incremental PCA.
     :return: PCA Embedding
     """
-
+    adata = _centerscale(
+        adata=adata,
+        min_std=min_std,
+        standardize=standardize,
+        standardize_by=standardize_by,
+        max_value=max_value,
+    )
+    X = adata.X
     is_dask = isinstance(adata.X, da.Array)
     if gpu is None:
         try:
@@ -51,55 +122,6 @@ def pca(
                 logger.info("Using GPU for PCA")
         except ModuleNotFoundError:
             gpu = False
-    xp = get_namespace(adata.X)
-    features = None
-    if standardize and standardize_by is not None:
-        xdata = _anndata_to_xr(adata)
-
-        def _standardize(x, min_std, max_value):
-            std = x.std(dim="obs")
-            if min_std is not None and min_std > 0:
-                std = std.where(std.data > min_std)
-            x = (x - x.mean(dim="obs")) / std
-            if max_value is not None:
-                x = x.clip(-max_value, max_value)
-            return x
-
-        xdata = xdata.groupby(standardize_by).map(
-            partial(_standardize, min_std=min_std, max_value=max_value)
-        )
-        X = xdata.data
-        no_nans_per_feature = xp.isnan(X).sum(axis=0) == 0
-
-        if is_dask:
-            no_nans_per_feature = no_nans_per_feature.compute()
-        X = X[:, no_nans_per_feature]
-        logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
-        obs = adata.obs.loc[xdata.coords["obs"].values]
-        features = adata.var.index[no_nans_per_feature].values
-    else:
-        X = adata.X
-        obs = adata.obs.copy()
-        means = None
-        stds = None
-        if standardize or min_std is not None:
-            means = X.mean(axis=0, keepdims=True)
-            stds = X.std(axis=0, keepdims=True)
-        if min_std is not None:
-            if is_dask:
-                means, stds = dask.compute(means, stds)
-            features_keep = stds > min_std
-            features_keep = features_keep.squeeze()
-
-            X = X[:, features_keep]
-            logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
-            stds = stds[:, features_keep]
-            means = means[:, features_keep]
-            features = adata.var.index[features_keep].values
-        if standardize:
-            X = (X - means) / stds
-            if max_value is not None:
-                X = xp.clip(X, -max_value, max_value)
 
     if batch_size is not None:
         if gpu:
@@ -154,16 +176,15 @@ def pca(
     variance = d.explained_variance_
     X_transformed = X @ components_.T  # (n_components, n_features)
     X_transformed -= get_namespace(mean_).reshape(mean_, (1, -1)) @ components_.T
-    if features is None:
-        features = adata.var.index.values
+
     uns = {
         "pca": {
             "variance_ratio": variance_ratio,
             "variance": variance,
             "mean": mean_,
             "PCs": components_,
-            "features": features,
+            "features": adata.var.index.values,
         }
     }
 
-    return anndata.AnnData(X=X_transformed, obs=obs, uns=uns)
+    return anndata.AnnData(X=X_transformed, obs=adata.obs, uns=uns)
