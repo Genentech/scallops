@@ -1,5 +1,4 @@
 import logging
-import random
 from collections.abc import Sequence
 from functools import partial
 
@@ -131,8 +130,7 @@ def pca(
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
-        random.seed(239753)
-        random.shuffle(batches)
+
         if progress:
             try:
                 from tqdm import tqdm
