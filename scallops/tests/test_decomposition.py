@@ -25,4 +25,5 @@ def test_decomposition():
         progress=False,
         batch_size=2,
     )
+    np.testing.assert_array_equal(result.obs.columns, ("plate", "well"))
     assert result.X.shape == (10, 2)
