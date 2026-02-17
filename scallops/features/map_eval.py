@@ -8,14 +8,13 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 def pairwise_similarities(
     data: anndata.AnnData, metric: Literal["cosine", "pearson"] = "cosine"
-) -> pd.DataFrame:
+) -> np.ndarray:
     """Compute pairwise similarities between observations in data.
 
     :param data: Anndata object
     :param metric: Similarity metric
-    :return: Dataframe containing similarities
+    :return: Array containing similarities
     """
-    names = data.obs.index.values
 
     if metric == "cosine":
         values = cosine_similarity(data.X)
@@ -23,10 +22,7 @@ def pairwise_similarities(
         values = np.corrcoef(data.X)
     else:
         raise ValueError(f"Metric {metric} is not supported.")
-    indices = np.tril_indices_from(values, k=-1)
-    return pd.DataFrame(
-        data=dict(a=names[indices[0]], b=names[indices[1]], value=values[indices])
-    ).set_index(["a", "b"])
+    return values
 
 
 def read_corum(path: str) -> pd.DataFrame:
