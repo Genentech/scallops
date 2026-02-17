@@ -48,6 +48,4 @@ def read_corum(path: str) -> pd.DataFrame:
     for p in pairs:
         a.append(p[0])
         b.append(p[1])
-    df = pd.DataFrame(data=dict(a=a, b=b))
-    df["corum"] = "1"
-    return df.set_index(["a", "b"])
+    return pd.DataFrame(data=dict(a=a, b=b))
