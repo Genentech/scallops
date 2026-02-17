@@ -94,7 +94,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
         data = _read_data(paths, features)
 
         if label_filter is not None:
-            data = _slice_anndata(data, _query_anndata(data, label_filter))
+            data = _slice_anndata(data, _query_anndata(data, label_filter).index)
         if join_path is not None:
             _join_metadata(
                 data,
