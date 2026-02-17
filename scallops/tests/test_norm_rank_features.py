@@ -70,7 +70,7 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
     values = ds.X.copy()
     ref_ds = ds
     if reference is not None:
-        ref_ds = _slice_anndata(ds, ds.obs.query(reference))
+        ref_ds = _slice_anndata(ds, ds.obs.query(reference).index)
 
     ref_values = ref_ds.X
     if normalize == "zscore":
@@ -152,9 +152,11 @@ def test_norm_features(
         scaling=scaling,
     )
     normed_data_dask.X = normed_data_dask.X.compute()
-    normed_data = _slice_anndata(normed_data, normed_data.obs.sort_values("label"))
+    normed_data = _slice_anndata(
+        normed_data, normed_data.obs.sort_values("label").index
+    )
     normed_data_dask = _slice_anndata(
-        normed_data_dask, normed_data_dask.obs.sort_values("label")
+        normed_data_dask, normed_data_dask.obs.sort_values("label").index
     )
     np.testing.assert_array_equal(normed_data.X, normed_data_dask.X)
     pd.testing.assert_frame_equal(normed_data.obs, normed_data_dask.obs)
@@ -168,7 +170,9 @@ def test_norm_features(
 
             _diff_values(
                 _slice_anndata(data, indices[name]),
-                _slice_anndata(normed_data, normed_data.obs.query("&".join(query))),
+                _slice_anndata(
+                    normed_data, normed_data.obs.query("&".join(query)).index
+                ),
                 normalize,
                 robust,
                 reference,
