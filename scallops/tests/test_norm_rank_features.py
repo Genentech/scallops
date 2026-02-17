@@ -244,15 +244,19 @@ def test_anndata_slice():
     pd.testing.assert_frame_equal(data1.var, data2.var)
 
 
+@pytest.mark.parametrize("by", ["pert", ("pert", "well")])
 @pytest.mark.features
-def test_agg_features():
+def test_agg_features(by):
     d = anndata.AnnData(
         X=np.arange(8).reshape((4, 2)),
-        obs=pd.DataFrame(data=dict(pert=["1", "2", "1", "2"])),
+        obs=pd.DataFrame(
+            data=dict(pert=["1", "2", "1", "2"], well=["1", "2", "1", "2"])
+        ),
         var=pd.DataFrame(index=["1", "2"]),
     )
-    agg_d = agg_features(d, "pert")
+    agg_d = agg_features(d, by)
     assert agg_d.shape == (2, 2)
+    agg_d.obs = agg_d.obs.set_index("pert")
     agg_d = agg_d[["1", "2"]]
     np.testing.assert_array_equal(agg_d.X, np.array([[2.0, 3.0], [4.0, 5.0]]))
 
