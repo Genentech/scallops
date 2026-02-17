@@ -627,7 +627,7 @@ def peaks_to_bases(
     if isinstance(peaks, dd.DataFrame):
         peaks = peaks.compute()
 
-    if "sigma" in maxed.dims:
+    if "sigma" in maxed.dims and maxed.sizes["sigma"] == 1:
         maxed = maxed.squeeze("sigma", drop=True)
 
     if isinstance(labels, xr.DataArray):
