@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from anndata._core.index import _normalize_index
+from anndata.typing import Index
 from pandas.core.computation.parsing import BACKTICK_QUOTED_STRING, tokenize_string
 
 from scallops.features.constants import _metadata_columns_whitelist_str
@@ -78,10 +79,11 @@ def _query_anndata(data: anndata.AnnData, query: str):
 
 def _slice_anndata(
     data: anndata.AnnData,
-    obs: pd.DataFrame | Sequence | np.ndarray | None,
-    var: pd.DataFrame | Sequence | np.ndarray | None = None,
+    obs: Index | None,
+    var: Index | None = None,
 ) -> anndata.AnnData:
     """Slice an AnnData object without copy-on-write AnnData's behavior.
+    Note that this method only slices the fields `X`, `obs`, and `var`.
 
     :param data: AnnData object
     :param obs: Slice for observations
@@ -92,9 +94,9 @@ def _slice_anndata(
     var_indices = None
 
     if obs is not None:
-        obs_indices = _normalize_index(obs.index, data.obs.index)
+        obs_indices = _normalize_index(obs, data.obs.index)
     if var is not None:
-        var_indices = _normalize_index(var.index, data.var.index)
+        var_indices = _normalize_index(var, data.var.index)
     X = data.X
     if obs_indices is not None:
         X = X[obs_indices]
