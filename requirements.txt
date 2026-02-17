@@ -27,7 +27,7 @@ ome-zarr==0.10.3
 pandas==2.3.3
 pint==0.25.2
 psutil==7.2.2
-pyarrow==23.0.0
+pyarrow==23.0.1
 pydantic==2.11.7
 pysam==0.23.3
 scikit-image==0.26.0
