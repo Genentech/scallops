@@ -121,7 +121,7 @@ def pca(
                 logger.info("Using GPU for PCA")
         except ModuleNotFoundError:
             gpu = False
-
+    X_transformed = None
     if batch_size is not None:
         if gpu:
             from cuml.decomposition import IncrementalPCA
@@ -166,14 +166,15 @@ def pca(
         if "random_state" in sig.parameters.keys():
             kwargs["random_state"] = 239753
         d = PCA(**kwargs)
-        d.fit(X)
+        X_transformed = d.fit_transform(X)
 
     components_ = d.components_
     mean_ = d.mean_
     variance_ratio = d.explained_variance_ratio_
     variance = d.explained_variance_
-    X_transformed = X @ components_.T  # (n_components, n_features)
-    X_transformed -= get_namespace(mean_).reshape(mean_, (1, -1)) @ components_.T
+    if X_transformed is None:
+        X_transformed = X @ components_.T  # (n_components, n_features)
+        X_transformed -= get_namespace(mean_).reshape(mean_, (1, -1)) @ components_.T
 
     uns = {
         "pca": {
