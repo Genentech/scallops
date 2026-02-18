@@ -1,30 +1,46 @@
+from collections.abc import Sequence
 from typing import Literal
 
 import anndata
+import numpy as np
 import pandas as pd
 import xarray as xr
+from xarray.core.indexes import PandasMultiIndex
 
 
 def agg_features(
     data: anndata.AnnData,
-    perturbation_column: str,
+    by: str | Sequence[str],
     agg_func: Literal["mean", "median"] = "mean",
 ):
     """Aggregate features
 
     :param data: Annotated data matrix.
-    :param perturbation_column: Column in `data.obs` containing perturbation.
+    :param by: Perturbation column(s) in `data.obs` to aggregate by.
     :param agg_func: Aggregation method.
     :return: Aggregated data
     """
-    assert agg_func in ["mean", "median"]
-    coords = dict(obs=data.obs[perturbation_column])
-    x = xr.DataArray(data.X, dims=["obs", "var"], coords=coords, name="")
-    grouped = x.groupby("obs")
+    assert agg_func in ("mean", "median")
+
+    group_by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if not group_by_multi:
+        coords = {"obs": data.obs[by]}
+    else:
+        coords = {"obs": np.arange(data.shape[0])}
+        for col in by:
+            coords[col] = ("obs", data.obs[col])
+    xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
+    if group_by_multi:
+        xdata = xdata.set_xindex(by, PandasMultiIndex)
+    grouped = xdata.groupby("obs")
     result = grouped.mean() if agg_func == "mean" else grouped.median()
-    result_obs = pd.DataFrame(index=result.coords["obs"].values)
+    X = result.data
+    obs = result.coords["obs"].to_dataframe().drop("obs", axis=1).reset_index()
+    if not group_by_multi:
+        obs = obs.rename({"obs": by}, axis=1)
+    obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
     return anndata.AnnData(
-        X=result.data,
-        obs=result_obs,
+        X=X,
+        obs=obs,
         var=data.var.copy(),
     )
