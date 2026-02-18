@@ -23,7 +23,7 @@ def _centerscale(
     is_dask = isinstance(adata.X, da.Array)
     xp = get_namespace(adata.X)
     if standardize and standardize_by is not None:
-        xdata = _anndata_to_xr(adata)
+        xdata = _anndata_to_xr(adata, standardize_by)
 
         def _standardize(x, min_std, max_value):
             std = x.std(dim="obs")
