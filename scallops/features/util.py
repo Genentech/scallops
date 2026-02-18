@@ -107,33 +107,52 @@ def _slice_anndata(
     return anndata.AnnData(X=X, obs=obs, var=var)
 
 
+def _update_coords(
+    df: pd.DataFrame,
+    df_coords: bool | str | Sequence[str],
+    coord_name: str,
+    coords_keys: set,
+    xarray_coords: dict,
+):
+    if df_coords:
+        xarray_coords[coord_name] = df.index
+        if isinstance(df_coords, str):
+            columns = [df_coords]
+        elif isinstance(df_coords, Sequence):
+            columns = df_coords
+        else:
+            columns = df.columns
+        for c in columns:
+            counter = 1
+            coord = c
+            while coord in coords_keys:
+                coord = f"{c}_{counter}"
+                counter += 1
+            coords_keys.add(coord)
+            xarray_coords[coord] = (coord_name, df[c].to_numpy(copy=False))
+
+
 def _anndata_to_xr(
-    adata: anndata.AnnData, obs_coords: bool = True, var_coords: bool = False
+    adata: anndata.AnnData,
+    obs_coords: bool | str | Sequence[str] = True,
+    var_coords: bool | str | Sequence[str] = False,
 ) -> xr.DataArray:
     coords = dict()
     coords_keys = {"obs", "var"}
-
-    if obs_coords:
-        coords["obs"] = adata.obs.index
-        for c in adata.obs.columns:
-            counter = 1
-            coord = c
-            while coord in coords_keys:
-                coord = f"{c}_{counter}"
-                counter += 1
-            coords_keys.add(coord)
-            coords[coord] = ("obs", adata.obs[c].to_numpy(copy=False))
-
-    if var_coords:
-        coords["var"] = adata.var.index
-        for c in adata.var.columns:
-            counter = 1
-            coord = c
-            while coord in coords_keys:
-                coord = f"{c}_{counter}"
-                counter += 1
-            coords_keys.add(coord)
-            coords[coord] = ("var", adata.var[c].to_numpy(copy=False))
+    _update_coords(
+        df=adata.obs,
+        df_coords=obs_coords,
+        coord_name="obs",
+        coords_keys=coords_keys,
+        xarray_coords=coords,
+    )
+    _update_coords(
+        df=adata.var,
+        df_coords=var_coords,
+        coord_name="var",
+        coords_keys=coords_keys,
+        xarray_coords=coords,
+    )
     return xr.DataArray(adata.X, dims=("obs", "var"), name="", coords=coords)
 
 
