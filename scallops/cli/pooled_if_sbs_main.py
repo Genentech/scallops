@@ -231,7 +231,7 @@ def _create_reads_parser(subparsers, default_help):
         "--crosstalk-correction-method",
         default="median",
         help="Method to correct channel crosstalk",
-        choices=["median", "none"],
+        choices=["li_and_speed", "median", "none"],
     )
     parser.add_argument(
         "--crosstalk-correction-by-t",
