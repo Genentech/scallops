@@ -187,6 +187,7 @@ def normalize_features(
     max_value: float | None = None,
     centering: bool = True,
     scaling: bool = True,
+    batch_size: int | None = None,
 ) -> anndata.AnnData:
     """Normalize features
 
@@ -206,6 +207,7 @@ def normalize_features(
     :param centering: Whether to center the data before scaling.
     :param max_value: Truncate to this value after scaling
     :param scaling: Whether to scale the data by dividing by the standard deviation.
+    :param batch_size: Batch size to use for local scaling to conserve memory.
     :return: Normalized data
     """
 
@@ -230,6 +232,7 @@ def normalize_features(
                 mad_scale=mad_scale,
                 centering=centering,
                 scaling=scaling,
+                batch_size=batch_size,
             )
         )
 
@@ -247,6 +250,7 @@ def normalize_features(
             mad_scale=mad_scale,
             centering=centering,
             scaling=scaling,
+            batch_size=batch_size,
         )
         data = anndata.AnnData(X=result.data, obs=data.obs.copy(), var=data.var.copy())
 
@@ -264,6 +268,7 @@ def _normalize_group(
     centering: bool,
     max_value: float | None,
     scaling: bool,
+    batch_size: int | None,
 ) -> xr.DataArray:
     indices = None
     reference_data = (
@@ -303,17 +308,36 @@ def _normalize_group(
         indices = _nearest_neighbors_indices(
             nn_ref, nn_query, n_neighbors=n_neighbors, metric=neighbors_metric
         )
+    if batch_size is not None and indices is not None and indices.shape[0] > batch_size:
+        value_list = []
+        if reference_data is None:
+            reference_data = data
 
-    values = _normalize_features_array(
-        data.data,
-        reference_data.data if reference_data is not None else None,
-        indices=indices,
-        robust=robust,
-        mad_scale=mad_scale,
-        centering=centering,
-        scaling=scaling,
-        max_value=max_value,
-    )
+        for i in range(0, indices.shape[0], batch_size):
+            sl = slice(i, i + batch_size)
+            values = _normalize_features_array(
+                data.data[sl],
+                reference_data.data,
+                indices=indices[sl],
+                robust=robust,
+                mad_scale=mad_scale,
+                centering=centering,
+                scaling=scaling,
+                max_value=max_value,
+            )
+            value_list.append(values)
+        values = np.concatenate(value_list)
+    else:
+        values = _normalize_features_array(
+            data.data,
+            reference_data.data if reference_data is not None else None,
+            indices=indices,
+            robust=robust,
+            mad_scale=mad_scale,
+            centering=centering,
+            scaling=scaling,
+            max_value=max_value,
+        )
     return data.copy(data=values)
 
 
