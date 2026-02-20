@@ -35,7 +35,16 @@ def agg_features(
     grouped = xdata.groupby("obs")
     result = grouped.mean() if agg_func == "mean" else grouped.median()
     X = result.data
-    obs = result.coords["obs"].to_dataframe().drop("obs", axis=1).reset_index()
+    group_counts = []
+    for group in grouped.groups:
+        group_counts.append((group, len(grouped.groups[group])))
+    obs = result.coords["obs"].to_dataframe()
+    obs = obs.join(
+        pd.DataFrame(group_counts, columns=["obs", "count"]).set_index("obs"),
+        on="obs",
+        rsuffix="_agg",
+    )
+    obs = obs.drop("obs", axis=1).reset_index()
     if not group_by_multi:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
