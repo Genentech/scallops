@@ -1,3 +1,4 @@
+import math
 from collections.abc import Sequence
 from typing import Literal
 
@@ -5,6 +6,7 @@ import anndata
 import numpy as np
 import pandas as pd
 import xarray as xr
+from pandas import MultiIndex
 from xarray.core.indexes import PandasMultiIndex
 
 
@@ -37,14 +39,19 @@ def agg_features(
     X = result.data
     group_counts = []
     for group in grouped.groups:
-        group_counts.append((group, len(grouped.groups[group])))
-    obs = result.coords["obs"].to_dataframe()
-    obs = obs.join(
-        pd.DataFrame(group_counts, columns=["obs", "count"]).set_index("obs"),
-        on="obs",
-        rsuffix="_agg",
-    )
-    obs = obs.drop("obs", axis=1).reset_index()
+        val = grouped.groups[group]
+        if isinstance(val, slice):
+            count = val.stop - val.start
+            if val.step is not None:
+                count = math.ceil(count / val.step)
+        else:
+            count = len(val)
+        group_counts.append((group, count))
+    obs = result.coords["obs"].to_dataframe().drop("obs", axis=1)
+    group_counts = pd.DataFrame(group_counts, columns=["obs", "count"]).set_index("obs")
+    if isinstance(obs.index, MultiIndex):
+        obs.index = obs.index.to_flat_index()
+    obs = obs.drop("obs", axis=1).join(group_counts).reset_index()
     if not group_by_multi:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
