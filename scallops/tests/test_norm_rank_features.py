@@ -84,7 +84,6 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
         if normalize == "nn-zscore":
             query = ds.X
             ref = ref_ds.X
-
         elif normalize == "local-zscore":
             query = np.stack(
                 (
@@ -122,6 +121,13 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
     )
 
 
+def _compare_anndata(data1: anndata.AnnData, data2: anndata.AnnData):
+    np.testing.assert_array_equal(data1.X, data2.X)
+    np.testing.assert_array_equal(data1.X, data2.X)
+    pd.testing.assert_frame_equal(data1.obs, data2.obs)
+    pd.testing.assert_frame_equal(data1.var, data2.var)
+
+
 @pytest.mark.features
 def test_norm_features(
     client, data, normalize, normalize_groups, robust, reference, tmp_path
@@ -137,6 +143,18 @@ def test_norm_features(
         n_neighbors=n_neighbors,
         scaling=scaling,
     )
+    if normalize in ("nn-zscore", "local-zscore"):
+        normed_data2 = normalize_features(
+            data,
+            reference_query=reference,
+            normalize=normalize,
+            robust=robust,
+            normalize_groups=normalize_groups,
+            n_neighbors=n_neighbors,
+            scaling=scaling,
+            batch_size=1,
+        )
+        _compare_anndata(normed_data, normed_data2)
 
     dask_data = anndata.AnnData(
         X=da.from_array(data.X, chunks=(1, 2)), obs=data.obs, var=data.var
@@ -152,15 +170,28 @@ def test_norm_features(
         scaling=scaling,
     )
     normed_data_dask.X = normed_data_dask.X.compute()
+    if normalize in ("nn-zscore", "local-zscore"):
+        normed_data_dask2 = normalize_features(
+            dask_data,
+            reference_query=reference,
+            normalize=normalize,
+            robust=robust,
+            normalize_groups=normalize_groups,
+            n_neighbors=n_neighbors,
+            scaling=scaling,
+            batch_size=1,
+        )
+        normed_data_dask2.X = normed_data_dask2.X.compute()
+        _compare_anndata(normed_data_dask, normed_data_dask2)
+
     normed_data = _slice_anndata(
         normed_data, normed_data.obs.sort_values("label").index
     )
     normed_data_dask = _slice_anndata(
         normed_data_dask, normed_data_dask.obs.sort_values("label").index
     )
-    np.testing.assert_array_equal(normed_data.X, normed_data_dask.X)
-    pd.testing.assert_frame_equal(normed_data.obs, normed_data_dask.obs)
-    pd.testing.assert_frame_equal(normed_data.var, normed_data_dask.var)
+    _compare_anndata(normed_data, normed_data_dask)
+
     if normalize_groups is not None:
         indices = data.obs.groupby(normalize_groups).indices
         for name in indices:
