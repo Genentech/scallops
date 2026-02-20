@@ -47,7 +47,7 @@ def agg_features(
         else:
             count = len(val)
         group_counts.append((group, count))
-    obs = result.coords["obs"].to_dataframe().drop("obs", axis=1)
+    obs = result.coords["obs"].to_dataframe()
     group_counts = pd.DataFrame(group_counts, columns=["obs", "count"]).set_index("obs")
     if isinstance(obs.index, MultiIndex):
         obs.index = obs.index.to_flat_index()
