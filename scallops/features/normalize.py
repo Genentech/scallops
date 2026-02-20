@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
 from scallops.features.constants import _centroid_column_names
+from scallops.features.util import _anndata_to_xr
 
 logger = logging.getLogger("scallops")
 
@@ -177,7 +178,7 @@ def typical_variation_normalization(
 
 def normalize_features(
     data: anndata.AnnData,
-    reference_query: str | None,
+    reference_query: str | None = None,
     normalize_groups: Sequence[str] | str | None = None,
     normalize: Literal["zscore", "local-zscore", "nn-zscore"] = "zscore",
     n_neighbors: int | None = 100,
@@ -212,13 +213,7 @@ def normalize_features(
     """
 
     mad_scale = _convert_scale(mad_scale)
-    coords = dict()
-    obs = data.obs
-    coords["obs"] = obs.index
-    for c in data.obs.columns:
-        coords[c] = ("obs", obs[c])
-
-    x_data = xr.DataArray(data.X, dims=["obs", "var"], name="", coords=coords)
+    x_data = _anndata_to_xr(data)
     if normalize_groups is not None:
         group_result = x_data.groupby(normalize_groups).map(
             lambda x: _normalize_group(
@@ -236,25 +231,26 @@ def normalize_features(
             )
         )
 
-        group_obs = obs.loc[group_result.coords["obs"].values]
-        data = anndata.AnnData(X=group_result.data, obs=group_obs, var=data.var.copy())
-    else:
-        result = _normalize_group(
-            x_data,
-            reference_query=reference_query,
-            normalize=normalize,
-            n_neighbors=n_neighbors,
-            neighbors_metric=neighbors_metric,
-            robust=robust,
-            max_value=max_value,
-            mad_scale=mad_scale,
-            centering=centering,
-            scaling=scaling,
-            batch_size=batch_size,
+        return anndata.AnnData(
+            X=group_result.data,
+            obs=data.obs.loc[group_result.coords["obs"].values],
+            var=data.var.copy(),
         )
-        data = anndata.AnnData(X=result.data, obs=data.obs.copy(), var=data.var.copy())
 
-    return data
+    result = _normalize_group(
+        x_data,
+        reference_query=reference_query,
+        normalize=normalize,
+        n_neighbors=n_neighbors,
+        neighbors_metric=neighbors_metric,
+        robust=robust,
+        max_value=max_value,
+        mad_scale=mad_scale,
+        centering=centering,
+        scaling=scaling,
+        batch_size=batch_size,
+    )
+    return anndata.AnnData(X=result.data, obs=data.obs.copy(), var=data.var.copy())
 
 
 def _normalize_group(
@@ -338,7 +334,7 @@ def _normalize_group(
             scaling=scaling,
             max_value=max_value,
         )
-    return data.copy(data=values)
+    return data.copy(data=values, deep=False)
 
 
 def _nearest_neighbors_indices(
