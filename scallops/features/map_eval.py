@@ -1,3 +1,4 @@
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from typing import Literal
 
@@ -96,22 +97,31 @@ def read_corum(path: str) -> pd.DataFrame:
 
     :param path: Path to CORUM CSV (e.g. corum_humanComplexes.txt). Available from
         https://mips.helmholtz-muenchen.de/corum/download
-    :return: Dataframe containing pairs of genes found in CORUM
+    :return: Dataframe containing pairs of genes found and complexes they belong to
     """
 
-    corum_gene_names = pd.read_csv(path, usecols=["subunits_gene_name"], sep="\t")[
-        "subunits_gene_name"
-    ].values
+    df = pd.read_csv(path, usecols=["complex_name", "subunits_gene_name"], sep="\t")
+    corum_gene_names = df["subunits_gene_name"].values
+    complex_names = df["complex_name"].values
     pairs = set()
+    pair_to_complex_names = defaultdict(set)
+
     for i in range(len(corum_gene_names)):
         cluster = corum_gene_names[i].split(";")
+        complex_name = complex_names[i]
         for j in range(len(cluster)):
             for k in range(j):
-                pairs.add((cluster[j], cluster[k]))
-                pairs.add((cluster[k], cluster[j]))
+                p1 = (cluster[j], cluster[k])
+                p2 = (cluster[k], cluster[j])
+                pairs.add(p1)
+                pairs.add(p2)
+                pair_to_complex_names[p1].add(complex_name)
+                pair_to_complex_names[p2].add(complex_name)
     a = []
     b = []
+    c = []
     for p in pairs:
         a.append(p[0])
         b.append(p[1])
-    return pd.DataFrame(data=dict(a=a, b=b))
+        c.append(pair_to_complex_names[p])
+    return pd.DataFrame(data=dict(a=a, b=b, complex_name=c))
