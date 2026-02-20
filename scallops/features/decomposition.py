@@ -95,7 +95,8 @@ def pca(
     :param standardize: Whether to standardize the data.
     :param standardize_by: Standardize the data specified groups
     :param n_components: Number of PCA components.
-    :param min_std: Remove features with standard deviation <= `min_std`.
+    :param min_std: Remove features with standard deviation <= `min_std` after
+     standardization.
     :param max_value: Clip to this value after standardizing
     :param batch_size: Batch size for incremental PCA.
     :param gpu: Whether to use GPU.
@@ -103,13 +104,14 @@ def pca(
     :param progress: Whether to show progress bar for incremental PCA.
     :return: PCA Embedding
     """
-    adata = _centerscale(
-        adata=adata,
-        min_std=min_std,
-        standardize=standardize,
-        standardize_by=standardize_by,
-        max_value=max_value,
-    )
+    if standardize:
+        adata = _centerscale(
+            adata=adata,
+            min_std=min_std,
+            standardize=standardize,
+            standardize_by=standardize_by,
+            max_value=max_value,
+        )
     X = adata.X
     is_dask = isinstance(adata.X, da.Array)
     if gpu is None:
