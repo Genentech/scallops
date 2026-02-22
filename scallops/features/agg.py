@@ -37,7 +37,8 @@ def agg_features(
     grouped = xdata.groupby("obs")
     result = grouped.mean() if agg_func == "mean" else grouped.median()
     X = result.data
-    group_counts = []
+    counts = []
+    groups = []
     for group in grouped.groups:
         val = grouped.groups[group]
         if isinstance(val, slice):
@@ -46,13 +47,14 @@ def agg_features(
                 count = math.ceil(count / val.step)
         else:
             count = len(val)
-        group_counts.append((group, count))
+        groups.append(group)
+        counts.append(count)
     obs = result.coords["obs"].to_dataframe()
-    group_counts = pd.DataFrame(group_counts, columns=["obs", "count"]).set_index("obs")
     if isinstance(obs.index, MultiIndex):
-        obs.index = obs.index.to_flat_index()
+        groups = pd.MultiIndex.from_tuples(groups, names=obs.index.names)
+    group_counts = pd.DataFrame(data=dict(count=counts), index=groups)
     obs = obs.drop("obs", axis=1).join(group_counts).reset_index()
-    if not group_by_multi:
+    if not group_by_multi and "obs" in obs.columns:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
     return anndata.AnnData(
