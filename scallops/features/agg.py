@@ -1,4 +1,3 @@
-import math
 from collections.abc import Sequence
 from typing import Literal
 
@@ -42,18 +41,24 @@ def agg_features(
     for group in grouped.groups:
         val = grouped.groups[group]
         if isinstance(val, slice):
-            count = val.stop - val.start
-            if val.step is not None:
-                count = math.ceil(count / val.step)
+            count = (
+                val.stop - val.start
+                if val.step is None
+                else len(val.indices(data.shape[0]))
+            )
         else:
             count = len(val)
         groups.append(group)
         counts.append(count)
+
     obs = result.coords["obs"].to_dataframe()
-    if isinstance(obs.index, MultiIndex):
-        groups = pd.MultiIndex.from_tuples(groups, names=obs.index.names)
-    group_counts = pd.DataFrame(data=dict(count=counts), index=groups)
-    obs = obs.drop("obs", axis=1).join(group_counts).reset_index()
+    group_counts = pd.DataFrame(
+        data={"count": counts},
+        index=pd.MultiIndex.from_tuples(groups, names=obs.index.names)
+        if isinstance(obs.index, MultiIndex)
+        else pd.Index(groups),
+    )
+    obs = obs.drop("obs", errors="ignore", axis=1).join(group_counts).reset_index()
     if not group_by_multi and "obs" in obs.columns:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
