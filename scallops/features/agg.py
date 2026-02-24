@@ -5,6 +5,7 @@ import anndata
 import numpy as np
 import pandas as pd
 import xarray as xr
+from pandas import MultiIndex
 from xarray.core.indexes import PandasMultiIndex
 
 
@@ -35,8 +36,30 @@ def agg_features(
     grouped = xdata.groupby("obs")
     result = grouped.mean() if agg_func == "mean" else grouped.median()
     X = result.data
-    obs = result.coords["obs"].to_dataframe().drop("obs", axis=1).reset_index()
-    if not group_by_multi:
+    counts = []
+    groups = []
+    for group in grouped.groups:
+        val = grouped.groups[group]
+        if isinstance(val, slice):
+            count = (
+                val.stop - val.start
+                if val.step is None
+                else len(val.indices(data.shape[0]))
+            )
+        else:
+            count = len(val)
+        groups.append(group)
+        counts.append(count)
+
+    obs = result.coords["obs"].to_dataframe()
+    group_counts = pd.DataFrame(
+        data={"count": counts},
+        index=pd.MultiIndex.from_tuples(groups, names=obs.index.names)
+        if isinstance(obs.index, MultiIndex)
+        else pd.Index(groups),
+    )
+    obs = obs.drop("obs", errors="ignore", axis=1).join(group_counts).reset_index()
+    if not group_by_multi and "obs" in obs.columns:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
     return anndata.AnnData(
