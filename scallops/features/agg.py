@@ -5,6 +5,8 @@ import anndata
 import numpy as np
 import pandas as pd
 import xarray as xr
+from array_api_compat import get_namespace
+from dask.array.numpy_compat import NUMPY_GE_200
 from pandas import MultiIndex
 from statsmodels.stats.weightstats import DescrStatsW
 from xarray.core.indexes import PandasMultiIndex
@@ -40,19 +42,26 @@ def agg_features(
         xdata = xdata.set_xindex(by, PandasMultiIndex)
 
     grouped = xdata.groupby("obs")
+    xp = get_namespace(xdata.data)
     if weights_col is not None:
 
         def weighted_agg(x):
             weights = x.coords[weights_col].values
+            x = x.data
+
             if agg_func == "mean":
-                x = np.average(x.data, weights=weights, axis=0)
+                x = xp.average(x, weights=weights, axis=0)
             else:
-                x = (
-                    DescrStatsW(data=x.data, weights=weights)
-                    .quantile(probs=0.5, return_pandas=False)
-                    .squeeze()
-                )
-            return xr.DataArray(x, dims=("var"), name="")
+                if NUMPY_GE_200:
+                    # np.quantile weights parameter added in numpy 2
+                    x = xp.quantile(x, weights=weights, q=0.5, axis=0)
+                else:
+                    x = (
+                        DescrStatsW(data=x, weights=weights)
+                        .quantile(probs=0.5)
+                        .squeeze()
+                    )
+            return xr.DataArray(x, dims=("var",), name="")
 
         result = grouped.map(weighted_agg)
     else:
