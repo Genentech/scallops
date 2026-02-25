@@ -43,7 +43,7 @@ def agg_features(
     if weights_col is not None:
 
         def weighted_agg(x):
-            weights = x.coords["weight"].values
+            weights = x.coords[weights_col].values
             if agg_func == "mean":
                 x = np.average(x.data, weights=weights, axis=0)
             else:
