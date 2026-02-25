@@ -6,18 +6,21 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from pandas import MultiIndex
+from statsmodels.stats.weightstats import DescrStatsW
 from xarray.core.indexes import PandasMultiIndex
 
 
 def agg_features(
     data: anndata.AnnData,
     by: str | Sequence[str],
+    weights_col: str | None = None,
     agg_func: Literal["mean", "median"] = "mean",
 ):
     """Aggregate features
 
     :param data: Annotated data matrix.
     :param by: Perturbation column(s) in `data.obs` to aggregate by.
+    :param weights_col: If provided, perform weighted aggregation
     :param agg_func: Aggregation method.
     :return: Aggregated data
     """
@@ -30,11 +33,30 @@ def agg_features(
         coords = {"obs": np.arange(data.shape[0])}
         for col in by:
             coords[col] = ("obs", data.obs[col])
+    if weights_col is not None:
+        coords[weights_col] = ("obs", data.obs[weights_col])
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
     if group_by_multi:
         xdata = xdata.set_xindex(by, PandasMultiIndex)
+
     grouped = xdata.groupby("obs")
-    result = grouped.mean() if agg_func == "mean" else grouped.median()
+    if weights_col is not None:
+
+        def weighted_agg(x):
+            weights = x.coords["weight"].values
+            if agg_func == "mean":
+                x = np.average(x.data, weights=weights, axis=0)
+            else:
+                x = (
+                    DescrStatsW(data=x.data, weights=weights)
+                    .quantile(probs=0.5, return_pandas=False)
+                    .squeeze()
+                )
+            return xr.DataArray(x, dims=("var"), name="")
+
+        result = grouped.map(weighted_agg)
+    else:
+        result = grouped.mean() if agg_func == "mean" else grouped.median()
     X = result.data
     counts = []
     groups = []
