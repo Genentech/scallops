@@ -335,6 +335,8 @@ def test_agg_features(by, weighted, agg_func, use_dask):
     agg_d = agg_features(
         adata, by, weights_col="weight" if weighted else None, agg_func=agg_func
     )
+    if isinstance(agg_d.X, da.Array):
+        agg_d.X = agg_d.X.compute()
     assert agg_d.shape == (2, 2)
     agg_df = agg_d.to_df().join(agg_d.obs).sort_values("pert").drop("count", axis=1)
     pd.testing.assert_frame_equal(result_df[agg_df.columns], agg_df)
