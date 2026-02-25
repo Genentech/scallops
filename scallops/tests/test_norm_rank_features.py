@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 from distributed import Client, LocalCluster
 from scipy.stats import median_abs_deviation
+from statsmodels.stats.weightstats import DescrStatsW
 
 from scallops.features.agg import agg_features
 from scallops.features.constants import _centroid_column_names
@@ -275,21 +276,62 @@ def test_anndata_slice():
     pd.testing.assert_frame_equal(data1.var, data2.var)
 
 
-@pytest.mark.parametrize("by", ["pert", ("pert", "well")])
+@pytest.mark.parametrize("by", ["pert", ["pert", "well"]])
+@pytest.mark.parametrize("weighted", [True, False])
+@pytest.mark.parametrize("agg_func", ["mean", "median"])
 @pytest.mark.features
-def test_agg_features(by):
+def test_agg_features(by, weighted, agg_func):
     d = anndata.AnnData(
         X=np.arange(8).reshape((4, 2)),
         obs=pd.DataFrame(
-            data=dict(pert=["1", "2", "1", "2"], well=["1", "2", "1", "2"])
+            data=dict(
+                pert=["pert1", "pert2", "pert1", "pert2"],
+                well=["well1", "well2", "well1", "well2"],
+                weight=[2, 4, 8, 6],
+            )
         ),
-        var=pd.DataFrame(index=["1", "2"]),
+        var=pd.DataFrame(index=["gene1", "gene2"]),
     )
-    agg_d = agg_features(d, by)
+
+    df = d.to_df().join(d.obs)
+    grouped = df.groupby(by)
+    if weighted:
+        if agg_func == "mean":
+            result_df = grouped.agg(
+                gene1=(
+                    "gene1",
+                    lambda x: np.average(x, weights=df.loc[x.index, "weight"]),
+                ),
+                gene2=(
+                    "gene2",
+                    lambda x: np.average(x, weights=df.loc[x.index, "weight"]),
+                ),
+            )
+        else:
+            result_df = grouped.agg(
+                gene1=(
+                    "gene1",
+                    lambda x: DescrStatsW(
+                        data=x, weights=df.loc[x.index, "weight"]
+                    ).quantile(probs=[0.5]),
+                ),
+                gene2=(
+                    "gene2",
+                    lambda x: DescrStatsW(
+                        data=x, weights=df.loc[x.index, "weight"]
+                    ).quantile(probs=[0.5]),
+                ),
+            )
+    else:
+        result_df = grouped.agg({"gene1": agg_func, "gene2": agg_func})
+    result_df = result_df.reset_index().sort_values("pert")
+    result_df.index = result_df.index.astype(str)
+    agg_d = agg_features(
+        d, by, weights_col="weight" if weighted else None, agg_func=agg_func
+    )
     assert agg_d.shape == (2, 2)
-    agg_d.obs = agg_d.obs.set_index("pert")
-    agg_d = agg_d[["1", "2"]]
-    np.testing.assert_array_equal(agg_d.X, np.array([[2.0, 3.0], [4.0, 5.0]]))
+    agg_df = agg_d.to_df().join(agg_d.obs).sort_values("pert").drop("count", axis=1)
+    pd.testing.assert_frame_equal(result_df[agg_df.columns], agg_df)
 
 
 @pytest.mark.features
