@@ -13,6 +13,11 @@ from statsmodels.stats.weightstats import DescrStatsW
 from xarray.core.indexes import PandasMultiIndex
 
 
+def _weighted_median(x, weights):
+    d = DescrStatsW(data=x, weights=weights).quantile(probs=0.5, return_pandas=False)
+    return d
+
+
 def agg_features(
     data: anndata.AnnData,
     by: str | Sequence[str],
@@ -55,15 +60,26 @@ def agg_features(
             if agg_func == "mean":
                 x = xp.average(x, weights=weights, axis=0)
             else:
+                if isinstance(x, da.Array):
+                    chunks = list(x.chunksize)
+                    if chunks[0] != x.shape[0]:
+                        chunks[0] = -1
+                        x = x.rechunk(tuple(chunks))
                 if NUMPY_GE_200:
                     # np.quantile weights parameter added in numpy 2
                     x = xp.quantile(x, weights=weights, q=0.5, axis=0)
                 else:
-                    x = (
-                        DescrStatsW(data=x, weights=weights)
-                        .quantile(probs=0.5)
-                        .squeeze()
-                    )
+                    if isinstance(x, da.Array):
+                        x = da.map_blocks(
+                            _weighted_median,
+                            x,
+                            weights=weights,
+                            meta=np.array((), dtype=np.int64),
+                            drop_axis=0,
+                        )
+                    else:
+                        x = _weighted_median(x, weights=weights).squeeze()
+
             return xr.DataArray(x, dims=("var",), name="")
 
         result = grouped.map(weighted_agg)
