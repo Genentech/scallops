@@ -2,7 +2,7 @@
 build-backend = "setuptools.build_meta"
 requires = [
     "cython",
-    "numpy<2",
+    "numpy",
     "setuptools>=42",
     "setuptools_scm[toml]>=3.4",
     "wheel"
@@ -53,8 +53,8 @@ dependencies = [
     "matplotlib",
     "natsort",
     "numcodecs",
-    "numpy<2",
-    "ome-zarr",
+    "numpy",
+    "ome-zarr<0.12.0",
     "pandas",
     "pint",
     "psutil",
@@ -69,7 +69,7 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile==2024.8.30",
+    "tifffile<=2025.5.10",
     "xarray",
     "zarr<3"
 ]
@@ -83,7 +83,7 @@ dask-ml = [
     "dask-ml"
 ]
 cellpose = [
-    "cellpose<4"
+    "cellpose"
 ]
 ufish = [
     "ufish"
@@ -105,22 +105,7 @@ doc = [
     "sphinx_argparse",
     "sphinx_rtd_theme",
 ]
-all = [
-    "napari",
-    "napari_ome_zarr",
-    "cellpose",
-    "dask-ml",
-    "ufish",
-    "pytest",
-    "pre-commit",
-    "ipython",
-    "myst_parser",
-    "nbsphinx",
-    "sphinx-copybutton",
-    "sphinx",
-    "sphinx_argparse",
-    "sphinx_rtd_theme"
-]
+
 [project.entry-points."miniwdl.plugin.container_backend"]
 miniwdl_test_local = "scallops.tests.miniwdl_local.local_runner:LocalRunner"
 
