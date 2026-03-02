@@ -89,6 +89,7 @@ def test_transform_features_yj(by, use_dask):
             .fit_transform(df["gene2"].values.reshape(-1, 1))
             .squeeze()
         )
+        df = df.reset_index(drop=True)
 
     adata_transformed = transform_features_yj(adata, by=by)
 
