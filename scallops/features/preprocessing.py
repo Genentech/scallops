@@ -29,10 +29,10 @@ def transform_features_yj(
                 chunks[0] = -1
                 chunks = tuple(chunks)
                 x.data = x.data.rechunk(chunks)
-            x.data = da.map_blocks(_transform_feature_block, x.data)
+            transformed_x = da.map_blocks(_transform_feature_block, x.data)
         else:
-            x.data = _transform_feature_block(x.data)
-        return x.copy(data=x.data, deep=False)
+            transformed_x = _transform_feature_block(x.data)
+        return x.copy(data=transformed_x, deep=False)
 
     xdata = _anndata_to_xr(adata, by)
     if by is not None:
