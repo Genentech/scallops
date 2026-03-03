@@ -215,8 +215,6 @@ def normalize_features(
     mad_scale = _convert_scale(mad_scale)
     xdata = _anndata_to_xr(data)
     if normalize_groups is not None:
-        if isinstance(xdata.data, da.Array):
-            xdata = xdata.groupby(normalize_groups).shuffle_to_chunks()
         group_result = xdata.groupby(normalize_groups).map(
             lambda x: _normalize_group(
                 x,
