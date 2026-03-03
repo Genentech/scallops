@@ -34,7 +34,7 @@ def test_filter_data(use_dask):
     assert filter_data(adata, max_fraction_nans=0, min_variance=5).shape == (3, 1)
 
 
-@pytest.mark.parametrize("by", [None, ["well"]])
+@pytest.mark.parametrize("by", [None, ["pert", "well"], ["well"]])
 @pytest.mark.parametrize("use_dask", [True, False])
 @pytest.mark.features
 def test_transform_features_yj(by, use_dask):
@@ -72,11 +72,7 @@ def test_transform_features_yj(by, use_dask):
             )
             return x
 
-        df = (
-            grouped.apply(single_group, include_groups=False)
-            .reset_index()
-            .drop("level_1", axis=1)
-        )
+        df = grouped.apply(single_group, include_groups=False).reset_index()
 
     else:
         df["gene1"] = (
@@ -90,11 +86,19 @@ def test_transform_features_yj(by, use_dask):
             .squeeze()
         )
         df = df.reset_index(drop=True)
+    columns_drop = df.columns[df.columns.str.startswith("level_")]
+    if len(columns_drop) > 0:
+        df = df.drop(columns_drop, axis=1)
 
     adata_transformed = transform_features_yj(adata, by=by)
 
     if isinstance(adata_transformed.X, da.Array):
         adata_transformed.X = adata_transformed.X.compute()
-    df_test = adata_transformed.to_df().join(adata_transformed.obs)
-    df_test = df_test.reset_index(drop=True)
+    df_test = (
+        adata_transformed.to_df()
+        .join(adata_transformed.obs)
+        .sort_values(["pert", "well"])
+    )
+    df_test = df_test.sort_values(["pert", "well"]).reset_index(drop=True)
+    df = df.sort_values(["pert", "well"]).reset_index(drop=True)
     pd.testing.assert_frame_equal(df_test[df.columns], df)
