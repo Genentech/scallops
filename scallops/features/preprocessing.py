@@ -3,6 +3,7 @@ from collections.abc import Sequence
 import anndata
 import dask
 import dask.array as da
+import numpy as np
 from array_api_compat import get_namespace
 from sklearn.preprocessing import PowerTransformer
 
@@ -19,7 +20,7 @@ def transform_features_yj(
     :return: Transformed AnnData object
     """
 
-    def _transform_feature_block(x):
+    def _transform_block(x):
         return PowerTransformer(method="yeo-johnson").fit_transform(x)
 
     def _transform_feature_group(x):
@@ -29,15 +30,13 @@ def transform_features_yj(
             if chunks[0] != d.shape[0]:
                 chunks[0] = -1
                 d = d.rechunk(tuple(chunks))
-            d = da.map_blocks(_transform_feature_block, d)
+            d = da.map_blocks(_transform_block, d, meta=np.array((), dtype=np.float64))
         else:
-            d = _transform_feature_block(d)
+            d = _transform_block(d)
         return x.copy(data=d, deep=False)
 
     xdata = _anndata_to_xr(adata, by)
     if by is not None:
-        if isinstance(xdata.data, da.Array):
-            xdata = xdata.groupby(by).shuffle_to_chunks()
         result = xdata.groupby(by).map(_transform_feature_group)
         return anndata.AnnData(
             X=result.data,
