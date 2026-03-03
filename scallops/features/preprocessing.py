@@ -37,7 +37,8 @@ def transform_features_yj(
 
     xdata = _anndata_to_xr(adata, by)
     if by is not None:
-        xdata = xdata.groupby(by).shuffle_to_chunks()
+        if isinstance(xdata.data, da.Array):
+            xdata = xdata.groupby(by).shuffle_to_chunks()
         result = xdata.groupby(by).map(_transform_feature_group)
         return anndata.AnnData(
             X=result.data,
