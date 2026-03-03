@@ -28,8 +28,7 @@ def transform_features_yj(
             chunks = list(d.chunksize)
             if chunks[0] != d.shape[0]:
                 chunks[0] = -1
-                chunks = tuple(chunks)
-                d = d.rechunk(chunks)
+                d = d.rechunk(tuple(chunks))
             d = da.map_blocks(_transform_feature_block, d)
         else:
             d = _transform_feature_block(d)
@@ -45,6 +44,7 @@ def transform_features_yj(
             obs=adata.obs.loc[result.coords["obs"].values],
             var=adata.var.copy(),
         )
+
     return anndata.AnnData(
         X=_transform_feature_group(xdata).data,
         obs=adata.obs.copy(),
