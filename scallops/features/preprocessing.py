@@ -23,16 +23,17 @@ def transform_features_yj(
         return PowerTransformer(method="yeo-johnson").fit_transform(x)
 
     def _transform_feature_group(x):
-        if isinstance(x.data, da.Array):
-            chunks = list(x.data.chunksize)
-            if chunks[0] != x.data.shape[0]:
+        d = x.data
+        if isinstance(d, da.Array):
+            chunks = list(d.chunksize)
+            if chunks[0] != d.shape[0]:
                 chunks[0] = -1
                 chunks = tuple(chunks)
-                x.data = x.data.rechunk(chunks)
-            transformed_x = da.map_blocks(_transform_feature_block, x.data)
+                d = d.rechunk(chunks)
+            d = da.map_blocks(_transform_feature_block, d)
         else:
-            transformed_x = _transform_feature_block(x.data)
-        return x.copy(data=transformed_x, deep=False)
+            d = _transform_feature_block(d)
+        return x.copy(data=d, deep=False)
 
     xdata = _anndata_to_xr(adata, by)
     if by is not None:
