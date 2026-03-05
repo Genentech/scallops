@@ -11,7 +11,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 def recall(
     null_distribution: np.ndarray,
     query_distribution: np.ndarray,
-    recall_threshold_pairs: Sequence[Tuple[float, float]] = [
+    recall_thresholds: Sequence[Tuple[float, float] | float] = [
         (0.01, 0.99),
         (0.05, 0.95),
     ],
@@ -21,8 +21,9 @@ def recall(
 
     :param null_distribution: The null distribution to compare against
     :param query_distribution: The query distribution
-    :param recall_threshold_pairs: A sequence of pairs of floats (left, right) of
-    recall threshold pairs, where left and right are between 0 and 1.
+    :param recall_thresholds: A sequence of pairs of floats (left, right) or single
+    floats. Single floats are used to perform one-sided recall. Thresholds should be
+    between 0 and 1.
     :return Dataframe containing recall at given thresholds
     """
 
@@ -34,14 +35,28 @@ def recall(
         sorted_null_distribution, query_distribution, side="right"
     ) / len(sorted_null_distribution)
     results = []
-    for threshold_pair in recall_threshold_pairs:
-        left_threshold, right_threshold = np.min(threshold_pair), np.max(threshold_pair)
+    for threshold in recall_thresholds:
         result = dict()
-        result["threshold"] = (left_threshold, right_threshold)
-        result["recall"] = np.sum(
-            (query_percentage_ranks_right <= left_threshold)
-            | (query_percentage_ranks_left >= right_threshold)
-        ) / len(query_distribution)
+        if np.isscalar(threshold):
+            assert 0 <= threshold <= 1
+            result["threshold"] = threshold
+            if threshold >= 0.5:
+                result["recall"] = np.sum(
+                    (query_percentage_ranks_left >= threshold)
+                ) / len(query_distribution)
+            else:
+                result["recall"] = np.sum(
+                    (query_percentage_ranks_right <= threshold)
+                ) / len(query_distribution)
+        else:
+            left_threshold, right_threshold = np.min(threshold), np.max(threshold)
+            assert 0 <= left_threshold <= 1
+            assert 0 <= right_threshold <= 1
+            result["threshold"] = (left_threshold, right_threshold)
+            result["recall"] = np.sum(
+                (query_percentage_ranks_right <= left_threshold)
+                | (query_percentage_ranks_left >= right_threshold)
+            ) / len(query_distribution)
         results.append(result)
     return pd.DataFrame(results)
 
