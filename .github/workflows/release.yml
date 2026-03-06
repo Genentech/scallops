@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           SKIP="pp* *-win32 *-manylinux_i686"
-          
+
           if python -c "
           import re, sys
           with open('pyproject.toml') as f:
@@ -47,7 +47,7 @@ jobs:
             echo "⚠ NumPy 2.x not detected. Skipping Python 3.13 to prevent crashes."
             SKIP="$SKIP cp313-*"
           fi
-          
+
           echo "CIBW_SKIP=$SKIP" >> $GITHUB_ENV
 
       - name: List intended builds
