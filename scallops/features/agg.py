@@ -108,7 +108,11 @@ def agg_features(
         if isinstance(obs.index, MultiIndex)
         else pd.Index(groups),
     )
-    obs = obs.drop("obs", errors="ignore", axis=1).join(group_counts).reset_index()
+    obs = (
+        obs.drop("obs", errors="ignore", axis=1)
+        .join(group_counts, rsuffix="_1")
+        .reset_index()
+    )
     if not group_by_multi and "obs" in obs.columns:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
