@@ -32,15 +32,15 @@ jobs:
         run: python -m cibuildwheel --print-build-identifiers
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
-          CIBW_SKIP: "pp* *-win32 *-manylinux_i686"
+          CIBW_SKIP: "pp* *-win32 *-manylinux_i686 cp313-*"
 
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
           # Reads pyproject.toml to skip Python < 3.11 automatically
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
-          # Skip PyPy (pp*) and 32-bit architectures to speed up build
-          CIBW_SKIP: "pp* *-win32 *-manylinux_i686"
+          # Skip PyPy (pp*) and 32-bit architectures to speed up build Once numpy 2 is allowed remove the cp313 restriction
+          CIBW_SKIP: "pp* *-win32 *-manylinux_i686 cp313-*" 
 
       - uses: actions/upload-artifact@v4
         with:
