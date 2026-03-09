@@ -42,13 +42,15 @@ jobs:
         with:
           python-version: '3.11'
 
-    # Defeat the HTTP 429 Rate Limit by safely pre-warming the cache
+      # Defeat the HTTP 429 Rate Limit using an Authenticated Request
       - name: Pre-warm cibuildwheel cache (Bypass HTTP 429)
         shell: python
+        env:
+          # Inject the built-in GitHub token into the environment
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           import os, sys, platform, urllib.request, pathlib, time
           
-          # Hardcoded for cibuildwheel==2.22.0 based on build logs
           ver = "20.27.1"
           
           if platform.system() == "Darwin":
@@ -61,11 +63,20 @@ jobs:
           pathlib.Path(cache_dir).mkdir(parents=True, exist_ok=True)
           dest = os.path.join(cache_dir, f"virtualenv-{ver}.pyz")
           
-          url = f"https://github.com/pypa/get-virtualenv/blob/{ver}/public/virtualenv.pyz?raw=true"
+          # Use raw.githubusercontent directly to avoid redirect header-drops
+          url = f"https://raw.githubusercontent.com/pypa/get-virtualenv/{ver}/public/virtualenv.pyz"
+          
+          # Create the request and attach the GitHub token
+          req = urllib.request.Request(url)
+          token = os.environ.get("GITHUB_TOKEN")
+          if token:
+              req.add_header("Authorization", f"Bearer {token}")
+              
           for i in range(1, 8):
               try:
                   print(f"Downloading {url} (Attempt {i}/7)...")
-                  urllib.request.urlretrieve(url, dest)
+                  with urllib.request.urlopen(req) as response, open(dest, 'wb') as out_file:
+                      out_file.write(response.read())
                   print(f"Successfully cached at {dest}")
                   sys.exit(0)
               except Exception as e:
