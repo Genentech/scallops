@@ -20,7 +20,7 @@ dynamic = ["version"]
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
+classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
@@ -32,7 +32,7 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
 
 dependencies = [
     "adjustText",
-    "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
+    "anndata>=0.12.4",
     "bioio<2",
     "bioio-nd2",
     "bioio-tifffile",
@@ -43,7 +43,7 @@ dependencies = [
     "decorator",
     "filelock",
     "flox",
-    "fsspec!=2023.9.0", # 2023.9.0 causes ome-zarr write image to fail
+    "fsspec!=2023.9.0",
     "igraph",
     "itk-elastix",
     "itk",
@@ -60,7 +60,6 @@ dependencies = [
     "psutil",
     "pyarrow",
     "pydantic",
-    "pysam",
     "scikit-image",
     "scikit-learn",
     "scipy",
@@ -75,6 +74,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Added pysam as an optional extra for Linux/macOS users
+dialout = [
+    "pysam"
+]
 napari = [
     "napari",
     "napari_ome_zarr"
@@ -93,7 +96,6 @@ test = [
     "pytest",
     "pytest-xdist"
 ]
-
 dev = [
     "pre-commit"
 ]
@@ -114,7 +116,6 @@ scallops = 'scallops.__main__:main'
 
 [project.urls]
 Repository = "https://github.com/Genentech/scallops.git"
-
 
 [tool.setuptools]
 include-package-data = true
@@ -137,9 +138,7 @@ fix = true
 docstring-code-format = true
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F",
-    # isort
-    "I001"]
+select = ["E4", "E7", "E9", "F", "I001"]
 ignore = []
 
 [tool.pytest.ini_options]
@@ -178,4 +177,4 @@ filterwarnings = [
 ]
 
 [tool.distutils.bdist_wheel]
-universal = false # since we have cython we should not use universal wheels
+universal = false
