@@ -3,7 +3,7 @@ name: Build and Publish to PyPI
 on:
   push:
     tags:
-      - 'v*'  # Triggers automatically on release tags like v1.0.0
+      - 'v*'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -12,11 +12,9 @@ on:
         type: boolean
         default: true
 
-# Top-level security: least privilege by default
 permissions:
   contents: read
 
-# Cancel superseded runs to save CI minutes
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -29,36 +27,33 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 (Apple Silicon) handles both ARM and Intel (via Rosetta)
+        # Windows is back! pysam is now optional.
         os: [ubuntu-latest, windows-latest, macos-14]
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for setuptools_scm versioning
+          fetch-depth: 0
+          lfs: true  # CRITICAL: Fetches real TIFF binaries instead of Git LFS text pointers
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # Ensure cibuildwheel is actually installed in the runner
       - name: Install cibuildwheel
         run: |
           python -m pip install --upgrade pip
           python -m pip install cibuildwheel==2.22.0
 
-      # Defeat the HTTP 429 Rate Limit using an Authenticated Request
       - name: Pre-warm cibuildwheel cache (Bypass HTTP 429)
         shell: python
         env:
-          # Inject the built-in GitHub token into the environment to avoid rate limits
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           import os, sys, platform, urllib.request, pathlib, time
           
           ver = "20.27.1"
-          
           if platform.system() == "Darwin":
               cache_dir = os.path.expanduser("~/Library/Caches/cibuildwheel")
           elif platform.system() == "Windows":
@@ -69,10 +64,7 @@ jobs:
           pathlib.Path(cache_dir).mkdir(parents=True, exist_ok=True)
           dest = os.path.join(cache_dir, f"virtualenv-{ver}.pyz")
           
-          # Use raw.githubusercontent directly to avoid redirect header-drops
           url = f"https://raw.githubusercontent.com/pypa/get-virtualenv/{ver}/public/virtualenv.pyz"
-          
-          # Create the request and attach the GitHub token
           req = urllib.request.Request(url)
           token = os.environ.get("GITHUB_TOKEN")
           if token:
@@ -90,22 +82,18 @@ jobs:
                   time.sleep(2 ** i)
           sys.exit(1)
 
-      # Install Rosetta 2 so the macos-14 ARM runner can test Intel (x86_64) wheels
       - name: Install Rosetta 2 (Apple Silicon)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         run: |
           echo "Installing Rosetta 2 for x86_64 compatibility..."
           sudo softwareupdate --install-rosetta --agree-to-license
 
-      # Safely evaluate Python 3.13 support without triggering bash 'set -e' crashes
       - name: Determine Python 3.13 Support
         id: check-numpy
         shell: bash
         run: |
           SKIP="pp* *-win32 *-manylinux_i686 *-musllinux*"
-          
           if [ ! -f "pyproject.toml" ]; then
-            echo "pyproject.toml not found. Skipping Python 3.13."
             echo "CIBW_SKIP=$SKIP cp313-*" >> $GITHUB_ENV
             exit 0
           fi
@@ -133,7 +121,6 @@ jobs:
             echo "CIBW_SKIP=$SKIP cp313-*" >> $GITHUB_ENV
           fi
 
-      # Finally, run the build using the globally installed module
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
@@ -141,15 +128,19 @@ jobs:
           CIBW_SKIP: ${{ env.CIBW_SKIP }}
           CIBW_BUILD_VERBOSITY: 1
           CIBW_ARCHS_MACOS: "x86_64 arm64"
-          CIBW_TEST_REQUIRES: pytest pytest-xdist
 
-          # Prevent SciPy/scikit-learn from building from source during testing
-          PIP_ONLY_BINARY: "scipy,scikit-learn,scikit-image,numpy,pandas"
+          # Install pysam extra ONLY on Linux and macOS for testing
+          CIBW_TEST_EXTRAS_LINUX: "test,pysam"
+          CIBW_TEST_EXTRAS_MACOS: "test,pysam"
+          CIBW_TEST_EXTRAS_WINDOWS: "test"
 
-          #  Inject C-headers and OpenBLAS into the Linux Docker container
+          # Pass PIP_ONLY_BINARY strictly inside the Docker containers to stop source compilation
+          CIBW_ENVIRONMENT_LINUX: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
+          CIBW_ENVIRONMENT_MACOS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
+          CIBW_ENVIRONMENT_WINDOWS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
+
           CIBW_BEFORE_ALL_LINUX: "yum install -y bzip2-devel xz-devel zlib-devel openblas-devel"
 
-          #  Strict Test Isolation
           CIBW_TEST_COMMAND_LINUX: >
             bash -c 'TEST_DIR="{project}/scallops/tests" &&
             cd /tmp && pytest -n auto "$TEST_DIR" -v --tb=short'
@@ -179,17 +170,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Build sdist
         run: |
           python -m pip install --upgrade pip build
           python -m build --sdist
-
       - uses: actions/upload-artifact@v4
         with:
           name: cibw-sdist
@@ -200,35 +188,19 @@ jobs:
     needs: [build_wheels, build_sdist]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     permissions:
-      id-token: write  # Required for PyPI Trusted Publishing (OIDC)
-      contents: read   # Required to download artifacts securely
-
-    # Ensure this only publishes on tags, OR on manual runs where dry_run is unchecked
+      id-token: write
+      contents: read
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
-
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: cibw-*
           path: dist
           merge-multiple: true
-
-      - name: List artifacts to be published
-        run: |
-          echo "Artifacts to publish:"
-          ls -lh dist/
-
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           verbose: true
-          # FALLBACK: If Trusted Publishing via OIDC fails:
-          # 1. Comment out `permissions:` at the top of this job
-          # 2. Add PYPI_API_TOKEN to repository secrets
-          # 3. Uncomment below:
-          # user: __token__
-          # password: ${{ secrets.PYPI_API_TOKEN }}
