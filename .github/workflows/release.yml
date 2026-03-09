@@ -121,7 +121,9 @@ jobs:
             exit 0
           fi
           
-          # Use peer's improved regex that checks only dependency sections
+          # Temporarily disable fail-fast to safely capture the Python exit code
+          set +e
+          
           python - <<'PYTHON_SCRIPT'
           import re, sys, pathlib
           
@@ -146,7 +148,12 @@ jobs:
               sys.exit(1)
           PYTHON_SCRIPT
           
-          if [ $? -eq 0 ]; then
+          # Capture the exit code and immediately re-enable fail-fast
+          PY_EXIT_CODE=$?
+          set -e
+          
+          # Now safely evaluate what to do based on the exit code
+          if [ $PY_EXIT_CODE -eq 0 ]; then
             echo "CIBW_SKIP=$SKIP" >> $GITHUB_ENV
           else
             echo "CIBW_SKIP=$SKIP cp313-*" >> $GITHUB_ENV
