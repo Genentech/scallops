@@ -27,14 +27,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows is back! pysam is now optional.
         os: [ubuntu-latest, windows-latest, macos-14]
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: true  # CRITICAL: Fetches real TIFF binaries instead of Git LFS text pointers
+          lfs: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,7 +51,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           import os, sys, platform, urllib.request, pathlib, time
-          
           ver = "20.27.1"
           if platform.system() == "Darwin":
               cache_dir = os.path.expanduser("~/Library/Caches/cibuildwheel")
@@ -129,31 +127,37 @@ jobs:
           CIBW_BUILD_VERBOSITY: 1
           CIBW_ARCHS_MACOS: "x86_64 arm64"
 
-          # Install pysam extra ONLY on Linux and macOS for testing
+          # DRAGON 1: Upgrade to manylinux_2_28 to access modern wheels (pyarrow, h5py)
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+
           CIBW_TEST_EXTRAS_LINUX: "test,pysam"
           CIBW_TEST_EXTRAS_MACOS: "test,pysam"
           CIBW_TEST_EXTRAS_WINDOWS: "test"
 
-          # Pass PIP_ONLY_BINARY strictly inside the Docker containers to stop source compilation
           CIBW_ENVIRONMENT_LINUX: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
           CIBW_ENVIRONMENT_MACOS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
           CIBW_ENVIRONMENT_WINDOWS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
 
-          CIBW_BEFORE_ALL_LINUX: "yum install -y bzip2-devel xz-devel zlib-devel openblas-devel"
+          CIBW_BEFORE_ALL_LINUX: "dnf install -y epel-release && dnf install -y bzip2-devel xz-devel zlib-devel openblas-devel"
 
+          # DRAGON 2: Copy tests to isolation dir to preserve relative data paths!
           CIBW_TEST_COMMAND_LINUX: >
-            bash -c 'TEST_DIR="{project}/scallops/tests" &&
-            cd /tmp && pytest -n auto "$TEST_DIR" -v --tb=short'
+            bash -c 'mkdir -p /tmp/scallops && cp -r {project}/scallops/tests /tmp/scallops/tests &&
+            cd /tmp && pytest scallops/tests -v --tb=short'
 
+          # DRAGON 4: Skip AVX-heavy stardist tests on Rosetta emulation
           CIBW_TEST_COMMAND_MACOS: >
-            bash -c 'TEST_DIR="{project}/scallops/tests" &&
-            cd /tmp && pytest -n auto "$TEST_DIR" -v --tb=short'
+            bash -c 'mkdir -p /tmp/scallops && cp -r {project}/scallops/tests /tmp/scallops/tests &&
+            cd /tmp && pytest scallops/tests -v --tb=short -m "not segmentation_stardist"'
 
+          # DRAGON 3: Ignore Unix-only miniwdl tests on Windows
           CIBW_TEST_COMMAND_WINDOWS: >
             powershell -Command "
-            $TestDir = '{project}\scallops\tests';
+            if (!(Test-Path $env:TEMP\scallops)) { mkdir $env:TEMP\scallops | Out-Null };
+            Copy-Item -Path '{project}\scallops\tests' -Destination '$env:TEMP\scallops' -Recurse -Force;
             Set-Location $env:TEMP;
-            pytest -n auto $TestDir -v --tb=short
+            pytest scallops\tests -v --tb=short --ignore=scallops\tests\miniwdl_local --ignore=scallops\tests\test_wdl.py
             "
 
       - uses: actions/upload-artifact@v4
@@ -204,3 +208,9 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           verbose: true
+          # FALLBACK: If Trusted Publishing via OIDC fails:
+          # 1. Comment out `permissions:` at the top of this job
+          # 2. Add PYPI_API_TOKEN to repository secrets
+          # 3. Uncomment below:
+          # user: __token__
+          # password: ${{ secrets.PYPI_API_TOKEN }}
