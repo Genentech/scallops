@@ -3,8 +3,8 @@ name: Build and Publish to PyPI
 on:
   push:
     tags:
-      - 'v*'  # Triggers on tags like v0.0.1, v1.0.0
-  workflow_dispatch:  # Manual trigger - works on any branch
+      - 'v*'  # Triggers automatically on release tags like v1.0.0
+  workflow_dispatch:
     inputs:
       dry_run:
         description: 'Dry run (build only, do not publish)'
@@ -29,9 +29,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
-        # macos-13: Intel (x86_64) - being deprecated but still available in some orgs
-        # macos-14: Apple Silicon (arm64) - current standard
+        # Dropped macos-13 to prevent 'us-default' deprecation errors.
+        # macos-14 (Apple Silicon) will handle both ARM and Intel architectures.
+        os: [ubuntu-latest, windows-latest, macos-14]
 
     steps:
       - uses: actions/checkout@v4
@@ -43,72 +43,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      # Defense #1 against HTTP 429: Install virtualenv system-wide
-      # (cibuildwheel checks for this before downloading)
+      # Fix #1: Install virtualenv natively to bypass the HTTP 429 rate limit
       - name: Install cibuildwheel and virtualenv
         run: |
           python -m pip install --upgrade pip
           python -m pip install cibuildwheel==2.22.0 virtualenv
 
-      # Defense #2 against HTTP 429: Pre-warm cibuildwheel's virtualenv.pyz cache
-      # This is the robust solution that handles the pinned version cibuildwheel expects
-      - name: Pre-warm virtualenv.pyz cache (avoid HTTP 429)
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PYTHON_SCRIPT'
-          import os, sys, platform, urllib.request, pathlib, time
-
-          # Import cibuildwheel to get the exact pinned virtualenv version
-          try:
-              import cibuildwheel.util as cbw_util
-              ver = cbw_util.VIRTUALENV_VERSION
-          except (ImportError, AttributeError):
-              print("Could not determine cibuildwheel virtualenv version, skipping pre-warm")
-              sys.exit(0)
-
-          # Determine platform-specific cache directory
-          if platform.system() == "Darwin":
-              cache_dir = os.path.expanduser("~/Library/Caches/cibuildwheel")
-          elif platform.system() == "Windows":
-              cache_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "cibuildwheel", "Cache")
-          else:
-              cache_dir = os.path.expanduser("~/.cache/cibuildwheel")
-
-          pathlib.Path(cache_dir).mkdir(parents=True, exist_ok=True)
-          dest = os.path.join(cache_dir, f"virtualenv-{ver}.pyz")
-
-          if os.path.exists(dest):
-              print(f"virtualenv.pyz already cached at {dest}")
-              sys.exit(0)
-
-          # Download with exponential backoff retry
-          url = f"https://raw.githubusercontent.com/pypa/get-virtualenv/{ver}/public/virtualenv.pyz"
-          for attempt in range(1, 9):
-              try:
-                  print(f"Downloading {url} (attempt {attempt}/8)")
-                  with urllib.request.urlopen(url, timeout=30) as response:
-                      with open(dest, "wb") as f:
-                          f.write(response.read())
-                  print(f"Downloaded to {dest}")
-                  break
-              except Exception as e:
-                  if attempt == 8:
-                      print(f"Failed after 8 attempts: {e}")
-                      raise
-                  wait = 2 * attempt
-                  print(f"Attempt {attempt} failed: {e}. Retrying in {wait}s...")
-                  time.sleep(wait)
-          PYTHON_SCRIPT
-
-      # Install Rosetta 2 on Apple Silicon to enable testing x86_64 wheels
+      # Fix #2: Install Rosetta 2 so the macos-14 ARM runner can test Intel (x86_64) wheels
       - name: Install Rosetta 2 (Apple Silicon)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         run: |
           echo "Installing Rosetta 2 for x86_64 compatibility..."
           sudo softwareupdate --install-rosetta --agree-to-license
 
-      # Dynamic Python 3.13 detection with improved regex (peer's suggestion)
+      # Fix #3: Safely evaluate Python 3.13 support without triggering bash 'set -e' crashes
       - name: Determine Python 3.13 Support
         id: check-numpy
         shell: bash
@@ -121,113 +69,64 @@ jobs:
             exit 0
           fi
           
-          # Temporarily disable fail-fast to safely capture the Python exit code
+          # Disable fail-fast temporarily to capture the python exit code
           set +e
-          
           python - <<'PYTHON_SCRIPT'
           import re, sys, pathlib
-          
           content = pathlib.Path("pyproject.toml").read_text(encoding="utf-8", errors="ignore")
-          
-          # Extract only dependency sections to avoid false positives in comments
           blocks = re.findall(
               r'\[(?:project|tool\..+)\.(?:dependencies|optional-dependencies.*)\](.*?)\n\[',
               content + "\n[",
               flags=re.S
           )
           text = "\n".join(blocks)
-          
-          # Match numpy >= 2 or numpy ~= 2 (with optional quotes)
           pattern = r'(?i)\bnumpy\b\s*(?:>=|~=)\s*["\']?\s*2(\D|$)'
-          
-          if re.search(pattern, text):
-              print("NumPy 2.x support detected. Building Python 3.13 wheels.")
-              sys.exit(0)
-          else:
-              print("NumPy 2.x not detected. Skipping Python 3.13.")
-              sys.exit(1)
+          sys.exit(0 if re.search(pattern, text) else 1)
           PYTHON_SCRIPT
           
-          # Capture the exit code and immediately re-enable fail-fast
           PY_EXIT_CODE=$?
-          set -e
+          set -e  # Re-enable fail-fast immediately
           
-          # Now safely evaluate what to do based on the exit code
           if [ $PY_EXIT_CODE -eq 0 ]; then
             echo "CIBW_SKIP=$SKIP" >> $GITHUB_ENV
           else
             echo "CIBW_SKIP=$SKIP cp313-*" >> $GITHUB_ENV
           fi
 
-      # Use official cibuildwheel action for better stability
+      # Fix #4: Use `python -m` instead of the action wrapper to utilize the shared virtualenv
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        run: python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
           CIBW_SKIP: ${{ env.CIBW_SKIP }}
           CIBW_BUILD_VERBOSITY: 1
-
-          # Build both architectures on macOS
-          # macos-13: x86_64 only (Intel)
-          # macos-14: arm64 only (Apple Silicon)
-          # Rosetta allows testing x86_64 on arm64
           CIBW_ARCHS_MACOS: "x86_64 arm64"
-
-          # Test dependencies
           CIBW_TEST_REQUIRES: pytest pytest-xdist
 
-          # Platform-specific test commands (portable and debuggable)
-          # These commands ensure tests run against the INSTALLED WHEEL, not source tree
-          
-          # Linux: Use temp directory to isolate from source
+          # Fix #5: Inject C-headers into the CentOS Docker container for pysam/HTSlib
+          CIBW_BEFORE_ALL_LINUX: "yum install -y bzip2-devel xz-devel zlib-devel"
+
+          # Fix #6: Strict Test Isolation (Forces tests against the built wheel, not source tree)
           CIBW_TEST_COMMAND_LINUX: >
             bash -c 'TEST_DIR="{project}/scallops/tests" &&
-            cd /tmp &&
-            echo "Testing from: $(pwd)" &&
-            echo "Wheel location: $(python -c \"import scallops; print(scallops.__file__)\")" &&
-            pytest -n auto "$TEST_DIR" -v --tb=short'
+            cd /tmp && pytest -n auto "$TEST_DIR" -v --tb=short'
 
-          # macOS: Same as Linux
           CIBW_TEST_COMMAND_MACOS: >
             bash -c 'TEST_DIR="{project}/scallops/tests" &&
-            cd /tmp &&
-            echo "Testing from: $(pwd)" &&
-            echo "Wheel location: $(python -c \"import scallops; print(scallops.__file__)\")" &&
-            pytest -n auto "$TEST_DIR" -v --tb=short'
+            cd /tmp && pytest -n auto "$TEST_DIR" -v --tb=short'
 
-          # Windows: Use %TEMP% and cmd.exe syntax
           CIBW_TEST_COMMAND_WINDOWS: >
             powershell -Command "
             $TestDir = '{project}\scallops\tests';
             Set-Location $env:TEMP;
-            Write-Host 'Testing from:' (Get-Location);
-            python -c 'import scallops; print(\"Wheel location:\", scallops.__file__)';
             pytest -n auto $TestDir -v --tb=short
             "
 
-          # Alternative: If tests are PACKAGED in the wheel, use this simpler approach:
-          # CIBW_TEST_COMMAND: "pytest -n auto --pyargs scallops.tests -v --tb=short"
-
-        with:
-          output-dir: wheelhouse
-        
-        # Continue on error for macos-13 (graceful degradation as it's being deprecated)
-        continue-on-error: ${{ matrix.os == 'macos-13' }}
-
-      - name: Check for macOS-13 deprecation warning
-        if: matrix.os == 'macos-13' && failure()
-        run: |
-          echo "::warning::macos-13 runner failed. This runner is being deprecated by GitHub."
-          echo "::warning::Consider migrating to macos-14 with CIBW_ARCHS_MACOS: 'x86_64 arm64'"
-          echo "::warning::See: https://github.com/actions/runner-images/issues/9255"
-
       - uses: actions/upload-artifact@v4
         with:
-          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          name: cibw-wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
           retention-days: 7
-        # Upload artifacts even if macos-13 fails
-        if: always()
 
   build_sdist:
     name: Build Source Distribution
@@ -259,12 +158,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # Elevate permissions only for publishing
     permissions:
       id-token: write  # Required for PyPI Trusted Publishing (OIDC)
-      contents: read   # Required to download artifacts
+      contents: read   # Required to download artifacts securely
 
-    # Publish on tag push OR manual trigger with dry_run=false
+    # Ensure this only publishes on tags, OR on manual runs where dry_run is unchecked
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
@@ -280,20 +178,18 @@ jobs:
         run: |
           echo "Artifacts to publish:"
           ls -lh dist/
-          echo ""
-          echo "Total artifacts: $(ls dist/ | wc -l)"
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           verbose: true
-          
-          # If Trusted Publishing fails:
-          # 1. Comment out the `permissions:` block above
-          # 2. Uncomment the lines below
-          #
+
+          # If Trusted Publishing via OIDC fails:
+          # 1. Comment out the `permissions:` block at the top of this job
+          # 2. Add PYPI_API_TOKEN to your repository secrets
+          # 3. Uncomment the two lines below:
           # user: __token__
           # password: ${{ secrets.PYPI_API_TOKEN }}
-          
+
           # Future enhancement (ecosystem not yet mature):
           # generate-provenance: true
