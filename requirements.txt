@@ -9,7 +9,7 @@ cython==3.2.4
 dask-image==2025.11.0
 dask==2025.11.0
 decorator==5.2.1
-filelock==3.25.0
+filelock==3.25.1
 flox==0.11.2
 fsspec==2026.2.0
 igraph==1.0.0
@@ -36,7 +36,7 @@ seaborn==0.13.2
 shapely==2.1.2
 stardist==0.9.2
 statsmodels==0.14.6
-tensorflow==2.20.0
+tensorflow==2.21.0
 tifffile==2025.5.10
 xarray==2026.2.0
 zarr==2.18.7
