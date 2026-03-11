@@ -2,7 +2,7 @@
 build-backend = "setuptools.build_meta"
 requires = [
     "cython",
-    "numpy",
+    "numpy<2",
     "setuptools>=42",
     "setuptools_scm[toml]>=3.4",
     "wheel"
@@ -53,7 +53,7 @@ dependencies = [
     "matplotlib",
     "natsort",
     "numcodecs",
-    "numpy",
+    "numpy<2",
     "ome-zarr<0.12.0",
     "pandas",
     "pint",
@@ -83,7 +83,7 @@ dask-ml = [
     "dask-ml"
 ]
 cellpose = [
-    "cellpose"
+    "cellpose<4"
 ]
 ufish = [
     "ufish"

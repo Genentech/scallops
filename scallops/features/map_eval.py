@@ -1,6 +1,6 @@
 from collections import defaultdict
-from collections.abc import Callable, Sequence
-from typing import Literal
+from collections.abc import Sequence
+from typing import Literal, Tuple
 
 import anndata
 import numpy as np
@@ -9,68 +9,56 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 
 def recall(
-    true_positives_df: pd.DataFrame,
-    similarity_df: pd.DataFrame,
-    similarity_column_true_positives: str = "value",
-    similarity_column: str = "value",
-    quantiles: Sequence[float] = (0.01, 0.05),
-    two_sided: bool = True,
-    n_true_positives: Callable[[pd.DataFrame], int] = len,
+    null_distribution: np.ndarray,
+    query_distribution: np.ndarray,
+    recall_thresholds: Sequence[Tuple[float, float] | float] = [
+        (0.01, 0.99),
+        (0.05, 0.95),
+    ],
 ) -> pd.DataFrame:
-    """Compute recall at the specified quantiles.
+    """Compute recall at given thresholds for a query distribution with respect to a
+    null distribution.
 
-    :param true_positives_df: Dataframe containing true positive pairwise similarities
-    (e.g. relationships from CORUM)
-    :param similarity_df: Dataframe containing all pairwise similarities from which
-    quantiles are computed.
-    :param similarity_column_true_positives: Column in `true_positives_df` containing
-    similarity scores.
-    :param similarity_column: Column in `similarity_df` containing similarity scores.
-    :param quantiles: List of quantiles to extract relevant gene pairs.
-    :param two_sided: If two-sided, recall is computed at specific quantiles
-    and 1-quantiles.
-    :param n_true_positives: Function that accepts a dataframe and returns the
-    number of true positives. Default is the length of the dataframe
-    :return: Dataframe containing recall results.
+    :param null_distribution: The null distribution to compare against
+    :param query_distribution: The query distribution
+    :param recall_thresholds: A sequence of pairs of floats (left, right) or single
+    floats. Single floats are used to perform one-sided recall. Thresholds should be
+    between 0 and 1.
+    :return Dataframe containing recall at given thresholds
     """
+
+    sorted_null_distribution = np.sort(null_distribution)
+    query_percentage_ranks_left = np.searchsorted(
+        sorted_null_distribution, query_distribution, side="left"
+    ) / len(sorted_null_distribution)
+    query_percentage_ranks_right = np.searchsorted(
+        sorted_null_distribution, query_distribution, side="right"
+    ) / len(sorted_null_distribution)
     results = []
-
-    n_relevant = n_true_positives(true_positives_df)
-    quantiles_ = quantiles
-    if two_sided:
-        quantiles = np.array(quantiles)
-        one_minus_quantiles = 1 - np.array(quantiles)
-        quantiles_ = [
-            (quantiles[i], one_minus_quantiles[i]) for i in range(len(quantiles))
-        ]
-        quantiles = np.concatenate((quantiles, one_minus_quantiles))
-    recall_thresholds = similarity_df[similarity_column].quantile(quantiles)
-    for quantile in quantiles_:
-        if two_sided:
-            threshold_low, threshold_high = (
-                recall_thresholds[quantile[0]],
-                recall_thresholds[quantile[1]],
-            )
-
-            df_retrieved = true_positives_df[
-                (true_positives_df[similarity_column_true_positives] >= threshold_high)
-                | (true_positives_df[similarity_column_true_positives] <= threshold_low)
-            ]
-        elif quantile <= 0.5:
-            df_retrieved = true_positives_df[
-                true_positives_df[similarity_column_true_positives]
-                <= recall_thresholds[quantile]
-            ]
+    for threshold in recall_thresholds:
+        result = dict()
+        if np.isscalar(threshold):
+            assert 0 <= threshold <= 1
+            result["threshold"] = threshold
+            if threshold >= 0.5:
+                result["recall"] = np.sum(
+                    (query_percentage_ranks_left >= threshold)
+                ) / len(query_distribution)
+            else:
+                result["recall"] = np.sum(
+                    (query_percentage_ranks_right <= threshold)
+                ) / len(query_distribution)
         else:
-            df_retrieved = true_positives_df[
-                true_positives_df[similarity_column_true_positives]
-                >= recall_thresholds[quantile]
-            ]
-        n_relevant_retrieved = n_true_positives(df_retrieved)
-        results.append(
-            [quantile[0] if two_sided else quantile, n_relevant_retrieved / n_relevant]
-        )
-    return pd.DataFrame(results, columns=["quantile", "recall"])
+            left_threshold, right_threshold = np.min(threshold), np.max(threshold)
+            assert 0 <= left_threshold <= 1
+            assert 0 <= right_threshold <= 1
+            result["threshold"] = (left_threshold, right_threshold)
+            result["recall"] = np.sum(
+                (query_percentage_ranks_right <= left_threshold)
+                | (query_percentage_ranks_left >= right_threshold)
+            ) / len(query_distribution)
+        results.append(result)
+    return pd.DataFrame(results)
 
 
 def pairwise_similarities(

@@ -213,9 +213,9 @@ def normalize_features(
     """
 
     mad_scale = _convert_scale(mad_scale)
-    x_data = _anndata_to_xr(data)
+    xdata = _anndata_to_xr(data)
     if normalize_groups is not None:
-        group_result = x_data.groupby(normalize_groups).map(
+        group_result = xdata.groupby(normalize_groups).map(
             lambda x: _normalize_group(
                 x,
                 reference_query=reference_query,
@@ -238,7 +238,7 @@ def normalize_features(
         )
 
     result = _normalize_group(
-        x_data,
+        xdata,
         reference_query=reference_query,
         normalize=normalize,
         n_neighbors=n_neighbors,
