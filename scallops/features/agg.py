@@ -117,7 +117,9 @@ def _weighted_distance(
     np.fill_diagonal(distances, 0)
     distances = distances.mean(axis=0)
     distances = distances / distances.sum()
-    weights = df.join(pd.DataFrame(index=keys, weights=distances))["weight"].values
+    weights = df.join(pd.DataFrame(index=keys, data=dict(weight=distances)))[
+        "weight"
+    ].values
     if agg_func == "mean":
         x = np.average(x, weight=weights, axis=0)
     else:
