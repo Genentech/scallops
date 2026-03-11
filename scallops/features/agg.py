@@ -65,9 +65,12 @@ def agg_features(
                     if chunks[0] != x.shape[0]:
                         chunks[0] = -1
                         x = x.rechunk(tuple(chunks))
-                if NUMPY_GE_200:
+                if NUMPY_GE_200 and not isinstance(x, da.Array):
                     # np.quantile weights parameter added in numpy 2
-                    x = xp.quantile(x, weights=weights, q=0.5, axis=0)
+                    # https://github.com/dask/dask/issues/12322
+                    x = xp.quantile(
+                        x, weights=weights, q=0.5, axis=0, method="inverted_cdf"
+                    )
                 else:
                     if isinstance(x, da.Array):
                         x = da.map_blocks(
