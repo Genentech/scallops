@@ -121,7 +121,7 @@ def _weighted_distance(
         "weight"
     ].values
     if agg_func == "mean":
-        x = np.average(x, weight=weights, axis=0)
+        x = np.average(x, weights=weights, axis=0)
     else:
         x = np.quantile(x, weights=weights, q=0.5, axis=0, method="inverted_cdf")
     return x
