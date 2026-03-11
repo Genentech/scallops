@@ -2,22 +2,33 @@ from collections.abc import Sequence
 from typing import Literal
 
 import anndata
+import dask.array as da
 import numpy as np
 import pandas as pd
 import xarray as xr
+from array_api_compat import get_namespace
+from dask.array.numpy_compat import NUMPY_GE_200
 from pandas import MultiIndex
+from statsmodels.stats.weightstats import DescrStatsW
 from xarray.core.indexes import PandasMultiIndex
+
+
+def _weighted_median(x, weights):
+    d = DescrStatsW(data=x, weights=weights).quantile(probs=0.5, return_pandas=False)
+    return d
 
 
 def agg_features(
     data: anndata.AnnData,
     by: str | Sequence[str],
+    weights_col: str | None = None,
     agg_func: Literal["mean", "median"] = "mean",
 ):
     """Aggregate features
 
     :param data: Annotated data matrix.
     :param by: Perturbation column(s) in `data.obs` to aggregate by.
+    :param weights_col: If provided, perform weighted aggregation
     :param agg_func: Aggregation method.
     :return: Aggregated data
     """
@@ -30,11 +41,50 @@ def agg_features(
         coords = {"obs": np.arange(data.shape[0])}
         for col in by:
             coords[col] = ("obs", data.obs[col])
+    if weights_col is not None:
+        coords[weights_col] = ("obs", data.obs[weights_col])
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
     if group_by_multi:
         xdata = xdata.set_xindex(by, PandasMultiIndex)
+    if agg_func == "median" and isinstance(xdata.data, da.Array):
+        xdata = xdata.groupby("obs").shuffle_to_chunks()
+
     grouped = xdata.groupby("obs")
-    result = grouped.mean() if agg_func == "mean" else grouped.median()
+    xp = get_namespace(xdata.data)
+    if weights_col is not None:
+
+        def weighted_agg(x):
+            weights = x.coords[weights_col].values
+            x = x.data
+
+            if agg_func == "mean":
+                x = xp.average(x, weights=weights, axis=0)
+            else:
+                if isinstance(x, da.Array):
+                    chunks = list(x.chunksize)
+                    if chunks[0] != x.shape[0]:
+                        chunks[0] = -1
+                        x = x.rechunk(tuple(chunks))
+                if NUMPY_GE_200:
+                    # np.quantile weights parameter added in numpy 2
+                    x = xp.quantile(x, weights=weights, q=0.5, axis=0)
+                else:
+                    if isinstance(x, da.Array):
+                        x = da.map_blocks(
+                            _weighted_median,
+                            x,
+                            weights=weights,
+                            meta=np.array((), dtype=np.int64),
+                            drop_axis=0,
+                        )
+                    else:
+                        x = _weighted_median(x, weights=weights).squeeze()
+
+            return xr.DataArray(x, dims=("var",), name="")
+
+        result = grouped.map(weighted_agg)
+    else:
+        result = grouped.mean() if agg_func == "mean" else grouped.median()
     X = result.data
     counts = []
     groups = []
@@ -58,7 +108,11 @@ def agg_features(
         if isinstance(obs.index, MultiIndex)
         else pd.Index(groups),
     )
-    obs = obs.drop("obs", errors="ignore", axis=1).join(group_counts).reset_index()
+    obs = (
+        obs.drop("obs", errors="ignore", axis=1)
+        .join(group_counts, rsuffix="_1")
+        .reset_index()
+    )
     if not group_by_multi and "obs" in obs.columns:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
