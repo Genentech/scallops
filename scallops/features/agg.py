@@ -133,7 +133,7 @@ def _weighted_agg(
 ):
     weights = x.coords[weights_col].values
     x = x.data
-    xp = get_namespace(x.data)
+    xp = get_namespace(x)
 
     if metric in ("wasserstein", "energy"):
         x = da.map_blocks(
