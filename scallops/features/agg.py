@@ -14,6 +14,8 @@ from scipy.stats import wasserstein_distance_nd
 from statsmodels.stats.weightstats import DescrStatsW
 from xarray.core.indexes import PandasMultiIndex
 
+# jit functions from pertpy
+
 
 @jit(nopython=True, parallel=True, cache=True, fastmath=True)
 def _euclidean_pairwise_mean_between(X: np.ndarray, Y: np.ndarray) -> float:
@@ -98,7 +100,7 @@ def _compute_weights_one_perturbation(
     if metric == "energy":
         within = np.zeros(len(keys))
         for i in range(len(keys)):
-            within = _euclidean_pairwise_mean_within(x[indices[keys[i]]])
+            within[i] = _euclidean_pairwise_mean_within(x[indices[keys[i]]])
     for i in range(len(keys)):
         X = x[indices[keys[i]]]
         for j in range(i):
