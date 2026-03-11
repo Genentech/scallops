@@ -85,17 +85,15 @@ def _weighted_median(x, weights):
     return d
 
 
-def _weighted_distance(
-    x: np.ndarray,
-    group_values: np.ndarray,
-    agg_func: Literal["mean", "median"],
-    metric: Literal["wasserstein", "energy"] | None,
-):
+def _compute_weights_one_perturbation(
+    x: np.ndarray, group_values: np.ndarray, metric: Literal["wasserstein", "energy"]
+) -> pd.DataFrame:
     df = pd.DataFrame(index=group_values)
     indices = df.groupby(df.index).indices
     keys = list(indices.keys())
     if len(keys) <= 2:
-        return np.mean(x, axis=0)
+        return pd.DataFrame(index=keys, data=dict(weight=1.0))
+
     distances = np.zeros((len(keys), len(keys)))
     if metric == "energy":
         within = np.zeros(len(keys))
@@ -105,7 +103,6 @@ def _weighted_distance(
         X = x[indices[keys[i]]]
         for j in range(i):
             Y = x[indices[keys[j]]]
-
             if metric == "energy":
                 between = _euclidean_pairwise_mean_between(X, Y)
                 dist = 2 * between - within[i] - within[j]
@@ -113,13 +110,22 @@ def _weighted_distance(
                 dist = wasserstein_distance_nd(X, Y)
             distances[i, j] = dist
             distances[j, i] = dist
-    distances = distances.max() - distances
+    distances = 1 / (1 + distances)
     np.fill_diagonal(distances, 0)
     distances = distances.mean(axis=0)
     distances = distances / distances.sum()
-    weights = df.join(pd.DataFrame(index=keys, data=dict(weight=distances)))[
-        "weight"
-    ].values
+    return df.join(pd.DataFrame(index=keys, data=dict(weight=distances)))["weight"]
+
+
+def _weighted_distance(
+    x: np.ndarray,
+    group_values: np.ndarray,
+    agg_func: Literal["mean", "median"],
+    metric: Literal["wasserstein", "energy"],
+):
+    weights = _compute_weights_one_perturbation(
+        x=x, group_values=group_values, metric=metric
+    )["weight"].values
     if agg_func == "mean":
         x = np.average(x, weights=weights, axis=0)
     else:
@@ -183,6 +189,40 @@ def _weighted_agg(
     return xr.DataArray(x, dims=("var",), name="")
 
 
+def _get_obs_with_counts(data: xr.DataArray, grouped, by: str | Sequence[str]):
+    counts = []
+    groups = []
+    for group in grouped.groups:
+        val = grouped.groups[group]
+        if isinstance(val, slice):
+            count = (
+                val.stop - val.start
+                if val.step is None
+                else len(val.indices(data.shape[0]))
+            )
+        else:
+            count = len(val)
+        groups.append(group)
+        counts.append(count)
+
+    obs = data.coords["obs"].to_dataframe()
+    group_counts = pd.DataFrame(
+        data={"count": counts},
+        index=pd.MultiIndex.from_tuples(groups, names=obs.index.names)
+        if isinstance(obs.index, MultiIndex)
+        else pd.Index(groups),
+    )
+    obs = (
+        obs.drop("obs", errors="ignore", axis=1)
+        .join(group_counts, rsuffix="_1")
+        .reset_index()
+    )
+    group_by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if not group_by_multi and "obs" in obs.columns:
+        obs = obs.rename({"obs": by}, axis=1)
+    return obs.set_index(pd.RangeIndex(len(obs)).astype(str))
+
+
 def agg_features(
     data: anndata.AnnData,
     by: str | Sequence[str],
@@ -230,36 +270,7 @@ def agg_features(
     else:
         result = grouped.mean() if agg_func == "mean" else grouped.median()
     X = result.data
-    counts = []
-    groups = []
-    for group in grouped.groups:
-        val = grouped.groups[group]
-        if isinstance(val, slice):
-            count = (
-                val.stop - val.start
-                if val.step is None
-                else len(val.indices(data.shape[0]))
-            )
-        else:
-            count = len(val)
-        groups.append(group)
-        counts.append(count)
-
-    obs = result.coords["obs"].to_dataframe()
-    group_counts = pd.DataFrame(
-        data={"count": counts},
-        index=pd.MultiIndex.from_tuples(groups, names=obs.index.names)
-        if isinstance(obs.index, MultiIndex)
-        else pd.Index(groups),
-    )
-    obs = (
-        obs.drop("obs", errors="ignore", axis=1)
-        .join(group_counts, rsuffix="_1")
-        .reset_index()
-    )
-    if not group_by_multi and "obs" in obs.columns:
-        obs = obs.rename({"obs": by}, axis=1)
-    obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
+    obs = _get_obs_with_counts(result, grouped, by)
     return anndata.AnnData(
         X=X,
         obs=obs,
