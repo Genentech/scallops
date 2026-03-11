@@ -116,7 +116,7 @@ def _compute_weights_one_perturbation(
     np.fill_diagonal(distances, 0)
     distances = distances.mean(axis=0)
     distances = distances / distances.sum()
-    return df.join(pd.DataFrame(index=keys, data=dict(weight=distances)))["weight"]
+    return df.join(pd.DataFrame(index=keys, data=dict(weight=distances)))
 
 
 def _weighted_distance(
