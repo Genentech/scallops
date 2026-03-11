@@ -8,9 +8,76 @@ import pandas as pd
 import xarray as xr
 from array_api_compat import get_namespace
 from dask.array.numpy_compat import NUMPY_GE_200
+from numba import jit, prange
 from pandas import MultiIndex
+from scipy.stats import wasserstein_distance_nd
 from statsmodels.stats.weightstats import DescrStatsW
 from xarray.core.indexes import PandasMultiIndex
+
+
+@jit(nopython=True, parallel=True, cache=True, fastmath=True)
+def _euclidean_pairwise_mean_between(X: np.ndarray, Y: np.ndarray) -> float:
+    """Compute mean pairwise euclidean distance between two groups (X to Y)."""
+    n_samples_X = X.shape[0]
+    n_samples_Y = Y.shape[0]
+
+    if n_samples_X == 0 or n_samples_Y == 0:
+        return 0.0
+
+    total_distance = 0.0
+    n_pairs = n_samples_X * n_samples_Y
+
+    for i in prange(n_samples_X):
+        for j in range(n_samples_Y):
+            total_distance += _euclidean_distance(X[i], Y[j])
+
+    return total_distance / n_pairs
+
+
+@jit(nopython=True, cache=True)
+def _euclidean_distance(x: np.ndarray, y: np.ndarray) -> float:
+    """Compute euclidean distance between two vectors."""
+    dist_sq = 0.0
+    for k in range(x.shape[0]):
+        diff = x[k] - y[k]
+        dist_sq += diff * diff
+    return np.sqrt(dist_sq)
+
+
+@jit(nopython=True, parallel=True, cache=True, fastmath=True)
+def _euclidean_pairwise_mean_within(X: np.ndarray) -> float:
+    """Compute mean pairwise euclidean distance within a group (X to X)."""
+    n_samples = X.shape[0]
+    if n_samples < 2:
+        return 0.0
+
+    total_distance = 0.0
+    n_pairs = n_samples * (n_samples - 1) / 2.0
+
+    for i in prange(n_samples):
+        for j in range(i + 1, n_samples):
+            total_distance += _euclidean_distance(X[i], X[j])
+
+    return total_distance / n_pairs
+
+
+@jit(nopython=True, parallel=True, cache=True, fastmath=True)
+def _euclidean_pairwise_mean_between(X: np.ndarray, Y: np.ndarray) -> float:
+    """Compute mean pairwise euclidean distance between two groups (X to Y)."""
+    n_samples_X = X.shape[0]
+    n_samples_Y = Y.shape[0]
+
+    if n_samples_X == 0 or n_samples_Y == 0:
+        return 0.0
+
+    total_distance = 0.0
+    n_pairs = n_samples_X * n_samples_Y
+
+    for i in prange(n_samples_X):
+        for j in range(n_samples_Y):
+            total_distance += _euclidean_distance(X[i], Y[j])
+
+    return total_distance / n_pairs
 
 
 def _weighted_median(x, weights):
@@ -18,11 +85,99 @@ def _weighted_median(x, weights):
     return d
 
 
+def _weighted_distance(
+    x: np.ndarray,
+    group_values: np.ndarray,
+    agg_func: Literal["mean", "median"],
+    metric: Literal["wasserstein", "energy"] | None,
+):
+    df = pd.DataFrame(index=group_values)
+    indices = df.groupby(df.index).indices
+    keys = list(indices.keys())
+    if len(keys) <= 2:
+        return np.mean(x, axis=0)
+    distances = np.zeros((len(keys), len(keys)))
+    if metric == "energy":
+        within = np.zeros(len(keys))
+        for i in range(len(keys)):
+            within = _euclidean_pairwise_mean_within(x[indices[keys[i]]])
+    for i in range(len(keys)):
+        X = x[indices[keys[i]]]
+        for j in range(i):
+            Y = x[indices[keys[j]]]
+
+            if metric == "energy":
+                between = _euclidean_pairwise_mean_between(X, Y)
+                dist = 2 * between - within[i] - within[j]
+            else:
+                dist = wasserstein_distance_nd(X, Y)
+            distances[i, j] = dist
+            distances[j, i] = dist
+    distances = distances.max() - distances
+    np.fill_diagonal(distances, 0)
+    distances = distances.mean(axis=0)
+    distances = distances / distances.sum()
+    weights = df.join(pd.DataFrame(index=keys, weights=distances))["weight"].values
+    if agg_func == "mean":
+        x = np.average(x, weight=weights, axis=0)
+    else:
+        x = np.quantile(x, weights=weights, q=0.5, axis=0, method="inverted_cdf")
+    return x
+
+
+def _weighted_agg(
+    x: xr.DataArray,
+    weights_col: str,
+    agg_func: Literal["mean", "median"],
+    metric: Literal["wasserstein", "energy"] | None,
+):
+    weights = x.coords[weights_col].values
+    x = x.data
+    xp = get_namespace(x.data)
+
+    if metric in ("wasserstein", "energy"):
+        x = da.map_blocks(
+            _weighted_distance,
+            x,
+            group_values=weights,
+            agg_func=agg_func,
+            metric=metric,
+            meta=np.array((), dtype=np.float64),
+            drop_axis=0,
+        )
+    elif agg_func == "mean":
+        x = xp.average(x, weights=weights, axis=0)
+    elif agg_func == "median":
+        if isinstance(x, da.Array):
+            chunks = list(x.chunksize)
+            if chunks[0] != x.shape[0]:
+                chunks[0] = -1
+                x = x.rechunk(tuple(chunks))
+        if NUMPY_GE_200 and not isinstance(x, da.Array):
+            # np.quantile weights parameter added in numpy 2
+            # https://github.com/dask/dask/issues/12322
+            x = xp.quantile(x, weights=weights, q=0.5, axis=0, method="inverted_cdf")
+        else:
+            if isinstance(x, da.Array):
+                x = da.map_blocks(
+                    _weighted_median,
+                    x,
+                    weights=weights,
+                    meta=np.array((), dtype=np.int64),
+                    drop_axis=0,
+                )
+            else:
+                x = _weighted_median(x, weights=weights).squeeze()
+
+    return xr.DataArray(x, dims=("var",), name="")
+
+
 def agg_features(
     data: anndata.AnnData,
     by: str | Sequence[str],
     weights_col: str | None = None,
     agg_func: Literal["mean", "median"] = "mean",
+    metric: Literal["wasserstein", "energy"] | None = None,
 ):
     """Aggregate features
 
@@ -33,7 +188,8 @@ def agg_features(
     :return: Aggregated data
     """
     assert agg_func in ("mean", "median")
-
+    if metric is not None and weights_col is None:
+        raise ValueError("Please provide `weights_col`")
     group_by_multi = not isinstance(by, str) and isinstance(by, Sequence)
     if not group_by_multi:
         coords = {"obs": data.obs[by]}
@@ -46,46 +202,15 @@ def agg_features(
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
     if group_by_multi:
         xdata = xdata.set_xindex(by, PandasMultiIndex)
-    if agg_func == "median" and isinstance(xdata.data, da.Array):
+    if agg_func in ("median", "wasserstein") and isinstance(xdata.data, da.Array):
         xdata = xdata.groupby("obs").shuffle_to_chunks()
 
     grouped = xdata.groupby("obs")
-    xp = get_namespace(xdata.data)
+
     if weights_col is not None:
-
-        def weighted_agg(x):
-            weights = x.coords[weights_col].values
-            x = x.data
-
-            if agg_func == "mean":
-                x = xp.average(x, weights=weights, axis=0)
-            else:
-                if isinstance(x, da.Array):
-                    chunks = list(x.chunksize)
-                    if chunks[0] != x.shape[0]:
-                        chunks[0] = -1
-                        x = x.rechunk(tuple(chunks))
-                if NUMPY_GE_200 and not isinstance(x, da.Array):
-                    # np.quantile weights parameter added in numpy 2
-                    # https://github.com/dask/dask/issues/12322
-                    x = xp.quantile(
-                        x, weights=weights, q=0.5, axis=0, method="inverted_cdf"
-                    )
-                else:
-                    if isinstance(x, da.Array):
-                        x = da.map_blocks(
-                            _weighted_median,
-                            x,
-                            weights=weights,
-                            meta=np.array((), dtype=np.int64),
-                            drop_axis=0,
-                        )
-                    else:
-                        x = _weighted_median(x, weights=weights).squeeze()
-
-            return xr.DataArray(x, dims=("var",), name="")
-
-        result = grouped.map(weighted_agg)
+        result = grouped.map(
+            _weighted_agg, weights_col=weights_col, agg_func=agg_func, metric=metric
+        )
     else:
         result = grouped.mean() if agg_func == "mean" else grouped.median()
     X = result.data
