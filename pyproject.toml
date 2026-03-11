@@ -37,7 +37,7 @@ dependencies = [
     "bioio-nd2",
     "bioio-tifffile",
     "centrosome",
-    "cp-measure",
+    "cp-measure>=0.1.16",
     "dask-image",
     "dask",
     "decorator",
@@ -53,14 +53,13 @@ dependencies = [
     "matplotlib",
     "natsort",
     "numcodecs",
-    "numpy<2",
+    "numpy",
     "ome-zarr<0.12.0",
     "pandas",
     "pint",
     "psutil",
     "pyarrow",
     "pydantic",
-    "pysam",
     "scikit-image",
     "scikit-learn",
     "scipy",
@@ -75,6 +74,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+pysam = [
+    "pysam"
+]
 napari = [
     "napari",
     "napari_ome_zarr"
