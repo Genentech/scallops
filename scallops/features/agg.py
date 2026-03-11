@@ -136,15 +136,24 @@ def _weighted_agg(
     xp = get_namespace(x)
 
     if metric in ("wasserstein", "energy"):
-        x = da.map_blocks(
-            _weighted_distance,
-            x,
-            group_values=weights,
-            agg_func=agg_func,
-            metric=metric,
-            meta=np.array((), dtype=np.float64),
-            drop_axis=0,
-        )
+        if isinstance(x, da.Array):
+            chunks = list(x.chunksize)
+            if chunks[0] != x.shape[0]:
+                chunks[0] = -1
+                x = x.rechunk(tuple(chunks))
+            x = da.map_blocks(
+                _weighted_distance,
+                x,
+                group_values=weights,
+                agg_func=agg_func,
+                metric=metric,
+                meta=np.array((), dtype=np.float64),
+                drop_axis=0,
+            )
+        else:
+            x = _weighted_distance(
+                x, group_values=weights, agg_func=agg_func, metric=metric
+            )
     elif agg_func == "mean":
         x = xp.average(x, weights=weights, axis=0)
     elif agg_func == "median":
@@ -205,7 +214,9 @@ def agg_features(
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
     if group_by_multi:
         xdata = xdata.set_xindex(by, PandasMultiIndex)
-    if agg_func in ("median", "wasserstein") and isinstance(xdata.data, da.Array):
+    if isinstance(xdata.data, da.Array) and (
+        agg_func == "median" or metric is not None
+    ):
         xdata = xdata.groupby("obs").shuffle_to_chunks()
 
     grouped = xdata.groupby("obs")
