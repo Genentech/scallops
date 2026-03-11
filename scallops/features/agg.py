@@ -183,8 +183,11 @@ def agg_features(
 
     :param data: Annotated data matrix.
     :param by: Perturbation column(s) in `data.obs` to aggregate by.
-    :param weights_col: If provided, perform weighted aggregation
+    :param weights_col: If provided, perform weighted aggregation using provided
+     weights if `metric` is None, or compute weights using specified metric within
+    `weights_col` (e.g. barcode).
     :param agg_func: Aggregation method.
+    :param metric: Distance method to use to compute weights within each feature
     :return: Aggregated data
     """
     assert agg_func in ("mean", "median")
