@@ -15,6 +15,7 @@ from typing import Literal, Sequence
 
 import numpy as np
 import pandas as pd
+from dask.array.numpy_compat import NUMPY_GE_200
 from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
@@ -701,6 +702,7 @@ def generate_cdfs_with_area_difference(
         mean1 - 5 * std1,
         mean1 + 5 * std1,
     )
+    trapezoid_func = np.trapezoid if NUMPY_GE_200 else np.trapz
     for _ in range(iterations):
         mean2 = (mean2_lower + mean2_upper) / 2
         data1 = np.random.normal(mean1, std1, n_data)
@@ -716,7 +718,8 @@ def generate_cdfs_with_area_difference(
         cdf2 = np.array([np.mean(data2 <= v) for v in x])
 
         # Calculate the area between the CDFs
-        area = np.trapz(np.abs(cdf1 - cdf2), dx=1) / n_points
+
+        area = trapezoid_func(np.abs(cdf1 - cdf2), dx=1) / n_points
 
         # Adjust the search bounds based on the current area
         if area < target_area:
@@ -836,7 +839,7 @@ def compute_area_between_cdfs(
     if plot:
         f, ax = plt.subplots()
         ax.plot(bin_edges[:-1], cdf_ref, label=reference_label, linestyle="dashed")
-
+    trapezoid_func = np.trapezoid if NUMPY_GE_200 else np.trapz
     for label, data2 in target.items():
         cdf_target = _compute_cdf(data2, bin_edges)
         cdfs[label] = cdf_target
@@ -846,7 +849,7 @@ def compute_area_between_cdfs(
         diff_cdf = (
             cdf_ref - cdf_target if area_as_delta else np.abs(cdf_ref - cdf_target)
         )
-        areas[label] = np.trapz(diff_cdf, dx=1) / (bin_edges.shape[0] - 1)
+        areas[label] = trapezoid_func(diff_cdf, dx=1) / (bin_edges.shape[0] - 1)
 
     return areas, cdfs, bin_edges, (ax, f)
 
