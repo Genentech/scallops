@@ -6,7 +6,7 @@ import centrosome.zernike
 import numpy as np
 import scipy.ndimage
 import scipy.sparse
-from cp_measure.core.utils import masks_to_ijv
+from cp_measure.utils import masks_to_ijv
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
 

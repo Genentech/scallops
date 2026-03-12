@@ -2,7 +2,7 @@
 build-backend = "setuptools.build_meta"
 requires = [
     "cython",
-    "numpy<2",
+    "numpy",
     "setuptools>=42",
     "setuptools_scm[toml]>=3.4",
     "wheel"
@@ -20,7 +20,7 @@ dynamic = ["version"]
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-classifiers = [
+classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
     "License :: OSI Approved :: Apache Software License",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
@@ -32,18 +32,18 @@ classifiers = [
 
 dependencies = [
     "adjustText",
-    "anndata>=0.12.4",
+    "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
     "bioio<2",
     "bioio-nd2",
     "bioio-tifffile",
     "centrosome",
-    "cp-measure",
+    "cp-measure>=0.1.16",
     "dask-image",
     "dask",
     "decorator",
     "filelock",
     "flox",
-    "fsspec!=2023.9.0",
+    "fsspec!=2023.9.0", # 2023.9.0 causes ome-zarr write image to fail
     "igraph",
     "itk-elastix",
     "itk",
@@ -53,7 +53,7 @@ dependencies = [
     "matplotlib",
     "natsort",
     "numcodecs",
-    "numpy<2",
+    "numpy",
     "ome-zarr<0.12.0",
     "pandas",
     "pint",
@@ -138,7 +138,9 @@ fix = true
 docstring-code-format = true
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I001"]
+select = ["E4", "E7", "E9", "F",
+    # isort
+    "I001"]
 ignore = []
 
 [tool.pytest.ini_options]
@@ -177,4 +179,4 @@ filterwarnings = [
 ]
 
 [tool.distutils.bdist_wheel]
-universal = false
+universal = false # since we have cython we should not use universal wheels
