@@ -158,7 +158,7 @@ def label_features(
         if isinstance(intensity_image, da.Array):
             # y,x,c
             assert intensity_image.shape[:-1] == label_shape, (
-                f"{intensity_image.shape} != {label_shape}"
+                f"{intensity_image.shape[:-1]} != {label_shape}"
             )
             label_image = label_image.rechunk(intensity_image.chunksize[:-1])
 

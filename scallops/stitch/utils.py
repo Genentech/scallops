@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 import bioio
@@ -20,6 +20,7 @@ from dask import delayed
 from ome_types import from_xml
 from pint import UndefinedUnitError, UnitRegistry
 from skimage.util import img_as_float, img_as_ubyte, img_as_uint
+from zarr.core.group import GroupMetadata
 
 from scallops.cli.util import _group_src_attrs
 from scallops.features.image_quality import power_spectrum
@@ -311,10 +312,10 @@ def _get_ome(image: bioio.BioImage):
             return metadata
     except NotImplementedError:
         pass
-
-    if isinstance(image.metadata, str):
+    image_metadata = _get_image_metadata(image)
+    if isinstance(image_metadata, str):
         try:
-            return from_xml(image.metadata)
+            return from_xml(image_metadata)
         except:  # noqa: E722
             pass
     return None
@@ -323,7 +324,10 @@ def _get_ome(image: bioio.BioImage):
 def get_tile_position(image: bioio.BioImage, image_index: int = 0):
     ome_metadata = _get_ome(image)
 
-    if ome_metadata is not None:
+    if (
+        ome_metadata is not None
+        and len(ome_metadata.images[image_index].pixels.planes) > 0
+    ):
         values = [
             ome_metadata.images[image_index].pixels.planes[0].position_y,
             ome_metadata.images[image_index].pixels.planes[0].position_x,
@@ -334,36 +338,44 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
         physical_size_x_unit = (
             ome_metadata.images[image_index].pixels.planes[0].position_x_unit.value
         )
-    elif "multiscales" in image.metadata:
-        metadata = image.metadata["multiscales"][0]["metadata"]
-        values = [metadata["position_y"], metadata["position_x"]]
-        physical_size_y_unit = metadata["position_y_unit"]
-        physical_size_x_unit = metadata["position_x_unit"]
     else:
-        attrs = image.xarray_dask_data.attrs
-        if "unprocessed" in attrs:
-            if 51123 in attrs["unprocessed"]:
-                attrs = attrs["unprocessed"][51123]
-                return np.array([attrs["YPositionUm"], attrs["XPositionUm"]])
-            elif 50839 in attrs["unprocessed"]:
-                attrs = attrs["unprocessed"][50839]
-                if "Info" in attrs:
-                    attrs = json.loads(attrs["Info"])
-                    return np.array([attrs["YPositionUm"], attrs["XPositionUm"]])
-            elif 270 in attrs["unprocessed"]:  # IXM
-                attrs = attrs["unprocessed"][270]
-                import xml.etree.ElementTree as ET
+        image_metadata = _get_image_metadata(image)
 
-                try:
-                    tree = ET.fromstring(attrs)
-                    stage_y = tree.findall(".//prop[@id='stage-position-y']")
-                    stage_x = tree.findall(".//prop[@id='stage-position-x']")
-                    if len(stage_y) == 1 and len(stage_x) == 1:
-                        stage_y = stage_y[0].attrib["value"]
-                        stage_x = stage_x[0].attrib["value"]
-                        return np.array([stage_y, stage_x])
-                except:  # noqa: E722
-                    pass
+        if "ome" in image_metadata or "multiscales" in image_metadata:
+            metadata = (
+                image_metadata["ome"]["multiscales"][0]["metadata"]
+                if "ome" in image_metadata
+                else image_metadata["multiscales"][0]["metadata"]
+            )
+
+            values = [metadata["position_y"], metadata["position_x"]]
+            physical_size_y_unit = metadata["position_y_unit"]
+            physical_size_x_unit = metadata["position_x_unit"]
+        else:
+            attrs = image.xarray_dask_data.attrs
+            if "unprocessed" in attrs:
+                if 51123 in attrs["unprocessed"]:
+                    attrs = attrs["unprocessed"][51123]
+                    return np.array([attrs["YPositionUm"], attrs["XPositionUm"]])
+                elif 50839 in attrs["unprocessed"]:
+                    attrs = attrs["unprocessed"][50839]
+                    if "Info" in attrs:
+                        attrs = json.loads(attrs["Info"])
+                        return np.array([attrs["YPositionUm"], attrs["XPositionUm"]])
+                elif 270 in attrs["unprocessed"]:  # IXM
+                    attrs = attrs["unprocessed"][270]
+                    import xml.etree.ElementTree as ET
+
+                    try:
+                        tree = ET.fromstring(attrs)
+                        stage_y = tree.findall(".//prop[@id='stage-position-y']")
+                        stage_x = tree.findall(".//prop[@id='stage-position-x']")
+                        if len(stage_y) == 1 and len(stage_x) == 1:
+                            stage_y = stage_y[0].attrib["value"]
+                            stage_x = stage_x[0].attrib["value"]
+                            return np.array([stage_y, stage_x])
+                    except:  # noqa: E722
+                        pass
     if physical_size_y_unit is not None and physical_size_x_unit is not None:
         try:
             values[0] = (
@@ -403,6 +415,15 @@ def get_pixel_size(
     return _pixel_size_from_image(_create_image(filepaths[0]))
 
 
+def _get_image_metadata(image: bioio.BioImage) -> dict:
+    metadata = image.metadata  # can be zarr GroupMetadata or dict
+    if isinstance(metadata, GroupMetadata):
+        metadata = metadata.attributes
+    if not isinstance(metadata, Mapping):
+        return dict()
+    return metadata
+
+
 def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
     ome_metadata = _get_ome(image)
     values = None
@@ -415,43 +436,51 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
         ]
         physical_size_y_unit = ome_metadata.images[0].pixels.physical_size_y_unit.value
         physical_size_x_unit = ome_metadata.images[0].pixels.physical_size_x_unit.value
-    elif "multiscales" in image.metadata:
-        metadata = image.metadata["multiscales"][0]["metadata"]
-        values = [metadata["physical_size_y"], metadata["physical_size_x"]]
-        physical_size_y_unit = metadata["physical_size_y_unit"]
-        physical_size_x_unit = metadata["physical_size_x_unit"]
     else:
-        attrs = image.xarray_dask_data.attrs
-        if "unprocessed" in attrs:
-            attrs = attrs["unprocessed"]
-            if 51123 in attrs:
-                attrs = attrs[51123]
-                if "PixelSizeUm" in attrs:
-                    pixel_size = attrs["PixelSizeUm"]
-                    values = np.array([pixel_size, pixel_size])
-            elif 270 in attrs:
-                import xml.etree.ElementTree as ET
-
-                try:
-                    tree = ET.fromstring(attrs[270])
-                    y = tree.findall(".//prop[@id='spatial-calibration-y']")
-                    x = tree.findall(".//prop[@id='spatial-calibration-x']")
-                    if len(y) == 1 and len(x) == 1:
-                        y = y[0].attrib["value"]
-                        x = x[0].attrib["value"]
-                        values = np.array([y, x]).astype(float)
-                        units = tree.findall(".//prop[@id='spatial-calibration-units']")
-                        if len(units) == 1:
-                            units = units[0].attrib["value"]
-                            physical_size_y_unit = units
-                            physical_size_x_unit = units
-
-                except:  # noqa: E722
-                    pass
-        if values is None and hasattr(image, "physical_pixel_sizes"):
-            values = np.array(
-                [image.physical_pixel_sizes.Y, image.physical_pixel_sizes.X]
+        image_metadata = _get_image_metadata(image)
+        if "ome" in image_metadata or "multiscales" in image_metadata:
+            metadata = (
+                image_metadata["ome"]["multiscales"][0]["metadata"]
+                if "ome" in image_metadata
+                else image_metadata["multiscales"][0]["metadata"]
             )
+            values = [metadata["physical_size_y"], metadata["physical_size_x"]]
+            physical_size_y_unit = metadata["physical_size_y_unit"]
+            physical_size_x_unit = metadata["physical_size_x_unit"]
+        else:
+            attrs = image.xarray_dask_data.attrs
+            if "unprocessed" in attrs:
+                attrs = attrs["unprocessed"]
+                if 51123 in attrs:
+                    attrs = attrs[51123]
+                    if "PixelSizeUm" in attrs:
+                        pixel_size = attrs["PixelSizeUm"]
+                        values = np.array([pixel_size, pixel_size])
+                elif 270 in attrs:
+                    import xml.etree.ElementTree as ET
+
+                    try:
+                        tree = ET.fromstring(attrs[270])
+                        y = tree.findall(".//prop[@id='spatial-calibration-y']")
+                        x = tree.findall(".//prop[@id='spatial-calibration-x']")
+                        if len(y) == 1 and len(x) == 1:
+                            y = y[0].attrib["value"]
+                            x = x[0].attrib["value"]
+                            values = np.array([y, x]).astype(float)
+                            units = tree.findall(
+                                ".//prop[@id='spatial-calibration-units']"
+                            )
+                            if len(units) == 1:
+                                units = units[0].attrib["value"]
+                                physical_size_y_unit = units
+                                physical_size_x_unit = units
+
+                    except:  # noqa: E722
+                        pass
+            if values is None and hasattr(image, "physical_pixel_sizes"):
+                values = np.array(
+                    [image.physical_pixel_sizes.Y, image.physical_pixel_sizes.X]
+                )
     if physical_size_y_unit is not None and physical_size_x_unit is not None:
         try:
             values[0] = (

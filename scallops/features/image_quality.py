@@ -4,7 +4,7 @@ from scipy.fftpack import fft2
 from scipy.ndimage import sum as nd_sum
 
 
-# updated for numpy2, see https://github.com/CellProfiler/centrosome/pull/135
+# copied from centrosome.radial_power_spectrum but use np.ptp instead of img.ptp for numpy 2
 def rps(img):
     assert img.ndim == 2
     radii2 = (np.arange(img.shape[0]).reshape((img.shape[0], 1)) ** 2) + (
@@ -25,6 +25,7 @@ def rps(img):
         magsum = nd_sum(mag, radii, labels)
         powersum = nd_sum(power, radii, labels)
         return np.array(labels), np.array(magsum), np.array(powersum)
+
     return [2], [0], [0]
 
 
