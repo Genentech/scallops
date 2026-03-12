@@ -31,17 +31,15 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
 ]
 
 dependencies = [
-    "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
     "adjustText",
+    "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
+    "bioio",
     "bioio-nd2",
     "bioio-tifffile",
-    "bioio-ome-tiff",
-    "bioio-ome-zarr>=3.2.2", # https://github.com/bioio-devs/bioio-ome-zarr/pull/130, https://github.com/bioio-devs/bioio-ome-zarr/issues/128
-    "bioio",
     "centrosome",
-    "cp-measure",
-    "dask!=2026.1.2", # https://github.com/dask/dask/issues/12265
+    "cp-measure>=0.1.16",
     "dask-image",
+    "dask",
     "decorator",
     "filelock",
     "flox",
@@ -76,6 +74,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dialout = [
+    "pysam"
+]
 napari = [
     "napari",
     "napari_ome_zarr"
@@ -89,12 +90,10 @@ cellpose = [
 ufish = [
     "ufish"
 ]
-pysam = [
-    "pysam"
-]
 test = [
     "miniwdl",
-    "pytest"
+    "pytest",
+    "pytest-xdist"
 ]
 
 dev = [
