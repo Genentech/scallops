@@ -22,7 +22,7 @@ from cp_measure.core.measureobjectintensitydistribution import (
     get_radial_zernikes,
 )
 from cp_measure.core.measureobjectsizeshape import (
-    get_ferret,
+    get_feret,
     get_sizeshape,
     get_zernike,
 )
@@ -173,7 +173,7 @@ def cp_size_shape(
         for key in size_shape_skip:
             del results[f"AreaShape_{key}"]
     results.update(_zernike(label_image))
-    results.update(_ferret(label_image))
+    results.update(_feret(label_image))
     return results
 
 
@@ -185,8 +185,8 @@ def _zernike(label_image: np.ndarray) -> dict[str, Any]:
     return results
 
 
-def _ferret(label_image: np.ndarray) -> dict[str, Any]:
-    results_ = get_ferret(label_image, None)
+def _feret(label_image: np.ndarray) -> dict[str, Any]:
+    results_ = get_feret(label_image, None)
     results = {}
     for key in results_:
         results[_size_shape_rename(key)] = results_[key]

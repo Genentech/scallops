@@ -10,7 +10,10 @@ from scallops.features.cp_measure_wrapper import (
     cp_size_shape,
 )
 from scallops.features.intensity import intensity
-from scallops.features.intensity_distribution import intensity_distribution
+from scallops.features.intensity_distribution import (
+    intensity_distribution_radial,
+    intensity_distribution_zernike,
+)
 from scallops.features.neighbors import neighbors
 from scallops.features.other import corr_region, intersects_boundary
 from scallops.features.spots import spot_count
@@ -24,7 +27,8 @@ _cp_features_mask = {
 _cp_features_single_channel = {
     "intensity": intensity,
     "granularity": cp_granularity,
-    "intensitydistribution": intensity_distribution,
+    "intensitydistribution": intensity_distribution_radial,
+    "intensitydistributionzernike": intensity_distribution_zernike,
     "haralick": haralick,
     "pftas": pftas,
 }

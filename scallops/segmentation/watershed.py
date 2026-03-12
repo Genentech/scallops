@@ -84,7 +84,7 @@ def _filter_by_region(
         intensity_image = intensity_image.squeeze()
     regions = regionprops(labeled, intensity_image=intensity_image)
     cut = _scoring(regions, score, threshold)
-    labeled.flat[np.in1d(labeled.flat[:], cut)] = 0
+    labeled.flat[np.isin(labeled.flat[:], cut)] = 0
     if relabel:
         labeled = relabel_sequential(labeled)
     return labeled

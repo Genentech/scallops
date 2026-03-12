@@ -8,6 +8,8 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from anndata._core.index import _normalize_index
+from anndata.typing import Index
 from pandas.core.computation.parsing import BACKTICK_QUOTED_STRING, tokenize_string
 
 from scallops.features.constants import _metadata_columns_whitelist_str
@@ -76,29 +78,25 @@ def _query_anndata(data: anndata.AnnData, query: str):
 
 
 def _slice_anndata(
-    data: anndata.AnnData, obs: pd.DataFrame | None, var: pd.DataFrame | None = None
-):
+    data: anndata.AnnData,
+    obs: Index | None,
+    var: Index | None = None,
+) -> anndata.AnnData:
+    """Slice an AnnData object without copy-on-write AnnData's behavior.
+    Note that this method only slices the fields `X`, `obs`, and `var`.
+
+    :param data: AnnData object
+    :param obs: Slice for observations
+    :param var: Slice for variables
+    :return: Sliced AnnData object
+    """
     obs_indices = None
     var_indices = None
 
     if obs is not None:
-        if isinstance(obs, pd.DataFrame):
-            obs_indices = data.obs.index.get_indexer_for(obs.index)
-            if np.any(obs_indices < 0):
-                raise ValueError()
-        elif isinstance(obs, (Sequence, np.ndarray)):
-            obs_indices = obs
-        else:
-            raise ValueError()
+        obs_indices = _normalize_index(obs, data.obs.index)
     if var is not None:
-        if isinstance(var, pd.DataFrame):
-            var_indices = data.var.index.get_indexer_for(var.index)
-            if np.any(var_indices < 0):
-                raise ValueError()
-        elif isinstance(var, (Sequence, np.ndarray)):
-            var_indices = var
-        else:
-            raise ValueError()
+        var_indices = _normalize_index(var, data.var.index)
     X = data.X
     if obs_indices is not None:
         X = X[obs_indices]
@@ -109,33 +107,52 @@ def _slice_anndata(
     return anndata.AnnData(X=X, obs=obs, var=var)
 
 
+def _update_coords(
+    df: pd.DataFrame,
+    df_coords: bool | str | Sequence[str],
+    coord_name: str,
+    coords_keys: set,
+    xarray_coords: dict,
+):
+    if df_coords:
+        xarray_coords[coord_name] = df.index
+        if isinstance(df_coords, str):
+            columns = [df_coords]
+        elif isinstance(df_coords, Sequence):
+            columns = df_coords
+        else:
+            columns = df.columns
+        for c in columns:
+            counter = 1
+            coord = c
+            while coord in coords_keys:
+                coord = f"{c}_{counter}"
+                counter += 1
+            coords_keys.add(coord)
+            xarray_coords[coord] = (coord_name, df[c].to_numpy(copy=False))
+
+
 def _anndata_to_xr(
-    adata: anndata.AnnData, obs_coords: bool = True, var_coords: bool = False
+    adata: anndata.AnnData,
+    obs_coords: bool | str | Sequence[str] = True,
+    var_coords: bool | str | Sequence[str] = False,
 ) -> xr.DataArray:
     coords = dict()
     coords_keys = {"obs", "var"}
-
-    if obs_coords:
-        coords["obs"] = adata.obs.index
-        for c in adata.obs.columns:
-            counter = 1
-            coord = c
-            while coord in coords_keys:
-                coord = f"{c}_{counter}"
-                counter += 1
-            coords_keys.add(coord)
-            coords[coord] = ("obs", adata.obs.columns[c].to_numpy(copy=False))
-
-    if var_coords:
-        coords["var"] = adata.var.index
-        for c in adata.var.columns:
-            counter = 1
-            coord = c
-            while coord in coords_keys:
-                coord = f"{c}_{counter}"
-                counter += 1
-            coords_keys.add(coord)
-            coords[coord] = ("var", adata.var.columns[c].to_numpy(copy=False))
+    _update_coords(
+        df=adata.obs,
+        df_coords=obs_coords,
+        coord_name="obs",
+        coords_keys=coords_keys,
+        xarray_coords=coords,
+    )
+    _update_coords(
+        df=adata.var,
+        df_coords=var_coords,
+        coord_name="var",
+        coords_keys=coords_keys,
+        xarray_coords=coords,
+    )
     return xr.DataArray(adata.X, dims=("obs", "var"), name="", coords=coords)
 
 

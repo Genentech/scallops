@@ -1,5 +1,4 @@
 import logging
-import random
 from collections.abc import Sequence
 from functools import partial
 
@@ -14,46 +13,17 @@ from scallops.features.util import _anndata_to_xr
 logger = logging.getLogger("scallops")
 
 
-def pca(
+def _centerscale(
     adata: anndata.AnnData,
-    n_components: int | float | None = None,
     min_std: float | None = 0,
     standardize: bool = True,
     standardize_by: str | Sequence[str] | None = None,
     max_value: float | None = None,
-    batch_size: int | None = None,
-    gpu: bool | None = None,
-    whiten: bool = False,
-    progress: bool = True,
 ) -> anndata.AnnData:
-    """Embed data using PCA.
-
-    :param adata: AnnData object.
-    :param standardize: Whether to standardize the data.
-    :param standardize_by: Standardize the data specified groups
-    :param n_components: Number of PCA components.
-    :param min_std: Remove features with standard deviation <= `min_std`.
-    :param max_value: Clip to this value after standardizing
-    :param batch_size: Batch size for incremental PCA.
-    :param gpu: Whether to use GPU.
-    :param whiten: Whether to use whitening.
-    :param progress: Whether to show progress bar for incremental PCA.
-    :return: PCA Embedding
-    """
-
     is_dask = isinstance(adata.X, da.Array)
-    if gpu is None:
-        try:
-            import torch
-
-            gpu = torch.cuda.is_available()
-            if gpu:
-                logger.info("Using GPU for PCA")
-        except ModuleNotFoundError:
-            gpu = False
     xp = get_namespace(adata.X)
     if standardize and standardize_by is not None:
-        xdata = _anndata_to_xr(adata)
+        xdata = _anndata_to_xr(adata, standardize_by)
 
         def _standardize(x, min_std, max_value):
             std = x.std(dim="obs")
@@ -74,10 +44,14 @@ def pca(
             no_nans_per_feature = no_nans_per_feature.compute()
         X = X[:, no_nans_per_feature]
         logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
-        obs = adata.obs.loc[xdata.coords["obs"].values]
+        return anndata.AnnData(
+            X=X,
+            obs=adata.obs.loc[xdata.coords["obs"].values],
+            var=adata.var[no_nans_per_feature],
+        )
     else:
         X = adata.X
-        obs = adata.obs.copy()
+        var = adata.var
         means = None
         stds = None
         if standardize or min_std is not None:
@@ -90,14 +64,66 @@ def pca(
             features_keep = features_keep.squeeze()
 
             X = X[:, features_keep]
-            logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
+
             stds = stds[:, features_keep]
             means = means[:, features_keep]
+            var = adata.var[features_keep]
+            logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
         if standardize:
             X = (X - means) / stds
             if max_value is not None:
                 X = xp.clip(X, -max_value, max_value)
 
+        return anndata.AnnData(X=X, obs=adata.obs.copy(), var=var)
+
+
+def pca(
+    adata: anndata.AnnData,
+    n_components: int | float | None = None,
+    min_std: float | None = 0,
+    standardize: bool = True,
+    standardize_by: str | Sequence[str] | None = None,
+    max_value: float | None = None,
+    batch_size: int | None = None,
+    gpu: bool | None = None,
+    whiten: bool = False,
+    progress: bool = True,
+) -> anndata.AnnData:
+    """Embed data using PCA.
+
+    :param adata: AnnData object.
+    :param standardize: Whether to standardize the data.
+    :param standardize_by: Standardize the data specified groups
+    :param n_components: Number of PCA components.
+    :param min_std: Remove features with standard deviation <= `min_std` after
+     standardization.
+    :param max_value: Clip to this value after standardizing
+    :param batch_size: Batch size for incremental PCA.
+    :param gpu: Whether to use GPU.
+    :param whiten: Whether to use whitening.
+    :param progress: Whether to show progress bar for incremental PCA.
+    :return: PCA Embedding
+    """
+    if standardize:
+        adata = _centerscale(
+            adata=adata,
+            min_std=min_std,
+            standardize=standardize,
+            standardize_by=standardize_by,
+            max_value=max_value,
+        )
+    X = adata.X
+    is_dask = isinstance(adata.X, da.Array)
+    if gpu is None:
+        try:
+            import torch
+
+            gpu = torch.cuda.is_available()
+            if gpu:
+                logger.info("Using GPU for PCA")
+        except ModuleNotFoundError:
+            gpu = False
+    X_transformed = None
     if batch_size is not None:
         if gpu:
             from cuml.decomposition import IncrementalPCA
@@ -106,8 +132,7 @@ def pca(
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
-        random.seed(239753)
-        random.shuffle(batches)
+
         if progress:
             try:
                 from tqdm import tqdm
@@ -143,14 +168,15 @@ def pca(
         if "random_state" in sig.parameters.keys():
             kwargs["random_state"] = 239753
         d = PCA(**kwargs)
-        d.fit(X)
+        X_transformed = d.fit_transform(X)
 
     components_ = d.components_
     mean_ = d.mean_
     variance_ratio = d.explained_variance_ratio_
     variance = d.explained_variance_
-    X_transformed = X @ components_.T  # (n_components, n_features)
-    X_transformed -= get_namespace(mean_).reshape(mean_, (1, -1)) @ components_.T
+    if X_transformed is None:
+        X_transformed = X @ components_.T  # (n_components, n_features)
+        X_transformed -= get_namespace(mean_).reshape(mean_, (1, -1)) @ components_.T
 
     uns = {
         "pca": {
@@ -158,7 +184,8 @@ def pca(
             "variance": variance,
             "mean": mean_,
             "PCs": components_,
+            "features": adata.var.index.values,
         }
     }
 
-    return anndata.AnnData(X=X_transformed, obs=obs, uns=uns)
+    return anndata.AnnData(X=X_transformed, obs=adata.obs, uns=uns)

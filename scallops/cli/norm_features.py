@@ -60,7 +60,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
     else:
         mad_scale_factor = float(mad_scale_factor)
 
-    robust = not arguments.no_robust
+    robust = not arguments.robust
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -94,7 +94,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
         data = _read_data(paths, features)
 
         if label_filter is not None:
-            data = _slice_anndata(data, _query_anndata(data, label_filter))
+            data = _slice_anndata(data, _query_anndata(data, label_filter).index)
         if join_path is not None:
             _join_metadata(
                 data,

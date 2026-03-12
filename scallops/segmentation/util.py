@@ -201,7 +201,7 @@ def remove_boundary_labels(labels: np.ndarray, relabel: bool = False) -> np.ndar
     """
     labels = labels.copy()
     cut = np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]])
-    labels.flat[np.in1d(labels.flat[:], np.unique(cut))] = 0
+    labels.flat[np.isin(labels.flat[:], np.unique(cut))] = 0
     if relabel:
         labels = relabel_sequential(labels)
     return labels
@@ -223,7 +223,7 @@ def remove_labels_region_props(
     """
     cut = [r.label for r in regions if not func(r)]
     labels = labels.copy()
-    labels.flat[np.in1d(labels.flat[:], cut)] = 0
+    labels.flat[np.isin(labels.flat[:], cut)] = 0
     if relabel:
         labels = relabel_sequential(labels)
     return labels
@@ -244,7 +244,7 @@ def remove_masked_regions(
     cut = np.unique(labels[mask == 0])
     cut = cut[cut > 0]
     labels = labels.copy()
-    labels.flat[np.in1d(labels.flat[:], cut)] = 0
+    labels.flat[np.isin(labels.flat[:], cut)] = 0
     if relabel:
         labels = relabel_sequential(labels)
     return labels

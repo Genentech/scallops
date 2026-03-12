@@ -92,7 +92,7 @@ def run_pipeline_rank_features(arguments: argparse.Namespace):
 
         if label_filter is None:
             label_filter = f"~`{perturbation_column}`.isna()"
-        data = _slice_anndata(data, _query_anndata(data, label_filter))
+        data = _slice_anndata(data, _query_anndata(data, label_filter).index)
 
         if join_path is not None:
             _join_metadata(

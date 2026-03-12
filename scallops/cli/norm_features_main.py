@@ -58,8 +58,8 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     )
 
     parser.add_argument(
-        "--no-robust",
-        help="Do not use robust statistics for normalization.",
+        "--robust",
+        help="Use robust statistics for normalization.",
         action="store_true",
     )
     parser.add_argument(
