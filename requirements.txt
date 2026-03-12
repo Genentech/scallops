@@ -30,7 +30,7 @@ pyarrow==23.0.1
 pydantic==2.12.5
 scikit-image==0.26.0
 scikit-learn==1.8.0
-scipy==1.16.3
+scipy==1.17.1
 seaborn==0.13.2
 shapely==2.1.2
 stardist==0.9.2
