@@ -114,7 +114,7 @@ def _slice_anndata(
         for key in layers:
             layers[key] = layers[key][:, var_indices]
         for key in varm:
-            varm[key] = varm[key][:, var_indices]
+            varm[key] = varm[key][var_indices]
     obs = data.obs.iloc[obs_indices] if obs_indices is not None else data.obs
     var = data.var.iloc[var_indices] if var_indices is not None else data.var
     return anndata.AnnData(X=X, obs=obs, var=var, layers=layers, obsm=obsm, varm=varm)

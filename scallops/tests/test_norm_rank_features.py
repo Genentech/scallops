@@ -286,7 +286,7 @@ def test_anndata_slice():
         var=pd.DataFrame(index=["1", "2"]),
         layers={"test": np.arange(4).reshape((2, 2))},
         obsm={"test": np.arange(4).reshape((2, 2))},
-        varm={"varm": np.arange(4).reshape((2, 2))},
+        varm={"test": np.arange(4).reshape((2, 2))},
     )
     data1 = d[[1, 0], [1, 0]]
     data2 = _slice_anndata(d, [1, 0], [1, 0])
