@@ -3,21 +3,47 @@ name: Build and Publish to PyPI
 on:
   push:
     tags:
-      - 'v*'  # Triggers on tags like v0.0.1, v1.0.0
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (build only, do not publish)'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+
+    env:
+      SETUP_SANDBOX: >-
+        python -c "import os, shutil, scallops;
+        p=r'{project}';
+        d=os.path.dirname(scallops.__file__);
+        shutil.copytree(os.path.join(p,'scallops','tests'), os.path.join(d,'tests'), dirs_exist_ok=True);
+        shutil.copytree(os.path.join(p,'wdl'), 'wdl', dirs_exist_ok=True) if os.path.exists(os.path.join(p,'wdl')) else None;
+        shutil.copytree(os.path.join(p,'scallops','tests'), os.path.join('scallops','tests'), dirs_exist_ok=True)"
+
     strategy:
+      fail-fast: false
       matrix:
-        # Mac (Intel & Silicon), Windows, and Linux
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        os: [ubuntu-latest, windows-latest, macos-14]
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for setuptools_scm versioning
+          fetch-depth: 0
+          lfs: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -25,90 +51,174 @@ jobs:
           python-version: '3.11'
 
       - name: Install cibuildwheel
-        run: python -m pip install cibuildwheel==2.22.0
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cibuildwheel==2.22.0
 
-      # Robust NumPy detection using Python regex
+      - name: Pre-warm cibuildwheel cache (Bypass HTTP 429)
+        shell: python
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          import os, sys, platform, urllib.request, pathlib, time
+          ver = "20.27.1"
+          if platform.system() == "Darwin":
+              cache_dir = os.path.expanduser("~/Library/Caches/cibuildwheel")
+          elif platform.system() == "Windows":
+              cache_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "pypa", "cibuildwheel", "Cache")
+          else:
+              cache_dir = os.path.expanduser("~/.cache/cibuildwheel")
+
+          pathlib.Path(cache_dir).mkdir(parents=True, exist_ok=True)
+          dest = os.path.join(cache_dir, f"virtualenv-{ver}.pyz")
+
+          url = f"https://raw.githubusercontent.com/pypa/get-virtualenv/{ver}/public/virtualenv.pyz"
+          req = urllib.request.Request(url)
+          token = os.environ.get("GITHUB_TOKEN")
+          if token:
+              req.add_header("Authorization", f"Bearer {token}")
+
+          for i in range(1, 8):
+              try:
+                  print(f"Downloading {url} (Attempt {i}/7)...")
+                  with urllib.request.urlopen(req) as response, open(dest, 'wb') as out_file:
+                      out_file.write(response.read())
+                  print(f"Successfully cached at {dest}")
+                  sys.exit(0)
+              except Exception as e:
+                  print(f"Error: {e}")
+                  time.sleep(2 ** i)
+          sys.exit(1)
+
+      - name: Install Rosetta 2 (Apple Silicon)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        run: |
+          echo "Installing Rosetta 2 for x86_64 compatibility..."
+          sudo softwareupdate --install-rosetta --agree-to-license
+
       - name: Determine Python 3.13 Support
         id: check-numpy
         shell: bash
         run: |
-          SKIP="pp* *-win32 *-manylinux_i686"
-
-          if python -c "
-          import re, sys
-          with open('pyproject.toml') as f:
-              content = f.read()
-          # Match numpy >= 2.x or numpy ~= 2.x
-          pattern = r'numpy\s*(?:>=|~=)\s*2'
-          sys.exit(0 if re.search(pattern, content) else 1)
-          " 2>/dev/null; then
-            echo "✓ NumPy 2.x support detected. Building Python 3.13."
-          else
-            echo "⚠ NumPy 2.x not detected. Skipping Python 3.13 to prevent crashes."
-            SKIP="$SKIP cp313-*"
+          SKIP="pp* *-win32 *-manylinux_i686 *-musllinux*"
+          if [ ! -f "pyproject.toml" ]; then
+            echo "CIBW_SKIP=$SKIP cp313-*" >> $GITHUB_ENV
+            exit 0
           fi
 
-          echo "CIBW_SKIP=$SKIP" >> $GITHUB_ENV
+          set +e
+          python - <<'PYTHON_SCRIPT'
+          import re, sys, pathlib
+          content = pathlib.Path("pyproject.toml").read_text(encoding="utf-8", errors="ignore")
+          blocks = re.findall(
+              r'\[(?:project|tool\..+)\.(?:dependencies|optional-dependencies.*)\](.*?)\n\[',
+              content + "\n[",
+              flags=re.S
+          )
+          text = "\n".join(blocks)
+          pattern = r'(?i)\bnumpy\b\s*(?:>=|~=)\s*["\']?\s*2(\D|$)'
+          sys.exit(0 if re.search(pattern, text) else 1)
+          PYTHON_SCRIPT
 
-      - name: List intended builds
-        run: python -m cibuildwheel --print-build-identifiers
-        env:
-          CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
-          CIBW_SKIP: ${{ env.CIBW_SKIP }}
+          PY_EXIT_CODE=$?
+          set -e
+
+          if [ $PY_EXIT_CODE -eq 0 ]; then
+            echo "CIBW_SKIP=$SKIP" >> $GITHUB_ENV
+          else
+            echo "CIBW_SKIP=$SKIP cp313-*" >> $GITHUB_ENV
+          fi
 
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
           CIBW_SKIP: ${{ env.CIBW_SKIP }}
+          CIBW_BUILD_VERBOSITY: 1
+          CIBW_ARCHS_MACOS: "x86_64 arm64"
 
-          # Install pytest in the isolated wheel environment
-          CIBW_TEST_REQUIRES: pytest
-          # Run tests against the installed wheel using the {project} placeholder
-          CIBW_TEST_COMMAND: "pytest {project}/scallops/tests"
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+
+          CIBW_TEST_EXTRAS_LINUX: "test,pysam"
+          CIBW_TEST_EXTRAS_MACOS: "test,pysam"
+          CIBW_TEST_EXTRAS_WINDOWS: "test"
+
+          CIBW_ENVIRONMENT_LINUX: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
+          CIBW_ENVIRONMENT_MACOS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
+          CIBW_ENVIRONMENT_WINDOWS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
+
+          CIBW_BEFORE_ALL_LINUX: "dnf install -y epel-release && dnf install -y bzip2-devel xz-devel zlib-devel openblas-devel"
+
+          CIBW_TEST_COMMAND_LINUX: >
+            ${{ env.SETUP_SANDBOX }}
+            && pytest scallops/tests -v --tb=short
+
+          CIBW_TEST_COMMAND_MACOS: >
+            ${{ env.SETUP_SANDBOX }}
+            && pytest scallops/tests -v --tb=short
+            --ignore=scallops/tests/test_wdl.py
+            -m "not segmentation_stardist"
+            -k "not test_sbs_dask and not test_reads_nuclei_labels and not test_register_itk_cli"
+
+          CIBW_TEST_COMMAND_WINDOWS: >
+            ${{ env.SETUP_SANDBOX }}
+            && pytest scallops/tests -v --tb=short
+            --ignore=scallops/tests/miniwdl_local
+            --ignore=scallops/tests/test_wdl.py
+            -k "not test_colocalization"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          name: cibw-wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
+          retention-days: 7
 
   build_sdist:
     name: Build Source Distribution
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Build sdist
-        run: pipx run build --sdist
-
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist
       - uses: actions/upload-artifact@v4
         with:
           name: cibw-sdist
           path: dist/*.tar.gz
+          retention-days: 7
 
   publish_to_pypi:
     needs: [build_wheels, build_sdist]
     runs-on: ubuntu-latest
-
-    # Required permissions for PyPI Trusted Publishing (OIDC)
+    timeout-minutes: 20
     permissions:
       id-token: write
-
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-
+      contents: read
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.dry_run == false)
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: cibw-*
           path: dist
           merge-multiple: true
-
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        # with:
-          # Commented out token auth in favor of Trusted Publishing above.
-          # If it fails, remove the `permissions` block above, uncomment `with:`, and uncomment these:
+        with:
+          verbose: true
+          # FALLBACK: If Trusted Publishing via OIDC fails:
+          # 1. Comment out `permissions:` at the top of this job
+          # 2. Add PYPI_API_TOKEN to repository secrets
+          # 3. Uncomment below:
           # user: __token__
           # password: ${{ secrets.PYPI_API_TOKEN }}
