@@ -256,24 +256,45 @@ def testrank_features(client, data, rank_groups):
     )
 
 
+def _assert_anndata_equal(adata1: anndata.AnnData, adata2: anndata.AnnData):
+    np.testing.assert_array_equal(adata1.X, adata2.X)
+    pd.testing.assert_frame_equal(adata1.obs, adata2.obs)
+    pd.testing.assert_frame_equal(adata1.var, adata2.var)
+    assert adata1.layers.keys() == adata2.layers.keys()
+    assert adata1.obsm.keys() == adata2.obsm.keys()
+    assert adata1.varm.keys() == adata2.varm.keys()
+    for key in adata1.layers.keys():
+        np.testing.assert_array_equal(
+            adata1.layers[key], adata2.layers[key], err_msg=f"Layer {key}"
+        )
+
+    for key in adata1.obsm.keys():
+        np.testing.assert_array_equal(
+            adata1.obsm[key], adata2.obsm[key], err_msg=f"obsm {key}"
+        )
+    for key in adata1.varm.keys():
+        np.testing.assert_array_equal(
+            adata1.varm[key], adata2.varm[key], err_msg=f"varm {key}"
+        )
+
+
 @pytest.mark.features
 def test_anndata_slice():
     d = anndata.AnnData(
         X=np.arange(4).reshape((2, 2)),
         obs=pd.DataFrame(index=["1", "2"]),
         var=pd.DataFrame(index=["1", "2"]),
+        layers={"test": np.arange(4).reshape((2, 2))},
+        obsm={"test": np.arange(4).reshape((2, 2))},
+        varm={"test": np.arange(4).reshape((2, 2))},
     )
     data1 = d[[1, 0], [1, 0]]
     data2 = _slice_anndata(d, [1, 0], [1, 0])
-    np.testing.assert_array_equal(data1.X, data2.X)
-    pd.testing.assert_frame_equal(data1.obs, data2.obs)
-    pd.testing.assert_frame_equal(data1.var, data2.var)
+    _assert_anndata_equal(data1, data2)
 
     data1 = d[d.obs.index.isin(["2"]), d.var.index.isin(["1"])]
     data2 = _slice_anndata(d, d.obs.index.isin(["2"]), d.var.index.isin(["1"]))
-    np.testing.assert_array_equal(data1.X, data2.X)
-    pd.testing.assert_frame_equal(data1.obs, data2.obs)
-    pd.testing.assert_frame_equal(data1.var, data2.var)
+    _assert_anndata_equal(data1, data2)
 
 
 @pytest.mark.parametrize("by", ["pert", ["pert", "well"]])
