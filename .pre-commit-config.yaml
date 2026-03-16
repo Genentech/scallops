@@ -6,8 +6,12 @@ repos:
       # - id: double-quote-string-fixer  # for single quotes: uncomment and add black config “skip-string-normalization”
       - id: trailing-whitespace
       - id: end-of-file-fixer
+      - id: check-case-conflict
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [ "--branch=main" ]
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.5
+    rev: v0.15.6
     hooks:
     # Run the linter.
     - id: ruff-check
