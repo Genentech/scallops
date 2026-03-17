@@ -90,13 +90,15 @@ _blacklist = {
 }
 
 _metadata_columns_whitelist = [
-    "AreaShape_BoundingBoxMaximum_X",
+    "AreaShape_BoundingBoxMaximum",
     "AreaShape_BoundingBoxMaximum_Y",
     "AreaShape_BoundingBoxMinimum_X",
     "AreaShape_BoundingBoxMinimum_Y",
     "AreaShape_Center_X",
     "AreaShape_Center_Y",
     "Correlation_PearsonBox",
+    "Location_CenterMassIntensity",
+    "Location_MaxIntensity",
     "Location_IntersectsBoundary",
     "Neighbors_FirstClosestObjectNumber",
     "Neighbors_SecondClosestObjectNumber",
