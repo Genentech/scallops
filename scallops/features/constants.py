@@ -90,7 +90,7 @@ _blacklist = {
 }
 
 _metadata_columns_whitelist = [
-    "AreaShape_BoundingBoxMaximum",
+    "AreaShape_BoundingBoxMaximum_X",
     "AreaShape_BoundingBoxMaximum_Y",
     "AreaShape_BoundingBoxMinimum_X",
     "AreaShape_BoundingBoxMinimum_Y",
