@@ -148,7 +148,7 @@ jobs:
           CIBW_ENVIRONMENT_MACOS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
           CIBW_ENVIRONMENT_WINDOWS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
           
-          CIBW_BEFORE_ALL_LINUX: "git config --global --add safe.directory /project && dnf install -y epel-release && dnf install -y bzip2-devel xz-devel zlib-devel openblas-devel"
+          CIBW_BEFORE_ALL_LINUX: "git config --system --add safe.directory '*' && dnf install -y epel-release && dnf install -y bzip2-devel xz-devel zlib-devel openblas-devel"
 
           CIBW_TEST_COMMAND_LINUX: >
             ${{ env.SETUP_SANDBOX }}
