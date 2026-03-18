@@ -591,3 +591,35 @@ def test_read_experiment_csv(tmp_path):
     assert list(exp2.images.keys()) == ["A1-102", "A1-103"]
     xr.testing.assert_equal(exp.images["A1-102"], exp2.images["A1-102"])
     xr.testing.assert_equal(exp.images["A1-103"], exp2.images["A1-103"])
+
+
+@pytest.mark.io
+def test_dask_zarr_io_component(tmp_path, recwarn):
+    # this is what current version of ome_zarr does
+    path = tmp_path / "test.zarr"
+    da.to_zarr(
+        arr=da.random.random((2, 2)),
+        url=path,
+        component="0",
+        fill_value=10,
+    )
+    assert zarr.open(path, mode="r")["0"].fill_value == 10
+    assert len(recwarn) == 0, (
+        f"Expected no warnings, but got: {[str(w.message) for w in recwarn]}"
+    )
+
+
+@pytest.mark.io
+def test_dask_zarr_io(tmp_path, recwarn):
+    # this is what current version of ome_zarr does
+    path = tmp_path / "test.zarr"
+    da.to_zarr(
+        arr=da.random.random((10, 10), chunks=(5, 5)),
+        url=path,
+        compute=True,
+        fill_value=10,
+    )
+    assert zarr.open(path, mode="r").fill_value == 10
+    assert len(recwarn) == 0, (
+        f"Expected no warnings, but got: {[str(w.message) for w in recwarn]}"
+    )
