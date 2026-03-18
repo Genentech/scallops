@@ -24,7 +24,7 @@ jobs:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    
+
     env:
       SETUP_SANDBOX: >-
         python -c "import os, shutil, scallops;
@@ -68,16 +68,16 @@ jobs:
               cache_dir = os.path.join(os.environ.get("LOCALAPPDATA", ""), "pypa", "cibuildwheel", "Cache")
           else:
               cache_dir = os.path.expanduser("~/.cache/cibuildwheel")
-              
+
           pathlib.Path(cache_dir).mkdir(parents=True, exist_ok=True)
           dest = os.path.join(cache_dir, f"virtualenv-{ver}.pyz")
-          
+
           url = f"https://raw.githubusercontent.com/pypa/get-virtualenv/{ver}/public/virtualenv.pyz"
           req = urllib.request.Request(url)
           token = os.environ.get("GITHUB_TOKEN")
           if token:
               req.add_header("Authorization", f"Bearer {token}")
-              
+
           for i in range(1, 8):
               try:
                   print(f"Downloading {url} (Attempt {i}/7)...")
@@ -105,7 +105,7 @@ jobs:
             echo "CIBW_SKIP=$SKIP cp313-*" >> $GITHUB_ENV
             exit 0
           fi
-          
+
           set +e
           python - <<'PYTHON_SCRIPT'
           import re, sys, pathlib
@@ -119,10 +119,10 @@ jobs:
           pattern = r'(?i)\bnumpy\b\s*(?:>=|~=)\s*["\']?\s*2(\D|$)'
           sys.exit(0 if re.search(pattern, text) else 1)
           PYTHON_SCRIPT
-          
+
           PY_EXIT_CODE=$?
           set -e
-          
+
           if [ $PY_EXIT_CODE -eq 0 ]; then
             echo "CIBW_SKIP=$SKIP" >> $GITHUB_ENV
           else
@@ -136,18 +136,18 @@ jobs:
           CIBW_SKIP: ${{ env.CIBW_SKIP }}
           CIBW_BUILD_VERBOSITY: 1
           CIBW_ARCHS_MACOS: "x86_64 arm64"
-          
+
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
-          
+
           CIBW_TEST_EXTRAS_LINUX: "test,pysam"
           CIBW_TEST_EXTRAS_MACOS: "test,pysam"
           CIBW_TEST_EXTRAS_WINDOWS: "test"
-          
+
           CIBW_ENVIRONMENT_LINUX: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
           CIBW_ENVIRONMENT_MACOS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
           CIBW_ENVIRONMENT_WINDOWS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
-          
+
           CIBW_BEFORE_ALL_LINUX: "git config --system --add safe.directory '*' && dnf install -y epel-release && dnf install -y bzip2-devel xz-devel zlib-devel openblas-devel"
 
           CIBW_TEST_COMMAND_LINUX: >
