@@ -83,7 +83,8 @@ def _slice_anndata(
     var: Index | None = None,
 ) -> anndata.AnnData:
     """Slice an AnnData object without copy-on-write AnnData's behavior.
-    Note that this method only slices the fields `X`, `obs`, and `var`.
+    Note that this method only slices the fields `X`, `layers`, `obsm`,  `varm`, `obs`,
+    and `var`.
 
     :param data: AnnData object
     :param obs: Slice for observations
@@ -98,13 +99,25 @@ def _slice_anndata(
     if var is not None:
         var_indices = _normalize_index(var, data.var.index)
     X = data.X
+    layers = dict(data.layers)
+    obsm = dict(data.obsm)
+    varm = dict(data.varm)
+
     if obs_indices is not None:
         X = X[obs_indices]
+        for key in layers:
+            layers[key] = layers[key][obs_indices]
+        for key in obsm:
+            obsm[key] = obsm[key][obs_indices]
     if var_indices is not None:
         X = X[:, var_indices]
+        for key in layers:
+            layers[key] = layers[key][:, var_indices]
+        for key in varm:
+            varm[key] = varm[key][var_indices]
     obs = data.obs.iloc[obs_indices] if obs_indices is not None else data.obs
     var = data.var.iloc[var_indices] if var_indices is not None else data.var
-    return anndata.AnnData(X=X, obs=obs, var=var)
+    return anndata.AnnData(X=X, obs=obs, var=var, layers=layers, obsm=obsm, varm=varm)
 
 
 def _update_coords(
