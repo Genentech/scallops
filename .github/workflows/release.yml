@@ -50,6 +50,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Determine Version
+        run: |
+          python -m pip install setuptools-scm
+          VERSION=$(python -m setuptools_scm)
+          echo "Calculated Version: $VERSION"
+          echo "SETUPTOOLS_SCM_PRETEND_VERSION=$VERSION" >> $GITHUB_ENV
+
       - name: Install cibuildwheel
         run: |
           python -m pip install --upgrade pip
@@ -144,9 +151,9 @@ jobs:
           CIBW_TEST_EXTRAS_MACOS: "test,pysam"
           CIBW_TEST_EXTRAS_WINDOWS: "test"
 
-          CIBW_ENVIRONMENT_LINUX: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
-          CIBW_ENVIRONMENT_MACOS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
-          CIBW_ENVIRONMENT_WINDOWS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas"
+          CIBW_ENVIRONMENT_LINUX: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.SETUPTOOLS_SCM_PRETEND_VERSION }}"
+          CIBW_ENVIRONMENT_MACOS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.SETUPTOOLS_SCM_PRETEND_VERSION }}"
+          CIBW_ENVIRONMENT_WINDOWS: "PIP_ONLY_BINARY=scipy,scikit-learn,scikit-image,numpy,pandas SETUPTOOLS_SCM_PRETEND_VERSION=${{ env.SETUPTOOLS_SCM_PRETEND_VERSION }}"
 
           CIBW_BEFORE_ALL_LINUX: "git config --system --add safe.directory '*' && dnf install -y epel-release && dnf install -y bzip2-devel xz-devel zlib-devel openblas-devel"
 
@@ -186,8 +193,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      # Make sure sdist also uses the pretend version if it's struggling on Ubuntu runner (usually fine, but safe to include)
       - name: Build sdist
         run: |
+          python -m pip install setuptools-scm
+          export SETUPTOOLS_SCM_PRETEND_VERSION=$(python -m setuptools_scm)
           python -m pip install --upgrade pip build
           python -m build --sdist
       - uses: actions/upload-artifact@v4
