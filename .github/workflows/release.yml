@@ -51,6 +51,7 @@ jobs:
           python-version: '3.11'
 
       - name: Determine Version
+        shell: bash
         run: |
           python -m pip install setuptools-scm
           VERSION=$(python -m setuptools_scm)
