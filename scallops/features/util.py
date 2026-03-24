@@ -128,7 +128,7 @@ def _update_coords(
     xarray_coords: dict,
 ):
     if df_coords:
-        xarray_coords[coord_name] = df.index
+        xarray_coords[coord_name] = df.index.to_numpy(copy=False)
         if isinstance(df_coords, str):
             columns = [df_coords]
         elif isinstance(df_coords, Sequence):
