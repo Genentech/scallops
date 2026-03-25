@@ -55,12 +55,15 @@ def filter_data(
     data: anndata.AnnData,
     max_fraction_nans: float | None = 0.25,
     min_variance: float | None = 0.1,
+    by: str | Sequence | None = None,
 ) -> anndata.AnnData:
     """Filter cells using `max_fraction_nans` then filter features using `min_variance`
 
     :param data: AnnData object
     :param max_fraction_nans: Keep cells with <= `max_fraction_nans` missing values
     :param min_variance: Keep features with variance >= `min_variance`
+    :param by: Column(s) in `data.obs` to stratify by when computing variance. If
+    provided, the median variance is used for filtering.
     :return: Filtered AnnData object
     """
     xp = get_namespace(data.X)
@@ -71,12 +74,23 @@ def filter_data(
         max_nans = int(data.shape[1] * max_fraction_nans)
         keep_cells = nan_counts_per_cell <= max_nans
     if min_variance is not None:
-        variance = (
-            xp.var(data.X[keep_cells], axis=0)
-            if keep_cells is not None
-            else xp.var(data.X, axis=0)
-        )
+        if by is not None:
+            if keep_cells is not None and isinstance(data.X, da.Array):
+                keep_cells = keep_cells.compute()
+            xdata = _anndata_to_xr(data, by)
+            if keep_cells is not None:
+                xdata = xdata[keep_cells]
+
+            variance = xdata.groupby(by).var(skipna=False).data
+            variance = xp.median(variance, axis=0)
+        else:
+            variance = (
+                xp.var(data.X[keep_cells], axis=0)
+                if keep_cells is not None
+                else xp.var(data.X, axis=0)
+            )
         keep_features = variance >= min_variance
+
     if isinstance(data.X, da.Array):
         keep_features, keep_cells = dask.compute(keep_features, keep_cells)
     return _slice_anndata(data, keep_cells, keep_features)

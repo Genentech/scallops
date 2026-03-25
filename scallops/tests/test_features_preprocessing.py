@@ -8,9 +8,10 @@ from sklearn.preprocessing import PowerTransformer
 from scallops.features.preprocessing import filter_data, transform_features_yj
 
 
+@pytest.mark.parametrize("by", [None, "well"])
 @pytest.mark.parametrize("use_dask", [True, False])
 @pytest.mark.features
-def test_filter_data(use_dask):
+def test_filter_data(use_dask, by):
     adata = anndata.AnnData(
         X=da.arange(8, chunks=(1,)).reshape((4, 2))
         if use_dask
@@ -27,11 +28,19 @@ def test_filter_data(use_dask):
     adata.X[1, 0] = 100
     adata.X[0, 0] = np.nan
     # np.var(adata.X, axis=0) array([nan,  5.], dtype=float32)
-    d = filter_data(adata, max_fraction_nans=0, min_variance=None)
-    # d.X.var(axis=0) #  array([2006.2222   ,    2.6666667]
-    assert d.shape == (3, 2)
-    assert filter_data(adata, max_fraction_nans=None, min_variance=0).shape == (4, 1)
-    assert filter_data(adata, max_fraction_nans=0, min_variance=5).shape == (3, 1)
+    test_nan_filter = filter_data(adata, max_fraction_nans=0, min_variance=None)
+    assert test_nan_filter.shape == (3, 2)
+    # np.var(adata.X, axis=0) # array([nan,  5.]
+    # np.var(adata[adata.obs['well'] == 'well1'].X, axis=0)  # array([nan,  4.])
+    # np.var(adata[adata.obs['well'] == 'well2'].X, axis=0)  # array([2209.,    4.]
+    d1 = filter_data(adata, max_fraction_nans=None, min_variance=0, by=by)
+    # np.var(adata[1:].X, axis=0)  array([2006.2222, 2.6666667]
+    d2 = filter_data(adata, max_fraction_nans=0, min_variance=5, by=by)
+
+    assert d1.shape == (4, 1)
+    assert d2.shape == (3, 1)
+    assert d1.var.index.values[0] == "gene2"
+    assert d2.var.index.values[0] == "gene1"
 
 
 @pytest.mark.parametrize("by", [None, ["pert", "well"], ["well"]])
