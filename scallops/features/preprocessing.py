@@ -11,12 +11,12 @@ from scallops.features.util import _anndata_to_xr, _slice_anndata
 
 
 def transform_features_yj(
-    adata: anndata.AnnData, by: str | Sequence | None = None
+    data: anndata.AnnData, by: str | Sequence | None = None
 ) -> anndata.AnnData:
     """Transform features using yeo-johnson transform
 
-    :param adata: AnnData object
-    :param by: Column(s) in `adata.obs` to stratify by.
+    :param data: AnnData object
+    :param by: Column(s) in `data.obs` to stratify by.
     :return: Transformed AnnData object
     """
 
@@ -35,48 +35,48 @@ def transform_features_yj(
             d = _transform_block(d)
         return x.copy(data=d, deep=False)
 
-    xdata = _anndata_to_xr(adata, by)
+    xdata = _anndata_to_xr(data, by)
     if by is not None:
         result = xdata.groupby(by).map(_transform_feature_group)
         return anndata.AnnData(
             X=result.data,
-            obs=adata.obs.loc[result.coords["obs"].values],
-            var=adata.var.copy(),
+            obs=data.obs.loc[result.coords["obs"].values],
+            var=data.var.copy(),
         )
 
     return anndata.AnnData(
         X=_transform_feature_group(xdata).data,
-        obs=adata.obs.copy(),
-        var=adata.var.copy(),
+        obs=data.obs.copy(),
+        var=data.var.copy(),
     )
 
 
 def filter_data(
-    adata: anndata.AnnData,
+    data: anndata.AnnData,
     max_fraction_nans: float | None = 0.25,
     min_variance: float | None = 0.1,
 ) -> anndata.AnnData:
     """Filter cells using `max_fraction_nans` then filter features using `min_variance`
 
-    :param adata: AnnData object
+    :param data: AnnData object
     :param max_fraction_nans: Keep cells with <= `max_fraction_nans` missing values
     :param min_variance: Keep features with variance >= `min_variance`
     :return: Filtered AnnData object
     """
-    xp = get_namespace(adata.X)
+    xp = get_namespace(data.X)
     keep_cells = None
     keep_features = None
     if max_fraction_nans is not None:
-        nan_counts_per_cell = xp.isnan(adata.X).sum(axis=1)
-        max_nans = int(adata.shape[1] * max_fraction_nans)
+        nan_counts_per_cell = xp.isnan(data.X).sum(axis=1)
+        max_nans = int(data.shape[1] * max_fraction_nans)
         keep_cells = nan_counts_per_cell <= max_nans
     if min_variance is not None:
         variance = (
-            xp.var(adata.X[keep_cells], axis=0)
+            xp.var(data.X[keep_cells], axis=0)
             if keep_cells is not None
-            else xp.var(adata.X, axis=0)
+            else xp.var(data.X, axis=0)
         )
         keep_features = variance >= min_variance
-    if isinstance(adata.X, da.Array):
+    if isinstance(data.X, da.Array):
         keep_features, keep_cells = dask.compute(keep_features, keep_cells)
-    return _slice_anndata(adata, keep_cells, keep_features)
+    return _slice_anndata(data, keep_cells, keep_features)

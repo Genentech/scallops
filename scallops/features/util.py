@@ -82,8 +82,8 @@ def _slice_anndata(
     obs: Index | None,
     var: Index | None = None,
 ) -> anndata.AnnData:
-    """Slice an AnnData object without copy-on-write AnnData's behavior.
-    Note that this method only slices the fields `X`, `layers`, `obsm`,  `varm`, `obs`,
+    """Slice an AnnData object without AnnData's copy-on-write behavior.
+    Note that this method slices the fields `X`, `layers`, `obsm`, `varm`, `obs`,
     and `var`.
 
     :param data: AnnData object
@@ -146,40 +146,40 @@ def _update_coords(
 
 
 def _anndata_to_xr(
-    adata: anndata.AnnData,
+    data: anndata.AnnData,
     obs_coords: bool | str | Sequence[str] = True,
     var_coords: bool | str | Sequence[str] = False,
 ) -> xr.DataArray:
     coords = dict()
     coords_keys = {"obs", "var"}
     _update_coords(
-        df=adata.obs,
+        df=data.obs,
         df_coords=obs_coords,
         coord_name="obs",
         coords_keys=coords_keys,
         xarray_coords=coords,
     )
     _update_coords(
-        df=adata.var,
+        df=data.var,
         df_coords=var_coords,
         coord_name="var",
         coords_keys=coords_keys,
         xarray_coords=coords,
     )
-    return xr.DataArray(adata.X, dims=("obs", "var"), name="", coords=coords)
+    return xr.DataArray(data.X, dims=("obs", "var"), name="", coords=coords)
 
 
 def _join_metadata(
-    adata: anndata.AnnData, join_df: pd.DataFrame | dd.DataFrame, on: Sequence[str]
+    data: anndata.AnnData, join_df: pd.DataFrame | dd.DataFrame, on: Sequence[str]
 ):
     # match data type
     for field in on:
-        if join_df[field].dtype != adata.obs[field].dtype:
-            adata.obs[field] = adata.obs[field].astype(join_df[field].dtype)
+        if join_df[field].dtype != data.obs[field].dtype:
+            data.obs[field] = data.obs[field].astype(join_df[field].dtype)
     if isinstance(join_df, dd.DataFrame):
         join_df = join_df.compute()
     join_df = join_df.set_index(on)
-    adata.obs = adata.obs.join(join_df, on=on)
+    data.obs = data.obs.join(join_df, on=on)
 
 
 def _read_data(
