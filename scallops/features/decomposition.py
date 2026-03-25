@@ -14,16 +14,16 @@ logger = logging.getLogger("scallops")
 
 
 def _centerscale(
-    adata: anndata.AnnData,
+    data: anndata.AnnData,
     min_std: float | None = 0,
     standardize: bool = True,
     standardize_by: str | Sequence[str] | None = None,
     max_value: float | None = None,
 ) -> anndata.AnnData:
-    is_dask = isinstance(adata.X, da.Array)
-    xp = get_namespace(adata.X)
+    is_dask = isinstance(data.X, da.Array)
+    xp = get_namespace(data.X)
     if standardize and standardize_by is not None:
-        xdata = _anndata_to_xr(adata, standardize_by)
+        xdata = _anndata_to_xr(data, standardize_by)
 
         def _standardize(x, min_std, max_value):
             std = x.std(dim="obs")
@@ -43,15 +43,15 @@ def _centerscale(
         if is_dask:
             no_nans_per_feature = no_nans_per_feature.compute()
         X = X[:, no_nans_per_feature]
-        logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
+        logger.info(f"# of features {X.shape[1]:,} / {data.X.shape[1]:,}")
         return anndata.AnnData(
             X=X,
-            obs=adata.obs.loc[xdata.coords["obs"].values],
-            var=adata.var[no_nans_per_feature],
+            obs=data.obs.loc[xdata.coords["obs"].values],
+            var=data.var[no_nans_per_feature],
         )
     else:
-        X = adata.X
-        var = adata.var
+        X = data.X
+        var = data.var
         means = None
         stds = None
         if standardize or min_std is not None:
@@ -67,18 +67,18 @@ def _centerscale(
 
             stds = stds[:, features_keep]
             means = means[:, features_keep]
-            var = adata.var[features_keep]
-            logger.info(f"# of features {X.shape[1]:,} / {adata.X.shape[1]:,}")
+            var = data.var[features_keep]
+            logger.info(f"# of features {X.shape[1]:,} / {data.X.shape[1]:,}")
         if standardize:
             X = (X - means) / stds
             if max_value is not None:
                 X = xp.clip(X, -max_value, max_value)
 
-        return anndata.AnnData(X=X, obs=adata.obs.copy(), var=var)
+        return anndata.AnnData(X=X, obs=data.obs.copy(), var=var)
 
 
 def pca(
-    adata: anndata.AnnData,
+    data: anndata.AnnData,
     n_components: int | float | None = None,
     min_std: float | None = 0,
     standardize: bool = True,
@@ -91,7 +91,7 @@ def pca(
 ) -> anndata.AnnData:
     """Embed data using PCA.
 
-    :param adata: AnnData object.
+    :param data: AnnData object.
     :param standardize: Whether to standardize the data.
     :param standardize_by: Standardize the data specified groups
     :param n_components: Number of PCA components.
@@ -105,15 +105,15 @@ def pca(
     :return: PCA Embedding
     """
     if standardize:
-        adata = _centerscale(
-            adata=adata,
+        data = _centerscale(
+            data=data,
             min_std=min_std,
             standardize=standardize,
             standardize_by=standardize_by,
             max_value=max_value,
         )
-    X = adata.X
-    is_dask = isinstance(adata.X, da.Array)
+    X = data.X
+    is_dask = isinstance(data.X, da.Array)
     if gpu is None:
         try:
             import torch
@@ -184,8 +184,8 @@ def pca(
             "variance": variance,
             "mean": mean_,
             "PCs": components_,
-            "features": adata.var.index.values,
+            "features": data.var.index.values,
         }
     }
 
-    return anndata.AnnData(X=X_transformed, obs=adata.obs, uns=uns)
+    return anndata.AnnData(X=X_transformed, obs=data.obs, uns=uns)

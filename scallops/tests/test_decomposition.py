@@ -16,7 +16,7 @@ def test_decomposition():
     )
     adata = anndata.AnnData(X=X, obs=obs)
     result = pca(
-        adata=adata,
+        data=adata,
         n_components=2,
         min_std=0,
         standardize=True,
