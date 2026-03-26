@@ -4,6 +4,7 @@ import anndata
 import dask
 import dask.array as da
 import numpy as np
+import xarray as xr
 from array_api_compat import get_namespace
 from sklearn.preprocessing import PowerTransformer
 
@@ -75,14 +76,25 @@ def filter_data(
         keep_cells = nan_counts_per_cell <= max_nans
     if min_variance is not None:
         if by is not None:
-            if keep_cells is not None and isinstance(data.X, da.Array):
+            if isinstance(keep_cells, da.Array):
                 keep_cells = keep_cells.compute()
-            xdata = _anndata_to_xr(data, by)
+
+            if not isinstance(by, str) and isinstance(by, Sequence):
+                # xarray outputs missing combinations
+                xdata = xr.DataArray(
+                    data.X,
+                    dims=("obs", "var"),
+                    name="",
+                    coords={"obs": data.obs[by].apply(tuple, axis=1)},
+                )
+                by = "obs"
+            else:
+                xdata = _anndata_to_xr(data, by)
             if keep_cells is not None:
                 xdata = xdata[keep_cells]
 
-            variance = xdata.groupby(by).var(skipna=False).data
-            variance = xp.median(variance, axis=0)
+            variance = xdata.groupby(by).var(skipna=False)  # dims (by, 'var')
+            variance = xp.median(variance.data, axis=0)
         else:
             variance = (
                 xp.var(data.X[keep_cells], axis=0)
