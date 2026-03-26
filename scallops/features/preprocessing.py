@@ -80,7 +80,8 @@ def filter_data(
                 keep_cells = keep_cells.compute()
 
             if not isinstance(by, str) and isinstance(by, Sequence):
-                # xarray outputs missing combinations
+                # xarray outputs all combinations, even ones that don't exist
+                # https://github.com/pydata/xarray/issues/11264
                 xdata = xr.DataArray(
                     data.X,
                     dims=("obs", "var"),
