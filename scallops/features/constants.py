@@ -97,9 +97,12 @@ _metadata_columns_whitelist = [
     "AreaShape_Center_X",
     "AreaShape_Center_Y",
     "Correlation_PearsonBox",
+    "Location_CenterMassIntensity",
+    "Location_MaxIntensity",
     "Location_IntersectsBoundary",
     "Neighbors_FirstClosestObjectNumber",
     "Neighbors_SecondClosestObjectNumber",
+    "-qc",
 ]
 
 _metadata_columns_whitelist_str = "|".join(_metadata_columns_whitelist)

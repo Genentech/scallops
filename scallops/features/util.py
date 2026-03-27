@@ -82,8 +82,9 @@ def _slice_anndata(
     obs: Index | None,
     var: Index | None = None,
 ) -> anndata.AnnData:
-    """Slice an AnnData object without copy-on-write AnnData's behavior.
-    Note that this method only slices the fields `X`, `obs`, and `var`.
+    """Slice an AnnData object without AnnData's copy-on-write behavior.
+    Note that this method slices the fields `X`, `layers`, `obsm`, `varm`, `obs`,
+    and `var`.
 
     :param data: AnnData object
     :param obs: Slice for observations
@@ -98,13 +99,25 @@ def _slice_anndata(
     if var is not None:
         var_indices = _normalize_index(var, data.var.index)
     X = data.X
+    layers = dict(data.layers)
+    obsm = dict(data.obsm)
+    varm = dict(data.varm)
+
     if obs_indices is not None:
         X = X[obs_indices]
+        for key in layers:
+            layers[key] = layers[key][obs_indices]
+        for key in obsm:
+            obsm[key] = obsm[key][obs_indices]
     if var_indices is not None:
         X = X[:, var_indices]
+        for key in layers:
+            layers[key] = layers[key][:, var_indices]
+        for key in varm:
+            varm[key] = varm[key][var_indices]
     obs = data.obs.iloc[obs_indices] if obs_indices is not None else data.obs
     var = data.var.iloc[var_indices] if var_indices is not None else data.var
-    return anndata.AnnData(X=X, obs=obs, var=var)
+    return anndata.AnnData(X=X, obs=obs, var=var, layers=layers, obsm=obsm, varm=varm)
 
 
 def _update_coords(
@@ -115,7 +128,7 @@ def _update_coords(
     xarray_coords: dict,
 ):
     if df_coords:
-        xarray_coords[coord_name] = df.index
+        xarray_coords[coord_name] = df.index.to_numpy(copy=False)
         if isinstance(df_coords, str):
             columns = [df_coords]
         elif isinstance(df_coords, Sequence):
@@ -133,40 +146,40 @@ def _update_coords(
 
 
 def _anndata_to_xr(
-    adata: anndata.AnnData,
+    data: anndata.AnnData,
     obs_coords: bool | str | Sequence[str] = True,
     var_coords: bool | str | Sequence[str] = False,
 ) -> xr.DataArray:
     coords = dict()
     coords_keys = {"obs", "var"}
     _update_coords(
-        df=adata.obs,
+        df=data.obs,
         df_coords=obs_coords,
         coord_name="obs",
         coords_keys=coords_keys,
         xarray_coords=coords,
     )
     _update_coords(
-        df=adata.var,
+        df=data.var,
         df_coords=var_coords,
         coord_name="var",
         coords_keys=coords_keys,
         xarray_coords=coords,
     )
-    return xr.DataArray(adata.X, dims=("obs", "var"), name="", coords=coords)
+    return xr.DataArray(data.X, dims=("obs", "var"), name="", coords=coords)
 
 
 def _join_metadata(
-    adata: anndata.AnnData, join_df: pd.DataFrame | dd.DataFrame, on: Sequence[str]
+    data: anndata.AnnData, join_df: pd.DataFrame | dd.DataFrame, on: Sequence[str]
 ):
     # match data type
     for field in on:
-        if join_df[field].dtype != adata.obs[field].dtype:
-            adata.obs[field] = adata.obs[field].astype(join_df[field].dtype)
+        if join_df[field].dtype != data.obs[field].dtype:
+            data.obs[field] = data.obs[field].astype(join_df[field].dtype)
     if isinstance(join_df, dd.DataFrame):
         join_df = join_df.compute()
     join_df = join_df.set_index(on)
-    adata.obs = adata.obs.join(join_df, on=on)
+    data.obs = data.obs.join(join_df, on=on)
 
 
 def _read_data(

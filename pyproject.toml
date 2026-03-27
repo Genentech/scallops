@@ -39,7 +39,7 @@ dependencies = [
     "centrosome",
     "cp-measure>=0.1.16",
     "dask-image",
-    "dask",
+    "dask<=2025.11.0",
     "decorator",
     "filelock",
     "flox",
@@ -74,6 +74,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Added pysam as an optional extra for Linux/macOS users
 dialout = [
     "pysam"
 ]
@@ -95,7 +96,6 @@ test = [
     "pytest",
     "pytest-xdist"
 ]
-
 dev = [
     "pre-commit"
 ]
@@ -116,7 +116,6 @@ scallops = 'scallops.__main__:main'
 
 [project.urls]
 Repository = "https://github.com/Genentech/scallops.git"
-
 
 [tool.setuptools]
 include-package-data = true
