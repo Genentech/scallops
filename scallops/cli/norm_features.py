@@ -60,7 +60,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
     else:
         mad_scale_factor = float(mad_scale_factor)
 
-    robust = not arguments.robust
+    robust = arguments.robust
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
