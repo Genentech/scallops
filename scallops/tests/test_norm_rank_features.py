@@ -28,26 +28,6 @@ def client():
     cluster.close()
 
 
-@pytest.fixture(params=[["plate", "well"], None])
-def normalize_groups(request):
-    return request.param
-
-
-@pytest.fixture(params=[True, False])
-def robust(request):
-    return request.param
-
-
-@pytest.fixture(params=["zscore", "local-zscore", "nn-zscore"])
-def normalize(request):
-    return request.param
-
-
-@pytest.fixture(params=["gene_symbol=='NTC'", None])
-def reference(request):
-    return request.param
-
-
 @pytest.fixture
 def data():
     df = pd.DataFrame(
@@ -129,18 +109,20 @@ def _compare_anndata(data1: anndata.AnnData, data2: anndata.AnnData):
     pd.testing.assert_frame_equal(data1.var, data2.var)
 
 
+@pytest.mark.parametrize("normalize", ["zscore", "local-zscore", "nn-zscore"])
+@pytest.mark.parametrize("reference", ["gene_symbol=='NTC'", None])
+@pytest.mark.parametrize("robust", [True, False])
+@pytest.mark.parametrize("by", [["plate", "well"], None])
 @pytest.mark.features
-def test_norm_features(
-    client, data, normalize, normalize_groups, robust, reference, tmp_path
-):
-    n_neighbors = 2 if normalize_groups is None else 1
+def test_norm_features(client, data, normalize, by, robust, reference, tmp_path):
+    n_neighbors = 2 if by is None else 1
     scaling = n_neighbors > 1
     normed_data = normalize_features(
         data,
         reference_query=reference,
         normalize=normalize,
         robust=robust,
-        normalize_groups=normalize_groups,
+        by=by,
         n_neighbors=n_neighbors,
         scaling=scaling,
     )
@@ -150,7 +132,7 @@ def test_norm_features(
             reference_query=reference,
             normalize=normalize,
             robust=robust,
-            normalize_groups=normalize_groups,
+            by=by,
             n_neighbors=n_neighbors,
             scaling=scaling,
             batch_size=1,
@@ -166,7 +148,7 @@ def test_norm_features(
         reference_query=reference,
         normalize=normalize,
         robust=robust,
-        normalize_groups=normalize_groups,
+        by=by,
         n_neighbors=n_neighbors,
         scaling=scaling,
     )
@@ -177,7 +159,7 @@ def test_norm_features(
             reference_query=reference,
             normalize=normalize,
             robust=robust,
-            normalize_groups=normalize_groups,
+            by=by,
             n_neighbors=n_neighbors,
             scaling=scaling,
             batch_size=1,
@@ -193,12 +175,12 @@ def test_norm_features(
     )
     _compare_anndata(normed_data, normed_data_dask)
 
-    if normalize_groups is not None:
-        indices = data.obs.groupby(normalize_groups).indices
+    if by is not None:
+        indices = data.obs.groupby(by).indices
         for name in indices:
             query = []
-            for i in range(len(normalize_groups)):
-                query.append(f"{normalize_groups[i]}=='{name[i]}'")
+            for i in range(len(by)):
+                query.append(f"{by[i]}=='{name[i]}'")
 
             _diff_values(
                 _slice_anndata(data, indices[name]),
@@ -217,13 +199,9 @@ def test_norm_features(
         )
 
 
-@pytest.fixture(params=[None, ["well"]])
-def rank_groups(request):
-    return request.param
-
-
+@pytest.mark.parametrize("by", [None, ["well"]])
 @pytest.mark.features
-def testrank_features(client, data, rank_groups):
+def testrank_features(client, data, by):
     reference_value = "NTC"
     perturbation_column = "gene_symbol"
     method = "welch_t"
@@ -231,7 +209,7 @@ def testrank_features(client, data, rank_groups):
 
     rank_results = rank_features(
         data,
-        rank_groups=rank_groups,
+        by=by,
         perturbation_column=perturbation_column,
         reference_value=reference_value,
         method=method,
@@ -242,7 +220,7 @@ def testrank_features(client, data, rank_groups):
         anndata.AnnData(
             X=da.from_array(data.X, chunks=(1, 2)), obs=data.obs, var=data.var
         ),
-        rank_groups=rank_groups,
+        by=by,
         perturbation_column=perturbation_column,
         reference_value=reference_value,
         method=method,
