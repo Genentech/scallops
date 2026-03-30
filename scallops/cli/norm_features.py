@@ -49,7 +49,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
     norm_output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    normalize_groups = arguments.by
+    by = arguments.by
     normalize = arguments.method
     n_neighbors = arguments.neighbors
     mad_scale_factor = arguments.mad_scale_factor
@@ -60,7 +60,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
     else:
         mad_scale_factor = float(mad_scale_factor)
 
-    robust = not arguments.robust
+    robust = arguments.robust
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -116,7 +116,7 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
                 reference,
                 normalize=normalize,
                 robust=robust,
-                normalize_groups=normalize_groups,
+                by=by,
                 n_neighbors=n_neighbors,
                 mad_scale=mad_scale_factor,
                 centering=centering,

@@ -40,7 +40,7 @@ def run_pipeline_rank_features(arguments: argparse.Namespace):
         rank_output = os.path.splitext(os.path.basename(paths[0]))[0] + ".parquet"
         if len(paths) > 1:
             logger.info(f"Saving results to {rank_output}")
-    rank_groups = arguments.by
+    by = arguments.by
 
     join_path = arguments.metadata
     join_fields = arguments.join
@@ -82,8 +82,8 @@ def run_pipeline_rank_features(arguments: argparse.Namespace):
         data = _read_data(paths, features)
         # columns_needed = set()
         # columns_needed.add(perturbation_column)
-        # if rank_groups is not None:
-        #     columns_needed.update(rank_groups)
+        # if by is not None:
+        #     columns_needed.update(by)
         # if label_filter is not None:
         #     columns_needed.update(_get_names_from_pd_query(label_filter))
         # if join_path is not None:
@@ -105,7 +105,7 @@ def run_pipeline_rank_features(arguments: argparse.Namespace):
             )
         rank_df = rank_features(
             data=data,
-            rank_groups=rank_groups,
+            by=by,
             perturbation_column=perturbation_column,
             reference_value=reference_value,
             method=method,
