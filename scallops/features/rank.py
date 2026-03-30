@@ -76,7 +76,7 @@ def rank_features(
     data: anndata.AnnData,
     perturbation_column: str,
     reference_value: str | None,
-    rank_groups: Sequence[str] | str | None = None,
+    by: Sequence[str] | str | None = None,
     method: Literal["welch_t", "student_t", "mannwhitney"] = "welch_t",
     min_labels: int | None = None,
     iqr_multiplier: float | None = None,
@@ -87,7 +87,7 @@ def rank_features(
     :param perturbation_column: Column in `data.obs` containing perturbation.
     :param reference_value: Reference value (e.g. NTC).
     :param method: Statistical method to use.
-    :param rank_groups: Column(s) in `data.obs` to stratify by.
+    :param by: Column(s) in `data.obs` to stratify by.
     :param min_labels: Include perturbations with at least this many observations.
     :param iqr_multiplier: Multiplier for interquartile range outlier removal.
     :return: A DataFrame with statistics for each comparison.
@@ -96,8 +96,8 @@ def rank_features(
     features = data.var.index.values
     is_dask = isinstance(data.X, da.Array)
     rank_results = []
-    if rank_groups is not None:
-        group_to_indices = data.obs.groupby(rank_groups, observed=True).indices
+    if by is not None:
+        group_to_indices = data.obs.groupby(by, observed=True).indices
         for group_name in group_to_indices:
             rank_results += _rank_single(
                 data=_slice_anndata(data, group_to_indices[group_name]),
@@ -123,7 +123,7 @@ def rank_features(
 
     if is_dask:
         rank_meta = _create_rank_metadata(method, reference_value)
-        if rank_groups is not None and len(rank_groups) > 0:
+        if by is not None and len(by) > 0:
             rank_meta["group"] = "test"
         return dd.from_delayed(rank_results, meta=rank_meta, verify_meta=False)
     else:
