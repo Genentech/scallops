@@ -96,7 +96,7 @@ def _normalize_features_array(
 def typical_variation_normalization(
     data: anndata.AnnData,
     reference_query: str,
-    normalize_groups: Sequence[str] | str | None = None,
+    by: Sequence[str] | str | None = None,
 ) -> anndata.AnnData:
     """
     Apply Typical Variation Normalization based on control
@@ -107,7 +107,7 @@ def typical_variation_normalization(
     :param data: Annotated data matrix.
     :param reference_query: Query to extract reference observations
         (e.g. "gene_symbol=='NTC'")
-    :param normalize_groups: Further align control and treatments in each group,
+    :param by: Further align control and treatments in each group,
         using the covariance matrix of all negative (reference) controls as the target
         and the covariance matrix of each group of negative controls as the source.
     """
@@ -126,10 +126,8 @@ def typical_variation_normalization(
     )
     X = PCA().fit(X[ref_indices]).transform(X)
 
-    if normalize_groups is not None:
-        group_to_indices = data.obs.groupby(
-            normalize_groups, observed=True, sort=False
-        ).indices
+    if by is not None:
+        group_to_indices = data.obs.groupby(by, observed=True, sort=False).indices
         for group in group_to_indices.keys():
             group_indices = group_to_indices[group]
             group_control_indices = group_indices[np.isin(group_indices, ref_indices)]
@@ -179,7 +177,7 @@ def typical_variation_normalization(
 def normalize_features(
     data: anndata.AnnData,
     reference_query: str | None = None,
-    normalize_groups: Sequence[str] | str | None = None,
+    by: Sequence[str] | str | None = None,
     normalize: Literal["zscore", "local-zscore", "nn-zscore"] = "zscore",
     n_neighbors: int | None = 100,
     neighbors_metric: str = "minkowski",
@@ -195,7 +193,7 @@ def normalize_features(
     :param data: Annotated data matrix.
     :param reference_query: Query to extract reference observations
         (e.g. "gene_symbol=='NTC'")
-    :param normalize_groups: Column(s) in `data.obs` to stratify by.
+    :param by: Column(s) in `data.obs` to stratify by.
     :param normalize: Normalization method to use where `local` uses nearest
         neighbors by location and `nn` uses nearest neighbors by `neighbors_metric`.
     :param n_neighbors: Number of neighbors for local and nearest neighbor zscore.
@@ -214,8 +212,8 @@ def normalize_features(
 
     mad_scale = _convert_scale(mad_scale)
     xdata = _anndata_to_xr(data)
-    if normalize_groups is not None:
-        group_result = xdata.groupby(normalize_groups).map(
+    if by is not None:
+        group_result = xdata.groupby(by).map(
             lambda x: _normalize_group(
                 x,
                 reference_query=reference_query,
