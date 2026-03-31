@@ -648,10 +648,18 @@ def _read_ome_zarr_array(
         coords = {}
         attrs = {}
         multiscales = node.attrs["multiscales"]
+        key = "0"
+
         if len(multiscales) > 0:
             multiscale0 = multiscales[0]
             coords, attrs, dims = _read_zarr_attrs(multiscale0)
-        array = node["0"]
+            if "datasets" in multiscale0:
+                tmp = multiscale0["datasets"]
+                if len(tmp) > 0:
+                    tmp = tmp[0]
+                    if "path" in tmp:
+                        key = tmp["path"]
+        array = node[key]
         return array, dims, coords, attrs
     else:  # see if user passed test.zarr and zarr file only has one image
         if "images" in node.keys():
