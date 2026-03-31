@@ -54,14 +54,16 @@ def transform_features_yj(
 
 def filter_data(
     data: anndata.AnnData,
-    max_fraction_nans: float | None = 0.25,
+    max_fraction_not_finite: float | None = 0.25,
     min_variance: float | None = 0.1,
     by: str | Sequence | None = None,
 ) -> anndata.AnnData:
-    """Filter cells using `max_fraction_nans` then filter features using `min_variance`
+    """Filter cells using `max_fraction_not_finite` then filter features using
+    `min_variance`
 
     :param data: AnnData object
-    :param max_fraction_nans: Keep cells with <= `max_fraction_nans` missing values
+    :param max_fraction_not_finite: Keep cells with <= `max_fraction_not_finite`
+    missing or infinite values
     :param min_variance: Keep features with variance >= `min_variance`
     :param by: Column(s) in `data.obs` to stratify by when computing variance. If
     provided, the median variance is used for filtering.
@@ -70,10 +72,10 @@ def filter_data(
     xp = get_namespace(data.X)
     keep_cells = None
     keep_features = None
-    if max_fraction_nans is not None:
-        nan_counts_per_cell = xp.isnan(data.X).sum(axis=1)
-        max_nans = int(data.shape[1] * max_fraction_nans)
-        keep_cells = nan_counts_per_cell <= max_nans
+    if max_fraction_not_finite is not None:
+        invalid_counts_per_cell = (~xp.isfinite(data.X)).sum(axis=1)
+        max_counts = int(data.shape[1] * max_fraction_not_finite)
+        keep_cells = invalid_counts_per_cell <= max_counts
     if min_variance is not None:
         if by is not None:
             if isinstance(keep_cells, da.Array):
@@ -102,7 +104,7 @@ def filter_data(
                 if keep_cells is not None
                 else xp.var(data.X, axis=0)
             )
-        keep_features = variance >= min_variance
+        keep_features = (variance >= min_variance) & (xp.isfinite(variance))
 
     if isinstance(data.X, da.Array):
         keep_features, keep_cells = dask.compute(keep_features, keep_cells)
