@@ -102,7 +102,7 @@ def filter_data(
                 if keep_cells is not None
                 else xp.var(data.X, axis=0)
             )
-        keep_features = variance >= min_variance
+        keep_features = (variance >= min_variance) & (xp.isfinite(variance))
 
     if isinstance(data.X, da.Array):
         keep_features, keep_cells = dask.compute(keep_features, keep_cells)
