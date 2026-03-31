@@ -664,7 +664,24 @@ def _read_ome_zarr_array(
     # For zarr v3, everything is under the "ome" namespace
     if "ome" in node.attrs or "multiscales" in node.attrs:
         coords, attrs, dims = _read_zarr_attrs(node.attrs)
-        array = node["0"]
+
+        multiscales = (
+            node.attrs["multiscales"]
+            if "multiscales" in node.attrs
+            else node.attrs["ome"]["multiscales"]
+        )
+        key = "0"
+
+        if len(multiscales) > 0:
+            multiscale0 = multiscales[0]
+            coords, attrs, dims = _read_zarr_attrs(multiscale0)
+            if "datasets" in multiscale0:
+                tmp = multiscale0["datasets"]
+                if len(tmp) > 0:
+                    tmp = tmp[0]
+                    if "path" in tmp:
+                        key = tmp["path"]
+        array = node[key]
         return array, dims, coords, attrs
     else:  # see if user passed test.zarr and zarr file only has one image
         if "images" in node.keys():
