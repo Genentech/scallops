@@ -674,7 +674,6 @@ def _read_ome_zarr_array(
 
         if len(multiscales) > 0:
             multiscale0 = multiscales[0]
-            coords, attrs, dims = _read_zarr_attrs(multiscale0)
             if "datasets" in multiscale0:
                 tmp = multiscale0["datasets"]
                 if len(tmp) > 0:
