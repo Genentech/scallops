@@ -39,7 +39,7 @@ dependencies = [
     "centrosome",
     "cp-measure>=0.1.16",
     "dask-image",
-    "dask",
+    "dask!=2026.1.1,!=2026.1.0,!=2025.12.0", # ignores keyword arguments in da.to_zarr
     "decorator",
     "filelock",
     "flox",
