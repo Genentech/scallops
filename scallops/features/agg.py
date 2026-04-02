@@ -46,8 +46,6 @@ def agg_features(
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
     if group_by_multi:
         xdata = xdata.set_xindex(by, PandasMultiIndex)
-    if agg_func == "median" and isinstance(xdata.data, da.Array):
-        xdata = xdata.groupby("obs").shuffle_to_chunks()
 
     grouped = xdata.groupby("obs")
     xp = get_namespace(xdata.data)
