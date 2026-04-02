@@ -8,7 +8,6 @@ import pandas as pd
 import xarray as xr
 from array_api_compat import get_namespace
 from dask.array.numpy_compat import NUMPY_GE_200
-from pandas import MultiIndex
 from statsmodels.stats.weightstats import DescrStatsW
 from xarray.core.indexes import PandasMultiIndex
 
@@ -102,19 +101,34 @@ def agg_features(
         groups.append(group)
         counts.append(count)
 
+    counts = []
+    groups = []
+    for group in grouped.groups:
+        val = grouped.groups[group]
+        if isinstance(val, slice):
+            count = (
+                val.stop - val.start
+                if val.step is None
+                else len(val.indices(X.shape[0]))
+            )
+        else:
+            count = len(val)
+        groups.append(group)
+        counts.append(count)
+
     obs = result.coords["obs"].to_dataframe()
     group_counts = pd.DataFrame(
         data={"count": counts},
-        index=pd.MultiIndex.from_tuples(groups, names=obs.index.names)
-        if isinstance(obs.index, MultiIndex)
-        else pd.Index(groups),
+        index=groups,
     )
-    obs = (
-        obs.drop("obs", errors="ignore", axis=1)
-        .join(group_counts, rsuffix="_1")
-        .reset_index()
-    )
-    if not group_by_multi and "obs" in obs.columns:
+    obs = obs.join(group_counts, rsuffix="_1").reset_index(drop=True)
+    if group_by_multi:
+        new_obs = pd.DataFrame(obs["obs"].tolist(), columns=by)
+        for c in obs.columns:
+            if c != "obs" and c not in new_obs.columns:
+                new_obs[c] = obs[c]
+        obs = new_obs
+    else:
         obs = obs.rename({"obs": by}, axis=1)
     obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
     return anndata.AnnData(
