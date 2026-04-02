@@ -36,9 +36,7 @@ def agg_features(
     if not group_by_multi:
         coords = {"obs": data.obs[by]}
     else:
-        coords = {"obs": np.arange(data.shape[0])}
-        for col in by:
-            coords[col] = ("obs", data.obs[col])
+        coords = {"obs": data.obs[by].apply(tuple, axis=1)}
     if weights_col is not None:
         coords[weights_col] = ("obs", data.obs[weights_col])
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
