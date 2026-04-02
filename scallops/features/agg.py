@@ -34,9 +34,14 @@ def agg_features(
 
     group_by_multi = not isinstance(by, str) and isinstance(by, Sequence)
     if not group_by_multi:
+        by = list(by)
+        if len(by) == 1:
+            by = by[0]
+            group_by_multi = False
+
+    if not group_by_multi:
         coords = {"obs": data.obs[by]}
     else:
-        by = list(by)
         coords = {"obs": data.obs[by].apply(tuple, axis=1)}
     if weights_col is not None:
         coords[weights_col] = ("obs", data.obs[weights_col])
