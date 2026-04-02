@@ -126,7 +126,7 @@ def agg_features(
     if group_by_multi:
         new_obs = pd.DataFrame(obs["obs"].tolist(), columns=by)
         for c in obs.columns:
-            if c != "obs" and c not in new_obs.columns:
+            if c.startswith("count") and c not in new_obs.columns:
                 new_obs[c] = obs[c]
         obs = new_obs
     else:
