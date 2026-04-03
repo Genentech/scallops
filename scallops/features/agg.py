@@ -33,7 +33,7 @@ def agg_features(
     assert agg_func in ("mean", "median")
 
     group_by_multi = not isinstance(by, str) and isinstance(by, Sequence)
-    if not group_by_multi:
+    if group_by_multi:
         by = list(by)
         if len(by) == 1:
             by = by[0]
