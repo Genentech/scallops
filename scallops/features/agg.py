@@ -102,26 +102,11 @@ def agg_features(
         groups.append(group)
         counts.append(count)
 
-    counts = []
-    groups = []
-    for group in grouped.groups:
-        val = grouped.groups[group]
-        if isinstance(val, slice):
-            count = (
-                val.stop - val.start
-                if val.step is None
-                else len(val.indices(X.shape[0]))
-            )
-        else:
-            count = len(val)
-        groups.append(group)
-        counts.append(count)
-
-    obs = result.coords["obs"].to_dataframe()
     group_counts = pd.DataFrame(
         data={"count": counts},
         index=groups,
     )
+    obs = result.coords["obs"].to_dataframe()
     obs = obs.join(group_counts, rsuffix="_1").reset_index(drop=True)
     if group_by_multi:
         new_obs = pd.DataFrame(obs["obs"].tolist(), columns=by)
