@@ -15,10 +15,10 @@ filelock==3.25.2
 flox==0.11.2
 fsspec==2026.3.0
 igraph==1.0.0
-itk-elastix==0.25.0
+itk-elastix==0.25.2
 itk==5.4.5
 joblib==1.5.3
-kneed==0.8.5
+kneed==0.8.6
 mahotas==1.4.18
 matplotlib==3.10.8
 natsort==8.4.0
@@ -26,7 +26,7 @@ numcodecs==0.16.5
 numpy==2.4.3
 ome-zarr==0.14.0
 pandas==2.3.3
-pint==0.25.2
+pint==0.25.3
 psutil==7.2.2
 pyarrow==23.0.1
 pydantic==2.12.5
