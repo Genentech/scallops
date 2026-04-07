@@ -123,7 +123,7 @@ def _get_read_images(
     channel: int = 0,
     z_index: int | Literal["max"] | Sequence[int] = "max",
     radial_correction_k: float | None = None,
-    crop_width: int | None = None,
+    crop_width: tuple[int, int] | None = None,
     n_scenes: int | None = None,
 ):
     n = len(filepaths) if n_scenes is None else n_scenes
@@ -153,7 +153,7 @@ def stitch_align(
     channel: int = 0,
     z_index: int | Sequence[int] | Literal["max"] = "max",
     radial_correction_k: float | None | Literal["auto"] = "auto",
-    crop_width: int | None = None,
+    crop_width: tuple[int, int] | None = None,
     upsample_factor=1.0,
     min_overlap_fraction: float = None,
     ncc_func: Callable[[np.ndarray, np.ndarray], float] = _zncc,
@@ -224,8 +224,8 @@ def stitch_align(
     original_tile_shape = tile_shape_no_crop
     if crop_width is not None:
         original_tile_shape = (
-            original_tile_shape[0] + crop_width * 2,
-            original_tile_shape[1] + crop_width * 2,
+            original_tile_shape[0] + crop_width[0] * 2,
+            original_tile_shape[1] + crop_width[1] * 2,
         )
 
     if min_overlap_fraction is None:
@@ -267,7 +267,7 @@ def stitch_align(
             flip_x=flip_x_axis,
             tile_shape=original_tile_shape,
             align_tile_shape=tile_shape,
-            fuse_crop_width=0,
+            fuse_crop_width=(0, 0),
             max_shift=max_shift,
             crop_width=crop_width,
             min_overlap_fraction=min_overlap_fraction,
