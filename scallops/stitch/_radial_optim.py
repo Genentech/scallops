@@ -33,11 +33,15 @@ def parallel_find_radial_K(pair_vec, read_images, pairs, shifts, upsample_factor
         )
     results = np.array(
         list(dask.compute(*results)),
-        dtype=[("K", float), ("nccv", float), ("crop_width", int)],
+        dtype=[("K", float), ("nccv", float), ("cropwy", int), ("cropwx", int)],
     )
     assert pair_vec.size % 2 == 1  # Make sure the size is odd
     id_median = np.argsort(results["K"])[pair_vec.size // 2]
-    return results[id_median]["K"], results[id_median]["crop_width"]
+    return (
+        results[id_median]["K"],
+        results[id_median]["cropwy"],
+        results[id_median]["cropwx"],
+    )
 
 
 grids = [-1e-7, -1e-8, -1e-9, 0.0, 1e-9, 1e-8, 1e-7]
@@ -46,36 +50,45 @@ tildes = [1e-8, 1e-9, 1e-10, 1e-10, 1e-10, 1e-9, 1e-8]
 
 def _radial_crop_width(img):
     tmp_ = img > 0
-    width = int(
-        ((tmp_.sum(axis=0) == 0).sum() + (tmp_.sum(axis=1) == 0).sum()) / 4.0 + 0.5
-    )  # round to nearest integer
-    return width
+    width_x = int((tmp_.sum(axis=0) == 0).sum() / 2.0 + 0.5)  # round to nearest integer
+    width_y = int((tmp_.sum(axis=1) == 0).sum() / 2.0 + 0.5)  # round to nearest integer
+    return width_y, width_x
 
 
 def _radial_get_ncc(ref, mov, K, orig_shift, overlap_min, upsample_factor):
     refc = radial_correct(ref, K)
     movc = radial_correct(mov, K)
-    cropw = max(_radial_crop_width(refc), _radial_crop_width(movc))
+    # If K < 0, cropwy == cropwx == 0
+    width_yr, width_xr = _radial_crop_width(refc)
+    width_ym, width_xm = _radial_crop_width(movc)
+    cropwy = max(width_yr, width_ym)
+    cropwx = max(width_xr, width_xm)
 
-    if (
-        np.abs(orig_shift).max() + 10 > ref.shape[0] - cropw * 2
+    if (np.abs(orig_shift[0]) + 10 > ref.shape[0] - cropwy * 2) or (
+        np.abs(orig_shift[1]) + 10 > ref.shape[1] - cropwx * 2
     ):  # at least 10 pixel overlap
-        return 0.0, cropw
+        return 0.0, cropwy, cropwx
 
-    if cropw > 0:
-        refc = refc[cropw:-cropw, cropw:-cropw]
-        movc = movc[cropw:-cropw, cropw:-cropw]
+    refc = refc[
+        cropwy : (-cropwy if cropwy > 0 else None),
+        cropwx : (-cropwx if cropwx > 0 else None),
+    ]
+    movc = movc[
+        cropwy : (-cropwy if cropwy > 0 else None),
+        cropwx : (-cropwx if cropwx > 0 else None),
+    ]
 
     _, ncc_value = calc_best_shift(
         refc, movc, orig_shift, upsample_factor=upsample_factor, overlap_min=overlap_min
     )
-    return ncc_value, cropw
+
+    return ncc_value, cropwy, cropwx
 
 
 def _radial_neighbor_search(
     ref, mov, K, tilde, orig_shift, overlap_min, upsample_factor
 ):
-    triplet = np.zeros(3, dtype=[("ncc", float), ("cropw", int)])
+    triplet = np.zeros(3, dtype=[("ncc", float), ("cropwy", int), ("cropwx", int)])
     triplet[0] = _radial_get_ncc(
         ref, mov, K, orig_shift, overlap_min, upsample_factor
     )  # Center
@@ -139,7 +152,7 @@ def _radial_detail_scan(
 def _radial_final_scan(
     ref, mov, orig_shift, K, tilde, orig_triplet, overlap_min, upsample_factor
 ):
-    res_vec = np.zeros(9, dtype=[("ncc", float), ("cropw", int)])
+    res_vec = np.zeros(9, dtype=[("ncc", float), ("cropwy", int), ("cropwx", int)])
     Ks = np.zeros(9)
     res_vec[0:3] = orig_triplet
     pos = 0
@@ -159,7 +172,7 @@ def _radial_final_scan(
             )
     best = np.argmax(res_vec["ncc"])
 
-    return Ks[best], res_vec[best][0], res_vec[best][1]
+    return Ks[best], res_vec[best][0], res_vec[best][1], res_vec[best][2]
 
 
 def radial_best_K(ref, mov, orig_shift, overlap_min=0.01, upsample_factor=1):
@@ -177,7 +190,7 @@ def radial_best_K(ref, mov, orig_shift, overlap_min=0.01, upsample_factor=1):
         upsample_factor,
     )
     if best_tilde >= 1e-10:
-        best_K, max_ncc, crop_width = _radial_final_scan(
+        best_K, max_ncc, cropwy, cropwx = _radial_final_scan(
             ref,
             mov,
             orig_shift,
@@ -188,6 +201,7 @@ def radial_best_K(ref, mov, orig_shift, overlap_min=0.01, upsample_factor=1):
             upsample_factor,
         )
     else:
-        crop_width = best_triplet["cropw"][0]
+        cropwy = best_triplet["cropwy"][0]
+        cropwx = best_triplet["cropwx"][0]
 
-    return best_K, max_ncc, crop_width
+    return best_K, max_ncc, cropwy, cropwx
