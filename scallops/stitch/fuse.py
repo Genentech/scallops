@@ -105,7 +105,7 @@ def _fuse(
     output_channels: Sequence[int] | None = None,
     ffp: np.ndarray | None = None,
     dfp: np.ndarray | None = None,
-    crop_width: int | None = None,
+    crop_width: tuple[int, int] | None = None,
     radial_correction_k: float | None = None,
     chunk_size: tuple[int, int] | None = None,
     channels_per_batch: int | None = None,
@@ -129,7 +129,7 @@ def _fuse(
     :param scenes: If `True`, input contains single image containing all tiles
     """
     assert blend in ["none", "linear"]
-    if crop_width is not None and crop_width <= 0:
+    if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
         crop_width = None
 
     df = df.copy()
@@ -158,7 +158,7 @@ def _fuse(
         # weights are cropped when fusing image so use full tile size
         weights = _tile_blending_weights(img.shape[1:])
     if crop_width is not None:
-        img = img[..., crop_width:-crop_width, crop_width:-crop_width]
+        img = img[..., crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]]
     target_dtype = img.dtype
 
     tile_shape = img.shape[1:]
@@ -387,7 +387,7 @@ def _fuse_image(
     target_dtype: np.dtype,
     radial_correction_k: float | None = None,
     output_channels: Sequence[int] | int | None = None,
-    crop_width: int | None = None,
+    crop_width: tuple[int, int] | None = None,
     dfp: np.ndarray | None = None,
     ffp: np.ndarray | None = None,
     z_index: int | Literal["max"] = "max",
@@ -427,9 +427,11 @@ def _fuse_image(
         img /= ffp
     img.clip(0, 1, out=img)
     if crop_width is not None:
-        img = img[..., crop_width:-crop_width, crop_width:-crop_width]
+        img = img[..., crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]]
         if weights is not None:
-            weights = weights[crop_width:-crop_width, crop_width:-crop_width]
+            weights = weights[
+                crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]
+            ]
 
     target_slice_y = (y, min(target_shape[-2], y + img.shape[-2]))
     target_slice_x = (x, min(target_shape[-1], x + img.shape[-1]))

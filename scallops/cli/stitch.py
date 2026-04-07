@@ -306,16 +306,26 @@ def run_stitch(args: argparse.Namespace) -> None:
             pass
 
     expected_images = args.expected_images
-    crop_width = args.crop
+    crop_width_y = args.crop_y
+    crop_width_x = args.crop_x
+    if crop_width_y == 0:
+        crop_width_y = None
+    if crop_width_x == 0:
+        crop_width_x = None
+    crop_width = None
+    if crop_width_y is not None or crop_width_x is not None:
+        if crop_width_y is None:
+            crop_width_y = 0
+        if crop_width_x is None:
+            crop_width_x = 0
+        assert crop_width_y >= 0, "Crop y must be positive."
+        assert crop_width_x >= 0, "Crop x must be positive."
+        crop_width = (crop_width_y, crop_width_x)
     min_overlap_fraction = args.min_overlap_fraction
     random_seed = args.random_seed
     max_shifts = args.max_shift
     assert all(shift >= 0 for shift in max_shifts), "Max shift must be non-negative."
 
-    if crop_width is not None:
-        assert crop_width >= 0, "Crop must be positive."
-    if crop_width == 0:
-        crop_width = None
     assert 0 <= stitch_alpha <= 1, "stitch alpha must be between 0 and 1"
     if min_overlap_fraction is not None:
         assert 0 <= min_overlap_fraction <= 1, (
