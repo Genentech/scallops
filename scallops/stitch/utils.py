@@ -56,8 +56,7 @@ def _read_tile(
         target_dtype = img.dtype
         img = radial_correct(img, radial_correction_k)
         img = dtype_convert(img, target_dtype)
-    if crop_width is not None:
-        img = img[..., crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]]
+    img = _crop_image(img, crop_width)
     return img
 
 
@@ -540,8 +539,7 @@ def create_composite(
 
     if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
         crop_width = None
-    if crop_width is not None:
-        img0 = img0[..., crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]]
+    img0 = _crop_image(img0, crop_width)
     tile_shape = img0.shape[-2:]
     image_shape = (ymax + tile_shape[0], xmax + tile_shape[1])
     result_shape = (
@@ -578,10 +576,8 @@ def create_composite(
             img /= ffp
         img.clip(0, 1, out=img)
         img = dtype_convert(img, result_image.dtype)
-        if crop_width is not None:
-            img = img[
-                ..., crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]
-            ]
+        img = _crop_image(img, crop_width)
+
         tile_locations.append(dict(tile=tiles[i], y=y[i], x=x[i]))
         if separate_channels:
             result_image[
@@ -830,3 +826,20 @@ def _filter_filepaths(filepaths, fileattrs, metadata_fields, metadata_values):
         new_attrs["file_metadata"] = file_metadata_
         new_fileattrs.append(new_attrs)
     return new_filepaths, new_fileattrs
+
+
+def _crop_image(img: np.ndarray, crop_width: tuple[int, int] | None) -> np.ndarray:
+    if crop_width is None:
+        return img
+
+    y1 = None
+    y2 = None
+    x1 = None
+    x2 = None
+    if crop_width[0] > 0:
+        y1 = crop_width[0]
+        y2 = -crop_width[0]
+    if crop_width[1] > 0:
+        x1 = crop_width[1]
+        x2 = -crop_width[1]
+    return img[..., y1:y2, x1:x2]

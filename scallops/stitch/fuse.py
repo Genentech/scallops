@@ -20,7 +20,7 @@ from sklearn.cluster import AgglomerativeClustering
 
 from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
-from scallops.stitch.utils import dtype_convert
+from scallops.stitch.utils import _crop_image, dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
 
 logger = logging.getLogger("scallops")
@@ -157,8 +157,7 @@ def _fuse(
     if blend != "none":
         # weights are cropped when fusing image so use full tile size
         weights = _tile_blending_weights(img.shape[1:])
-    if crop_width is not None:
-        img = img[..., crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]]
+    img = _crop_image(img, crop_width)
     target_dtype = img.dtype
 
     tile_shape = img.shape[1:]
@@ -426,12 +425,11 @@ def _fuse_image(
     if ffp is not None:
         img /= ffp
     img.clip(0, 1, out=img)
-    if crop_width is not None:
-        img = img[..., crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]]
-        if weights is not None:
-            weights = weights[
-                crop_width[0] : -crop_width[0], crop_width[1] : -crop_width[1]
-            ]
+
+    img = _crop_image(img, crop_width)
+
+    if weights is not None:
+        weights = _crop_image(weights, crop_width)
 
     target_slice_y = (y, min(target_shape[-2], y + img.shape[-2]))
     target_slice_x = (x, min(target_shape[-1], x + img.shape[-1]))
