@@ -17,7 +17,8 @@ workflow stitch_workflow {
         String? stitch_blend
         String? stitch_radial_correction_k
         String? stitch_stage_positions
-        Int? stitch_crop
+        Int? stitch_crop_y
+        Int? stitch_crop_x
         Float? stitch_min_overlap_fraction
         Array[Int]? stitch_output_channels
         Int? expected_cycles
@@ -119,7 +120,8 @@ workflow stitch_workflow {
                 flatfield_url=illumination_correction.output_url,
                 radial_correction_k=stitch_radial_correction_k,
                 stage_positions=stitch_stage_positions,
-                crop=stitch_crop,
+                crop_y=stitch_crop_y,
+                crop_x=stitch_crop_x,
                 min_overlap_fraction=stitch_min_overlap_fraction,
                 max_shift=stitch_max_shift,
                 blend=stitch_blend,
