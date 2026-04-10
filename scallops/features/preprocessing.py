@@ -12,17 +12,23 @@ from scallops.features.util import _anndata_to_xr, _slice_anndata
 
 
 def transform_features_yj(
-    data: anndata.AnnData, by: str | Sequence | None = None
+    data: anndata.AnnData,
+    by: str | Sequence | None = None,
+    standardize: bool = False,
 ) -> anndata.AnnData:
     """Transform features using yeo-johnson transform
 
     :param data: AnnData object
     :param by: Column(s) in `data.obs` to stratify by.
+    :param standardize: Set to True to apply zero-mean, unit-variance normalization to the
+        transformed output
     :return: Transformed AnnData object
     """
 
     def _transform_block(x):
-        return PowerTransformer(method="yeo-johnson").fit_transform(x)
+        return PowerTransformer(
+            method="yeo-johnson", standardize=standardize
+        ).fit_transform(x)
 
     def _transform_feature_group(x):
         d = x.data
@@ -56,15 +62,16 @@ def filter_data(
     data: anndata.AnnData,
     max_fraction_not_finite: float | None = 0.25,
     min_variance: float | None = 0.1,
+    max_variance: float | None = 5,
     by: str | Sequence | None = None,
 ) -> anndata.AnnData:
-    """Filter cells using `max_fraction_not_finite` then filter features using
-    `min_variance`
+    """Filter cells using `max_fraction_not_finite` then filter features using variance
 
     :param data: AnnData object
     :param max_fraction_not_finite: Keep cells with <= `max_fraction_not_finite`
     missing or infinite values
     :param min_variance: Keep features with variance >= `min_variance`
+    :param max_variance: Keep features with variance <= `max_variance`
     :param by: Column(s) in `data.obs` to stratify by when computing variance. If
     provided, the median variance is used for filtering.
     :return: Filtered AnnData object
@@ -76,7 +83,12 @@ def filter_data(
         invalid_counts_per_cell = (~xp.isfinite(data.X)).sum(axis=1)
         max_counts = int(data.shape[1] * max_fraction_not_finite)
         keep_cells = invalid_counts_per_cell <= max_counts
-    if min_variance is not None:
+    if min_variance is not None or max_variance is not None:
+        if min_variance is None:
+            min_variance = -np.inf
+        if max_variance is None:
+            max_variance = np.inf
+
         if by is not None:
             if isinstance(keep_cells, da.Array):
                 keep_cells = keep_cells.compute()
@@ -104,7 +116,11 @@ def filter_data(
                 if keep_cells is not None
                 else xp.var(data.X, axis=0)
             )
-        keep_features = (variance >= min_variance) & (xp.isfinite(variance))
+        keep_features = (
+            (variance >= min_variance)
+            & (variance <= max_variance)
+            & (xp.isfinite(variance))
+        )
 
     if isinstance(data.X, da.Array):
         keep_features, keep_cells = dask.compute(keep_features, keep_cells)
