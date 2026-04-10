@@ -28,14 +28,20 @@ def test_filter_data(use_dask, by):
     adata.X[1, 0] = 100
     adata.X[0, 0] = np.nan
     # np.var(adata.X, axis=0) array([nan,  5.], dtype=float32)
-    test_nan_filter = filter_data(adata, max_fraction_not_finite=0, min_variance=None)
+    test_nan_filter = filter_data(
+        adata, max_fraction_not_finite=0, min_variance=None, max_variance=None
+    )
     assert test_nan_filter.shape == (3, 2)
     # np.var(adata.X, axis=0) # array([nan,  5.]
     # np.var(adata[adata.obs['well'] == 'well1'].X, axis=0)  # array([nan,  4.])
     # np.var(adata[adata.obs['well'] == 'well2'].X, axis=0)  # array([2209.,    4.]
-    d1 = filter_data(adata, max_fraction_not_finite=None, min_variance=0, by=by)
+    d1 = filter_data(
+        adata, max_fraction_not_finite=None, min_variance=0, max_variance=None, by=by
+    )
     # np.var(adata[1:].X, axis=0)  array([2006.2222, 2.6666667]
-    d2 = filter_data(adata, max_fraction_not_finite=0, min_variance=5, by=by)
+    d2 = filter_data(
+        adata, max_fraction_not_finite=0, min_variance=5, max_variance=None, by=by
+    )
 
     assert d1.shape == (4, 1)
     assert d2.shape == (3, 1)
