@@ -76,12 +76,12 @@ def test_transform_features_yj(by, use_dask):
         def single_group(x):
             x = x.copy()
             x["gene1"] = (
-                PowerTransformer(method="yeo-johnson")
+                PowerTransformer(method="yeo-johnson", standardize=False)
                 .fit_transform(x["gene1"].values.reshape(-1, 1))
                 .squeeze()
             )
             x["gene2"] = (
-                PowerTransformer(method="yeo-johnson")
+                PowerTransformer(method="yeo-johnson", standardize=False)
                 .fit_transform(x["gene2"].values.reshape(-1, 1))
                 .squeeze()
             )
@@ -91,12 +91,12 @@ def test_transform_features_yj(by, use_dask):
 
     else:
         df["gene1"] = (
-            PowerTransformer(method="yeo-johnson")
+            PowerTransformer(method="yeo-johnson", standardize=False)
             .fit_transform(df["gene1"].values.reshape(-1, 1))
             .squeeze()
         )
         df["gene2"] = (
-            PowerTransformer(method="yeo-johnson")
+            PowerTransformer(method="yeo-johnson", standardize=False)
             .fit_transform(df["gene2"].values.reshape(-1, 1))
             .squeeze()
         )
