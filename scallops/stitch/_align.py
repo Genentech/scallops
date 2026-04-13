@@ -297,7 +297,7 @@ def stitch_align(
             if n_pairs % 2 == 0:
                 n_pairs -= 1
             # Make sure n_pairs is odd
-            radial_correction_k, crop_width_ = parallel_find_radial_K(
+            radial_correction_k, crop_y, crop_x = parallel_find_radial_K(
                 _sample_random_pairs(pairs, seed=random_seed, size=n_pairs),
                 read_images,
                 pairs,
@@ -305,12 +305,12 @@ def stitch_align(
                 upsample_factor=upsample_factor,
             )
         else:
-            crop_width_ = _radial_crop_width(
+            crop_y, crop_x = _radial_crop_width(
                 radial_correct(read_images[center_tile].compute(), radial_correction_k)
             )
 
         if crop_width is None:
-            crop_width = crop_width_
+            crop_width = crop_y, crop_x
 
         # update read image to use barrel correction k and crop_width
         read_images = _get_read_images(
