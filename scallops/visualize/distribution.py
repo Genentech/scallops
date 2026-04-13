@@ -490,6 +490,7 @@ def cdf_plot(
     shade: bool | None = None,
     height: int = 8,
     include_n: bool = True,
+    palette: list[tuple[int, int, int]] | None = None,
 ) -> Sequence[plt.Axes]:
     """A utility function to create Cumulative Distribution Function (CDF) plots
     comparing a set of conditions against a reference condition. The CDF plots are
@@ -508,6 +509,7 @@ def cdf_plot(
     :param shade: Shade the area between target and reference.
     :param height: Figure height.
     :param include_n: Include the sample size per target in legend.
+    :param palette: Colors to use when mapping the hue semantic.
     :return: The axes.
     :example:
 
@@ -623,7 +625,8 @@ def cdf_plot(
                 step="post",
             )
 
-    palette = sns.color_palette()
+    if palette is None:
+        palette = sns.color_palette()
 
     def _plot_target(
         ax, df_target, ylabel, ref_cdf, interpolated_ref_cdf, target_index, show_legend
