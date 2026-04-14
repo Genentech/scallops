@@ -62,7 +62,7 @@ def filter_data(
     data: anndata.AnnData,
     max_fraction_not_finite: float | None = 0.25,
     min_variance: float | None = 0.1,
-    max_variance: float | None = 5,
+    max_variance: float | None = None,
     by: str | Sequence | None = None,
 ) -> anndata.AnnData:
     """Filter cells using `max_fraction_not_finite` then filter features using variance
