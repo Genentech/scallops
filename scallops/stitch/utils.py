@@ -249,7 +249,12 @@ def read_stage_positions(filepaths: Sequence[str], stage_positions_path: str):
             filepaths, stage_positions_path
         )
     else:
-        stage_positions = pd.read_csv(stage_positions_path, index_col="name")
+        if stage_positions_path.lower().endswith(
+            ".parquet"
+        ) or stage_positions_path.lower().endswith(".pq"):
+            stage_positions = pd.read_parquet(stage_positions_path).set_index("name")
+        else:
+            stage_positions = pd.read_csv(stage_positions_path, index_col="name")
         for c in ["y", "x"]:
             if c not in stage_positions.columns:
                 raise ValueError(

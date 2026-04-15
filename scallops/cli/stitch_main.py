@@ -205,7 +205,7 @@ def _create_stitch_parser(
     parser.add_argument(
         "--stage-positions",
         help=(
-            "Optional CSV file containing stage positions. Use when image metadata "
+            "Optional CSV or Parquet file containing stage positions. Use when image metadata "
             "is missing stage positions. Expected columns `name`, `y`, "
             "and `x`, where name is the full image path."
         ),
