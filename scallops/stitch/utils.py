@@ -455,9 +455,13 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
                 except:  # noqa: E722
                     pass
         if values is None and hasattr(image, "physical_pixel_sizes"):
-            values = np.array(
-                [image.physical_pixel_sizes.Y, image.physical_pixel_sizes.X]
-            )
+            if (
+                image.physical_pixel_sizes.Y is not None
+                and image.physical_pixel_sizes.X is not None
+            ):
+                values = np.array(
+                    [image.physical_pixel_sizes.Y, image.physical_pixel_sizes.X]
+                )
     if physical_size_y_unit is not None and physical_size_x_unit is not None:
         try:
             values[0] = (
