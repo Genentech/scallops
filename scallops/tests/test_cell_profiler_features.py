@@ -216,9 +216,10 @@ def test_colocalization(array_A1_102_cells, array_A1_102_pheno):
         intensity_image[..., 0], intensity_image[..., 1], label_image
     )
     for key in features_cp:
+        scallops_key = key.replace("_1", "_c0_c1").replace("_2", "_c1_c0")
         np.testing.assert_array_equal(
             features_cp[key],
-            features_scallops[key],
+            features_scallops[scallops_key],
             err_msg=key,
         )
 
