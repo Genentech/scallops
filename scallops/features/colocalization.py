@@ -1,82 +1,5 @@
-"""
-MeasureColocalization
-=====================
+# Adapted from https://github.com/afermg/cp_measure/blob/main/src/cp_measure/core/measurecolocalization.py
 
-**MeasureColocalization** measures the colocalization and correlation
-between intensities in different images (e.g., different color channels)
-on a pixel-by-pixel basis, within identified objects or across an entire
-image.
-
-Given two or more images, this module calculates the correlation &
-colocalization (Overlap, Manders, Costes’ Automated Threshold & Rank
-Weighted Colocalization) between the pixel intensities. The correlation
-/ colocalization can be measured for entire images, or a correlation
-measurement can be made within each individual object. Correlations /
-Colocalizations will be calculated between all pairs of images that are
-selected in the module, as well as between selected objects. For
-example, if correlations are to be measured for a set of red, green, and
-blue images containing identified nuclei, measurements will be made
-between the following:
-
--  The blue and green, red and green, and red and blue images.
--  The nuclei in each of the above image pairs.
-
-A good primer on colocalization theory can be found on the `SVI website`_.
-
-You can find a helpful review on colocalization from Aaron *et al*. `here`_.
-
-|
-
-============ ============ ===============
-Supports 2D? Supports 3D? Respects masks?
-============ ============ ===============
-YES          YES          YES
-============ ============ ===============
-
-Measurements made by this module
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
--  *Correlation:* The correlation between a pair of images *I* and *J*,
-   calculated as Pearson’s correlation coefficient. The formula is
-   covariance( *I* , *J*)/[std( *I* ) × std( *J*)].
--  *Slope:* The slope of the least-squares regression between a pair of
-   images I and J. Calculated using the model *A* × *I* + *B* = *J*, where *A* is the slope.
--  *Overlap coefficient:* The overlap coefficient is a modification of
-   Pearson’s correlation where average intensity values of the pixels are
-   not subtracted from the original intensity values. For a pair of
-   images R and G, the overlap coefficient is measured as r = sum(Ri *
-   Gi) / sqrt (sum(Ri*Ri)*sum(Gi*Gi)).
--  *Manders coefficient:* The Manders coefficient for a pair of images R
-   and G is measured as M1 = sum(Ri_coloc)/sum(Ri) and M2 =
-   sum(Gi_coloc)/sum(Gi), where Ri_coloc = Ri when Gi > 0, 0 otherwise
-   and Gi_coloc = Gi when Ri >0, 0 otherwise.
--  *Manders coefficient (Costes Automated Threshold):* Costes’ automated
-   threshold estimates maximum threshold of intensity for each image
-   based on correlation. Manders coefficient is applied on thresholded
-   images as Ri_coloc = Ri when Gi > Gthr and Gi_coloc = Gi when Ri >
-   Rthr where Gthr and Rthr are thresholds calculated using Costes’
-   automated threshold method.
--  *Rank Weighted Colocalization coefficient:* The RWC coefficient for a
-   pair of images R and G is measured as RWC1 =
-   sum(Ri_coloc*Wi)/sum(Ri) and RWC2 = sum(Gi_coloc*Wi)/sum(Gi),
-   where Wi is Weight defined as Wi = (Rmax - Di)/Rmax where Rmax is the
-   maximum of Ranks among R and G based on the max intensity, and Di =
-   abs(Rank(Ri) - Rank(Gi)) (absolute difference in ranks between R and
-   G) and Ri_coloc = Ri when Gi > 0, 0 otherwise and Gi_coloc = Gi
-   when Ri >0, 0 otherwise. (Singan et al. 2011, BMC Bioinformatics
-   12:407).
-
-References
-^^^^^^^^^^
-
--  Aaron JS, Taylor AB, Chew TL. Image co-localization - co-occurrence versus correlation.
-   J Cell Sci. 2018;131(3):jcs211847. Published 2018 Feb 8. doi:10.1242/jcs.211847
-
-
-
-.. _SVI website: http://svi.nl/ColocalizationTheory
-.. _here: https://jcs.biologists.org/content/joces/131/3/jcs211847.full.pdf
-"""
 
 from collections.abc import Sequence
 
@@ -97,9 +20,6 @@ F_OVERLAP_FORMAT = "Correlation_Overlap"
 
 """Feature name format for the Manders Coefficient measurement"""
 F_K_FORMAT = "Correlation_K"
-
-"""Feature name format for the Manders Coefficient measurement"""
-F_KS_FORMAT = "Correlation_KS"
 
 """Feature name format for the Manders Coefficient measurement"""
 F_MANDERS_FORMAT = "Correlation_Manders"
@@ -399,6 +319,10 @@ def _colocalization_pairs(
         results[f"{F_RWC_FORMAT}_{channel_name2}_{channel_name1}"] = values[
             :, pair_index, 8
         ]
-        results[f"{F_COSTES_FORMAT}_1"] = values[:, pair_index, 9]
-        results[f"{F_COSTES_FORMAT}_2"] = values[:, pair_index, 10]
+        results[f"{F_COSTES_FORMAT}_{channel_name1}_{channel_name2}"] = values[
+            :, pair_index, 9
+        ]
+        results[f"{F_COSTES_FORMAT}_{channel_name2}_{channel_name1}"] = values[
+            :, pair_index, 10
+        ]
     return results

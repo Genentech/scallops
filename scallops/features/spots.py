@@ -29,7 +29,6 @@ def _download_ufish_model():
                 model = UFish(default_weights_file="v1.0-alldata-ufish_c32.pth")
                 ufish_logger.remove()
                 model.load_weights(weights_file="v1.0-alldata-ufish_c32.pth")
-    os.remove(".scallops-ufish.lock")
 
 
 def _load_ufish_model():
