@@ -327,7 +327,8 @@ def _get_ome(image: bioio.BioImage):
 
 def get_tile_position(image: bioio.BioImage, image_index: int = 0):
     ome_metadata = _get_ome(image)
-
+    physical_size_y_unit = None
+    physical_size_x_unit = None
     if ome_metadata is not None:
         values = [
             ome_metadata.images[image_index].pixels.planes[0].position_y,
