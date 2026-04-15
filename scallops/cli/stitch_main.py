@@ -196,10 +196,17 @@ def _create_stitch_parser(
     )
 
     parser.add_argument(
-        "--crop",
+        "--crop-y",
         type=int,
         default=None,
-        help="Crop tiles by `crop` pixels along each dimension when aligning tiles. Set"
+        help="Crop tiles by `crop` pixels along y dimension when aligning tiles. Set"
+        "automatically when radial correction is enabled.",
+    )
+    parser.add_argument(
+        "--crop-x",
+        type=int,
+        default=None,
+        help="Crop tiles by `crop` pixels along x dimension when aligning tiles. Set"
         "automatically when radial correction is enabled.",
     )
     parser.add_argument(
