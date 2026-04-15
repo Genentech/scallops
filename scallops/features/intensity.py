@@ -1,72 +1,9 @@
+# Adapted from https://github.com/afermg/cp_measure/blob/main/src/cp_measure/core/measureobjectintensity.py
+
 from collections.abc import Sequence
 
 import numpy as np
 import scipy.ndimage
-
-__doc__ = """
-MeasureObjectIntensity
-======================
-
-**MeasureObjectIntensity** measures several intensity features for
-identified objects.
-
-Given an image with objects identified (e.g., nuclei or cells), this
-module extracts intensity features for each object based on one or more
-corresponding grayscale images. Measurements are recorded for each
-object.
-
-Intensity measurements are made for all combinations of the images and
-objects entered. If you want only specific image/object measurements,
-you can use multiple MeasureObjectIntensity modules for each group of
-measurements desired.
-
-============ ============ ===============
-Supports 2D? Supports 3D? Respects masks?
-============ ============ ===============
-YES          YES          YES
-============ ============ ===============
-
-See also
-^^^^^^^^
-
-See also **NamesAndTypes**, **MeasureImageIntensity**.
-
-Measurements made by this module
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
--  *IntegratedIntensity:* The sum of the pixel intensities within an
-   object.
--  *MeanIntensity:* The average pixel intensity within an object.
--  *StdIntensity:* The standard deviation of the pixel intensities
-   within an object.
--  *MaxIntensity:* The maximal pixel intensity within an object.
--  *MinIntensity:* The minimal pixel intensity within an object.
--  *IntegratedIntensityEdge:* The sum of the edge pixel intensities of
-   an object.
--  *MeanIntensityEdge:* The average edge pixel intensity of an object.
--  *StdIntensityEdge:* The standard deviation of the edge pixel
-   intensities of an object.
--  *MaxIntensityEdge:* The maximal edge pixel intensity of an object.
--  *MinIntensityEdge:* The minimal edge pixel intensity of an object.
--  *MassDisplacement:* The distance between the centers of gravity in
-   the gray-level representation of the object and the binary
-   representation of the object.
--  *LowerQuartileIntensity:* The intensity value of the pixel for which
-   25% of the pixels in the object have lower values.
--  *MedianIntensity:* The median intensity value within the object.
--  *MADIntensity:* The median absolute deviation (MAD) value of the
-   intensities within the object. The MAD is defined as the
-   median(|x :sub:`i` - median(x)|).
--  *UpperQuartileIntensity:* The intensity value of the pixel for which
-   75% of the pixels in the object have lower values.
--  *Location_CenterMassIntensity_X, Location_CenterMassIntensity_Y:*
-   The (X,Y) coordinates of the intensity weighted centroid (=
-   center of mass = first moment) of all pixels within the object.
--  *Location_MaxIntensity_X, Location_MaxIntensity_Y:* The
-   (X,Y) coordinates of the pixel with the maximum intensity within the
-   object.
-"""
-
 from scipy.ndimage import find_objects
 from skimage.segmentation import find_boundaries
 

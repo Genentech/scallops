@@ -1,3 +1,4 @@
+# Adapter from https://github.com/afermg/cp_measure/blob/main/src/cp_measure/core/measureobjectintensitydistribution.py
 from collections.abc import Sequence
 
 import centrosome.cpmorphology
@@ -9,36 +10,6 @@ import scipy.sparse
 from cp_measure.utils import masks_to_ijv
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import regionprops
-
-""""
-============ ============ ===============
-Supports 2D? Supports 3D? Respects masks?
-============ ============ ===============
-YES          NO           YES
-============ ============ ===============
-
-See also
-^^^^^^^^
-
-See also **MeasureObjectIntensity** and **/MeasureTexture**.
-
-Measurements made by this module
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
--  *FracAtD:* Fraction of total stain in an object at a given radius.
--  *MeanFrac:* Mean fractional intensity at a given radius; calculated
-   as fraction of total intensity normalized by fraction of pixels at a
-   given radius.
--  *RadialCV:* Coefficient of variation of intensity within a ring,
-   calculated across 8 slices.
--  *Zernike:* The Zernike features characterize the distribution of
-   intensity across the object. For instance, Zernike 1,1 has a high
-   value if the intensity is low on one side of the object and high on
-   the other. The ZernikeMagnitude feature records the rotationally
-   invariant degree magnitude of the moment and the ZernikePhase feature
-   gives the moment’s orientation.
-
-"""
 
 Z_NONE = "None"
 Z_MAGNITUDES = "Magnitudes only"
