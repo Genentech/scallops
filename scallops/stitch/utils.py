@@ -248,7 +248,12 @@ def read_stage_positions(filepaths: Sequence[str], stage_positions_path: str):
             filepaths, stage_positions_path
         )
     else:
-        stage_positions = pd.read_csv(stage_positions_path, index_col="name")
+        if stage_positions_path.lower().endswith(
+            ".parquet"
+        ) or stage_positions_path.lower().endswith(".pq"):
+            stage_positions = pd.read_parquet(stage_positions_path).set_index("name")
+        else:
+            stage_positions = pd.read_csv(stage_positions_path, index_col="name")
         for c in ["y", "x"]:
             if c not in stage_positions.columns:
                 raise ValueError(
@@ -321,7 +326,8 @@ def _get_ome(image: bioio.BioImage):
 
 def get_tile_position(image: bioio.BioImage, image_index: int = 0):
     ome_metadata = _get_ome(image)
-
+    physical_size_y_unit = None
+    physical_size_x_unit = None
     if ome_metadata is not None:
         values = [
             ome_metadata.images[image_index].pixels.planes[0].position_y,
@@ -448,9 +454,15 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
                 except:  # noqa: E722
                     pass
         if values is None and hasattr(image, "physical_pixel_sizes"):
-            values = np.array(
-                [image.physical_pixel_sizes.Y, image.physical_pixel_sizes.X]
-            )
+            if (
+                image.physical_pixel_sizes.Y is not None
+                and image.physical_pixel_sizes.X is not None
+            ):
+                values = np.array(
+                    [image.physical_pixel_sizes.Y, image.physical_pixel_sizes.X]
+                )
+    if values is None:
+        raise ValueError("Unable to determine physical size.")
     if physical_size_y_unit is not None and physical_size_x_unit is not None:
         try:
             values[0] = (
