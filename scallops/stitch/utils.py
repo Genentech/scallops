@@ -471,7 +471,8 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
             logger.info("Unknown physical size units. Assuming µm")
     else:
         logger.info("Unknown physical size units. Assuming µm")
-
+    if values is None:
+        raise ValueError("Unable to determine physical size.")
     return np.array(values)
 
 
