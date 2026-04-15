@@ -259,7 +259,7 @@ def test_stitch_cli(tmp_path):
         blend="linear",
         channels_per_batch=1,
         radial_correction_k=10e-9,
-        crop_width=9,
+        crop_width=(9, 9),
         z_index=0,
         group=blend_fuse_result,
         ffp=read_image(str(tmp_path / "illum" / "test.ome.tiff")).squeeze(),
@@ -305,7 +305,9 @@ def test_stitch_crop(tmp_path):
         str(tmp_path / "stitch"),
         "--radial-correction-k",
         "none",
-        "--crop",
+        "--crop-y",
+        "50",
+        "--crop-x",
         "50",
     ]
 

@@ -16,6 +16,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import NearestNeighbors
 
 logger = logging.getLogger("scallops")
+
+
 # Functions to calculate zero-normalized cross correlation and normalized cross correlation
 
 
@@ -963,8 +965,12 @@ def _get_overlap_bounding_box(y0, x0, dy, dx, sy, sx):
     return topleft, bottomright
 
 
-def _estimate_crop_width(fracs, min_frac, tile_shape, crop_width):
+def _estimate_crop_width(
+    fracs, min_frac, tile_shape: tuple[int, int], crop_width: tuple[int, int]
+) -> tuple[int, int]:
     pct = max(
         np.median(fracs[fracs > min_frac]) / 2.0 - 0.015, 0.0
     )  # 0.015 can be adjusted
-    return (0 if crop_width is None else crop_width) + int(tile_shape[0] * pct)
+    y = (0 if crop_width is None else crop_width[0]) + int(tile_shape[0] * pct)
+    x = (0 if crop_width is None else crop_width[1]) + int(tile_shape[1] * pct)
+    return y, x
