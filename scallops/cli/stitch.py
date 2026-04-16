@@ -95,14 +95,16 @@ def single_stitch_preview(
     metadata_fields = init["metadata_fields"]
     primary_filepaths = [paths[0] for paths in filepaths]
     image_key = image_metadata["id"]
-
+    original_filepaths = init["original_filepaths"]
     stage_positions = None
     if stage_positions_path is not None:
         stage_positions_path = stage_positions_path.format(
             **image_metadata["file_metadata"][0]
         )
 
-        stage_positions = read_stage_positions(primary_filepaths, stage_positions_path)
+        stage_positions = read_stage_positions(
+            [paths[0] for paths in original_filepaths], stage_positions_path
+        )
 
     if stage_positions is None:
         stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
@@ -175,8 +177,11 @@ def single_stitch_preview(
                 else img.isel(z=0, missing_dims="ignore")
             )
             img = img.values
-            img = skimage.transform.rescale(img, resolution_scale, anti_aliasing=False)
-            img = img_as_uint(img)
+            if resolution_scale < 1:
+                img = skimage.transform.rescale(
+                    img, resolution_scale, anti_aliasing=False
+                )
+                img = img_as_uint(img)
             if log:
                 img = np.log1p(np.maximum(img, 1)).astype(np.uint16)
             y, x = stage_positions[i]
