@@ -12,7 +12,7 @@ from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
 from scallops.features.constants import _centroid_column_names
-from scallops.features.util import _anndata_to_xr
+from scallops.features.util import _anndata_to_xr, _slice_anndata
 
 logger = logging.getLogger("scallops")
 
@@ -124,23 +124,37 @@ def typical_variation_normalization(
         scaling=True,
         max_value=None,
     )
-    X = PCA().fit(X[ref_indices]).transform(X)
+    d = PCA()
+    X = d.fit(X[ref_indices]).transform(X)
+    components_ = d.components_
+    mean_ = d.mean_
+    variance_ratio = d.explained_variance_ratio_
+    variance = d.explained_variance_
 
+    uns = {
+        "pca": {
+            "variance_ratio": variance_ratio,
+            "variance": variance,
+            "mean": mean_,
+            "PCs": components_,
+            "features": data.var.index.values,
+        }
+    }
     if by is not None:
         group_to_indices = data.obs.groupby(by, observed=True, sort=False).indices
         for group in group_to_indices.keys():
             group_indices = group_to_indices[group]
-            group_control_indices = group_indices[np.isin(group_indices, ref_indices)]
-            X[group_indices] = _normalize_features_array(
-                X[group_indices],
-                X[group_control_indices],
-                indices=None,
-                robust=False,
-                mad_scale="normal",
-                centering=True,
-                scaling=True,
-                max_value=None,
-            )
+
+            subset = _slice_anndata(data, group_indices)
+
+            X[group_indices] = normalize_features(
+                data=subset,
+                reference_query=reference_query,
+                by=None,
+                normalize="local-zscore",
+                n_neighbors=75,
+                batch_size=20000,
+            ).X
 
         target_cov = np.cov(X[ref_indices], rowvar=False, ddof=1) + 0.5 * np.eye(
             X.shape[1]
@@ -171,7 +185,7 @@ def typical_variation_normalization(
             scaling=True,
             max_value=None,
         )
-    return anndata.AnnData(X=X, obs=data.obs.copy(), var=data.var.copy())
+    return anndata.AnnData(X=X, obs=data.obs.copy(), var=data.var.copy(), uns=uns)
 
 
 def normalize_features(
