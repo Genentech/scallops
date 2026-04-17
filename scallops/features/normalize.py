@@ -186,7 +186,6 @@ def typical_variation_normalization(
                 "variance": variance,
                 "mean": mean_,
                 "PCs": components_,
-                "features": data.var.index.values,
             }
         },
     )
