@@ -29,6 +29,7 @@ from typing import Any, Dict, Generator, Literal, Mapping, Sequence
 
 import anndata
 import bioio
+import bioio_ome_zarr
 import bioio_tifffile
 import dask
 import dask.array as da
@@ -54,12 +55,11 @@ from tifffile import tifffile
 from xarray.core.utils import equivalent
 from zarr.storage import StoreLike
 
-from scallops._bioio_zarr_reader import ScallopsZarrReader
 from scallops.experiment.elements import Experiment, _LazyLoadData
 from scallops.externals.tifffile2014 import imsave
 from scallops.utils import forceTCZYX, mlcs
 from scallops.xr import _crop
-from scallops.zarr_io import _read_zarr_experiment, read_ome_zarr_array
+from scallops.zarr_io import _get_store_path, _read_zarr_experiment, read_ome_zarr_array
 
 logger = logging.getLogger("scallops")
 
@@ -234,7 +234,7 @@ def _create_image(path: str, **kwargs) -> bioio.BioImage:
     base_path_lc, ext = os.path.splitext(path_lc)
     if "reader" not in img_args:
         if ext in ["", ".zarr", "/", ".zarr/"]:
-            img_args["reader"] = ScallopsZarrReader
+            img_args["reader"] = bioio_ome_zarr.Reader
         elif ext in [".tiff", ".tif"] and os.path.splitext(base_path_lc)[1] != ".ome":
             img_args["reader"] = bioio_tifffile.Reader
     return bioio.BioImage(path, **img_args)
@@ -1358,7 +1358,7 @@ def _images2fov(
             name = (
                 os.path.basename(file_list[i])
                 if not isinstance(file_list[i], zarr.Group)
-                else file_list[i].store.path
+                else _get_store_path(file_list[i])
             )
             src_metadata.append(dict(attrs=image_attrs[i], name=name))
 
@@ -1599,6 +1599,7 @@ def _set_up_experiment(
         lambda: []
     )  # key is tuple -> value is tuple of group, dict
     maxdepth = None
+
     for image_path in image_paths:
         if isinstance(image_path, Path):
             # IF URI DO NOT PROVIDE AS PATH
@@ -1611,6 +1612,7 @@ def _set_up_experiment(
                 pass
         else:
             root = image_path
+
         if root is not None:
             if "0" not in root:  # format: "path.zarr/images/"
                 if "images" in root:
@@ -1664,6 +1666,7 @@ def _set_up_experiment(
             if image_path in [".", "./"] and _get_fs_protocol(fs) == "file":
                 image_path = fs.info(image_path)["name"].rstrip(".")
             image_prefix = None
+
             if fs.isdir(image_path):
                 image_path = image_path.rstrip(fs.sep)
                 if maxdepth is None:
@@ -1681,6 +1684,7 @@ def _set_up_experiment(
                         withdirs=True,
                     )
                 )
+
                 paths = [p for p in all_paths if p.lower().endswith(extension)]
                 if len(paths) == 0:
                     # try with no maxdepth
@@ -1718,7 +1722,7 @@ def _set_up_experiment(
                         group_to_matches[group].append((x, d))
 
     if len(group_to_matches) == 0:
-        message = [f"No files found matching pattern: {file_regex.pattern}"]
+        message = [f"No files found matching pattern: {files_pattern}"]
         if subset_ is not None:
             message.append(f", subset: {', '.join([str(s) for s in subset_])}")
         if len(group_by) > 0:
@@ -1784,7 +1788,9 @@ def _set_up_experiment(
                 src=file_list,
                 common_src=mlcs(
                     [
-                        Path(x).stem if not isinstance(x, zarr.Group) else x.store.path
+                        Path(x).stem
+                        if not isinstance(x, zarr.Group)
+                        else _get_store_path(x)
                         for x in file_list
                     ]
                 ),

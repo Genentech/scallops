@@ -217,12 +217,14 @@ def test_write_non_ome_zarr_image(tmp_path, dask):
     image.attrs["physical_pixel_sizes"] = (1, 1, 1)
     image.attrs["physical_pixel_units"] = ("mm", "mm", "mm")
     zarr_path = str(tmp_path / "test.zarr")
-    _write_zarr_image("foo", open_ome_zarr(zarr_path), image, zarr_format="zarr")
-    _write_zarr_image("foo2", open_ome_zarr(zarr_path), image)
+    _write_zarr_image("img_zarr", open_ome_zarr(zarr_path), image, zarr_format="zarr")
+    _write_zarr_image("img_ome_zarr", open_ome_zarr(zarr_path), image)
 
-    data_zarr = read_image(f"{zarr_path}/images/foo", dask=False)
-    data_ome_zarr = read_image(f"{zarr_path}/images/foo2", dask=False)
+    data_zarr = read_image(f"{zarr_path}/images/img_zarr", dask=False)
+    data_ome_zarr = read_image(f"{zarr_path}/images/img_ome_zarr", dask=False)
+
     xr.testing.assert_equal(data_zarr, data_ome_zarr)
+    xr.testing.assert_equal(image, data_ome_zarr)
 
 
 @pytest.mark.io
@@ -344,7 +346,7 @@ def test_read_write_labels(tmp_path, array_A1_102_nuclei):
     _write_zarr_labels(
         name="test", root=open_ome_zarr(str(tmp_path), "w"), labels=nuclei
     )
-    test = read_ome_zarr_array(zarr.open(str(tmp_path / "labels" / "test"), "r"))
+    test = read_ome_zarr_array(zarr.open(str(tmp_path / "labels" / "test"), mode="r"))
     np.testing.assert_equal(nuclei, test.data)
 
 

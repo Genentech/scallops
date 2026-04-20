@@ -28,8 +28,8 @@ def test_illumination_correction_cli(tmp_path):
     ]
     subprocess.check_call(args)
 
-    store = zarr.ZipStore("scallops/tests/data/ops-illum-corr.zip", mode="r")
-    root = zarr.group(store=store)
+    store = zarr.storage.ZipStore("scallops/tests/data/ops-illum-corr.zip", mode="r")
+    root = zarr.open(store=store, mode="r")
     np.testing.assert_equal(
         root["data"][...],
         read_image(os.path.join(tmp_path, "images", "A1")).values.squeeze(),
