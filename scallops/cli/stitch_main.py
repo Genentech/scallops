@@ -196,16 +196,23 @@ def _create_stitch_parser(
     )
 
     parser.add_argument(
-        "--crop",
+        "--crop-y",
         type=int,
         default=None,
-        help="Crop tiles by `crop` pixels along each dimension when aligning tiles. Set"
+        help="Crop tiles by `crop` pixels along y dimension when aligning tiles. Set"
+        "automatically when radial correction is enabled.",
+    )
+    parser.add_argument(
+        "--crop-x",
+        type=int,
+        default=None,
+        help="Crop tiles by `crop` pixels along x dimension when aligning tiles. Set"
         "automatically when radial correction is enabled.",
     )
     parser.add_argument(
         "--stage-positions",
         help=(
-            "Optional CSV file containing stage positions. Use when image metadata "
+            "Optional CSV or Parquet file containing stage positions. Use when image metadata "
             "is missing stage positions. Expected columns `name`, `y`, "
             "and `x`, where name is the full image path."
         ),

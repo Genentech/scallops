@@ -47,7 +47,7 @@ def _single_stitch(
     image_spacing: tuple[float, float] | None,
     radial_correction_k: float | None | Literal["auto", "none"],
     blend: Literal["none", "linear"],
-    crop_width: int | None,
+    crop_width: tuple[int, int] | None,
     stitch_alpha: float,
     evaluate: bool,
     no_save_labels: bool,
@@ -133,7 +133,7 @@ def _single_stitch(
         isinstance(radial_correction_k, float) and radial_correction_k <= 0
     ):
         radial_correction_k = None
-    if crop_width is not None and crop_width <= 0:
+    if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
         crop_width = None
 
     primary_filepaths = [paths[0] for paths in filepaths]
@@ -142,7 +142,9 @@ def _single_stitch(
         stage_positions_path = stage_positions_path.format(
             **image_metadata["file_metadata"][0]
         )
-        stage_positions = read_stage_positions(primary_filepaths, stage_positions_path)
+        stage_positions = read_stage_positions(
+            [paths[0] for paths in original_filepaths], stage_positions_path
+        )
 
     if stage_positions is None:
         stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
@@ -182,9 +184,10 @@ def _single_stitch(
     max_shift = stitch_result["max_shift"]
     crop_width = stitch_result["crop_width"]
     # convert from numpy type to int for JSON serialization
-    fuse_crop_width = int(stitch_result["fuse_crop_width"])
+    fuse_crop_width = stitch_result["fuse_crop_width"]
+    fuse_crop_width = int(fuse_crop_width[0]), int(fuse_crop_width[1])
     if crop_width is not None:
-        crop_width = int(crop_width)
+        crop_width = int(crop_width[0]), int(crop_width[1])
     tile_shape_no_crop = stitch_result["tile_shape"]
     align_tile_shape = stitch_result["align_tile_shape"]
     spanning_tree_edges = stitch_result["spanning_tree_edges"]
@@ -336,8 +339,8 @@ def _single_stitch(
             filesystem=fs,
         )
     fused_tile_shape = (
-        tile_shape_no_crop[0] - fuse_crop_width * 2,
-        tile_shape_no_crop[1] - fuse_crop_width * 2,
+        tile_shape_no_crop[0] - fuse_crop_width[0] * 2,
+        tile_shape_no_crop[1] - fuse_crop_width[1] * 2,
     )
     fused_y_size = int(
         np.round(stitch_positions_df["y"].max()).astype(int) + fused_tile_shape[0]

@@ -124,7 +124,12 @@ def typical_variation_normalization(
         scaling=True,
         max_value=None,
     )
-    X = PCA().fit(X[ref_indices]).transform(X)
+    d = PCA()
+    X = d.fit(X[ref_indices]).transform(X)
+    components_ = d.components_
+    mean_ = d.mean_
+    variance_ratio = d.explained_variance_ratio_
+    variance = d.explained_variance_
 
     if by is not None:
         group_to_indices = data.obs.groupby(by, observed=True, sort=False).indices
@@ -171,7 +176,19 @@ def typical_variation_normalization(
             scaling=True,
             max_value=None,
         )
-    return anndata.AnnData(X=X, obs=data.obs.copy(), var=data.var.copy())
+    return anndata.AnnData(
+        X=X,
+        obs=data.obs.copy(),
+        var=data.var.copy(),
+        uns={
+            "pca": {
+                "variance_ratio": variance_ratio,
+                "variance": variance,
+                "mean": mean_,
+                "PCs": components_,
+            }
+        },
+    )
 
 
 def normalize_features(

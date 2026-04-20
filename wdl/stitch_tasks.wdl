@@ -89,7 +89,8 @@ task stitch {
 
         String? radial_correction_k
         String? stage_positions
-        Int? crop
+        Int? crop_y
+        Int? crop_x
         Float? min_overlap_fraction
         Float? max_shift
 
@@ -119,7 +120,8 @@ task stitch {
         expected_images = "~{expected_images}"
         radial_correction_k = "~{radial_correction_k}"
         stage_positions = "~{ stage_positions}"
-        crop = "~{crop}"
+        crop_y = "~{crop_y}"
+        crop_x = "~{crop_x}"
         min_overlap_fraction = "~{min_overlap_fraction}"
         subset = "~{subset}"
         blend = "~{blend}"
@@ -145,8 +147,10 @@ task stitch {
             cmd += ["--max-shift", max_shift]
         if radial_correction_k != "":
             cmd += ["--radial-correction-k", radial_correction_k]
-        if crop != "":
-            cmd += ["--crop", crop]
+        if crop_y != "":
+            cmd += ["--crop-y", crop_y]
+        if crop_x != "":
+            cmd += ["--crop-x", crop_x]
         if blend != "":
             cmd += ["--blend", blend]
         if stage_positions != "":

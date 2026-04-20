@@ -95,14 +95,16 @@ def single_stitch_preview(
     metadata_fields = init["metadata_fields"]
     primary_filepaths = [paths[0] for paths in filepaths]
     image_key = image_metadata["id"]
-
+    original_filepaths = init["original_filepaths"]
     stage_positions = None
     if stage_positions_path is not None:
         stage_positions_path = stage_positions_path.format(
             **image_metadata["file_metadata"][0]
         )
 
-        stage_positions = read_stage_positions(primary_filepaths, stage_positions_path)
+        stage_positions = read_stage_positions(
+            [paths[0] for paths in original_filepaths], stage_positions_path
+        )
 
     if stage_positions is None:
         stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
@@ -175,8 +177,11 @@ def single_stitch_preview(
                 else img.isel(z=0, missing_dims="ignore")
             )
             img = img.values
-            img = skimage.transform.rescale(img, resolution_scale, anti_aliasing=False)
-            img = img_as_uint(img)
+            if resolution_scale < 1:
+                img = skimage.transform.rescale(
+                    img, resolution_scale, anti_aliasing=False
+                )
+                img = img_as_uint(img)
             if log:
                 img = np.log1p(np.maximum(img, 1)).astype(np.uint16)
             y, x = stage_positions[i]
@@ -306,16 +311,26 @@ def run_stitch(args: argparse.Namespace) -> None:
             pass
 
     expected_images = args.expected_images
-    crop_width = args.crop
+    crop_width_y = args.crop_y
+    crop_width_x = args.crop_x
+    if crop_width_y == 0:
+        crop_width_y = None
+    if crop_width_x == 0:
+        crop_width_x = None
+    crop_width = None
+    if crop_width_y is not None or crop_width_x is not None:
+        if crop_width_y is None:
+            crop_width_y = 0
+        if crop_width_x is None:
+            crop_width_x = 0
+        assert crop_width_y >= 0, "Crop y must be positive."
+        assert crop_width_x >= 0, "Crop x must be positive."
+        crop_width = (crop_width_y, crop_width_x)
     min_overlap_fraction = args.min_overlap_fraction
     random_seed = args.random_seed
     max_shifts = args.max_shift
     assert all(shift >= 0 for shift in max_shifts), "Max shift must be non-negative."
 
-    if crop_width is not None:
-        assert crop_width >= 0, "Crop must be positive."
-    if crop_width == 0:
-        crop_width = None
     assert 0 <= stitch_alpha <= 1, "stitch alpha must be between 0 and 1"
     if min_overlap_fraction is not None:
         assert 0 <= min_overlap_fraction <= 1, (
