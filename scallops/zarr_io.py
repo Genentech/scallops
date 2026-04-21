@@ -629,6 +629,23 @@ def _read_zarr_attrs(multiscale0: zarr.Group) -> tuple[dict, dict, list[str]]:
     return coords, attrs, dims
 
 
+def _get_multiscales_path(node: zarr.Group) -> str | None:
+    if "multiscales" in node.attrs:
+        multiscales = node.attrs["multiscales"]
+        key = "0"
+
+        if len(multiscales) > 0:
+            multiscale0 = multiscales[0]
+            if "datasets" in multiscale0:
+                tmp = multiscale0["datasets"]
+                if len(tmp) > 0:
+                    tmp = tmp[0]
+                    if "path" in tmp:
+                        key = tmp["path"]
+        return key
+    return None
+
+
 def _read_ome_zarr_array(
     node: str | Path | zarr.Group,
 ) -> tuple[zarr.Array, dict, list[str], dict, dict] | None:
@@ -647,18 +664,12 @@ def _read_ome_zarr_array(
         dims = None
         coords = {}
         attrs = {}
-        multiscales = node.attrs["multiscales"]
-        key = "0"
 
+        key = _get_multiscales_path(node)
+        multiscales = node.attrs["multiscales"]
         if len(multiscales) > 0:
             multiscale0 = multiscales[0]
             coords, attrs, dims = _read_zarr_attrs(multiscale0)
-            if "datasets" in multiscale0:
-                tmp = multiscale0["datasets"]
-                if len(tmp) > 0:
-                    tmp = tmp[0]
-                    if "path" in tmp:
-                        key = tmp["path"]
         array = node[key]
         return array, dims, coords, attrs
     else:  # see if user passed test.zarr and zarr file only has one image
