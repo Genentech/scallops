@@ -64,7 +64,8 @@ def get_labels(labels_group: Group, name: str, suffix: str) -> zarr.Array | None
     :return: The retrieved labels as a DataArray or None if the labels are not found.
     """
     try:
-        return labels_group[f"{name}-{suffix}"]["0"]
+        g = labels_group[f"{name}-{suffix}"]
+        return g[list(g.keys())[0]]
     except KeyError as e:
         logger.warning(f'"{name}-{suffix}" not found in {labels_group}.')
         raise e
