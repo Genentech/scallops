@@ -81,7 +81,6 @@ def _feature_block(
     label_image = relabel_sequential(label_image)
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
-
     if intensity_image is not None:
         if normalize:
             intensity_image = skimage.util.img_as_float(intensity_image)
@@ -107,14 +106,13 @@ def _feature_block(
 def _create_dd_metadata(
     intensity_image_dtype, nchannels, normalize, channel_names_, funcs
 ):
-    tmp = np.array([[1, 0, 0], [2, 0, 0], [0, 0, 0]])
+    intensity_image = np.ones((50, 50, nchannels), dtype=intensity_image_dtype)
+    label_image = np.zeros((50, 50), dtype=int)
+    label_image[0:20, 0:20] = 1
+    label_image[30:50, 30:50] = 2
     return _feature_block(
-        label_image=tmp,
-        intensity_image=np.stack([tmp] * nchannels, axis=2).astype(
-            intensity_image_dtype
-        )
-        if nchannels > 0
-        else None,
+        label_image=label_image,
+        intensity_image=intensity_image if nchannels > 0 else None,
         labels=np.array([1, 2]),
         sl=None,
         normalize=normalize,

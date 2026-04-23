@@ -265,6 +265,58 @@ def test_haralick_features(array_A1_102_cells, array_A1_102_pheno):
 
 
 @pytest.mark.features
+def test_intensity_distribution(array_A1_102_cells, array_A1_102_pheno):
+    label_image = relabel_sequential(array_A1_102_cells.squeeze().data)
+
+    intensity_image = (
+        (
+            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
+            .rename({"z": "t", "t": "z"})
+            .isel(t=0, z=0)
+        )
+        .transpose(*("y", "x", "c"))
+        .data
+    )
+    unique_labels = np.unique(label_image)
+    unique_labels = unique_labels[unique_labels > 0]
+    c = [0, 1]
+    channel_names = ["c0", "c1"]
+
+    features_cp = cp_intensity_distribution(
+        c=c,
+        channel_names=channel_names,
+        unique_labels=unique_labels,
+        label_image=label_image,
+        intensity_image=intensity_image,
+        calculate_zernike=True,
+    )
+
+    features_scallops = intensity_distribution_radial(
+        c=c,
+        channel_names=channel_names,
+        unique_labels=unique_labels,
+        label_image=label_image,
+        intensity_image=intensity_image,
+    )
+    features_scallops.update(
+        intensity_distribution_zernike(
+            c=c,
+            channel_names=channel_names,
+            unique_labels=unique_labels,
+            label_image=label_image,
+            intensity_image=intensity_image,
+        )
+    )
+
+    for key in features_cp:
+        np.testing.assert_array_equal(
+            features_cp[key],
+            features_scallops[key],
+            err_msg=key,
+        )
+
+
+@pytest.mark.features
 def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
     label_image = array_A1_102_cells.squeeze().data
     intensity_image = (
@@ -320,55 +372,3 @@ def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
                 features_scallops[key],
                 err_msg=key,
             )
-
-
-@pytest.mark.features
-def test_intensity_distribution(array_A1_102_cells, array_A1_102_pheno):
-    label_image = relabel_sequential(array_A1_102_cells.squeeze().data)
-
-    intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
-    )
-    unique_labels = np.unique(label_image)
-    unique_labels = unique_labels[unique_labels > 0]
-    c = [0, 1]
-    channel_names = ["c0", "c1"]
-
-    features_cp = cp_intensity_distribution(
-        c=c,
-        channel_names=channel_names,
-        unique_labels=unique_labels,
-        label_image=label_image,
-        intensity_image=intensity_image,
-        calculate_zernike=True,
-    )
-
-    features_scallops = intensity_distribution_radial(
-        c=c,
-        channel_names=channel_names,
-        unique_labels=unique_labels,
-        label_image=label_image,
-        intensity_image=intensity_image,
-    )
-    features_scallops.update(
-        intensity_distribution_zernike(
-            c=c,
-            channel_names=channel_names,
-            unique_labels=unique_labels,
-            label_image=label_image,
-            intensity_image=intensity_image,
-        )
-    )
-
-    for key in features_cp:
-        np.testing.assert_array_equal(
-            features_cp[key],
-            features_scallops[key],
-            err_msg=key,
-        )
