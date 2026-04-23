@@ -10,7 +10,6 @@ import pandas as pd
 import pytest
 import shapely
 import zarr
-from scipy.stats import spearmanr
 from skimage.measure import regionprops
 
 from scallops.experiment.elements import Experiment
@@ -188,6 +187,7 @@ def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
         .compute()
         .sort_index()
     )
+    np.testing.assert_array_equal(unique_labels, test_df_no_chunking.index.values)
     # this differs due to ties
     location_cols = [
         "Location_MaxIntensity_Y_Channel0",
@@ -235,10 +235,6 @@ def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
         diff = np.max(np.abs(test_df[col] - test_df_no_chunking[col]))
         assert diff < 0.025, f"{col}, {diff}"
 
-    for col in granularity_cols:
-        # there are some values that are much different so use spearman
-        cor = spearmanr(test_df[col], test_df_no_chunking[col])[0]
-        assert cor > 0.9, f"{col}, {cor}"
     for col in radial_dist_cols:
         cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
         assert cor > 0.89, f"{col}, {cor}"
@@ -254,11 +250,50 @@ def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
             assert cor > 0.8, f"{col}, {cor}"
         else:
             np.testing.assert_array_equal(val1, val2)
+
+    granularity_corr = {
+        "Granularity_1_Channel0": 0.2875184642807318,
+        "Granularity_2_Channel0": 0.24031361669437323,
+        "Granularity_3_Channel0": 0.7963548676359768,
+        "Granularity_4_Channel0": 0.8424338617869634,
+        "Granularity_5_Channel0": 0.5242064491229136,
+        "Granularity_6_Channel0": 0.46622015071482553,
+        "Granularity_7_Channel0": 0.027894757866763584,
+        "Granularity_8_Channel0": 0.25560196347142644,
+        "Granularity_9_Channel0": 0.35153200857794004,
+        "Granularity_10_Channel0": 0.23291082312882855,
+        "Granularity_11_Channel0": 0.5512186107629126,
+        "Granularity_12_Channel0": 0.3379511972830313,
+        "Granularity_13_Channel0": 0.5339604903634116,
+        "Granularity_14_Channel0": 0.2852713281964144,
+        "Granularity_15_Channel0": 0.09411013589015368,
+        "Granularity_16_Channel0": 0.08942753632107721,
+        "Granularity_1_Channel1": 0.2739314083116178,
+        "Granularity_2_Channel1": 0.2869059228408956,
+        "Granularity_3_Channel1": 0.12449467659260113,
+        "Granularity_4_Channel1": 0.8644136428035725,
+        "Granularity_5_Channel1": 0.737508044793908,
+        "Granularity_6_Channel1": 0.6250128117907956,
+        "Granularity_7_Channel1": 0.6397645080236087,
+        "Granularity_8_Channel1": 0.39876944819140187,
+        "Granularity_9_Channel1": 0.393164151687802,
+        "Granularity_10_Channel1": 0.30070447651070525,
+        "Granularity_11_Channel1": 0.20240474997387176,
+        "Granularity_12_Channel1": 0.19955540494771346,
+        "Granularity_13_Channel1": 0.135837367120659,
+        "Granularity_14_Channel1": 0.08752759356593076,
+        "Granularity_15_Channel1": 0.17777785341265878,
+        "Granularity_16_Channel1": 0.19553440565319036,
+    }
+    for col in granularity_cols:
+        cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
+        expected_corr = granularity_corr[col] - 0.0001
+        assert cor >= expected_corr, f"{col}, expected: {expected_corr}, actual {cor}"
+
     pd.testing.assert_frame_equal(
         test_df.drop(drop_cols, axis=1), test_df_no_chunking.drop(drop_cols, axis=1)
     )
     test_df = test_df.join(objects_df)
-
     test_labels = test_df.index.values
     test_centroid0 = test_df["AreaShape_Center_Y"].values
     test_centroid1 = test_df["AreaShape_Center_X"].values
