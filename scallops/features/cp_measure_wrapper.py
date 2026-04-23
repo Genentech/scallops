@@ -31,9 +31,11 @@ def cp_granularity(
 ) -> dict[str, Any]:
     results = {}
     for j in range(len(c)):
+        # Granularity_{granularity_id}_Channel
         results_ = get_granularity(label_image, intensity_image[..., c[j]])
         for key in results_:
-            results[f"{key}_{channel_names[c[j]]}"] = results_[key]
+            channel_name = channel_names[c[j]]
+            results[f"{key}_{channel_name}"] = results_[key]
     return results
 
 
