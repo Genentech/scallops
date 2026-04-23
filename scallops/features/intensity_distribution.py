@@ -127,6 +127,7 @@ def _radial_distribution(
             )
         for key in result:
             tokens = key.split("_")  # RadialDistribution_FracAtD_1of4_
+            assert len(tokens) == 3, tokens
             results[f"{tokens[0]}_{tokens[1]}_{channel_names[channel]}_{tokens[2]}"] = (
                 result[key]
             )
@@ -347,9 +348,10 @@ def _radial_zernikes(
         )
         for key in result:
             tokens = key.split("_")
-            results[f"{tokens[0]}_{tokens[1]}_{channel_names[channel]}_{tokens[2]}"] = (
-                result[key]
-            )
+            # RadialDistribution_ZernikeMagnitude_0_0
+            results[
+                f"{tokens[0]}_{tokens[1]}_{channel_names[channel]}_{tokens[2]}_{tokens[3]}"
+            ] = result[key]
     return results
 
 
