@@ -925,20 +925,24 @@ def _extract_crops(
                 if label_mask.max() > 0:
                     label_mask = label_mask / label_mask.max()
             img = (img * label_mask).astype(img_type, copy=False)
+        output_url = f"{output_dir}/{label}.{output_format}"
         if output_format == "tiff":
-            with (
-                fs.open(f"{output_dir}/{label}.tiff", "wb") as f,
-                tifffile.TiffWriter(f) as tif,
-            ):
-                tif.write(img, compression="zlib")
-        else:
             if protocol == "file":
-                np.save(f"{output_dir}/{label}.npy", img)
+                tifffile.imwrite(output_url, img, compression="zlib")
+            else:
+                bytes_buffer = BytesIO()
+                tifffile.imwrite(bytes_buffer, img, compression="zlib")
+                bytes_buffer.seek(0)
+                with fs.open(output_url, "wb") as f:
+                    f.write(bytes_buffer.getvalue())
+        elif output_format == "npy":
+            if protocol == "file":
+                np.save(output_url, img)
             else:
                 bytes_buffer = BytesIO()
                 np.save(bytes_buffer, img)
                 bytes_buffer.seek(0)
-                with fs.open(f"{output_dir}/{label}.npy", "wb") as f:
+                with fs.open(output_url, "wb") as f:
                     f.write(bytes_buffer.getvalue())
 
 
