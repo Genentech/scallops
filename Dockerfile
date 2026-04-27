@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 ENV AWS_RETRY_MODE=adaptive \
     AWS_MAX_ATTEMPTS=10
