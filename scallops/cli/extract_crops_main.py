@@ -203,5 +203,3 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     parser.set_defaults(
         func=run_pipeline_extract_crops,
     )
-    args = parser.parse_args()
-    args.func(args)
