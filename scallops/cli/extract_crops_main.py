@@ -1,5 +1,4 @@
 import argparse
-from argparse import ArgumentParser
 
 import fsspec
 import zarr
@@ -112,8 +111,16 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         ).compute()
 
 
-def main():
-    parser = ArgumentParser()
+def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+    parser = subparsers.add_parser(
+        "extract-crops",
+        help="Extracts crops from labeled images.",
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter
+            if default_help
+            else argparse.HelpFormatter
+        ),
+    )
 
     required = parser.add_argument_group("required arguments")
     images_arg(required)

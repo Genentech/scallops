@@ -34,6 +34,17 @@ report:
    :path: dialout
 
 
+scallops extract-crops
+======================
+
+The `scallops extract-crops` command extracts image crops from labeled images.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: extract-crops
+
 scallops find-objects
 ======================
 
