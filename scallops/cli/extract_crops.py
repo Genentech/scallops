@@ -131,6 +131,7 @@ def single_crop(
             merged_df = merged_df[merged_df.index.isin(label_filter)]
 
     merged_df = merged_df.query(f"{area_column}>=2")
+
     n_labels_filtered = n_labels_before_filtering - len(merged_df)
     logger.info(f"Removed {n_labels_filtered:,} out of {n_labels_before_filtering:,}.")
     if len(merged_df) == 0:
@@ -165,7 +166,7 @@ def single_crop(
             image = da.clip(image, 0, 1)
     image = (image * 255).astype(np.uint8)
     # gaussian_sigma=2
-    df = to_label_crops(
+    index = to_label_crops(
         label_image=da.from_zarr(zarr_labels),
         intensity_image=image,
         merged_df=merged_df,
@@ -178,9 +179,12 @@ def single_crop(
         ],
         gaussian_sigma=None,
     )
+    merged_df = merged_df.loc[index]
     output_metadata = cli_metadata() if not no_version else dict()
-    df["path"] = output_dir + "/" + df.index.astype(str) + "." + output_format
-    table = pa.Table.from_pandas(df, preserve_index=True)
+    merged_df["crop_url"] = (
+        output_dir + "/" + merged_df.index.astype(str) + "." + output_format
+    )
+    table = pa.Table.from_pandas(merged_df, preserve_index=True)
     table = table.replace_schema_metadata(
         {
             "scallops".encode(): json.dumps(output_metadata).encode(),
