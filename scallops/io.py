@@ -955,7 +955,7 @@ def to_label_crops(
     output_format: Literal["tiff", "npy"] = "tiff",
     centroid_cols: Sequence[str] | None = None,
     gaussian_sigma: float | None = None,
-) -> pd.DataFrame:
+) -> pd.Index:
     """Export individual label crops as tiff or npy files.
 
     :param intensity_image: Image data
@@ -966,7 +966,7 @@ def to_label_crops(
     :param output_format: Crop output format
     :param centroid_cols: Columns in objects_df containing y and x centroids.
     :param gaussian_sigma: If not None, apply gaussian-smoothed mask to isolate target mask
-    :return: Objects dataframe (with objects at well edges removed)
+    :return: Objects dataframe index (with objects at well edges removed)
     """
     assert not isinstance(objects_df.index, pd.RangeIndex), (
         "Index should contain `label`"
@@ -1070,7 +1070,7 @@ def to_label_crops(
                 )
             )
     dask.compute(*results)
-    return objects_df
+    return objects_df.index
 
 
 def example_image_coords(
