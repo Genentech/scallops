@@ -85,7 +85,8 @@ def single_crop(
         raise ValueError(f"Unable to read {label_name} labels for {image_key}.")
     merge_paths = [
         f"{merge_dir}{merge_dir_sep}{label_name}{merge_dir_sep}{image_key}.parquet",
-        f"{merge_dir}{merge_dir_sep}{label_name}{merge_dir_sep}{image_key}.zarr",
+        f"{merge_dir}{merge_dir_sep}{image_key}.zarr",
+        f"{merge_dir}{merge_dir_sep}{image_key}.parquet",
         f"{merge_dir}{merge_dir_sep}{label_name}{merge_dir_sep}{image_key}-objects.parquet",
     ]
     merge_path = None
