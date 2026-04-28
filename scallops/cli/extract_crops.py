@@ -90,7 +90,7 @@ def single_crop(
     ]
     merge_path = None
     for path in merge_paths:
-        if fsspec.core.url_to_fs(merge_path)[0].exists(merge_path):
+        if fsspec.core.url_to_fs(path)[0].exists(path):
             merge_path = path
             break
     if merge_path is None:
