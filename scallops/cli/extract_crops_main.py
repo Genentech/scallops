@@ -88,7 +88,9 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     )
 
     with (
-        _create_default_dask_config(),
+        _create_default_dask_config(
+            {"distributed.admin.large-graph-warning-threshold": "250MB"}
+        ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         image_seq.starmap(
