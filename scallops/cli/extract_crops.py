@@ -170,7 +170,7 @@ def single_crop(
     index = to_label_crops(
         label_image=da.from_zarr(zarr_labels),
         intensity_image=image,
-        merged_df=merged_df,
+        objects_df=merged_df,
         output_dir=output_dir,
         crop_size=crop_size,
         output_format=output_format,
