@@ -114,10 +114,9 @@ def single_crop(
             ]
             columns.update(query_columns)
         columns = list(columns)
-        if len(columns) > 0:
-            values = data[:, columns].X.compute()
-            for i in range(len(columns)):
-                merged_df[columns[i]] = values[:, i]
+        values = data[:, columns].X.compute()
+        for i in range(len(columns)):
+            merged_df[columns[i]] = values[:, i]
 
     else:
         merged_df = pd.read_parquet(merge_path)
