@@ -146,7 +146,7 @@ def single_crop(
             chunksize[-2] = chunks
             chunksize[-1] = chunks
         else:
-            logger.info(f"Chunk size: {(chunksize[-2],)} by {(chunksize[-1],)}")
+            logger.info(f"Chunk size: {chunksize[-2]:,} by {chunksize[-1]:,}")
         image = image.rechunk(tuple(chunksize))
         if local_percentile_normalize:
             depth = None
