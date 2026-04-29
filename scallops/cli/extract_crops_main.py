@@ -47,11 +47,16 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     crop_size = (crop_size, crop_size)
     label_filter = arguments.label_filter
     percentile_min = arguments.percentile_min
+
     percentile_max = arguments.percentile_max
     output_format = arguments.output_format
     local_percentile_normalize = arguments.local_percentile_normalize
     local_normalize_overlap = arguments.local_percentile_overlap
     percentile_normalize = None
+    if percentile_min <= 0 or percentile_min >= 100:
+        percentile_min = None
+    if percentile_max <= 0 or percentile_max >= 100:
+        percentile_max = None
     if percentile_min is not None or percentile_max is not None:
         if percentile_min is None:
             percentile_min = 0
