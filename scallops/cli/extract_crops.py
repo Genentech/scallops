@@ -74,7 +74,7 @@ def single_crop(
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_fs.makedirs(output_dir, exist_ok=True)
     image = _images2fov(file_list, metadata, dask=True).squeeze().data
-    logger.info(f"Image shape {image.shape}")
+    logger.info(f"{image_key} image shape {image.shape}")
     zarr_labels = get_labels(
         labels_group=labels_group,
         name=image_key,
@@ -133,9 +133,11 @@ def single_crop(
     merged_df = merged_df.query(f"{area_column}>=2")
 
     n_labels_filtered = n_labels_before_filtering - len(merged_df)
-    logger.info(f"Removed {n_labels_filtered:,} out of {n_labels_before_filtering:,}.")
+    logger.info(
+        f"Removed {n_labels_filtered:,} out of {n_labels_before_filtering:,} labels for {image_key}."
+    )
     if len(merged_df) == 0:
-        raise ValueError("No labels.")
+        raise ValueError(f"No labels found for {image_key}.")
     # e.g. CHAMMI-75
 
     if percentile_normalize is not None:
@@ -146,7 +148,9 @@ def single_crop(
             chunksize[-2] = chunks
             chunksize[-1] = chunks
         else:
-            logger.info(f"Chunk size: {chunksize[-2]:,} by {chunksize[-1]:,}")
+            logger.info(
+                f"{image_key} chunk size: {chunksize[-2]:,} by {chunksize[-1]:,}"
+            )
         image = image.rechunk(tuple(chunksize))
         if local_percentile_normalize:
             depth = None
