@@ -1035,6 +1035,8 @@ def to_label_crops(
         if label_image is not None:
             label_image = delayed(label_image)
     objects_df_delayed = delayed(objects_df)
+    padding = 0 if gaussian_sigma is None else int(math.ceil(gaussian_sigma * 4))
+    label_shape = label_image.shape
     for sl in chunk_slices:
         array_start = [s.start for s in sl]
         array_end = [s.stop for s in sl]
@@ -1043,12 +1045,18 @@ def to_label_crops(
         if len(objects_df_slice) > 0:
             sl = (
                 slice(
-                    objects_df_slice["bbox-0"].min(),
-                    objects_df_slice["bbox-2"].max(),
+                    max(0, objects_df_slice["bbox-0"[0]].min() - padding),
+                    min(
+                        label_shape[0],
+                        objects_df_slice["bbox-2"].max() + padding,
+                    ),
                 ),
                 slice(
-                    objects_df_slice["bbox-1"].min(),
-                    objects_df_slice["bbox-3"].max(),
+                    max(0, objects_df_slice["bbox-1"].min() - padding),
+                    min(
+                        label_shape[1],
+                        objects_df_slice["bbox-3"].max() + padding,
+                    ),
                 ),
             )
             label_block = None
