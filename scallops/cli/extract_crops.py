@@ -53,6 +53,7 @@ def single_crop(
     percentile_normalize: tuple[float, float] | None,
     local_percentile_normalize: bool,
     local_normalize_overlap: int | None,
+    gaussian_sigma: int | None,
     chunks: int | None,
     no_version: bool,
     force: bool,
@@ -169,7 +170,7 @@ def single_crop(
             image = (image - percentiles[0]) / (percentiles[1] - percentiles[0])
             image = da.clip(image, 0, 1)
     image = (image * 255).astype(np.uint8)
-    # gaussian_sigma=2
+
     index = to_label_crops(
         label_image=da.from_zarr(zarr_labels),
         intensity_image=image,
@@ -181,7 +182,7 @@ def single_crop(
             f"{label_prefix}_AreaShape_Center_Y",
             f"{label_prefix}_AreaShape_Center_X",
         ],
-        gaussian_sigma=None,
+        gaussian_sigma=gaussian_sigma,
     )
     merged_df = merged_df.loc[index]
     output_metadata = cli_metadata() if not no_version else dict()

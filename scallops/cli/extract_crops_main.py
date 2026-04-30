@@ -63,7 +63,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         if percentile_max is None:
             percentile_max = 100
         percentile_normalize = (percentile_min, percentile_max)
-
+    gaussian_sigma = arguments.gaussian_sigma
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
     if dask_server_url is None and arguments.dask_cluster is None:
@@ -112,6 +112,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
             local_percentile_normalize=local_percentile_normalize,
             crop_size=crop_size,
             output_format=output_format,
+            gaussian_sigma=gaussian_sigma,
             chunks=chunks,
             force=force,
             no_version=no_version,
@@ -196,6 +197,11 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
         choices=["tiff", "npy"],
         default="tiff",
         help="Output image format",
+    )
+    parser.add_argument(
+        "--gaussian-sigma",
+        type=float,
+        help="Apply gaussian-smoothed mask to isolate target mask",
     )
 
     groupby_arg(parser)
