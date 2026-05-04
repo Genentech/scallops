@@ -1045,7 +1045,7 @@ def to_label_crops(
         if len(objects_df_slice) > 0:
             sl = (
                 slice(
-                    max(0, objects_df_slice["bbox-0"[0]].min() - padding),
+                    max(0, objects_df_slice["bbox-0"].min() - padding),
                     min(
                         label_shape[0],
                         objects_df_slice["bbox-2"].max() + padding,
