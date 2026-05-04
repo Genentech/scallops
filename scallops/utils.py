@@ -64,7 +64,7 @@ def _tqdm_shim(iterator, *args, **kwargs):
     return iterator
 
 
-def _fix_json(d):
+def _fix_json(d: dict) -> dict:
     """Attempts to serialize and deserialize a dictionary to ensure it can be safely converted to
     JSON.
 

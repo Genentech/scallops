@@ -222,7 +222,9 @@ def test_write_non_ome_zarr_image(tmp_path, dask):
 
     data_zarr = read_image(f"{zarr_path}/images/foo", dask=False)
     data_ome_zarr = read_image(f"{zarr_path}/images/foo2", dask=False)
+
     xr.testing.assert_equal(data_zarr, data_ome_zarr)
+    xr.testing.assert_equal(image, data_ome_zarr)
 
 
 @pytest.mark.io
