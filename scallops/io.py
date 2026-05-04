@@ -948,7 +948,7 @@ def _extract_crops(
 
 def to_label_crops(
     intensity_image: zarr.Array | da.Array,
-    label_image: zarr.Array | da.Array | None,
+    label_image: zarr.Array | da.Array,
     objects_df: pd.DataFrame,
     output_dir: str,
     crop_size: tuple[int, int] = (224, 224),
@@ -973,18 +973,14 @@ def to_label_crops(
     )
     is_dask_array = isinstance(intensity_image, da.Array)
     image_shape = intensity_image.shape[-2:]
-    if label_image is not None:
-        assert label_image.shape == image_shape, (
-            "Label shape does not match image shape."
-        )
-        assert isinstance(label_image, da.Array) == is_dask_array, (
-            "Label image type does not match intensity image type."
-        )
-        if is_dask_array and intensity_image.chunksize[-2:] != label_image.chunks:
-            label_image = label_image.rechunk(intensity_image.chunksize[-2:])
+    label_shape = label_image.shape
+    assert label_shape == image_shape, "Label shape does not match image shape."
+    assert isinstance(label_image, da.Array) == is_dask_array, (
+        "Label image type does not match intensity image type."
+    )
+    if is_dask_array and intensity_image.chunksize[-2:] != label_image.chunks:
+        label_image = label_image.rechunk(intensity_image.chunksize[-2:])
 
-    fs, _ = fsspec.url_to_fs(output_dir)
-    fs.makedirs(output_dir, exist_ok=True)
     if centroid_cols is None:
         centroid_cols = objects_df.columns[
             objects_df.columns.str.contains("AreaShape_Center_Y")
@@ -1032,11 +1028,13 @@ def to_label_crops(
 
     if not is_dask_array:
         intensity_image = delayed(intensity_image)
-        if label_image is not None:
-            label_image = delayed(label_image)
-    objects_df_delayed = delayed(objects_df)
+        label_image = delayed(label_image)
+
     padding = 0 if gaussian_sigma is None else int(math.ceil(gaussian_sigma * 4))
-    label_shape = label_image.shape
+
+    fs, _ = fsspec.url_to_fs(output_dir)
+    fs.makedirs(output_dir, exist_ok=True)
+    objects_df_delayed = delayed(objects_df)
     for sl in chunk_slices:
         array_start = [s.start for s in sl]
         array_end = [s.stop for s in sl]
@@ -1062,8 +1060,7 @@ def to_label_crops(
             label_block = None
             if is_dask_array:
                 image_block = intensity_image[..., sl[0], sl[1]]
-                if label_image is not None:
-                    label_block = label_image[sl[0], sl[1]]
+                label_block = label_image[sl[0], sl[1]]
 
             results.append(
                 _extract_crops_delayed(
