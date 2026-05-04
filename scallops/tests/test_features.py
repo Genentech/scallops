@@ -48,7 +48,7 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     objects_df = find_objects(label_image).compute()
     crop_size = (30, 30)
 
-    result_df = to_label_crops(
+    result_index = to_label_crops(
         intensity_image=intensity_image,
         label_image=label_image,
         objects_df=objects_df.query("index==2603|index==17"),
@@ -56,7 +56,7 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
         output_dir=output_dir_dask,
     )
     # 17 should be filtered b/c on tile edge
-    assert len(result_df) == 1 and result_df.index.values[0] == 2603
+    assert len(result_index) == 1 and result_index.values[0] == 2603
 
     group = zarr.group()
     intensity_image_zarr = group.create_dataset(

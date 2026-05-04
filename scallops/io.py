@@ -948,14 +948,14 @@ def _extract_crops(
 
 def to_label_crops(
     intensity_image: zarr.Array | da.Array,
-    label_image: zarr.Array | da.Array | None,
+    label_image: zarr.Array | da.Array,
     objects_df: pd.DataFrame,
     output_dir: str,
     crop_size: tuple[int, int] = (224, 224),
     output_format: Literal["tiff", "npy"] = "tiff",
     centroid_cols: Sequence[str] | None = None,
     gaussian_sigma: float | None = None,
-) -> pd.DataFrame:
+) -> pd.Index:
     """Export individual label crops as tiff or npy files.
 
     :param intensity_image: Image data
@@ -966,25 +966,21 @@ def to_label_crops(
     :param output_format: Crop output format
     :param centroid_cols: Columns in objects_df containing y and x centroids.
     :param gaussian_sigma: If not None, apply gaussian-smoothed mask to isolate target mask
-    :return: Objects dataframe (with objects at well edges removed)
+    :return: Objects dataframe index (with objects at well edges removed)
     """
     assert not isinstance(objects_df.index, pd.RangeIndex), (
         "Index should contain `label`"
     )
     is_dask_array = isinstance(intensity_image, da.Array)
     image_shape = intensity_image.shape[-2:]
-    if label_image is not None:
-        assert label_image.shape == image_shape, (
-            "Label shape does not match image shape."
-        )
-        assert isinstance(label_image, da.Array) == is_dask_array, (
-            "Label image type does not match intensity image type."
-        )
-        if is_dask_array and intensity_image.chunksize[-2:] != label_image.chunks:
-            label_image = label_image.rechunk(intensity_image.chunksize[-2:])
+    label_shape = label_image.shape
+    assert label_shape == image_shape, "Label shape does not match image shape."
+    assert isinstance(label_image, da.Array) == is_dask_array, (
+        "Label image type does not match intensity image type."
+    )
+    if is_dask_array and intensity_image.chunksize[-2:] != label_image.chunks:
+        label_image = label_image.rechunk(intensity_image.chunksize[-2:])
 
-    fs, _ = fsspec.url_to_fs(output_dir)
-    fs.makedirs(output_dir, exist_ok=True)
     if centroid_cols is None:
         centroid_cols = objects_df.columns[
             objects_df.columns.str.contains("AreaShape_Center_Y")
@@ -1032,8 +1028,12 @@ def to_label_crops(
 
     if not is_dask_array:
         intensity_image = delayed(intensity_image)
-        if label_image is not None:
-            label_image = delayed(label_image)
+        label_image = delayed(label_image)
+
+    padding = 0 if gaussian_sigma is None else int(math.ceil(gaussian_sigma * 4))
+
+    fs, _ = fsspec.url_to_fs(output_dir)
+    fs.makedirs(output_dir, exist_ok=True)
     objects_df_delayed = delayed(objects_df)
     for sl in chunk_slices:
         array_start = [s.start for s in sl]
@@ -1043,19 +1043,24 @@ def to_label_crops(
         if len(objects_df_slice) > 0:
             sl = (
                 slice(
-                    objects_df_slice["bbox-0"].min(),
-                    objects_df_slice["bbox-2"].max(),
+                    max(0, objects_df_slice["bbox-0"].min() - padding),
+                    min(
+                        label_shape[0],
+                        objects_df_slice["bbox-2"].max() + padding,
+                    ),
                 ),
                 slice(
-                    objects_df_slice["bbox-1"].min(),
-                    objects_df_slice["bbox-3"].max(),
+                    max(0, objects_df_slice["bbox-1"].min() - padding),
+                    min(
+                        label_shape[1],
+                        objects_df_slice["bbox-3"].max() + padding,
+                    ),
                 ),
             )
             label_block = None
             if is_dask_array:
                 image_block = intensity_image[..., sl[0], sl[1]]
-                if label_image is not None:
-                    label_block = label_image[sl[0], sl[1]]
+                label_block = label_image[sl[0], sl[1]]
 
             results.append(
                 _extract_crops_delayed(
@@ -1070,7 +1075,7 @@ def to_label_crops(
                 )
             )
     dask.compute(*results)
-    return objects_df
+    return objects_df.index
 
 
 def example_image_coords(
