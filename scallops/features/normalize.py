@@ -11,7 +11,6 @@ from dask.delayed import delayed
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
-from scallops.features.constants import _centroid_column_names
 from scallops.features.util import _anndata_to_xr
 
 logger = logging.getLogger("scallops")
@@ -204,6 +203,10 @@ def normalize_features(
     centering: bool = True,
     scaling: bool = True,
     batch_size: int | None = None,
+    centroid_column_names: tuple[str, str] = (
+        "Nuclei_AreaShape_Center_Y",
+        "Nuclei_AreaShape_Center_X",
+    ),
 ) -> anndata.AnnData:
     """Normalize features
 
@@ -224,6 +227,7 @@ def normalize_features(
     :param max_value: Truncate to this value after scaling
     :param scaling: Whether to scale the data by dividing by the standard deviation.
     :param batch_size: Batch size to use for local scaling to conserve memory.
+    :param centroid_column_names: Columns for y and x centroids to use for local zscore.
     :return: Normalized data
     """
 
@@ -243,6 +247,7 @@ def normalize_features(
                 centering=centering,
                 scaling=scaling,
                 batch_size=batch_size,
+                centroid_column_names=centroid_column_names,
             )
         )
 
@@ -264,6 +269,7 @@ def normalize_features(
         centering=centering,
         scaling=scaling,
         batch_size=batch_size,
+        centroid_column_names=centroid_column_names,
     )
     return anndata.AnnData(X=result.data, obs=data.obs.copy(), var=data.var.copy())
 
@@ -280,6 +286,10 @@ def _normalize_group(
     max_value: float | None,
     scaling: bool,
     batch_size: int | None,
+    centroid_column_names: tuple[str, str] = (
+        "Nuclei_AreaShape_Center_Y",
+        "Nuclei_AreaShape_Center_X",
+    ),
 ) -> xr.DataArray:
     indices = None
     reference_data = (
@@ -301,8 +311,8 @@ def _normalize_group(
     elif normalize == "local-zscore":
         nn_query = np.stack(
             (
-                data.coords[_centroid_column_names[0]].values,
-                data.coords[_centroid_column_names[1]].values,
+                data.coords[centroid_column_names[0]].values,
+                data.coords[centroid_column_names[1]].values,
             ),
             axis=1,
         )
@@ -310,8 +320,8 @@ def _normalize_group(
         if reference_data is not None:
             nn_ref = np.stack(
                 (
-                    reference_data.coords[_centroid_column_names[0]].values,
-                    reference_data.coords[_centroid_column_names[1]].values,
+                    reference_data.coords[centroid_column_names[0]].values,
+                    reference_data.coords[centroid_column_names[1]].values,
                 ),
                 axis=1,
             )
