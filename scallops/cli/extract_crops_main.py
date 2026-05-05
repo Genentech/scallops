@@ -122,7 +122,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
 def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "extract-crops",
-        help="Extracts crops from labeled images.",
+        help="Extract crops from labeled images.",
         formatter_class=(
             argparse.ArgumentDefaultsHelpFormatter
             if default_help
@@ -143,16 +143,15 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     image_pattern_arg(parser)
 
     required.add_argument(
-        "--label-name",
-        help="Name of labels to use. For example `nuclei` or `cell`",
-        default="cell",
-    )
-    required.add_argument(
         "--merge",
         required=False,
         help="Path to directory containing output from `merge`",
     )
-
+    parser.add_argument(
+        "--label-name",
+        help="Name of labels to use. For example `nuclei` or `cell`",
+        default="cell",
+    )
     parser.add_argument(
         "--crop-size",
         type=int,
