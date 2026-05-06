@@ -24,6 +24,7 @@ from scallops.io import (
     get_image_spacing,
     is_parquet_file,
     is_scallops_zarr,
+    read_anndata_zarr,
     read_experiment,
     read_image,
     save_ome_tiff,
@@ -625,3 +626,20 @@ def test_dask_zarr_io(tmp_path, recwarn):
     assert len(recwarn) == 0, (
         f"Expected no warnings, but got: {[str(w.message) for w in recwarn]}"
     )
+
+
+@pytest.mark.io
+def test_anndata_zarr(tmp_path):
+    path = tmp_path / "test.zarr"
+    d = anndata.AnnData(
+        X=np.random.random((4, 4)),
+        uns={"a": 1},
+        var=pd.DataFrame({"a": [4, 3, 2, 1]}),
+        obs=pd.DataFrame({"b": [1, 2, 3, 4]}),
+    )
+    d.write_zarr(path, convert_strings_to_categoricals=False)
+    d2 = read_anndata_zarr(path, dask=True)
+    np.testing.assert_equal(d2.X.compute(), d.X)
+    pd.testing.assert_frame_equal(d.obs, d2.obs)
+    pd.testing.assert_frame_equal(d.var, d2.var)
+    assert d.uns == d2.uns
