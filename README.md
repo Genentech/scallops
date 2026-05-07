@@ -66,7 +66,7 @@ uv pip install scallops
 ```
 
 #### Option 2: Run via Docker (GitHub Container Registry)
-SCALLOPS is available as a containerized image via the GitHub Container Registry (GHCR). This is the 
+SCALLOPS is available as a containerized image via the GitHub Container Registry (GHCR). This is the
 best option for ensuring environment consistency.
 
 ```bash
