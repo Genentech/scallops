@@ -657,6 +657,9 @@ def _dask_from_array_no_copy(
     if isinstance(x, (list, tuple, memoryview) + np.ScalarType):
         x = np.array(x)
 
+    if isinstance(x, np.ndarray):
+        x = x.view()
+        x.flags.writeable = False
     # if is_arraylike(x) and hasattr(x, "copy"):
     #     x = x.copy()
 
