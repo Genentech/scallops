@@ -62,15 +62,13 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     group = zarr.group()
     intensity_image_zarr = group.create_array(
         name="image",
-        shape=intensity_image.shape,
+        data=intensity_image.compute(),
         chunk_key_encoding=_chunk_key_encoding,
     )
-    intensity_image_zarr[:] = intensity_image.compute()
 
     label_image_zarr = group.create_array(
-        name="label", shape=label_image.shape, chunk_key_encoding=_chunk_key_encoding
+        name="label", data=label_image.compute(), chunk_key_encoding=_chunk_key_encoding
     )
-    label_image_zarr[:] = label_image.compute()
 
     to_label_crops(
         intensity_image=intensity_image_zarr,
