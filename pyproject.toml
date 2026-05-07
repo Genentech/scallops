@@ -37,7 +37,7 @@ dependencies = [
     "bioio-ome-tiff",
     "bioio-ome-zarr",
     "bioio-tifffile",
-    "bioio",
+    "bioio>=3",
     "centrosome>=0.1.16",
     "cp-measure",
     "cython",
@@ -73,7 +73,7 @@ dependencies = [
     "tensorflow",
     "tifffile",
     "xarray",
-    "zarr",
+    "zarr>=3",
 ]
 
 [project.optional-dependencies]
