@@ -14,7 +14,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import zarr
 from sklearn.cluster import AgglomerativeClustering
-from zarr.errors import PathNotFoundError
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
 from scallops.io import is_parquet_file, read_image
@@ -32,7 +31,12 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import is_ome_zarr_array
+from scallops.zarr_io import (
+    _chunk_key_encoding,
+    _current_format,
+    _da_to_zarr_kwargs,
+    is_ome_zarr_array,
+)
 
 logger = _get_cli_logger()
 
@@ -82,14 +86,14 @@ def _single_stitch(
                 if is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif not no_save_labels:
             try:
                 if is_ome_zarr_array(image_output_root.get(f"labels/{image_key}-mask")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif is_parquet_file(f"{other_output_path}{image_key}-positions.parquet"):
             logger.info(f"Skipping stitching for {image_key}.")
@@ -404,17 +408,18 @@ def _write_arrays(
     metadata,
 ):
     gc.collect()
+    fmt = _current_format()
     if not no_save_labels:
         labels_group = image_output_root.require_group("labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
 
-        array = group.create_dataset(
+        array = group.create_array(
             name="0",
             shape=(fused_y_size, fused_x_size),
             chunks=chunk_size,
             dtype=np.uint8,
-            dimension_separator="/",
             overwrite=True,
+            chunk_key_encoding=_chunk_key_encoding,
         )
 
         da.to_zarr(
@@ -428,20 +433,21 @@ def _write_arrays(
             ),
             url=array,
             compute=True,
-            dimension_separator="/",
+            **_da_to_zarr_kwargs(fmt),
         )
         group.attrs.update(
             _create_label_ome_metadata(image_spacing, image_key + "-mask")
         )
+
         if blend == "none":
             group = labels_group.create_group(image_key + "-tile", overwrite=True)
-            array = group.create_dataset(
+            array = group.create_array(
                 name="0",
                 shape=(fused_y_size, fused_x_size),
                 chunks=chunk_size,
                 dtype=np.uint16,
-                dimension_separator="/",
                 overwrite=True,
+                chunk_key_encoding=_chunk_key_encoding,
             )
 
             da.to_zarr(
@@ -451,12 +457,16 @@ def _write_arrays(
                 ),
                 url=array,
                 compute=True,
-                dimension_separator="/",
+                **_da_to_zarr_kwargs(fmt),
             )
             label_metadata = _create_label_ome_metadata(
-                image_spacing, image_key + "-tile"
+                image_spacing, image_key + "-tile", fmt=fmt
             )
-            label_metadata["multiscales"][0]["metadata"] = {
+
+            multiscales_path = (
+                "multiscales" if "multiscales" in label_metadata else "ome/multiscales"
+            )
+            label_metadata[multiscales_path][0]["metadata"] = {
                 "source": f"../../images/{image_key}"
             }
             group.attrs.update(label_metadata)

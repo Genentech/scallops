@@ -33,7 +33,7 @@ from scallops.io import _download_file, _get_fs_protocol, get_image_spacing
 from scallops.registration.landmarks import _get_translation, find_landmarks
 from scallops.utils import _dask_from_array_no_copy
 from scallops.xr import _get_dims
-from scallops.zarr_io import open_ome_zarr, write_zarr
+from scallops.zarr_io import _chunk_key_encoding, open_ome_zarr, write_zarr
 
 logger = logging.getLogger("scallops")
 
@@ -331,12 +331,13 @@ def _itk_align_reference_time_zarr(
             group = images_group.create_group(
                 image_name.replace("/", "-"), overwrite=True
             )
-            zarr_dataset = group.create_dataset(
+            zarr_dataset = group.create_array(
                 "0",
                 shape=shape,
                 chunks=(1,) * (len(shape) - 2) + chunk_size,
                 dtype=dtype,
                 overwrite=True,
+                chunk_key_encoding=_chunk_key_encoding,
             )
 
         return {
@@ -1164,12 +1165,13 @@ def _itk_transform_image_zarr(
         image_name.replace("/", "-"), overwrite=True
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
-    data = group.create_dataset(
+    data = group.create_array(
         "0",
         shape=dim_sizes + output_size,
         chunks=chunks,
         dtype=image.dtype,
         overwrite=True,
+        chunk_key_encoding=_chunk_key_encoding,
     )
 
     _itk_transform_image(

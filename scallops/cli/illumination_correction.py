@@ -43,6 +43,7 @@ from scallops.io import _get_fs_protocol, _set_up_experiment, save_ome_tiff
 from scallops.zarr_io import (
     _get_fs,
     _get_sep,
+    _get_store_path,
     _write_zarr_image,
     is_ome_zarr_array,
     open_ome_zarr,
@@ -108,7 +109,7 @@ def single_agg_illumination_correction(
     )
     if save_z_index:
         if output_image_format == "zarr":
-            path = root.store.path.rstrip(_get_sep(root))
+            path = _get_store_path(root).rstrip(_get_sep(root))
             if path.endswith(".zarr"):
                 path = path[: -len(".zarr")]
             protocol = _get_fs_protocol(_get_fs(root))

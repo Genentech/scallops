@@ -328,19 +328,18 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
     ome_metadata = _get_ome(image)
     physical_size_y_unit = None
     physical_size_x_unit = None
-    if ome_metadata is not None:
-        values = [
-            ome_metadata.images[image_index].pixels.planes[0].position_y,
-            ome_metadata.images[image_index].pixels.planes[0].position_x,
-        ]
-        physical_size_y_unit = (
-            ome_metadata.images[image_index].pixels.planes[0].position_y_unit.value
-        )
-        physical_size_x_unit = (
-            ome_metadata.images[image_index].pixels.planes[0].position_x_unit.value
-        )
-    elif "multiscales" in image.metadata:
-        metadata = image.metadata["multiscales"][0]["metadata"]
+    values = None
+    if ome_metadata is not None and image_index < len(ome_metadata.images):
+        img = ome_metadata.images[image_index]
+        if len(img.pixels.planes) > 0:
+            values = [
+                img.pixels.planes[0].position_y,
+                img.pixels.planes[0].position_x,
+            ]
+            physical_size_y_unit = img.pixels.planes[0].position_y_unit.value
+            physical_size_x_unit = img.pixels.planes[0].position_x_unit.value
+    if values is None and "multiscales" in image.metadata.attributes:
+        metadata = image.metadata.attributes["multiscales"][0]["metadata"]
         values = [metadata["position_y"], metadata["position_x"]]
         physical_size_y_unit = metadata["position_y_unit"]
         physical_size_x_unit = metadata["position_x_unit"]
@@ -420,8 +419,8 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
         ]
         physical_size_y_unit = ome_metadata.images[0].pixels.physical_size_y_unit.value
         physical_size_x_unit = ome_metadata.images[0].pixels.physical_size_x_unit.value
-    elif "multiscales" in image.metadata:
-        metadata = image.metadata["multiscales"][0]["metadata"]
+    elif "multiscales" in image.metadata.attributes:
+        metadata = image.metadata.attributes["multiscales"][0]["metadata"]
         values = [metadata["physical_size_y"], metadata["physical_size_x"]]
         physical_size_y_unit = metadata["physical_size_y_unit"]
         physical_size_x_unit = metadata["physical_size_x_unit"]

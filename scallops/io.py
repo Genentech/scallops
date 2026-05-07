@@ -54,12 +54,11 @@ from tifffile import tifffile
 from xarray.core.utils import equivalent
 from zarr.storage import StoreLike
 
-from scallops._bioio_zarr_reader import ScallopsZarrReader
 from scallops.experiment.elements import Experiment, _LazyLoadData
 from scallops.externals.tifffile2014 import imsave
 from scallops.utils import forceTCZYX, mlcs
 from scallops.xr import _crop
-from scallops.zarr_io import _read_zarr_experiment, read_ome_zarr_array
+from scallops.zarr_io import _get_store_path, _read_zarr_experiment, read_ome_zarr_array
 
 logger = logging.getLogger("scallops")
 
@@ -83,7 +82,7 @@ def _add_suffix(path: str, suffix: str) -> str:
     """
     path = path.rstrip("/")
 
-    if not path.lower().endswith(".zarr"):
+    if not path.lower().endswith(suffix):
         logger.info(f"Added `{suffix}` extension to {path}")
         path += suffix
     return path
@@ -234,7 +233,9 @@ def _create_image(path: str, **kwargs) -> bioio.BioImage:
     base_path_lc, ext = os.path.splitext(path_lc)
     if "reader" not in img_args:
         if ext in ["", ".zarr", "/", ".zarr/"]:
-            img_args["reader"] = ScallopsZarrReader
+            import bioio_ome_zarr
+
+            img_args["reader"] = bioio_ome_zarr.Reader
         elif ext in [".tiff", ".tif"] and os.path.splitext(base_path_lc)[1] != ".ome":
             img_args["reader"] = bioio_tifffile.Reader
     return bioio.BioImage(path, **img_args)
@@ -1367,7 +1368,7 @@ def _images2fov(
             name = (
                 os.path.basename(file_list[i])
                 if not isinstance(file_list[i], zarr.Group)
-                else file_list[i].store.path
+                else _get_store_path(file_list[i])
             )
             src_metadata.append(dict(attrs=image_attrs[i], name=name))
 
@@ -1640,7 +1641,7 @@ def _set_up_experiment(
                             group_to_matches[group].append((x, d))
             else:
                 x = root
-                name = Path(x.store.path).stem
+                name = Path(_get_store_path(x)).stem
                 m = file_regex.match(name)
                 if m:
                     d = m.groupdict()
@@ -1793,7 +1794,9 @@ def _set_up_experiment(
                 src=file_list,
                 common_src=mlcs(
                     [
-                        Path(x).stem if not isinstance(x, zarr.Group) else x.store.path
+                        Path(x).stem
+                        if not isinstance(x, zarr.Group)
+                        else _get_store_path(x)
                         for x in file_list
                     ]
                 ),

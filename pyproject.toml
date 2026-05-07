@@ -33,13 +33,15 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
 dependencies = [
     "adjustText",
     "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
-    "bioio<2",
+    "bioio",
     "bioio-nd2",
+    "bioio-ome-tiff",
+    "bioio-ome-zarr",
     "bioio-tifffile",
     "centrosome",
     "cp-measure>=0.1.16",
     "dask-image",
-    "dask<=2025.11.0",
+    "dask",
     "decorator",
     "filelock",
     "flox",
@@ -54,7 +56,7 @@ dependencies = [
     "natsort",
     "numcodecs",
     "numpy",
-    "ome-zarr<0.12.0",
+    "ome-zarr",
     "pandas",
     "pint",
     "psutil",
@@ -68,9 +70,9 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile<=2025.5.10",
+    "tifffile",
     "xarray",
-    "zarr<3"
+    "zarr"
 ]
 
 [project.optional-dependencies]

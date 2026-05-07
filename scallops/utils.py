@@ -250,8 +250,8 @@ def grid_search(
             write_image(
                 image=image,
                 group=ome_zarr_root.create_group(name),
-                scaler=None,
                 axes=["t", "c", "z", "y", "x"],
+                scale_factors=[],
                 storage_options=dict(dimension_separator="/"),
             )
         ome_zarr_root.create_group("OME").attrs["series"] = image_keys
