@@ -24,6 +24,7 @@ import xarray as xr
 import zarr
 from dask.delayed import Delayed
 from natsort import natsorted
+from packaging.version import Version
 from zarr import Group
 
 from scallops.cli.util import (
@@ -197,19 +198,19 @@ def single_feature(
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     join_df = False
     features_output_suffix = "" if join_df else "-features"
-    zarr_inputs = True
+    use_zarr_inputs = Version(zarr.__version__).major < 3
+    if use_zarr_inputs:
+        for f in file_list:
+            if not isinstance(f, (zarr.Group, zarr.Array)):
+                use_zarr_inputs = False
+                break
 
-    for f in file_list:
-        if not isinstance(f, (zarr.Group, zarr.Array)):
-            zarr_inputs = False
-            break
-
-    if zarr_inputs and stacked_image_tuple is not None:
+    if use_zarr_inputs and stacked_image_tuple is not None:
         for f in stacked_file_list:
             if not isinstance(f, (zarr.Group, zarr.Array)):
-                zarr_inputs = False
+                use_zarr_inputs = False
                 break
-    if not zarr_inputs:
+    if not use_zarr_inputs:
         image = _read_image(file_list, metadata)
     else:
         image = []
@@ -218,7 +219,7 @@ def single_feature(
             image.append(array)
     n_channels1 = None
     if stacked_image_tuple is not None:
-        if not zarr_inputs:
+        if not use_zarr_inputs:
             stacked_image = _read_image(stacked_file_list, stacked_metadata)
             n_channels1 = image.sizes["c"]
             # clear coords to avoid issues with xr.concat
@@ -343,8 +344,8 @@ def single_feature(
 
         df = label_features(
             objects_df=objects_df,
-            label_image=zarr_labels if zarr_inputs else da.from_zarr(zarr_labels),
-            intensity_image=image if zarr_inputs else image.data,
+            label_image=zarr_labels if use_zarr_inputs else da.from_zarr(zarr_labels),
+            intensity_image=image if use_zarr_inputs else image.data,
             features=features,
             normalize=normalize,
             channel_names=channel_names,
