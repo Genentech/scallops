@@ -27,6 +27,7 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import skimage
+import xarray as xr
 from dask import is_dask_collection
 from dask.array.core import (
     getter,
@@ -64,7 +65,7 @@ def _tqdm_shim(iterator, *args, **kwargs):
     return iterator
 
 
-def _fix_json(d):
+def _fix_json(d: dict) -> dict:
     """Attempts to serialize and deserialize a dictionary to ensure it can be safely converted to
     JSON.
 
@@ -250,8 +251,8 @@ def grid_search(
             write_image(
                 image=image,
                 group=ome_zarr_root.create_group(name),
-                scaler=None,
                 axes=["t", "c", "z", "y", "x"],
+                scale_factors=[],
                 storage_options=dict(dimension_separator="/"),
             )
         ome_zarr_root.create_group("OME").attrs["series"] = image_keys
@@ -630,7 +631,7 @@ def _dask_from_array_no_copy(
     chunks="auto",
     name=None,
     lock=False,
-    asarray=False,
+    asarray=None,
     fancy=True,
     getitem=None,
     meta=None,
@@ -643,6 +644,10 @@ def _dask_from_array_no_copy(
             "Array is already a dask array. Use 'asarray' or 'rechunk' instead."
         )
 
+    if xr is not None and isinstance(x, xr.DataArray) and x.chunks is not None:
+        if isinstance(x.data, da.Array):
+            return x.data
+
     elif is_dask_collection(x):
         warnings.warn(
             "Passing an object to dask.array.from_array which is already a "
@@ -652,6 +657,9 @@ def _dask_from_array_no_copy(
     if isinstance(x, (list, tuple, memoryview) + np.ScalarType):
         x = np.array(x)
 
+    if isinstance(x, np.ndarray):
+        x = x.view()
+        x.flags.writeable = False
     # if is_arraylike(x) and hasattr(x, "copy"):
     #     x = x.copy()
 
@@ -660,15 +668,27 @@ def _dask_from_array_no_copy(
 
     previous_chunks = getattr(x, "chunks", None)
 
+    # As of Zarr 3.x, arrays can have a shards attribute. If present,
+    # this defines the smallest array region that is safe to write, and
+    # thus this is a better starting point than the chunks attribute.
+    # We check for chunks AND shards to be somewhat specific to Zarr 3.x arrays
+    if (
+        hasattr(x, "chunks")
+        and hasattr(x, "shards")
+        and (x.shards is not None)
+        and chunks == "auto"
+    ):
+        previous_chunks = x.shards
+
     chunks = normalize_chunks(
         chunks, x.shape, dtype=x.dtype, previous_chunks=previous_chunks
     )
 
     if name in (None, True):
         token = tokenize(x, chunks, lock, asarray, fancy, getitem, inline_array)
-        name = name or "array-" + token
+        name = name or f"array-{token}"
     elif name is False:
-        name = "array-" + str(uuid.uuid1())
+        name = f"array-{uuid.uuid1()}"
 
     if lock is True:
         lock = SerializableLock()
@@ -764,7 +784,7 @@ def _list_images_wdl(
     save_group_size: bool = False,
     expected_cycles_str: int | None = None,
 ):
-    """Used by WDL workflow to output info about images"""
+    """Used by WDL test to output info about images"""
     from scallops.io import _set_up_experiment
 
     batch_size = 0

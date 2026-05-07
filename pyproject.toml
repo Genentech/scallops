@@ -33,17 +33,20 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
 dependencies = [
     "adjustText",
     "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
-    "bioio<2",
     "bioio-nd2",
+    "bioio-ome-tiff",
+    "bioio-ome-zarr",
     "bioio-tifffile",
-    "centrosome",
-    "cp-measure>=0.1.16",
+    "bioio>=3",
+    "centrosome>=0.1.16",
+    "cp-measure",
+    "cython",
     "dask-image",
-    "dask<=2025.11.0",
+    "dask",
     "decorator",
     "filelock",
     "flox",
-    "fsspec!=2023.9.0", # 2023.9.0 causes ome-zarr write image to fail
+    "fsspec",
     "igraph",
     "itk-elastix",
     "itk",
@@ -54,7 +57,7 @@ dependencies = [
     "natsort",
     "numcodecs",
     "numpy",
-    "ome-zarr<0.12.0",
+    "ome-zarr",
     "pandas",
     "pint",
     "psutil",
@@ -68,13 +71,13 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile<=2025.5.10",
+    "tifffile",
     "xarray",
-    "zarr<3"
+    "zarr>=3",
 ]
 
 [project.optional-dependencies]
-# Added pysam as an optional extra for Linux/macOS users
+
 dialout = [
     "pysam"
 ]

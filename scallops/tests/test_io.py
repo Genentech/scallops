@@ -31,17 +31,14 @@ from scallops.io import (
     to_image_montage,
 )
 from scallops.zarr_io import (
+    _current_format,
+    _da_to_zarr_kwargs,
     _write_zarr_image,
     _write_zarr_labels,
     is_anndata_zarr,
     open_ome_zarr,
     read_ome_zarr_array,
 )
-
-
-@pytest.fixture(params=[False, True])
-def dask(request):
-    return request.param
 
 
 @pytest.mark.io
@@ -165,7 +162,8 @@ def test_read_experiment_multi_scene(scenes):
 
 
 @pytest.mark.io
-def test_read_tif(dask):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_read_tif(use_dask):
     """Ensures that we can read a tif file using bioio.
 
     # In older versions of bioio the following was needed:
@@ -178,9 +176,10 @@ def test_read_tif(dask):
     # bioio.formats.FORMAT_IMPLEMENTATIONS["tif"] = ["bioio.readers.tiff_reader.TiffReader"]
     """
     data = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=dask
+        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
+        dask=use_dask,
     )
-    if dask:
+    if use_dask:
         data2 = read_image(
             "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
             dask=False,
@@ -210,20 +209,25 @@ def test_write_ome_zarr_image_dask(tmp_path):
 
 
 @pytest.mark.io
-def test_write_non_ome_zarr_image(tmp_path, dask):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_write_non_ome_zarr_image(tmp_path, use_dask):
     image = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=dask
+        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
+        dask=use_dask,
     )
     image.attrs = {"test": "1"}
     image.attrs["physical_pixel_sizes"] = (1, 1, 1)
     image.attrs["physical_pixel_units"] = ("mm", "mm", "mm")
-    zarr_path = str(tmp_path / "test.zarr")
-    _write_zarr_image("foo", open_ome_zarr(zarr_path), image, zarr_format="zarr")
-    _write_zarr_image("foo2", open_ome_zarr(zarr_path), image)
+    zarr_path1 = str(tmp_path / "test1.zarr")
+    zarr_path2 = str(tmp_path / "test2.zarr")
 
-    data_zarr = read_image(f"{zarr_path}/images/foo", dask=False)
-    data_ome_zarr = read_image(f"{zarr_path}/images/foo2", dask=False)
+    _write_zarr_image("test", open_ome_zarr(zarr_path1), image, zarr_format="zarr")
+    _write_zarr_image("test", open_ome_zarr(zarr_path2), image)
+    data_zarr = read_image(f"{zarr_path1}/images/test", dask=False)
+    data_ome_zarr = read_image(f"{zarr_path2}/images/test", dask=False)
+
     xr.testing.assert_equal(data_zarr, data_ome_zarr)
+    xr.testing.assert_equal(image, data_ome_zarr)
 
 
 @pytest.mark.io
@@ -266,7 +270,8 @@ def test_experiment_pattern_prefix(tmp_path):
 
 
 @pytest.mark.io
-def test_experiment_separate_t_c(dask, tmp_path):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_experiment_separate_t_c(use_dask, tmp_path):
     """Test reading in exp where channels and cycles are both stored in separate images."""
     ncycles = 4
     nchannels = 5
@@ -294,7 +299,7 @@ def test_experiment_separate_t_c(dask, tmp_path):
             np.testing.assert_equal(
                 image.isel(c=channel, t=cycle).squeeze().data,
                 test_image,
-                f"dask: {dask}, channel: {channel}, cycle: {cycle}, value: {value}",
+                f"dask: {use_dask}, channel: {channel}, cycle: {cycle}, value: {value}",
             )
     gen = list(_set_up_experiment(tmp_path, pattern, ("well",)))
     assert len(gen) == 1
@@ -309,12 +314,13 @@ def test_experiment_separate_t_c(dask, tmp_path):
 
 
 @pytest.mark.io
-def test_group_by_one_field(dask):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_group_by_one_field(use_dask):
     exp = read_experiment(
         "scallops/tests/data/experimentC/input",
         "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-102.{datatype}.tif",
         group_by=("well",),
-        dask=dask,
+        dask=use_dask,
     )
     assert len(exp.images) == 1
     image = exp.images["A1"]
@@ -343,9 +349,9 @@ def test_read_write_labels(tmp_path, array_A1_102_nuclei):
     nuclei = array_A1_102_nuclei.squeeze().data
 
     _write_zarr_labels(
-        name="test", root=open_ome_zarr(str(tmp_path), "w"), labels=nuclei
+        name="test", root=open_ome_zarr(str(tmp_path), mode="w"), labels=nuclei
     )
-    test = read_ome_zarr_array(zarr.open(str(tmp_path / "labels" / "test"), "r"))
+    test = read_ome_zarr_array(zarr.open(str(tmp_path / "labels" / "test"), mode="r"))
     np.testing.assert_equal(nuclei, test.data)
 
 
@@ -603,6 +609,7 @@ def test_dask_zarr_io_component(tmp_path, recwarn):
         url=path,
         component="0",
         fill_value=10,
+        **_da_to_zarr_kwargs(_current_format()),
     )
     assert zarr.open(path, mode="r")["0"].fill_value == 10
     assert len(recwarn) == 0, (
@@ -619,6 +626,7 @@ def test_dask_zarr_io(tmp_path, recwarn):
         url=path,
         compute=True,
         fill_value=10,
+        **_da_to_zarr_kwargs(_current_format()),
     )
     assert zarr.open(path, mode="r").fill_value == 10
     assert len(recwarn) == 0, (

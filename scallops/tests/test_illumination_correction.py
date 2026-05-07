@@ -4,6 +4,7 @@ import subprocess
 import numpy as np
 import pytest
 import zarr
+from zarr.storage import ZipStore
 
 from scallops.io import read_image
 
@@ -28,10 +29,10 @@ def test_illumination_correction_cli(tmp_path):
     ]
     subprocess.check_call(args)
 
-    store = zarr.ZipStore("scallops/tests/data/ops-illum-corr.zip", mode="r")
-    root = zarr.group(store=store)
-    np.testing.assert_equal(
-        root["data"][...],
-        read_image(os.path.join(tmp_path, "images", "A1")).values.squeeze(),
-    )
-    # compare to known good result
+    with ZipStore("scallops/tests/data/ops-illum-corr.zip", read_only=True) as store:
+        root = zarr.open(store=store)
+        # compare to known good result
+        np.testing.assert_equal(
+            root["data"][...],
+            read_image(os.path.join(tmp_path, "images", "A1")).values.squeeze(),
+        )

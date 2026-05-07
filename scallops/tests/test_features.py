@@ -27,6 +27,7 @@ from scallops.features.generate import _create_funcs, label_features
 from scallops.features.spots import spot_count
 from scallops.features.texture import pftas
 from scallops.io import read_image, to_label_crops
+from scallops.zarr_io import _chunk_key_encoding
 
 __this__ = Path(__file__).resolve()
 __tests__ = __this__.parent
@@ -59,13 +60,15 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     assert len(result_index) == 1 and result_index.values[0] == 2603
 
     group = zarr.group()
-    intensity_image_zarr = group.create_dataset(
-        name="image", shape=intensity_image.shape
+    intensity_image_zarr = group.create_array(
+        name="image",
+        data=intensity_image.compute(),
+        chunk_key_encoding=_chunk_key_encoding,
     )
-    intensity_image_zarr[:] = intensity_image.compute()
 
-    label_image_zarr = group.create_dataset(name="label", shape=label_image.shape)
-    label_image_zarr[:] = label_image.compute()
+    label_image_zarr = group.create_array(
+        name="label", data=label_image.compute(), chunk_key_encoding=_chunk_key_encoding
+    )
 
     to_label_crops(
         intensity_image=intensity_image_zarr,

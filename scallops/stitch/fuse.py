@@ -15,6 +15,7 @@ import shapely
 import zarr
 from dask import delayed
 from dask.diagnostics import ProgressBar
+from ome_zarr.format import Format
 from skimage.util import img_as_float
 from sklearn.cluster import AgglomerativeClustering
 
@@ -22,12 +23,17 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.utils import _crop_image, dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
+from scallops.zarr_io import _chunk_key_encoding, _current_format, _da_to_zarr_kwargs
 
 logger = logging.getLogger("scallops")
 
 
-def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: str):
-    return {
+def _create_label_ome_metadata(
+    image_spacing: tuple[float, float], label_name: str, fmt: Format = None
+):
+    if fmt is None:
+        fmt = _current_format()
+    d = {
         "multiscales": [
             {
                 "axes": [
@@ -38,10 +44,10 @@ def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: s
                     {
                         "coordinateTransformations": [
                             {
-                                "scale": [
+                                "scale": (
                                     float(image_spacing[0]),
                                     float(image_spacing[1]),
-                                ],
+                                ),
                                 "type": "scale",
                             }
                         ],
@@ -49,10 +55,14 @@ def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: s
                     }
                 ],
                 "name": f"/labels/{label_name}",
-                "version": "0.4",
+                "version": fmt.version,
             }
         ]
     }
+    if fmt.version in ("0.1", "0.2", "0.3", "0.4"):
+        return d
+
+    return {"ome": d}
 
 
 def _create_ome_metadata(
@@ -64,9 +74,10 @@ def _create_ome_metadata(
     metadata = {}
     metadata.update(**kwargs)
     metadata["stitch_coords"] = dict()
+    fmt = _current_format()
     for c in stitch_coords:  # convert to dict
         metadata["stitch_coords"][c] = stitch_coords[c].to_list()
-    return {
+    d = {
         "multiscales": [
             {
                 "metadata": metadata,
@@ -79,11 +90,11 @@ def _create_ome_metadata(
                     {
                         "coordinateTransformations": [
                             {
-                                "scale": [
+                                "scale": (
                                     1.0,
                                     float(image_spacing[0]),
                                     float(image_spacing[1]),
-                                ],
+                                ),
                                 "type": "scale",
                             }
                         ],
@@ -91,10 +102,13 @@ def _create_ome_metadata(
                     }
                 ],
                 "name": f"/images/{image_key}",
-                "version": "0.4",
+                "version": fmt.version,
             }
         ]
     }
+    if fmt.version in ("0.1", "0.2", "0.3", "0.4"):
+        return d
+    return {"ome": d}
 
 
 def _fuse(
@@ -222,7 +236,7 @@ def _fuse(
         locks = np.array(locks)
         partition_tree = shapely.STRtree(partition_boxes)
 
-    result = group.create_dataset(
+    result = group.create_array(
         shape=(
             len(output_channels),  # c
             fused_y_size,
@@ -231,8 +245,8 @@ def _fuse(
         dtype=target_dtype,
         chunks=(1,) + chunk_size,
         name="0",
-        dimension_separator="/",
         overwrite=True,
+        chunk_key_encoding=_chunk_key_encoding,
     )
 
     _fuse_image_delayed = delayed(_fuse_image)
@@ -372,7 +386,7 @@ def _fuse(
                 url=result,
                 region=(slice(channel_batch, channel_batch + channels_per_batch),),
                 compute=True,
-                dimension_separator="/",
+                **_da_to_zarr_kwargs(_current_format()),
             )
 
 

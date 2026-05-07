@@ -143,7 +143,7 @@ def pooled_iss(
 
         for i in range(len(image_keys)):
             node_name = image_keys[i]
-            grp = zarr.open(url + fs.sep + "images" + fs.sep + node_name, "r")
+            grp = zarr.open(url + fs.sep + "images" + fs.sep + node_name, mode="r")
 
             channel_axis = None
             ch_types = [axis["type"] for axis in grp.attrs["multiscales"][0]["axes"]]
@@ -193,7 +193,7 @@ def pooled_iss(
 
         for label_key in label_keys:
             label_suffix = label_key.split("-")[-1]
-            grp = zarr.open(url + fs.sep + "labels" + fs.sep + label_key, "r")
+            grp = zarr.open(url + fs.sep + "labels" + fs.sep + label_key, mode="r")
             label_data = grp["0"]
             params = dict(name=label_key, opacity=0.5, visible=label_suffix in visible)
             if label_suffix == "spots":  # view spots as points
