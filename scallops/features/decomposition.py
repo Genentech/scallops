@@ -146,7 +146,7 @@ def pca(
                 X_batch = X_batch.compute()
             d.partial_fit(X_batch)
 
-        #  x = d.transform(X)  # loads everything into memory
+        # x = d.transform(X)  # loads everything into memory
 
     else:
         if not is_dask:
@@ -175,8 +175,11 @@ def pca(
     variance_ratio = d.explained_variance_ratio_
     variance = d.explained_variance_
     if X_transformed is None:
+        if mean_ is not None:
+            X = X - mean_
         X_transformed = X @ components_.T  # (n_components, n_features)
-        X_transformed -= get_namespace(mean_).reshape(mean_, (1, -1)) @ components_.T
+        if whiten:
+            X_transformed /= get_namespace(variance).sqrt(variance)
 
     uns = {
         "pca": {
