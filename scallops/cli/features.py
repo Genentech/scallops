@@ -450,8 +450,16 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
     if features_plot is None:
         features_plot = []
     if dask_server_url is None and arguments.dask_cluster is None:
+        threads_per_worker = 1
+        if "sizeshape" in unique_features:
+            threads_per_worker = 4
+        else:
+            for feature in unique_features:
+                if feature.startswith("correlationpearsonbox"):
+                    threads_per_worker = 2
+                    break
         dask_cluster_parameters = _dask_workers_threads(
-            threads_per_worker=4 if "sizeshape" in unique_features else 1
+            threads_per_worker=threads_per_worker
         )
 
     objects_dir_sep = None
