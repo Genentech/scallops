@@ -242,7 +242,11 @@ def _single_stitch(
         np.sum(stitch_position_coords - center, axis=1) ** 2
     )
 
-    stitch_positions_df["source"] = original_filepaths
+    stitch_positions_df["source"] = (
+        original_filepaths * len(stitch_positions_df)
+        if len(original_filepaths) == 1
+        else original_filepaths
+    )
     if fileattrs is not None:
         stitch_positions_df["source_metadata"] = fileattrs
     stitch_positions_df["tile"] = np.arange(len(stitch_positions_df))
