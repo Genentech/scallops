@@ -189,6 +189,22 @@ def test_read_tif(use_dask):
 
 
 @pytest.mark.io
+def test_read_ome_zarr_v5(tmp_path):
+    from ome_zarr.writer import write_image as ome_zarr_write_image
+
+    path = tmp_path / "test.ome.zarr"
+
+    size_xy = 128
+    size_z = 10
+    rng = np.random.default_rng(0)
+    data = rng.poisson(lam=10, size=(size_z, size_xy, size_xy)).astype(np.uint8)
+    ome_zarr_write_image(data, str(path), axes="zyx")
+    data_from_zarr = read_image(path)
+    assert data_from_zarr.dims == ("z", "y", "x")
+    np.testing.assert_array_equal(data_from_zarr.data, data)
+
+
+@pytest.mark.io
 def test_write_ome_zarr_image_dask(tmp_path):
     data = read_image(
         "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=True
