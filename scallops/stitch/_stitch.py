@@ -242,7 +242,11 @@ def _single_stitch(
         np.sum(stitch_position_coords - center, axis=1) ** 2
     )
 
-    stitch_positions_df["source"] = original_filepaths
+    stitch_positions_df["source"] = (
+        original_filepaths * len(stitch_positions_df)
+        if len(original_filepaths) == 1
+        else original_filepaths
+    )
     if fileattrs is not None:
         stitch_positions_df["source_metadata"] = fileattrs
     stitch_positions_df["tile"] = np.arange(len(stitch_positions_df))
@@ -286,7 +290,10 @@ def _single_stitch(
 
     # replace source with local source
     stitch_positions_df_local = stitch_positions_df.copy()
-    stitch_positions_df_local["source"] = filepaths
+    stitch_positions_df_local["source"] = (
+        filepaths * len(stitch_positions_df_local) if len(filepaths) == 1 else filepaths
+    )
+
     logger.info(f"Saving report to {other_output_path}{image_key}.pdf.")
     _qc_report(
         path=f"{other_output_path}{image_key}.pdf",
