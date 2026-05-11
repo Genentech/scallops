@@ -290,7 +290,10 @@ def _single_stitch(
 
     # replace source with local source
     stitch_positions_df_local = stitch_positions_df.copy()
-    stitch_positions_df_local["source"] = filepaths
+    stitch_positions_df_local["source"] = (
+        filepaths * len(filepaths) if len(filepaths) == 1 else filepaths
+    )
+
     logger.info(f"Saving report to {other_output_path}{image_key}.pdf.")
     _qc_report(
         path=f"{other_output_path}{image_key}.pdf",
