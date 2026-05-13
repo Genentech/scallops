@@ -154,11 +154,11 @@ def read_gmt(path: str) -> dict[str, set[str]]:
             n_genes = len(genes)
             genes = set(genes)
             set_name = fields[0]
-            set_descr = fields[1]
+            #  set_descr = fields[1]
             assert len(genes) == n_genes, f"Duplicate gene found for {set_name}."
             if set_name in set_name_to_entries:
                 raise ValueError(f"Duplicate gene set found: {set_name}.")
-            set_name_to_entries[set_name] = set_descr
+            set_name_to_entries[set_name] = genes
     return set_name_to_entries
 
 
