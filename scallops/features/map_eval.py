@@ -141,13 +141,13 @@ def pairwise_similarities(
     return values
 
 
-def read_gmt(path: str) -> dict[str, set[str]]:
+def read_gmt(path: str) -> pd.DataFrame:
     """Read gene sets stored in GMT format.
 
     :param path: Path to GMT file.
-    :return: Set name to genes
+    :return: Dataframe containing gene sets.
     """
-    set_name_to_entries = dict()
+    results = []
     with fsspec.open(path, "r") as file:
         for line in file:
             fields = line.strip().split("\t")
@@ -156,12 +156,12 @@ def read_gmt(path: str) -> dict[str, set[str]]:
             n_genes = len(genes)
             genes = set(genes)
             set_name = fields[0]
-            #  set_descr = fields[1]
+            set_descr = fields[1]
             assert len(genes) == n_genes, f"Duplicate gene found for {set_name}."
-            if set_name in set_name_to_entries:
-                raise ValueError(f"Duplicate gene set found: {set_name}.")
-            set_name_to_entries[set_name] = genes
-    return set_name_to_entries
+            results.append([set_name, set_descr, genes])
+    return pd.DataFrame(results, columns=["name", "description", "genes"]).set_index(
+        "name"
+    )
 
 
 def read_corum(path: str) -> pd.DataFrame:
