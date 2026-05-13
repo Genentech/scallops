@@ -95,7 +95,7 @@ def cluster_benchmark(
         if within_data.shape[0] < min_genes:
             continue
         within_vals = within_data.X[np.triu_indices(within_data.shape[0], k=1)]
-        between_data = _slice_anndata(data, ~within_expr, within_expr)
+        between_data = _slice_anndata(data, within_expr, ~within_expr)
         between_vals = between_data.X.flatten()
         ks_res = ks_2samp(within_vals, between_vals, alternative=alternative)
         results.append(
