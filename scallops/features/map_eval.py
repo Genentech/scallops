@@ -103,7 +103,9 @@ def cluster_benchmark(
                 cluster_name,
                 within_data.shape[0],
                 within_vals.mean(),
+                within_vals.std(),
                 between_vals.mean(),
+                between_vals.std(),
                 ks_res.statistic,
                 ks_res.pvalue,
             ]
@@ -114,8 +116,10 @@ def cluster_benchmark(
         columns=[
             "name",
             "size",
-            "within",
-            "between",
+            "within_mean",
+            "within_std",
+            "between_mean",
+            "between_std",
             "statistic",
             "pvalue",
         ],
