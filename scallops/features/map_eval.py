@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from typing import Literal, Tuple
 
 import anndata
+import fsspec
 import numpy as np
 import pandas as pd
 from scipy.stats import ks_2samp
@@ -136,6 +137,29 @@ def pairwise_similarities(
     else:
         raise ValueError(f"Metric {metric} is not supported.")
     return values
+
+
+def read_gmt(path: str) -> dict[str, set[str]]:
+    """Read gene sets stored in GMT format.
+
+    :param path: Path to GMT file.
+    :return: Set name to genes
+    """
+    set_name_to_entries = dict()
+    with fsspec.open(path, "r") as file:
+        for line in file:
+            fields = line.strip().split("\t")
+            genes = fields[2:]
+            genes = [x for x in genes if x]
+            n_genes = len(genes)
+            genes = set(genes)
+            set_name = fields[0]
+            set_descr = fields[1]
+            assert len(genes) == n_genes, f"Duplicate gene found for {set_name}."
+            if set_name in set_name_to_entries:
+                raise ValueError(f"Duplicate gene set found: {set_name}.")
+            set_name_to_entries[set_name] = set_descr
+    return set_name_to_entries
 
 
 def read_corum(path: str) -> pd.DataFrame:
