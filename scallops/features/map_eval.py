@@ -5,7 +5,10 @@ from typing import Literal, Tuple
 import anndata
 import numpy as np
 import pandas as pd
+from scipy.stats import ks_2samp
 from sklearn.metrics.pairwise import cosine_similarity
+
+from scallops.features.util import _slice_anndata
 
 
 def recall(
@@ -59,6 +62,61 @@ def recall(
             ) / len(query_distribution)
         results.append(result)
     return pd.DataFrame(results)
+
+
+def cluster_benchmark(
+    data: anndata.AnnData,
+    cluster_name_to_genes: dict[str, Sequence[str]],
+    min_genes: int = 10,
+    alternative: Literal["two-sided", "less", "greater"] = "two-sided",
+) -> pd.DataFrame:
+    """
+    Perform benchmarking of a map based on known biological cluster of perturbations.
+
+    :param data: AnnData object containing perturbation similarity matrix.
+    :param cluster_name_to_genes: Dictionary that maps cluster name to genes in cluster.
+    :param min_genes: Minimum number of genes per cluster.
+    :param alternative: Defines the null and alternative hypotheses. Use `less` to test that
+    non-cluster similarities are less than cluster similarities.
+    :return: DataFrame containing the benchmarking results.
+
+    """
+
+    # Adapted from EFAAR_benchmarking https://github.com/recursionpharma/EFAAR_benchmarking/
+
+    results = []
+    assert np.all(data.var.index == data.obs.index)
+    for cluster_name in cluster_name_to_genes:
+        cluster_genes = cluster_name_to_genes[cluster_name]
+
+        within_expr = data.var.index.isin(cluster_genes)
+        within_data = _slice_anndata(data, within_expr, within_expr)
+        if within_data.shape[0] < min_genes:
+            continue
+        within_vals = within_data.X[np.triu_indices(within_data.shape[0], k=1)]
+        notin_in_data = _slice_anndata(data, ~within_expr, within_expr)
+        between_vals = notin_in_data.X.flatten()
+        ks_res = ks_2samp(within_vals, between_vals, alternative=alternative)
+        results.append(
+            [
+                within_data.shape[0],
+                within_vals.mean(),
+                between_vals.mean(),
+                ks_res.statistic,
+                ks_res.pvalue,
+            ]
+        )
+
+    return pd.DataFrame(
+        results,
+        columns=[
+            "cluster",
+            "within",
+            "between",
+            "statistic",
+            "pvalue",
+        ],
+    )
 
 
 def pairwise_similarities(
