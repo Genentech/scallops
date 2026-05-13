@@ -111,7 +111,7 @@ def cluster_benchmark(
     return pd.DataFrame(
         results,
         columns=[
-            "cluster",
+            "size",
             "within",
             "between",
             "statistic",
