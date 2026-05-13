@@ -100,6 +100,7 @@ def cluster_benchmark(
         ks_res = ks_2samp(within_vals, between_vals, alternative=alternative)
         results.append(
             [
+                cluster_name,
                 within_data.shape[0],
                 within_vals.mean(),
                 between_vals.mean(),
@@ -111,6 +112,7 @@ def cluster_benchmark(
     return pd.DataFrame(
         results,
         columns=[
+            "name",
             "size",
             "within",
             "between",
