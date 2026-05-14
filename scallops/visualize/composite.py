@@ -383,8 +383,7 @@ def imcomposite(
         ncol, nrow = (
             _wrap_cols(ncol=len(facet_values), col_wrap=col_wrap)
             if col_wrap is not None
-            else len(facet_values),
-            1,
+            else (len(facet_values), 1)
         )
         if figsize is None:
             figsize = 6 * ncol, 6 * nrow
@@ -413,7 +412,6 @@ def imcomposite(
                 rgb=rgb,
                 mask=mask,
             )
-
             ax[i].set_title(f"{facet}={facet_values[i]}")
         return ax
     if ax is None:
