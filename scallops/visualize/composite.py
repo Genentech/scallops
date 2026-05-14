@@ -275,6 +275,10 @@ def _imcomposite_image_labels(
 
     # contour
     if isinstance(labels_contour, (np.ndarray, da.Array, xr.DataArray)):
+        if isinstance(labels_contour, xr.DataArray):
+            labels_contour = labels_contour.data
+        if isinstance(labels_contour, da.Array):
+            labels_contour = labels_contour.compute()
         # use a different mask for contours
         if labels_contour_cmap is not None:
             labels_cmap = labels_contour_cmap
