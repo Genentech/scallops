@@ -8,6 +8,7 @@ Authors:
 import argparse
 import json
 
+import dask.array as da
 import fsspec
 import zarr
 from zarr import Group
@@ -51,7 +52,7 @@ def _execute(
             return
     logger.info(f"Finding objects for {metadata['id']}.")
     array = file_list[0][list(file_list[0].keys())[0]]
-    df = find_objects(array)
+    df = find_objects(da.from_zarr(array))
     df.index.name = "label"
     df.columns = f"{_label_name_to_prefix[label_name]}_" + df.columns
     _to_parquet(
