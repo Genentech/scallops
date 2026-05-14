@@ -260,7 +260,7 @@ def single_feature(
         label_prefix = _label_name_to_prefix[label_name]
         if objects_path is None:
             logger.info(f"Find {label_name} objects for {image_key}.")
-            objects_df = find_objects(zarr_labels)
+            objects_df = find_objects(da.from_zarr(zarr_labels))
             objects_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
             objects_df.index.name = "label"
             objects_df.columns = f"{label_prefix}_" + objects_df.columns
