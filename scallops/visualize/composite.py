@@ -311,11 +311,13 @@ def imcomposite(
     labels_contour_thickness: int = 1,
     labels_contour_alpha: float = 1,
     dim: str | None = "c",
+    facet: str | None = None,
+    col_wrap: int | None = 3,
     figsize: tuple[int, int] = None,
-    ax: plt.Axes | None = None,
+    ax: plt.Axes | Sequence[plt.Axes] | None = None,
     rgb: bool = False,
     mask: np.ndarray | xr.DataArray | da.Array = None,
-) -> plt.Axes:
+) -> plt.Axes | Sequence[plt.Axes]:
     """Plot an image composite using additive blending.
 
     :param image: XArray with dimensions y, x and optionally `dim`.
@@ -341,7 +343,10 @@ def imcomposite(
     :param labels_cmap: ListedColormap instance or registered colormap name used to
         map label data to colors.
     :param dim: Image dimension to blend.
-    :param ax: Matplotlib axes to plot the composite to.
+    :param facet: Image dimension to plot on different facet.
+    :param col_wrap: Wrap the facet variable at this width, so that the facet values span multiple rows.
+    :param ax: Matplotlib axes to plot to. If facet is provided, a one dimensional array of axes corresponding to
+    length of facet values
     :param rgb: Whether the image is RGB or RGBA.
     :param mask: Mask pixels where mask == 0
 
@@ -373,6 +378,42 @@ def imcomposite(
             plt.show()
     """
 
+    if facet is not None:
+        facet_values = image.coords[facet].values
+        ncol, nrow = (
+            _wrap_cols(ncol=len(facet_values), col_wrap=col_wrap)
+            if col_wrap is not None
+            else (len(facet_values), 1)
+        )
+        if figsize is None:
+            figsize = 6 * ncol, 6 * nrow
+        if ax is None:
+            fig, ax = plt.subplots(
+                ncols=ncol, nrows=nrow, figsize=figsize, layout="constrained"
+            )
+            ax = ax.ravel()
+        for i in range(len(facet_values)):
+            sel = {}
+            sel[facet] = facet_values[i]
+            imcomposite(
+                image=image.sel(sel),
+                labels=labels,
+                vmin=vmin,
+                vmax=vmax,
+                cmap=cmap,
+                labels_cmap=labels_cmap,
+                labels_alpha=labels_alpha,
+                labels_contour=labels_contour,
+                labels_contour_cmap=labels_contour_cmap,
+                labels_contour_thickness=labels_contour_thickness,
+                labels_contour_alpha=labels_contour_alpha,
+                dim=dim,
+                ax=ax[i],
+                rgb=rgb,
+                mask=mask,
+            )
+            ax[i].set_title(f"{facet}={facet_values[i]}")
+        return ax
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize if figsize is not None else (6, 6))
 
