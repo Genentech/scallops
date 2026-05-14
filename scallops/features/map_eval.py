@@ -3,9 +3,13 @@ from collections.abc import Sequence
 from typing import Literal, Tuple
 
 import anndata
+import fsspec
 import numpy as np
 import pandas as pd
+from scipy.stats import ks_2samp
 from sklearn.metrics.pairwise import cosine_similarity
+
+from scallops.features.util import _slice_anndata
 
 
 def recall(
@@ -61,6 +65,61 @@ def recall(
     return pd.DataFrame(results)
 
 
+def set_benchmark(
+    data: anndata.AnnData,
+    set_name_to_genes: dict[str, Sequence[str]],
+    min_genes: int = 10,
+) -> pd.DataFrame:
+    """
+    Tests whether distributions of similarities of within and between set are different using Kolmogorov-Smirnov test.
+
+    :param data: AnnData object containing perturbation similarity matrix.
+    :param set_name_to_genes: Dictionary that maps set names to genes in set.
+    :param min_genes: Minimum number of genes per set.
+    :return: DataFrame containing the results.
+
+    """
+
+    # Adapted from cluster_benchmark method from
+    # https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/benchmarking.py
+
+    results = []
+    assert np.all(data.var.index == data.obs.index)
+    for set_name in set_name_to_genes:
+        set_genes = set_name_to_genes[set_name]
+
+        within_expr = data.var.index.isin(set_genes)
+        within_data = _slice_anndata(data, within_expr, within_expr)
+        if within_data.shape[0] < min_genes:
+            continue
+        within_vals = within_data.X[np.triu_indices(within_data.shape[0], k=1)]
+        between_data = _slice_anndata(data, within_expr, ~within_expr)
+        between_vals = between_data.X.flatten()
+        ks_res = ks_2samp(within_vals, between_vals)
+        results.append(
+            [
+                set_name,
+                within_data.shape[0],
+                within_vals.mean(),
+                between_vals.mean(),
+                ks_res.statistic,
+                ks_res.pvalue,
+            ]
+        )
+
+    return pd.DataFrame(
+        results,
+        columns=[
+            "name",
+            "size",
+            "within_mean",
+            "between_mean",
+            "statistic",
+            "pvalue",
+        ],
+    )
+
+
 def pairwise_similarities(
     data: anndata.AnnData, metric: Literal["cosine", "pearson"] = "cosine"
 ) -> np.ndarray:
@@ -78,6 +137,29 @@ def pairwise_similarities(
     else:
         raise ValueError(f"Metric {metric} is not supported.")
     return values
+
+
+def read_gmt(path: str) -> pd.DataFrame:
+    """Read gene sets stored in GMT format.
+
+    :param path: Path to GMT file.
+    :return: Dataframe containing gene sets.
+    """
+    results = []
+    with fsspec.open(path, "r") as file:
+        for line in file:
+            fields = line.strip().split("\t")
+            genes = fields[2:]
+            genes = [x for x in genes if x]
+            n_genes = len(genes)
+            genes = set(genes)
+            set_name = fields[0]
+            set_descr = fields[1]
+            assert len(genes) == n_genes, f"Duplicate gene found for {set_name}."
+            results.append([set_name, set_descr, genes])
+    return pd.DataFrame(results, columns=["name", "description", "genes"]).set_index(
+        "name"
+    )
 
 
 def read_corum(path: str) -> pd.DataFrame:
