@@ -742,8 +742,13 @@ def _itk_align_reference_time(
                             moving_y=grid_results_filtered["moving_y_microns"].values,
                             moving_x=grid_results_filtered["moving_x_microns"].values,
                         )
+
                         if len(grid_results_filtered) >= landmark_min_count:
                             landmarks_found = True
+                            if padding_attempt > 0:
+                                landmarks["template_padding"] = (
+                                    landmark_template_padding[padding_attempt]
+                                )
                             break
                     if landmarks_found:
                         break
@@ -971,10 +976,11 @@ def itk_align(
         )
         matrix = np.array(landmarks_transform.GetParameters()).tolist()
         matrix = ", ".join([f"{d:.2f}" for d in matrix])
-        logger.info(
-            f"Initialized registration using {len(landmarks['fixed_y'])} landmarks. "
-            f"Transformation: {matrix}."
-        )
+        message = f"Initialized registration using {len(landmarks['fixed_y'])} landmarks. Transformation: {matrix}."
+
+        if "template_padding" in landmarks:
+            message += f" Using template padding: {landmarks['template_padding']}."
+        logger.info(message)
         elastix_object.SetInitialTransform(landmarks_transform)
 
     if additional_fixed_image is not None:
