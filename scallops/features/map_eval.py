@@ -65,29 +65,30 @@ def recall(
     return pd.DataFrame(results)
 
 
-def cluster_benchmark(
+def set_benchmark(
     data: anndata.AnnData,
-    cluster_name_to_genes: dict[str, Sequence[str]],
+    set_name_to_genes: dict[str, Sequence[str]],
     min_genes: int = 10,
 ) -> pd.DataFrame:
     """
-    Perform benchmarking of a similarity map based on known biological clusters of perturbations.
+    Tests whether distributions of similarities of within and between set are different using Kolmogorov-Smirnov test.
 
     :param data: AnnData object containing perturbation similarity matrix.
-    :param cluster_name_to_genes: Dictionary that maps cluster names to genes in cluster.
-    :param min_genes: Minimum number of genes per cluster.
-    :return: DataFrame containing the benchmarking results.
+    :param set_name_to_genes: Dictionary that maps set names to genes in set.
+    :param min_genes: Minimum number of genes per set.
+    :return: DataFrame containing the results.
 
     """
 
-    # Adapted from EFAAR_benchmarking https://github.com/recursionpharma/EFAAR_benchmarking/
+    # Adapted from cluster_benchmark method from
+    # https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/benchmarking.py
 
     results = []
     assert np.all(data.var.index == data.obs.index)
-    for cluster_name in cluster_name_to_genes:
-        cluster_genes = cluster_name_to_genes[cluster_name]
+    for set_name in set_name_to_genes:
+        set_genes = set_name_to_genes[set_name]
 
-        within_expr = data.var.index.isin(cluster_genes)
+        within_expr = data.var.index.isin(set_genes)
         within_data = _slice_anndata(data, within_expr, within_expr)
         if within_data.shape[0] < min_genes:
             continue
@@ -97,12 +98,10 @@ def cluster_benchmark(
         ks_res = ks_2samp(within_vals, between_vals)
         results.append(
             [
-                cluster_name,
+                set_name,
                 within_data.shape[0],
                 within_vals.mean(),
-                within_vals.std(),
                 between_vals.mean(),
-                between_vals.std(),
                 ks_res.statistic,
                 ks_res.pvalue,
             ]
@@ -114,9 +113,7 @@ def cluster_benchmark(
             "name",
             "size",
             "within_mean",
-            "within_std",
             "between_mean",
-            "between_std",
             "statistic",
             "pvalue",
         ],
