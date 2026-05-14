@@ -69,16 +69,13 @@ def cluster_benchmark(
     data: anndata.AnnData,
     cluster_name_to_genes: dict[str, Sequence[str]],
     min_genes: int = 10,
-    alternative: Literal["two-sided", "less", "greater"] = "two-sided",
 ) -> pd.DataFrame:
     """
-    Perform benchmarking of a map based on known biological cluster of perturbations.
+    Perform benchmarking of a similarity map based on known biological clusters of perturbations.
 
     :param data: AnnData object containing perturbation similarity matrix.
-    :param cluster_name_to_genes: Dictionary that maps cluster name to genes in cluster.
+    :param cluster_name_to_genes: Dictionary that maps cluster names to genes in cluster.
     :param min_genes: Minimum number of genes per cluster.
-    :param alternative: Defines the null and alternative hypotheses. Use `less` to test that
-    non-cluster similarities are less than cluster similarities.
     :return: DataFrame containing the benchmarking results.
 
     """
@@ -97,7 +94,7 @@ def cluster_benchmark(
         within_vals = within_data.X[np.triu_indices(within_data.shape[0], k=1)]
         between_data = _slice_anndata(data, within_expr, ~within_expr)
         between_vals = between_data.X.flatten()
-        ks_res = ks_2samp(within_vals, between_vals, alternative=alternative)
+        ks_res = ks_2samp(within_vals, between_vals)
         results.append(
             [
                 cluster_name,
