@@ -232,6 +232,7 @@ def _single_stitch(
     stitch_positions_df = pd.DataFrame(
         stitch_result["stitched_positions"], columns=["y", "x"]
     )
+
     if isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(z_index, str):
         stitch_positions_df["z_index"] = z_index
     del stitch_result
@@ -244,12 +245,14 @@ def _single_stitch(
 
     stitch_positions_df["source"] = (
         original_filepaths * len(stitch_positions_df)
-        if len(original_filepaths) == 1
+        if n_scenes is not None
         else original_filepaths
     )
     if fileattrs is not None:
         stitch_positions_df["source_metadata"] = fileattrs
     stitch_positions_df["tile"] = np.arange(len(stitch_positions_df))
+    if n_scenes is not None:
+        stitch_positions_df["scene"] = stitch_positions_df["tile"]
     stitch_positions_df["original_y"] = stage_positions[:, 0]
     stitch_positions_df["original_x"] = stage_positions[:, 1]
 
@@ -291,7 +294,9 @@ def _single_stitch(
     # replace source with local source
     stitch_positions_df_local = stitch_positions_df.copy()
     stitch_positions_df_local["source"] = (
-        filepaths * len(stitch_positions_df_local) if len(filepaths) == 1 else filepaths
+        filepaths * len(stitch_positions_df_local)
+        if n_scenes is not None
+        else filepaths
     )
 
     logger.info(f"Saving report to {other_output_path}{image_key}.pdf.")
