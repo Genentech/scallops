@@ -163,13 +163,12 @@ def overlapping_pairs(df: pd.DataFrame, tile_shape: tuple[int, int]) -> pd.DataF
 
 
 def tile_source_labels(
-    df: pd.DataFrame, tile_shape: tuple[int, int], offset: int = 1
-) -> np.ndarray[np.uint16]:
-    """Create label array indicating tile source
+    df: pd.DataFrame, tile_shape: tuple[int, int]
+) -> np.ndarray[np.int32]:
+    """Create label array indicating tile source. A value of -1 indicate no tile.
 
     :param df: DataFrame containing stitched tile locations
     :param tile_shape: Image tile size
-    :param offset: Value to add to tile
     :return: Labels array
     """
     df = df.sort_values("distance_to_center", ascending=False)
@@ -177,13 +176,14 @@ def tile_source_labels(
     x = df["x"].round().values.astype(int)
     stitched_y_size = (y + tile_shape[0]).max()
     stitched_x_size = (x + tile_shape[1]).max()
-    result = np.zeros((stitched_y_size, stitched_x_size), dtype=np.uint16)
+    result = np.zeros((stitched_y_size, stitched_x_size), dtype=np.int32)
+    result[:] = -1
     y_end = y + tile_shape[0]
     x_end = x + tile_shape[1]
     tiles = df["tile"].values
     for i in range(len(y)):
         x1, y1, x2, y2 = x[i], y[i], x_end[i], y_end[i]
-        result[y1:y2, x1:x2] = tiles[i] + offset
+        result[y1:y2, x1:x2] = tiles[i]
     return result
 
 
