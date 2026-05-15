@@ -709,6 +709,7 @@ def _itk_align_reference_time(
             if landmarks_initialize:
                 landmarks_found = False
                 grid_results = None
+                max_landmarks_found = 0
                 for landmark_translation_attempt in range(len(landmark_translations)):
                     landmark_translation = landmark_translations[
                         landmark_translation_attempt
@@ -736,6 +737,9 @@ def _itk_align_reference_time(
                         ).compute()
                         query = ["inlier", f"score>{landmark_min_score}"]
                         grid_results_filtered = grid_results.query(" & ".join(query))
+                        max_landmarks_found = max(
+                            max_landmarks_found, len(grid_results_filtered)
+                        )
                         landmarks = dict(
                             fixed_y=grid_results_filtered["y_start_microns"].values,
                             fixed_x=grid_results_filtered["x_start_microns"].values,
@@ -756,7 +760,9 @@ def _itk_align_reference_time(
                 if dest is not None and grid_results is not None:
                     grid_results.to_parquet(f"{dest}landmarks.parquet", index=False)
                 if not landmarks_found:
-                    raise ValueError("Not enough landmarks found.")
+                    raise ValueError(
+                        f"Found {max_landmarks_found} / {landmark_min_count} required landmarks."
+                    )
 
             elastix_object = itk_align(
                 fixed_image=moving_image_reference_t_moving_c,
