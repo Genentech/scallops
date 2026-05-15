@@ -210,6 +210,15 @@ def test_write_ome_zarr_image_dask(tmp_path):
 
 
 @pytest.mark.io
+def test_write_non_ome_zarr_image_no_dims(tmp_path):
+    a = np.ones((3, 2))
+    zarr_path = str(tmp_path / "test.zarr")
+    _write_zarr_image("foo", open_ome_zarr(zarr_path), a, zarr_format="zarr")
+    data_zarr = read_image(f"{zarr_path}/images/foo", dask=False)
+    np.testing.assert_array_equal(data_zarr.values, a)
+
+
+@pytest.mark.io
 def test_write_non_ome_zarr_image(tmp_path, dask):
     image = read_image(
         "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=dask
