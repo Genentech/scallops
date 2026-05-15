@@ -226,7 +226,7 @@ def test_stitch_cli(tmp_path):
         err_msg="No blending image differs from expected",
     )
     tiles = tile_source_labels(test_positions_df, tile_shape)
-    mask = tiles != 0
+    mask = tiles != -1
     assert (no_blend_array[..., mask] == 0).sum() == 0
 
     # blending
