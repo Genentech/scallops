@@ -389,7 +389,7 @@ def imcomposite(
             figsize = 6 * ncol, 6 * nrow
         if ax is None:
             fig, ax = plt.subplots(
-                ncols=ncol, nrows=nrow, figsize=figsize, layout="constrained"
+                ncols=ncol, nrows=nrow, figsize=figsize, layout="compressed"
             )
             ax = ax.ravel()
         for i in range(len(facet_values)):
