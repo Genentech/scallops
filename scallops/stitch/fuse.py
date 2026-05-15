@@ -135,13 +135,13 @@ def _fuse(
     image0_attrs = (
         df["source_metadata"].values[0] if "source_metadata" in df.columns else None
     )
-    scenes = df["source"].nunique() == 1
+    has_scenes = "scene" in df.columns
     local_image0_paths = [_localize_path(path) for path in image0_paths]
     image0_paths = [
         local_image0_paths[i] if local_image0_paths[i] is not None else image0_paths[i]
         for i in range(len(image0_paths))
     ]
-    img = _images2fov(image0_paths, image0_attrs, scene_id=0 if scenes else None)
+    img = _images2fov(image0_paths, image0_attrs, scene_id=0 if has_scenes else None)
 
     [os.remove(path) for path in local_image0_paths if path is not None]
 
@@ -251,7 +251,7 @@ def _fuse(
     y = df["y"].values
     x = df["x"].values
     source = df["source"].values
-    tiles = df["tile"].values
+    scene_ids = df["scene"].values
 
     source_attrs = (
         df["source_metadata"].values if "source_metadata" in df.columns else None
@@ -350,7 +350,7 @@ def _fuse(
                 intersecting_boxes=intersecting_boxes
                 if len(intersecting_boxes) > 0
                 else None,
-                scene_id=tiles[i] if scenes else None,
+                scene_id=scene_ids[i] if has_scenes else None,
             )
 
             delayed_results.append(d)
