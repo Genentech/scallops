@@ -252,7 +252,7 @@ def _fuse(
     x = df["x"].values
     source = df["source"].values
     # convert scenes to list to convert numpy int to int (read_image does not like numpy ints for scene ids)
-    scene_ids = df["scene"].values.tolist() if has_scenes else None
+    scene_ids = df["scene"].tolist() if has_scenes else None
 
     source_attrs = (
         df["source_metadata"].values if "source_metadata" in df.columns else None
