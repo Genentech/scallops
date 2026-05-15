@@ -164,7 +164,7 @@ def single_stitch_preview(
         n = n_scenes if n_scenes is not None else len(filepaths)
         for i in range(n):
             img = _images2fov(
-                filepaths[i],
+                filepaths[0] if n_scenes is not None else filepaths[i],
                 None,
                 dask=False,
                 scene_id=i if n_scenes is not None else None,
