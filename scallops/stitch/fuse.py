@@ -251,7 +251,7 @@ def _fuse(
     y = df["y"].values
     x = df["x"].values
     source = df["source"].values
-    scene_ids = df["scene"].values
+    scene_ids = df["scene"].values if has_scenes else None
 
     source_attrs = (
         df["source_metadata"].values if "source_metadata" in df.columns else None
