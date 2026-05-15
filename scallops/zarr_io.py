@@ -603,6 +603,9 @@ def _read_zarr_attrs(multiscale0: zarr.Group) -> tuple[dict, dict, list[str]]:
     attrs = multiscale0.get("metadata")
     if attrs is None:
         attrs = {}
+    if "axes" not in multiscale0:
+        # not an ome-zarr
+        return None, attrs, None
     axes = multiscale0["axes"]
     dims = [axis["name"] for axis in axes]
 
@@ -671,6 +674,7 @@ def _read_ome_zarr_array(
             multiscale0 = multiscales[0]
             coords, attrs, dims = _read_zarr_attrs(multiscale0)
         array = node[key]
+
         return array, dims, coords, attrs
     else:  # see if user passed test.zarr and zarr file only has one image
         if "images" in node.keys():
