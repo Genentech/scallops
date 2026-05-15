@@ -109,7 +109,6 @@ def _fuse(
     radial_correction_k: float | None = None,
     chunk_size: tuple[int, int] | None = None,
     channels_per_batch: int | None = None,
-    scenes: bool = False,
 ):
     """Use stitching coordinates to fuse tiles.
 
@@ -126,7 +125,6 @@ def _fuse(
         tile positions into a grid to estimate number of rows and columns.
     :param channels_per_batch: Number of channels to output per batch. If `None`,
         auto determine from available memory
-    :param scenes: If `True`, input contains single image containing all tiles
     """
     assert blend in ["none", "linear"]
     if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
@@ -137,13 +135,13 @@ def _fuse(
     image0_attrs = (
         df["source_metadata"].values[0] if "source_metadata" in df.columns else None
     )
-
+    scenes = df["source"].nunique() == 1
     local_image0_paths = [_localize_path(path) for path in image0_paths]
     image0_paths = [
         local_image0_paths[i] if local_image0_paths[i] is not None else image0_paths[i]
         for i in range(len(image0_paths))
     ]
-    img = _images2fov(image0_paths, image0_attrs)
+    img = _images2fov(image0_paths, image0_attrs, scene_id=0 if scenes else None)
 
     [os.remove(path) for path in local_image0_paths if path is not None]
 
@@ -253,6 +251,7 @@ def _fuse(
     y = df["y"].values
     x = df["x"].values
     source = df["source"].values
+    tiles = df["tile"].values
 
     source_attrs = (
         df["source_metadata"].values if "source_metadata" in df.columns else None
@@ -351,7 +350,7 @@ def _fuse(
                 intersecting_boxes=intersecting_boxes
                 if len(intersecting_boxes) > 0
                 else None,
-                scene=i if scenes else None,
+                scene_id=tiles[i] if scenes else None,
             )
 
             delayed_results.append(d)
@@ -395,7 +394,7 @@ def _fuse_image(
     intersecting_boxes: Sequence[tuple[int, int, int, int]] | None = None,
     weights: np.ndarray | None = None,
     weights_sum: np.ndarray | None = None,
-    scene: int | None = None,
+    scene_id: int | None = None,
 ):
     local_image_paths = [_localize_path(path) for path in image_paths]
     image_paths = [
@@ -403,7 +402,7 @@ def _fuse_image(
         for i in range(len(image_paths))
     ]
 
-    img = _images2fov(image_paths, image_attrs, scene_id=scene).isel(
+    img = _images2fov(image_paths, image_attrs, scene_id=scene_id).isel(
         t=0, missing_dims="ignore"
     )
     [os.remove(path) for path in local_image_paths if path is not None]

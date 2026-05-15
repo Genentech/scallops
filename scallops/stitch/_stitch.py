@@ -381,7 +381,6 @@ def _single_stitch(
         output_channels,
         fuse_crop_width,
         radial_correction_k,
-        n_scenes is not None,
         output_metadata,
     )
     if tmp_dir is not None:
@@ -407,7 +406,6 @@ def _write_arrays(
     output_channels,
     fuse_crop_width,
     radial_correction_k,
-    scenes,
     metadata,
 ):
     gc.collect()
@@ -531,7 +529,6 @@ def _write_arrays(
             crop_width=fuse_crop_width,
             radial_correction_k=radial_correction_k,
             chunk_size=chunk_size,
-            scenes=scenes,
         )
 
         ome_metadata = _create_ome_metadata(
