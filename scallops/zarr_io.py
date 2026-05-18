@@ -659,6 +659,7 @@ def _read_ome_zarr_array(
                     if "path" in tmp:
                         key = tmp["path"]
         array = node[key]
+
         return array, dims, coords, attrs
     else:  # see if user passed test.zarr and zarr file only has one image
         if "images" in node.keys():
