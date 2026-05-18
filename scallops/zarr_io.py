@@ -592,12 +592,15 @@ def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:
 
     if "ome" in attrs:
         attrs = attrs["ome"]
+
     multiscales = attrs["multiscales"]
     if len(multiscales) > 0:
         multiscale0 = multiscales[0]
     else:
-        return None, None, None
-
+        return None, attrs, None
+    if "axes" not in multiscale0:
+        # not an ome-zarr
+        return None, attrs, None
     axes = multiscale0["axes"]
     dims = [axis["name"] for axis in axes]
     metadata = multiscale0.get("metadata")
