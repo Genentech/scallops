@@ -427,8 +427,8 @@ def _write_arrays(
             overwrite=True,
         )
 
-        da.to_zarr(
-            arr=_dask_from_array_no_copy(
+        da.store(
+            _dask_from_array_no_copy(
                 tile_overlap_mask(
                     stitch_positions_df,
                     fill=blend != "none",
@@ -436,9 +436,8 @@ def _write_arrays(
                 ),
                 chunks=chunk_size,
             ),
-            url=array,
+            array,
             compute=True,
-            dimension_separator="/",
         )
         group.attrs.update(
             _create_label_ome_metadata(image_spacing, image_key + "-mask")
@@ -454,14 +453,13 @@ def _write_arrays(
                 overwrite=True,
             )
 
-            da.to_zarr(
-                arr=_dask_from_array_no_copy(
+            da.store(
+                _dask_from_array_no_copy(
                     tile_source_labels(stitch_positions_df, fused_tile_shape),
                     chunks=chunk_size,
                 ),
-                url=array,
+                array,
                 compute=True,
-                dimension_separator="/",
             )
             label_metadata = _create_label_ome_metadata(
                 image_spacing, image_key + "-tile"
