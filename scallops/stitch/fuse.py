@@ -367,12 +367,11 @@ def _fuse(
         with ProgressBar():
             logger.info("Writing to disk.")
             target = _dask_from_array_no_copy(target, chunks=(1,) + chunk_size)
-            da.to_zarr(
-                arr=target,
-                url=result,
-                region=(slice(channel_batch, channel_batch + channels_per_batch),),
+            da.store(
+                target,
+                result,
+                regions=(slice(channel_batch, channel_batch + channels_per_batch),),
                 compute=True,
-                dimension_separator="/",
             )
 
 
