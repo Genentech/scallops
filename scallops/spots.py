@@ -115,12 +115,13 @@ def peak_thresholds_from_bases(
         random_reads = np.sort(random_reads)
         bases_array = bases_array.isel(read=random_reads)
     df_reads = decode_max(bases_array)
-    apply_kw_args = dict()
+
     if n_unique_bases is not None and n_unique_bases > 1:
+        n_unique_bases_kw_args = dict()
         if isinstance(df_reads, dd.DataFrame):
-            apply_kw_args["meta"] = int
-        df_reads["n_unique_bases"] = df_reads["barcode"].apply(
-            _n_unique_bases, **apply_kw_args
+            n_unique_bases_kw_args["meta"] = int
+        df_reads["n_unique_bases"] = df_reads["barcode"].map(
+            _n_unique_bases, **n_unique_bases_kw_args
         )
         df_reads = df_reads.query(f"n_unique_bases>={n_unique_bases}")
     if isinstance(df_reads, dd.DataFrame):
