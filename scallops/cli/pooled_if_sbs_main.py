@@ -245,6 +245,12 @@ def _create_reads_parser(subparsers, default_help):
         default=500000,
         type=int,
     )
+    parser.add_argument(
+        "--crosstalk-n-unique-bases",
+        help="Include reads with >= `n-unique-bases`.",
+        default=2,
+        type=int,
+    )
 
     parser.add_argument(
         "--all-labels",

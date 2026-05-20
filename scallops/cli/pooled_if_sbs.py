@@ -860,6 +860,7 @@ def reads_pipeline(
     barcode_column: str = "barcode",
     read_filter: float | None = None,
     crosstalk_n_reads: int = 500000,
+    crosstalk_n_unique_bases: int | None = 2,
 ):
     """Run the reads pipeline.
 
@@ -889,6 +890,7 @@ def reads_pipeline(
     :param no_version: Whether to skip version/CLI information in output.
     :param barcode_column: Column name of barcode
     :param read_filter: Filter reads by quality score before assigning reads to labels.
+    :param crosstalk_n_unique_bases: Include barcodes with >= number of unique bases
     """
 
     if not force:
@@ -960,7 +962,9 @@ def reads_pipeline(
         elif isinstance(threshold_peaks_crosstalk_correction, str):
             if threshold_peaks_crosstalk_correction == "auto":
                 threshold_peaks_crosstalk_correction_df = peak_thresholds_from_bases(
-                    bases_array=crosstalk_bases_array, n_reads=crosstalk_n_reads
+                    bases_array=crosstalk_bases_array,
+                    n_reads=crosstalk_n_reads,
+                    n_unique_bases=crosstalk_n_unique_bases,
                 )
                 threshold_peaks_crosstalk_correction = (
                     threshold_peaks_crosstalk_correction_df.iloc[0]["threshold"]
@@ -1192,7 +1196,7 @@ def reads_main(arguments: argparse.Namespace):
     labels_only = not arguments.all_labels
     n_mismatches = arguments.n_mismatches
     crosstalk_n_reads = arguments.crosstalk_nreads
-
+    crosstalk_n_unique_bases = arguments.crosstalk_n_unique_bases
     bases = list(arguments.bases)
     crosstalk_correction_method = arguments.crosstalk_correction_method
     force = arguments.force
@@ -1240,6 +1244,7 @@ def reads_main(arguments: argparse.Namespace):
                 crosstalk_correction_method=crosstalk_correction_method,
                 crosstalk_correction_by_t=crosstalk_correction_by_t,
                 crosstalk_correction_method_args=crosstalk_correction_method_args,
+                crosstalk_n_unique_bases=crosstalk_n_unique_bases,
                 bases=bases,
                 label_name=label_name,
                 expand_labels_distance=expand_labels_distance,

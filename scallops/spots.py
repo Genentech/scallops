@@ -88,7 +88,7 @@ def std(
         raise ValueError("Unexpected input data.")
 
 
-def _nunique_bases(x):
+def _n_unique_bases(x):
     return len(set(x))
 
 
@@ -97,7 +97,7 @@ def peak_thresholds_from_bases(
     n_reads: int | None = 500000,
     seed: int = 239753,
     Q_cutoff: float = 60,
-    remove_zero_entropy_barcodes: bool = True,
+    n_unique_bases: int | None = 2,
 ) -> pd.DataFrame:
     """Calculate recall, precision, f1, and accuracy for different cutoff value of peaks.
 
@@ -105,7 +105,7 @@ def peak_thresholds_from_bases(
     :param n_reads: Number of reads to consider.
     :param seed: Seed for random number generator.
     :param Q_cutoff: Threshold for binarization of reads.
-    :param remove_zero_entropy_barcodes: Whether to remove zero entropy barcodes.
+    :param n_unique_bases: Include barcodes with >= number of unique bases.
     :return: Result data frame.
     """
 
@@ -116,13 +116,13 @@ def peak_thresholds_from_bases(
         bases_array = bases_array.isel(read=random_reads)
     df_reads = decode_max(bases_array)
     apply_kw_args = dict()
-    if remove_zero_entropy_barcodes:
+    if n_unique_bases is not None and n_unique_bases > 1:
         if isinstance(df_reads, dd.DataFrame):
             apply_kw_args["meta"] = int
-        df_reads["nunique_bases"] = df_reads["barcode"].apply(
-            _nunique_bases, **apply_kw_args
+        df_reads["n_unique_bases"] = df_reads["barcode"].apply(
+            _n_unique_bases, **apply_kw_args
         )
-        df_reads = df_reads.query("nunique_bases>1")
+        df_reads = df_reads.query(f"n_unique_bases>={n_unique_bases}")
     if isinstance(df_reads, dd.DataFrame):
         df_reads = df_reads.compute()
     else:
