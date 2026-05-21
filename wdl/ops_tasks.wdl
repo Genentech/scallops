@@ -297,28 +297,34 @@ task register_qc {
         fi
 
         python <<CODE
-        from subprocess import check_call
         import json
+        from subprocess import check_call
 
+        from scallops.io import read_experiment
 
         images = "~{images}"
-        image_pattern = "~{ image_pattern}"
+        image_pattern = "~{image_pattern}"
         label_type = "~{label_type}"
         labels = "~{labels}"
-        channel = ~{channel}
+
+        channel = "~{channel}"
         subset = "~{subset}"
         output_directory = "~{output_directory}"
         groupby = "~{sep=',' groupby}".split(",")
         force = "~{force}"
         channel_prefix = "~{channel_prefix}"
-        n_times = 0
-        n_channels = 0
+
+        exp = read_experiment(images, image_pattern, group_by=groupby, subset=subset, dask=True)
+        key = list(exp.images.keys())[0]
+        image = exp.images[key]
+        size_t = image.sizes['t']
+        size_c = image.sizes['c']
         channel_rename = {}
-        for i in range(channel, n_times*n_channels, n_times):
+        for i in range(int(channel), size_t * size_c, size_t):
             channel_rename[f"{i}"] = channel_rename[f"{channel_prefix}{i}"]
 
         cmd = ["scallops", "features"]
-        cmad += [f"--features-{label_type}", f"correlationpearsonbox_{image_channel}_{channel}:{n_times}:{n_channels}"]
+        cmd += [f"--features-{label_type}", f"correlationpearsonbox_{channel}_{channel}:{size_t * size_c}:{size_c}"]
         cmd += ["--labels", labels]
 
         if image_pattern != "":
@@ -327,14 +333,15 @@ task register_qc {
         cmd += groupby
         if subset != "":
             cmd += ["--subset", subset]
-        cmd += ["--output", output]
+        cmd += ["--output", output_directory]
         cmd += ["--images", images]
         cmd += ["--channel-rename", f"'{json.dumps(channel_rename)}'"]
 
-        if force=="true":
+        if force == "true":
             cmd.append("--force")
         print(" ".join(cmd))
         check_call(cmd)
+
         CODE
 
     >>>

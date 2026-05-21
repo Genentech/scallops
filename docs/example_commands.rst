@@ -57,7 +57,7 @@ Example::
    scallops illum-corr agg \
    --agg-method mean \
    --images "s3://xxx-input/" \
-   --image-pattern"{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
+   --image-pattern "{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
    --output "s3://xxx/stitch/pheno/illumination_correction/" \
    --groupby plate well t \
    --subset "A-3-IF" "A-3-FISH"
@@ -75,22 +75,21 @@ Example::
 
    scallops stitch \
    --images "s3://xxx-input/"\
-   --image-pattern "s3://xxx-input/" \
+   --image-pattern "20231010_10x_6W_SBS_c{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
    --ffp "s3://xxx/stitch/iss/illumination_correction/{plate}-{well}-{t}.ome.tiff" \
-   --output "s3://xxx/stitch/iss/stitch/" \
+   --image-output "s3://xxx/stitch/iss/stitch/stitch.zarr" \
+   --report-output "s3://xxx/stitch/iss/stitch/report" \
    --groupby plate well t \
    --subset "A-3-*"
 
-
-
    scallops stitch \
    --images "s3://your_bucket/your_screen/subdirectory/20231012_20x_6W_IF/plateA/" \
-   --image-pattern "Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
+   --image-pattern "{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
    --ffp "s3://xxx/stitch/pheno/illumination_correction/{plate}-{well}-{t}.ome.tiff" \
-   --output "s3://xxx/stitch/pheno/stitch/"  \
+   --image-output "s3://xxx/stitch/pheno/stitch/stitch.zarr"  \
+   --report-output "s3://xxx/stitch/pheno/stitch/report"  \
    --groupby plate well t \
    --subset "A-3-IF" "A-3-FISH"
-
 
 
 Register ISS Images
