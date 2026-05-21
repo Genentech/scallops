@@ -446,17 +446,18 @@ def _create_funcs(
                 if p not in ("c1", "c2"):
                     additional_params[p] = params_list[0][p]
             rewrite_func = _features_rewrite.get(func_name)
-            if rewrite_func is not None:
-                new_params = dict(c=list(seen_symmetric))
-                new_params.update(additional_params)
-                f = partial(rewrite_func, **new_params)
-                funcs.append(f)
-            else:
-                for c1, c2 in seen_symmetric:
-                    new_params = dict(c1=c1, c2=c2)
+            if len(seen_symmetric) > 0:
+                if rewrite_func is not None:
+                    new_params = dict(c=list(seen_symmetric))
                     new_params.update(additional_params)
-                    f = partial(features_dict[func_name], **new_params)
+                    f = partial(rewrite_func, **new_params)
                     funcs.append(f)
+                else:
+                    for c1, c2 in seen_symmetric:
+                        new_params = dict(c1=c1, c2=c2)
+                        new_params.update(additional_params)
+                        f = partial(features_dict[func_name], **new_params)
+                        funcs.append(f)
         else:
             for params in params_list:
                 f = partial(features_dict[func_name], **params)
