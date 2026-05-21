@@ -90,6 +90,8 @@ Use `*` for all channels. Example: `intensity_*`, `colocalization_*_*`.
 
 Include a comma separated list of channel indices (0-based) to include. Example: `intensity_0,1,2,6`.
 
+Specify a range of channel indices using start:stop:step. Example: *colocalization_0_1:10:2*.
+
 Notes
 ^^^^^^
 Feature names are case insensitive (intensity == Intensity) and hyphens in feature names are
