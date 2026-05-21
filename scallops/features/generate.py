@@ -514,13 +514,25 @@ def _get_params(
             if value == "*":
                 values = [i for i in range(n_channels)]
             else:
-                for val in value.split(","):
-                    val = int(val.strip())
-                    if val < 0 or val >= n_channels:
-                        raise ValueError(
-                            "Channel must be between 0 and {}".format(n_channels - 1)
+                for entry in value.split(","):
+                    entry = entry.strip()
+                    if entry.find(":") != -1:
+                        range_spec = entry.split(":")
+                        if len(range_spec) != 3:
+                            raise ValueError("Incorrect format for range.")
+                        val = range(
+                            int(range_spec[0]), int(range_spec[1]), int(range_spec[2])
                         )
-                    values.append(val)
+                    else:
+                        val = [int(entry)]
+                    for c in val:
+                        if c < 0 or c >= n_channels:
+                            raise ValueError(
+                                "Channel must be between 0 and {}".format(
+                                    n_channels - 1
+                                )
+                            )
+                        values.append(c)
             params[parameter_name] = values
         elif annotation in (int, float, bool, str, Literal):
             value = annotation(value)
