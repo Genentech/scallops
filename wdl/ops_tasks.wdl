@@ -199,7 +199,7 @@ task register_elastix {
     }
 }
 
-task register_qc {
+task register_pheno_to_iss_qc {
     input {
         String images
         String? image_pattern
@@ -229,7 +229,7 @@ task register_qc {
         set -ex
 
         if [[ "$SCALLOPS_TEST" != "1" ]]; then
-            ulimit -n 100000
+        ulimit -n 100000
         fi
 
 
@@ -240,12 +240,103 @@ task register_qc {
         --subset ~{subset} \
         --output "~{output_directory}" \
         --images "~{images}" \
-        --stack-images "~{stacked_images}" \
+        ~{'--stack-images ' + stacked_images} \
         ~{'--image-pattern ' + image_pattern} \
         ~{'--stack-image-pattern ' + stacked_image_pattern} \
         ~{true="--force" false="" force} \
         --features-plot "Nuclei_Correlation_PearsonBox_DAPI-ISS_DAPI-PHENO" \
         --channel-rename '{"~{image_channel_}":"ISS","s~{stacked_image_channel_}":"PHENO"}'
+    >>>
+
+    output {
+        String output_url = "~{output_directory}"
+
+    }
+
+    runtime {
+        docker:docker
+        disks: disks
+        zones: zones
+        memory: memory
+        cpu : cpu
+        preemptible: preemptible
+        queueArn: aws_queue_arn
+        maxRetries : max_retries
+    }
+}
+
+
+task register_qc {
+    input {
+        String images
+        String? image_pattern
+        String label_type
+        String labels
+        Int channel
+        String subset
+        String output_directory
+        String channel_prefix
+        Array[String] groupby
+        Boolean? force
+
+        String docker
+        String zones
+        Int preemptible
+        String aws_queue_arn
+        Int cpu
+        String disks
+        String memory
+        Int max_retries
+    }
+
+    command <<<
+        set -ex
+
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
+            ulimit -n 100000
+        fi
+
+        python <<CODE
+        from subprocess import check_call
+        import json
+
+
+        images = "~{images}"
+        image_pattern = "~{ image_pattern}"
+        label_type = "~{label_type}"
+        labels = "~{labels}"
+        channel = ~{channel}
+        subset = "~{subset}"
+        output_directory = "~{output_directory}"
+        groupby = "~{sep=',' groupby}".split(",")
+        force = "~{force}"
+        channel_prefix = "~{channel_prefix}"
+        n_times = 0
+        n_channels = 0
+        channel_rename = {}
+        for i in range(channel, n_times*n_channels, n_times):
+            channel_rename[f"{i}"] = channel_rename[f"{channel_prefix}{i}"]
+
+        cmd = ["scallops", "features"]
+        cmad += [f"--features-{label_type}", f"correlationpearsonbox_{image_channel}_{channel}:{n_times}:{n_channels}"]
+        cmd += ["--labels", labels]
+
+        if image_pattern != "":
+            cmd += ["--image-pattern", image_pattern]
+        cmd.append("--groupby")
+        cmd += groupby
+        if subset != "":
+            cmd += ["--subset", subset]
+        cmd += ["--output", output]
+        cmd += ["--images", images]
+        cmd += ["--channel-rename", f"'{json.dumps(channel_rename)}'"]
+
+        if force=="true":
+            cmd.append("--force")
+        print(" ".join(cmd))
+        check_call(cmd)
+        CODE
+
     >>>
 
     output {
@@ -291,7 +382,7 @@ task intersects_boundary {
         set -ex
 
         if [[ "$SCALLOPS_TEST" != "1" ]]; then
-            ulimit -n 100000
+        ulimit -n 100000
         fi
 
         scallops features \
@@ -347,7 +438,7 @@ task find_objects {
         set -ex
 
         if [[ "$SCALLOPS_TEST" != "1" ]]; then
-            ulimit -n 100000
+        ulimit -n 100000
         fi
 
         scallops find-objects \
@@ -413,7 +504,7 @@ task features {
         export SCALLOPS_MODEL_DIR="~{model_dir}"
 
         if [[ "$SCALLOPS_TEST" != "1" ]]; then
-            ulimit -n 100000
+        ulimit -n 100000
         fi
 
         scallops features \
@@ -591,6 +682,7 @@ task merge {
         String? objects_nuclei
         String? objects_cell
         String? register_pheno_to_iss_qc
+        String? register_iss_to_iss_qc
         String? objects_cytosol
         String? cell_intersects_boundary
         String? cell_intersects_boundary_t
@@ -630,6 +722,7 @@ task merge {
         ~{cell_intersects_boundary} \
         ~{cell_intersects_boundary_t} \
         ~{register_pheno_to_iss_qc} \
+        ~{register_iss_to_iss_qc} \
         --subset ~{subset} \
         ~{"--barcode-col " + barcode_column} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \

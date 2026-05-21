@@ -53,7 +53,7 @@ Example::
    --groupby plate well t \
    --subset "A-3-*"
 
-   # illumination correction per cycle in well 3 of immunofluorescence & FISH data
+   # illumination correction per cycle in well 3 of IF & FISH data
    scallops illum-corr agg \
    --agg-method mean \
    --images "s3://xxx-input/" \
@@ -80,6 +80,7 @@ Example::
    --output "s3://xxx/stitch/iss/stitch/" \
    --groupby plate well t \
    --subset "A-3-*"
+
 
 
    scallops stitch \
@@ -145,7 +146,7 @@ Nuclei::
     --images s3://xxx/ops/pheno-registered.zarr \
     --groupby plate well \
     --image-pattern '{plate}-{well}' \
-    --dapi-channel 4
+    --dapi-channel 4 \
     --output s3://xxx/ops/segment.zarr \
     --subset A-3
 
@@ -226,7 +227,7 @@ Example::
     --label-name cell \
     --output s3://xxx/ops/reads \
     --subset A-3 \
-    --barcodes s3://bigdipir-ctg-s3/internal/singa166-lab/barcodes/dialout-5.csv
+    --barcodes s3://xxx/barcodes/dialout-5.csv
 
 
 Find objects
@@ -260,21 +261,6 @@ Cytosol::
     --label-suffix cytosol \
     --output s3://xxx/ops/objects-cytosol
 
-Pheno to ISS Registration QC
-==============================
-Compute correlation in nuclei bounding boxes between ISS DAPI channel and registered IF DAPI channel::
-
-    scallops features \
-    --features-nuclei correlationpearsonbox_0_s4 \
-    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
-    --groupby plate well \
-    --subset A-3 \
-    --output s3://xxx/ops/pheno-to-iss-qc \
-    --images s3://xxx/ops/iss-registered-t0.zarr \
-    --stack-images s3://xxx/ops/pheno-to-iss-registered.zarr \
-    --image-pattern '{plate}-{well}' \
-    --stack-image-pattern '{plate}-{well}' \
-    --channel-rename '{"0":"ISS","s4":"PHENO"}'
 
 Features
 ==================
@@ -343,6 +329,60 @@ FISH::
     --objects s3://xxx/ops/objects-cell \
     --image-pattern '{plate}-{well}-{t}-mask'
 
+Registration QC
+==============================
+Find objects in ISS image::
+
+    scallops find-objects \
+    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --subset A-3 \
+    --label-pattern {plate}-{well} \
+    --label-suffix nuclei \
+    --output s3://xxx/ops/objects-nuclei-iss
+
+Compute correlation in nuclei bounding boxes between ISS DAPI channel and registered IF DAPI channel::
+
+
+    scallops features \
+    --features-nuclei correlationpearsonbox_0_s4 \
+    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --objects s3://xxx/ops/objects-nuclei-iss \
+    --groupby plate well \
+    --subset A-3 \
+    --output s3://xxx/ops/pheno-to-iss-qc \
+    --images s3://xxx/ops/iss-registered-t0.zarr \
+    --stack-images s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --image-pattern '{plate}-{well}' \
+    --stack-image-pattern '{plate}-{well}' \
+    --channel-rename '{"0":"ISS","s4":"PHENO"}'
+
+
+Compute correlation in nuclei bounding boxes between ISS DAPI channel at t=0 and other times::
+
+    scallops features \
+    --features-nuclei correlationpearsonbox_0_0:35:5 \
+    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --objects s3://xxx/ops/objects-nuclei-iss \
+    --groupby plate well \
+    --subset A-3 \
+    --output s3://xxx/ops/iss-to-iss-qc \
+    --images s3://xxx/ops/iss-registered-t0.zarr \
+    --image-pattern '{plate}-{well}'
+
+
+Compute correlation in nuclei bounding boxes between IF DAPI channel and FISH DAPI channel::
+
+    scallops features \
+    --features-nuclei correlationpearsonbox_0_4 \
+    --labels s3://xxx/ops/segment.zarr \
+    --objects s3://xxx/ops/objects-nuclei \
+    --groupby plate well \
+    --subset A-3 \
+    --output s3://xxx/ops/pheno-to-pheno-qc \
+    --images s3://xxx/ops/pheno-registered-t0.zarr \
+    --image-pattern '{plate}-{well}' \
+    --channel-rename '{"0":"FISH","4":"IF"}'
+
 Merge
 ======
 Merge the phenotype features, ISS barcode assignments, and QC info.
@@ -362,6 +402,8 @@ Example::
     s3://xxx/ops/intersects-boundary \
     s3://xxx/ops/intersects-boundary-t \
     s3://xxx/ops/pheno-to-iss-qc \
+    s3://xxx/ops/iss-to-iss-qc \
+    s3://xxx/ops/pheno-to-pheno-qc \
     --subset A-3
 
 
@@ -372,7 +414,8 @@ Example::
     scallops rank-features \
     --input s3://xxx/ops/merge/A-3.parquet \
     --label-filter "barcode_Q_mean_0/barcode_Q_mean==1 & \
-   `Nuclei_Correlation_PearsonBox_ISS_PHENO`>0.9 & \
+    Nuclei_Correlation_PearsonBox_ISS_PHENO>0.9 & \
+    Nuclei_Correlation_PearsonBox_FISH_IF>0.9 & \
     ~Cells_Location_IntersectsBoundary_Channel0==False & \
     ~Cells_Location_IntersectsBoundary_Channel0-intersects-boundary-t==False" \
     --output s3://xxx/ops/rank-features/A-3.parquet
