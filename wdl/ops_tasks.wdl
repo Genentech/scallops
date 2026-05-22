@@ -321,7 +321,7 @@ task register_qc {
         size_c = image.sizes['c']
         channel_rename = {}
         for i in range(int(channel), size_t * size_c, size_t):
-            channel_rename[f"{i}"] = channel_rename[f"{channel_prefix}{i}"]
+            channel_rename[f"{i}"] = f"{channel_prefix}{i}"
 
         cmd = ["scallops", "features"]
         cmd += [f"--features-{label_type}", f"correlationpearsonbox_{channel}_{channel}:{size_t * size_c}:{size_c}"]
