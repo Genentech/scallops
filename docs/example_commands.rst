@@ -83,7 +83,7 @@ Example::
    --subset "A-3-*"
 
    scallops stitch \
-   --images "s3://your_bucket/your_screen/subdirectory/20231012_20x_6W_IF/plateA/" \
+   --images "s3://xxx-input/" \
    --image-pattern "{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
    --ffp "s3://xxx/stitch/pheno/illumination_correction/{plate}-{well}-{t}.ome.tiff" \
    --image-output "s3://xxx/stitch/pheno/stitch/stitch.zarr"  \
