@@ -257,6 +257,7 @@ def run_stitch(args: argparse.Namespace) -> None:
         load_json(args.dask_cluster) if args.dask_cluster is not None else {}
     )
     no_save_image = args.no_save_image
+    channel_names = args.channel_name
 
     if dask_server_url is None and args.dask_cluster is None:
         dask_cluster_parameters = dict(n_workers=1, threads_per_worker=_cpu_count())
@@ -376,6 +377,7 @@ def run_stitch(args: argparse.Namespace) -> None:
             upsample_factor=upsample_factor,
             expected_images=expected_images,
             output_channels=output_channels,
+            channel_names=channel_names,
             channel=channel,
             rename=rename,
             crop_width=crop_width,

@@ -128,20 +128,24 @@ def _create_omero_metadata(
     if channel_names is not None:
         if isinstance(channel_names, xr.DataArray):
             channel_names = channel_names.values
-        # Napari does not like '#' at start of hex color string
-        # Hex colors match Napari defaults
-        colors = ["00FFFF", "FFFF00", "FF00FF", "FF0000", "008000", "0000FF"]
-        # Napari requires that colors are specified if channel names are specified
-        channels = (
-            [
-                dict(label=channel_names[i], color=colors[i % len(colors)])
-                for i in range(len(channel_names))
-            ]
-            if not np.isscalar(channel_names)
-            else [channel_names.tolist()]
-        )
-        return dict(channels=channels)
+        return _omero_channels(channel_names)
     return None
+
+
+def _omero_channels(channel_names):
+    # Napari does not like '#' at start of hex color string
+    # Hex colors match Napari defaults
+    colors = ["00FFFF", "FFFF00", "FF00FF", "FF0000", "008000", "0000FF"]
+    # Napari requires that colors are specified if channel names are specified
+    channels = (
+        [
+            dict(label=channel_names[i], color=colors[i % len(colors)])
+            for i in range(len(channel_names))
+        ]
+        if not np.isscalar(channel_names)
+        else [channel_names.tolist()]
+    )
+    return dict(channels=channels)
 
 
 def _fix_attrs(d: dict) -> None:
