@@ -430,19 +430,22 @@ Volcano Plot:
     import pandas as pd
     from adjustText import adjust_text
     from matplotlib import pyplot as plt
+    import seaborn as sns
+    import numpy as np
 
     rank_features_df = pd.read_parquet('s3://xxx/ops/rank-features/A-3.parquet')
     feature = 'Nuclei_Intensity_MedianIntensity_Channel5'
     fig, ax = plt.subplots()
     ax.set_title(feature)
     df = rank_features_df.query(f"feature=='{feature}'")
-    highlight_df = df.query("abs(fold_change)>2 & `FDR-BH pval`<0.05")
-    sns.scatterplot(df, x="fold_change", y="-log2FDR", ax=ax)
+    df["-log10FDR"] = np.minimum(10, -np.log10(df["FDR"]))
+    highlight_df = df.query("abs(fold_change)>2 & FDR<0.05")
+    sns.scatterplot(df, x="fold_change", y="-log10FDR", ax=ax)
     texts = [
         ax.text(
             x=r["fold_change"],
-            y=r["-log2FDR"],
-            s=r["group"],
+            y=r["-log10FDR"],
+            s=r["perturbation"],
         )
         for i, r in highlight_df.iterrows()
     ]
@@ -451,7 +454,7 @@ Volcano Plot:
         arrowprops=dict(arrowstyle="->", color="Grey"),
         ax=ax,
         x=highlight_df["fold_change"],
-        y=highlight_df["-log2FDR"],
+        y=highlight_df["-log10FDR"],
         expand_axes=True
     );
 
