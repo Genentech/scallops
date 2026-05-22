@@ -308,14 +308,16 @@ task register_qc {
         labels = "~{labels}"
 
         channel = "~{channel}"
-        subset = "~{subset}"
+        subset = "~{subset}".split(" ")
         output_directory = "~{output_directory}"
         groupby = "~{sep=',' groupby}".split(",")
         force = "~{force}"
         channel_prefix = "~{channel_prefix}"
 
         exp = read_experiment(images, image_pattern, group_by=groupby, subset=subset, dask=True)
-        key = list(exp.images.keys())[0]
+        keys = list(exp.images.keys())
+        if len(keys) == 0:
+            raise ValueError("No images found")
         image = exp.images[key]
         size_t = image.sizes['t']
         size_c = image.sizes['c']
