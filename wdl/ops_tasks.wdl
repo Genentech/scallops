@@ -322,8 +322,10 @@ task register_qc {
         size_t = image.sizes['t']
         size_c = image.sizes['c']
         channel_rename = {}
+        t = 0
         for i in range(int(channel), size_t * size_c, size_c):
-            channel_rename[f"{i}"] = f"{channel_prefix}{i}"
+            channel_rename[f"{i}"] = f"{channel_prefix}{t}"
+            t += 1
 
         cmd = ["scallops", "features"]
         cmd += [f"--features-{label_type}", f"correlationpearsonbox_{channel}_{channel}:{size_t * size_c}:{size_c}"]
@@ -338,7 +340,7 @@ task register_qc {
             cmd += subset
         cmd += ["--output", output_directory]
         cmd += ["--images", images]
-        cmd += ["--channel-rename", f"'{json.dumps(channel_rename)}'"]
+        cmd += ["--channel-rename", f"{json.dumps(channel_rename)}"]
 
         if force == "true":
             cmd.append("--force")
