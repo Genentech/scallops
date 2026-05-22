@@ -191,7 +191,7 @@ def _read_data(
     data_arrays = []
     for path in paths:
         if path.lower().endswith(".parquet") or path.lower().endswith(".pq"):
-            df = dd.read_parquet(path)
+            df = pd.read_parquet(path)
             d = pandas_to_anndata(df, features)
         else:
             d = read_anndata_zarr(path, dask=True)
