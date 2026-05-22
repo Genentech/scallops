@@ -343,7 +343,7 @@ Compute correlation in nuclei bounding boxes between ISS DAPI channel and regist
 
 
     scallops features \
-    --features-nuclei correlationpearsonbox_0_s4 \
+    --features-nuclei correlationpearsonbox_0_s0 \
     --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
     --objects s3://xxx/ops/objects-nuclei-iss \
     --groupby plate well \
@@ -353,7 +353,7 @@ Compute correlation in nuclei bounding boxes between ISS DAPI channel and regist
     --stack-images s3://xxx/ops/pheno-to-iss-registered.zarr \
     --image-pattern '{plate}-{well}' \
     --stack-image-pattern '{plate}-{well}' \
-    --channel-rename '{"0":"ISS","s4":"PHENO"}'
+    --channel-rename '{"0":"ISS","s0":"PHENO"}'
 
 
 Compute correlation in nuclei bounding boxes between ISS DAPI channel at t=0 and other times::
@@ -378,7 +378,7 @@ Compute correlation in nuclei bounding boxes between IF DAPI channel and FISH DA
     --groupby plate well \
     --subset A-3 \
     --output s3://xxx/ops/pheno-to-pheno-qc \
-    --images s3://xxx/ops/pheno-registered-t0.zarr \
+    --images s3://xxx/ops/pheno-registered.zarr \
     --image-pattern '{plate}-{well}' \
     --channel-rename '{"0":"FISH","4":"IF"}'
 
