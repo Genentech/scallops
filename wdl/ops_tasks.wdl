@@ -318,8 +318,7 @@ task register_qc {
         keys = list(exp.images.keys())
         if len(keys) == 0:
             raise ValueError("No images found")
-        key = images[0]
-        image = exp.images[key]
+        image = exp.images[keys[0]]
         size_t = image.sizes['t']
         size_c = image.sizes['c']
         channel_rename = {}
