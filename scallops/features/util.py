@@ -29,11 +29,11 @@ def pandas_to_anndata(
     """
     if features is None:
         features = infer_feature_columns(df)
-
+    # https://github.com/dask/dask/issues/12411
     data = (
         df[features].values
         if not isinstance(df, dd.DataFrame)
-        else df[features].to_dask_array(lengths=True)
+        else df[features].to_dask_array(lengths=df.map_partitions(len).compute())
     )
 
     df = df.drop(columns=features)
