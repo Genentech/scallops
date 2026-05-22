@@ -333,8 +333,9 @@ task register_qc {
             cmd += ["--image-pattern", image_pattern]
         cmd.append("--groupby")
         cmd += groupby
-        if subset != "":
-            cmd += ["--subset", subset]
+        if len(subset) > 0:
+            cmd.append("--subset")
+            cmd += subset
         cmd += ["--output", output_directory]
         cmd += ["--images", images]
         cmd += ["--channel-rename", f"'{json.dumps(channel_rename)}'"]
