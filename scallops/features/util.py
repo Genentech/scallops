@@ -33,7 +33,7 @@ def pandas_to_anndata(
     data = (
         df[features].values
         if not isinstance(df, dd.DataFrame)
-        else df[features].to_dask_array(lengths=df.map_partitions(len).compute())
+        else df[features].to_dask_array(lengths=tuple(df.map_partitions(len).compute()))
     )
 
     df = df.drop(columns=features)
