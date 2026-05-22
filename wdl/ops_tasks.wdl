@@ -323,7 +323,7 @@ task register_qc {
         size_t = image.sizes['t']
         size_c = image.sizes['c']
         channel_rename = {}
-        for i in range(int(channel), size_t * size_c, size_t):
+        for i in range(int(channel), size_t * size_c, size_c):
             channel_rename[f"{i}"] = f"{channel_prefix}{i}"
 
         cmd = ["scallops", "features"]
