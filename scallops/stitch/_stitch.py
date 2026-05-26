@@ -545,7 +545,8 @@ def _write_arrays(
         if channel_names is not None:
             if output_channels is not None:
                 channel_names = channel_names[output_channels]
-            ome_metadata["omero"] = _omero_channels(channel_names)
+            metadata = ome_metadata["multiscales"][0]["metadata"]
+            metadata["omero"] = _omero_channels(channel_names)
 
         group.attrs.update(ome_metadata)
 
