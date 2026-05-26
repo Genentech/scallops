@@ -39,11 +39,6 @@ from scallops.zarr_io import (
 )
 
 
-@pytest.fixture(params=[False, True])
-def dask(request):
-    return request.param
-
-
 @pytest.mark.io
 def test_is_scallops_zarr(tmp_path):
     data = anndata.AnnData(
@@ -165,7 +160,8 @@ def test_read_experiment_multi_scene(scenes):
 
 
 @pytest.mark.io
-def test_read_tif(dask):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_read_tif(use_dask):
     """Ensures that we can read a tif file using bioio.
 
     # In older versions of bioio the following was needed:
@@ -178,9 +174,10 @@ def test_read_tif(dask):
     # bioio.formats.FORMAT_IMPLEMENTATIONS["tif"] = ["bioio.readers.tiff_reader.TiffReader"]
     """
     data = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=dask
+        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
+        dask=use_dask,
     )
-    if dask:
+    if use_dask:
         data2 = read_image(
             "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
             dask=False,
@@ -219,9 +216,11 @@ def test_write_non_ome_zarr_image_no_dims(tmp_path):
 
 
 @pytest.mark.io
-def test_write_non_ome_zarr_image(tmp_path, dask):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_write_non_ome_zarr_image(tmp_path, use_dask):
     image = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=dask
+        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
+        dask=use_dask,
     )
     image.attrs = {"test": "1"}
     image.attrs["physical_pixel_sizes"] = (1, 1, 1)
@@ -275,7 +274,8 @@ def test_experiment_pattern_prefix(tmp_path):
 
 
 @pytest.mark.io
-def test_experiment_separate_t_c(dask, tmp_path):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_experiment_separate_t_c(use_dask, tmp_path):
     """Test reading in exp where channels and cycles are both stored in separate images."""
     ncycles = 4
     nchannels = 5
@@ -292,7 +292,9 @@ def test_experiment_separate_t_c(dask, tmp_path):
             save_ome_tiff(data=tmp, uri=path)
 
     # reading with dask fails with version bioio==4.10.0
-    image = read_experiment(tmp_path, pattern, group_by=("well",)).images["B06"]
+    image = read_experiment(
+        tmp_path, pattern, group_by=("well",), dask=use_dask
+    ).images["B06"]
     np.testing.assert_equal(image.coords["t"].data, [1, 2, 3, 4])
     np.testing.assert_equal(image.coords["c"].data, ["0", "1", "2", "3", "4"])
     for cycle in range(ncycles):
@@ -303,7 +305,7 @@ def test_experiment_separate_t_c(dask, tmp_path):
             np.testing.assert_equal(
                 image.isel(c=channel, t=cycle).squeeze().data,
                 test_image,
-                f"dask: {dask}, channel: {channel}, cycle: {cycle}, value: {value}",
+                f"dask: {use_dask}, channel: {channel}, cycle: {cycle}, value: {value}",
             )
     gen = list(_set_up_experiment(tmp_path, pattern, ("well",)))
     assert len(gen) == 1
@@ -318,12 +320,13 @@ def test_experiment_separate_t_c(dask, tmp_path):
 
 
 @pytest.mark.io
-def test_group_by_one_field(dask):
+@pytest.mark.parametrize("use_dask", [True, False])
+def test_group_by_one_field(use_dask):
     exp = read_experiment(
         "scallops/tests/data/experimentC/input",
         "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-102.{datatype}.tif",
         group_by=("well",),
-        dask=dask,
+        dask=use_dask,
     )
     assert len(exp.images) == 1
     image = exp.images["A1"]
@@ -354,7 +357,7 @@ def test_read_write_labels(tmp_path, array_A1_102_nuclei):
     _write_zarr_labels(
         name="test", root=open_ome_zarr(str(tmp_path), "w"), labels=nuclei
     )
-    test = read_ome_zarr_array(zarr.open(str(tmp_path / "labels" / "test"), "r"))
+    test = read_ome_zarr_array(zarr.open(str(tmp_path / "labels" / "test"), mode="r"))
     np.testing.assert_equal(nuclei, test.data)
 
 

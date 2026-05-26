@@ -91,6 +91,14 @@ def _get_sep(group: zarr.Group) -> str:
     return "/"
 
 
+def _get_store_path(group: zarr.Group):
+    if hasattr(group.store, "root"):
+        return str(group.store.root)
+    if hasattr(group.store, "path"):
+        return group.store.path
+    return ""
+
+
 def _create_omero_metadata(
     coords: DataArrayCoordinates, dims: tuple[Hashable, ...]
 ) -> dict | None:
