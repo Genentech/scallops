@@ -418,7 +418,7 @@ def write_zarr(
             if not compute:
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
-            grp.create_array(
+            grp.create_dataset(
                 "0", data=data, overwrite=True, chunk_key_encoding=_chunk_key_encoding
             )
 
@@ -811,7 +811,7 @@ class _LazyLoadZarrData(_LazyLoadData):
 
             root = open_ome_zarr(store=store)
             group = root.create_group("test_group")
-            group.create_array("0", data=[1, 2, 3, 4, 5])
+            group.create_dataset("0", data=[1, 2, 3, 4, 5])
 
             # Create a _LazyLoadZarrData instance
             lazy_data = _LazyLoadZarrData(group, dask=True)
