@@ -60,7 +60,7 @@ from scallops.experiment.elements import Experiment, _LazyLoadData
 from scallops.externals.tifffile2014 import imsave
 from scallops.utils import forceTCZYX, mlcs
 from scallops.xr import _crop
-from scallops.zarr_io import _read_zarr_experiment, read_ome_zarr_array
+from scallops.zarr_io import _get_store_path, _read_zarr_experiment, read_ome_zarr_array
 
 logger = logging.getLogger("scallops")
 
@@ -1368,7 +1368,7 @@ def _images2fov(
             name = (
                 os.path.basename(file_list[i])
                 if not isinstance(file_list[i], zarr.Group)
-                else file_list[i].store.path
+                else _get_store_path(file_list[i])
             )
             src_metadata.append(dict(attrs=image_attrs[i], name=name))
 
@@ -1641,7 +1641,7 @@ def _set_up_experiment(
                             group_to_matches[group].append((x, d))
             else:
                 x = root
-                name = Path(x.store.path).stem
+                name = Path(_get_store_path(x)).stem
                 m = file_regex.match(name)
                 if m:
                     d = m.groupdict()
@@ -1794,7 +1794,9 @@ def _set_up_experiment(
                 src=file_list,
                 common_src=mlcs(
                     [
-                        Path(x).stem if not isinstance(x, zarr.Group) else x.store.path
+                        Path(x).stem
+                        if not isinstance(x, zarr.Group)
+                        else _get_store_path(x)
                         for x in file_list
                     ]
                 ),
