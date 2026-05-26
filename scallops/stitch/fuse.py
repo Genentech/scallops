@@ -22,6 +22,7 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.utils import _crop_image, dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
+from scallops.zarr_io import _da_to_zarr_kwargs
 
 logger = logging.getLogger("scallops")
 
@@ -229,8 +230,8 @@ def _fuse(
         dtype=target_dtype,
         chunks=(1,) + chunk_size,
         name="0",
-        dimension_separator="/",
         overwrite=True,
+        **_da_to_zarr_kwargs(),
     )
 
     _fuse_image_delayed = delayed(_fuse_image)
