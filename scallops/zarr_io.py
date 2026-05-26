@@ -48,11 +48,13 @@ def _da_to_zarr_kwargs(fmt: Format | None = None) -> dict[str, Any]:
     if fmt is None:
         fmt = _current_format()
     zarr_array_kwargs = dict()
+    if fmt.version == "0.4":
+        zarr_array_kwargs["dimension_separator"] = "/"
     # if USE_DASK_ARRAY_KWARGS:
     #     if fmt.zarr_format == 2:
     #         zarr_array_kwargs["chunk_key_encoding"] = _chunk_key_encoding
-    if fmt.zarr_format == 2:
-        zarr_array_kwargs["dimension_separator"] = "/"
+    # if fmt.zarr_format == 2:
+    #     zarr_array_kwargs["dimension_separator"] = "/"
     # if fmt.zarr_format == 2:
     #     zarr_array_kwargs["zarr_format"] = 2
     return zarr_array_kwargs
@@ -719,7 +721,8 @@ def open_ome_zarr(url: Path | str, mode: str = "a") -> zarr.Group | None:
         loc = parse_url(url, mode=mode, fmt=fmt)
         if loc is None:
             return None
-        return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
+        return zarr.open(loc.store, mode=mode)
+        # return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
     except Exception as e:
         logger.error(f"Failed to open OME-Zarr store: {url}")
         raise e
