@@ -23,7 +23,7 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.utils import _crop_image, dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
-from scallops.zarr_io import _chunk_key_encoding, _current_format, _da_to_zarr_kwargs
+from scallops.zarr_io import _chunk_key_encoding, _current_format
 
 logger = logging.getLogger("scallops")
 
@@ -381,12 +381,11 @@ def _fuse(
         with ProgressBar():
             logger.info("Writing to disk.")
             target = _dask_from_array_no_copy(target, chunks=(1,) + chunk_size)
-            da.to_zarr(
-                arr=target,
-                url=result,
-                region=(slice(channel_batch, channel_batch + channels_per_batch),),
+            da.store(
+                target,
+                result,
+                regions=(slice(channel_batch, channel_batch + channels_per_batch),),
                 compute=True,
-                **_da_to_zarr_kwargs(_current_format()),
             )
 
 

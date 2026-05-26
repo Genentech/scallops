@@ -446,17 +446,18 @@ def _create_funcs(
                 if p not in ("c1", "c2"):
                     additional_params[p] = params_list[0][p]
             rewrite_func = _features_rewrite.get(func_name)
-            if rewrite_func is not None:
-                new_params = dict(c=list(seen_symmetric))
-                new_params.update(additional_params)
-                f = partial(rewrite_func, **new_params)
-                funcs.append(f)
-            else:
-                for c1, c2 in seen_symmetric:
-                    new_params = dict(c1=c1, c2=c2)
+            if len(seen_symmetric) > 0:
+                if rewrite_func is not None:
+                    new_params = dict(c=list(seen_symmetric))
                     new_params.update(additional_params)
-                    f = partial(features_dict[func_name], **new_params)
+                    f = partial(rewrite_func, **new_params)
                     funcs.append(f)
+                else:
+                    for c1, c2 in seen_symmetric:
+                        new_params = dict(c1=c1, c2=c2)
+                        new_params.update(additional_params)
+                        f = partial(features_dict[func_name], **new_params)
+                        funcs.append(f)
         else:
             for params in params_list:
                 f = partial(features_dict[func_name], **params)
@@ -513,13 +514,25 @@ def _get_params(
             if value == "*":
                 values = [i for i in range(n_channels)]
             else:
-                for val in value.split(","):
-                    val = int(val.strip())
-                    if val < 0 or val >= n_channels:
-                        raise ValueError(
-                            "Channel must be between 0 and {}".format(n_channels - 1)
+                for entry in value.split(","):
+                    entry = entry.strip()
+                    if entry.find(":") != -1:
+                        range_spec = entry.split(":")
+                        if len(range_spec) != 3:
+                            raise ValueError("Incorrect format for range.")
+                        val = range(
+                            int(range_spec[0]), int(range_spec[1]), int(range_spec[2])
                         )
-                    values.append(val)
+                    else:
+                        val = [int(entry)]
+                    for c in val:
+                        if c < 0 or c >= n_channels:
+                            raise ValueError(
+                                "Channel must be between 0 and {}".format(
+                                    n_channels - 1
+                                )
+                            )
+                        values.append(c)
             params[parameter_name] = values
         elif annotation in (int, float, bool, str, Literal):
             value = annotation(value)

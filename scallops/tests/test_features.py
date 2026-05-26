@@ -357,6 +357,16 @@ def test_create_funcs():
     assert requires_intensity
     assert len(funcs) == 1
 
+    funcs, _ = _create_funcs(["colocalization_0_0"], 3)
+    assert len(funcs) == 0
+    funcs, _ = _create_funcs(["correlationpearsonbox_1_1"], 3)
+    assert len(funcs) == 0
+    funcs, _ = _create_funcs(["correlationpearsonbox_0_0:9:2"], 10)
+    funcs = sorted(funcs, key=lambda x: x.keywords["c2"])
+
+    for i in range(4):
+        assert funcs[i].keywords == {"c1": 0, "c2": i * 2 + 2}
+
 
 @pytest.mark.features
 def test_features_cli_multi_images(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):

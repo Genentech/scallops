@@ -96,6 +96,7 @@ workflow ops_workflow {
         Boolean force_features = false
         Boolean force_find_objects = false
         Boolean force_register_pheno_to_iss_qc = false
+        Boolean force_register_iss_to_iss_qc = false
 
         # general options
         Array[String]? subset
@@ -142,6 +143,10 @@ workflow ops_workflow {
         Int register_pheno_to_iss_qc_cpu = 48
         String register_pheno_to_iss_qc_disks = "local-disk 200 HDD"
 
+        String register_iss_to_iss_qc_memory = "48 GiB"
+        Int register_iss_to_iss_qc_cpu = 24
+        String register_iss_to_iss_qc_disks = "local-disk 200 HDD"
+
         Int merge_cpu = 32
         String merge_memory = "256 GiB"
         String merge_disks = "local-disk 20 HDD"
@@ -172,6 +177,7 @@ workflow ops_workflow {
         String register_pheno_to_pheno_suffix = "pheno-registered.zarr"
         String register_pheno_to_pheno_transform_suffix = "pheno-to-pheno-transforms"
         String register_pheno_to_iss_qc_suffix = "pheno-to-iss-qc"
+        String register_iss_to_iss_qc_directory = "iss-to-iss-qc"
         String spot_detect_suffix = "spot-detect.zarr"
         String reads_suffix = "reads"
         String merge_suffix = "merge"
@@ -447,7 +453,7 @@ workflow ops_workflow {
                         max_retries = max_retries
                 }
 
-                call tasks.register_qc as register_pheno_to_iss_qc {
+                call tasks.register_pheno_to_iss_qc as register_pheno_to_iss_qc {
                     input:
                         images=select_first([register_iss_t0.moving_output_url]),
                         image_pattern=image_pattern_after_registration,
@@ -468,6 +474,27 @@ workflow ops_workflow {
                         disks = register_pheno_to_iss_qc_disks,
                         memory = register_pheno_to_iss_qc_memory,
                         cpu = register_pheno_to_iss_qc_cpu,
+                        max_retries = max_retries
+                }
+                 call tasks.register_qc as register_iss_to_iss_qc {
+                    input:
+                        images=select_first([register_iss_t0.moving_output_url]),
+                        image_pattern=image_pattern_after_registration,
+                        channel=select_first([iss_dapi_channel, 0]),
+                        label_type='nuclei',
+                        channel_prefix="ISS",
+                        output_directory=register_iss_to_iss_qc_directory,
+                        labels=register_pheno_to_iss.label_output_url,
+                        subset = group,
+                        groupby=groupby,
+                        force = force_register_iss_to_iss_qc,
+                        docker=docker,
+                        zones = zones,
+                        preemptible = preemptible,
+                        aws_queue_arn = aws_queue_arn,
+                        disks = register_iss_to_iss_qc_disks,
+                        memory = register_iss_to_iss_qc_memory,
+                        cpu = register_iss_to_iss_qc_cpu,
                         max_retries = max_retries
                 }
             }
@@ -662,6 +689,7 @@ workflow ops_workflow {
                         cell_intersects_boundary=cell_intersects_boundary.output_url,
                         cell_intersects_boundary_t=cell_intersects_boundary_t.output_url,
                         register_pheno_to_iss_qc=register_pheno_to_iss_qc.output_url,
+                        register_iss_to_iss_qc=register_iss_to_iss_qc.output_url,
                         barcodes=select_first([barcodes]),
                         barcode_column=barcode_column,
                         output_directory=merge_directory,

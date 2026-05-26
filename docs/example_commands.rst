@@ -53,11 +53,11 @@ Example::
    --groupby plate well t \
    --subset "A-3-*"
 
-   # illumination correction per cycle in well 3 of immunofluorescence & FISH data
+   # illumination correction per cycle in well 3 of IF & FISH data
    scallops illum-corr agg \
    --agg-method mean \
    --images "s3://xxx-input/" \
-   --image-pattern"{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
+   --image-pattern "{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
    --output "s3://xxx/stitch/pheno/illumination_correction/" \
    --groupby plate well t \
    --subset "A-3-IF" "A-3-FISH"
@@ -75,21 +75,21 @@ Example::
 
    scallops stitch \
    --images "s3://xxx-input/"\
-   --image-pattern "s3://xxx-input/" \
+   --image-pattern "20231010_10x_6W_SBS_c{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
    --ffp "s3://xxx/stitch/iss/illumination_correction/{plate}-{well}-{t}.ome.tiff" \
-   --output "s3://xxx/stitch/iss/stitch/" \
+   --image-output "s3://xxx/stitch/iss/stitch/stitch.zarr" \
+   --report-output "s3://xxx/stitch/iss/stitch/report" \
    --groupby plate well t \
    --subset "A-3-*"
 
-
    scallops stitch \
-   --images "s3://your_bucket/your_screen/subdirectory/20231012_20x_6W_IF/plateA/" \
-   --image-pattern "Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
+   --images "s3://xxx-input/" \
+   --image-pattern "{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2" \
    --ffp "s3://xxx/stitch/pheno/illumination_correction/{plate}-{well}-{t}.ome.tiff" \
-   --output "s3://xxx/stitch/pheno/stitch/"  \
+   --image-output "s3://xxx/stitch/pheno/stitch/stitch.zarr"  \
+   --report-output "s3://xxx/stitch/pheno/stitch/report"  \
    --groupby plate well t \
    --subset "A-3-IF" "A-3-FISH"
-
 
 
 Register ISS Images
@@ -145,7 +145,7 @@ Nuclei::
     --images s3://xxx/ops/pheno-registered.zarr \
     --groupby plate well \
     --image-pattern '{plate}-{well}' \
-    --dapi-channel 4
+    --dapi-channel 4 \
     --output s3://xxx/ops/segment.zarr \
     --subset A-3
 
@@ -226,7 +226,7 @@ Example::
     --label-name cell \
     --output s3://xxx/ops/reads \
     --subset A-3 \
-    --barcodes s3://bigdipir-ctg-s3/internal/singa166-lab/barcodes/dialout-5.csv
+    --barcodes s3://xxx/barcodes/dialout-5.csv
 
 
 Find objects
@@ -260,21 +260,6 @@ Cytosol::
     --label-suffix cytosol \
     --output s3://xxx/ops/objects-cytosol
 
-Pheno to ISS Registration QC
-==============================
-Compute correlation in nuclei bounding boxes between ISS DAPI channel and registered IF DAPI channel::
-
-    scallops features \
-    --features-nuclei correlationpearsonbox_0_s4 \
-    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
-    --groupby plate well \
-    --subset A-3 \
-    --output s3://xxx/ops/pheno-to-iss-qc \
-    --images s3://xxx/ops/iss-registered-t0.zarr \
-    --stack-images s3://xxx/ops/pheno-to-iss-registered.zarr \
-    --image-pattern '{plate}-{well}' \
-    --stack-image-pattern '{plate}-{well}' \
-    --channel-rename '{"0":"ISS","s4":"PHENO"}'
 
 Features
 ==================
@@ -343,6 +328,60 @@ FISH::
     --objects s3://xxx/ops/objects-cell \
     --image-pattern '{plate}-{well}-{t}-mask'
 
+Registration QC
+==============================
+Find objects in ISS image::
+
+    scallops find-objects \
+    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --subset A-3 \
+    --label-pattern {plate}-{well} \
+    --label-suffix nuclei \
+    --output s3://xxx/ops/objects-nuclei-iss
+
+Compute correlation in nuclei bounding boxes between ISS DAPI channel and registered IF DAPI channel::
+
+
+    scallops features \
+    --features-nuclei correlationpearsonbox_0_s0 \
+    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --objects s3://xxx/ops/objects-nuclei-iss \
+    --groupby plate well \
+    --subset A-3 \
+    --output s3://xxx/ops/pheno-to-iss-qc \
+    --images s3://xxx/ops/iss-registered-t0.zarr \
+    --stack-images s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --image-pattern '{plate}-{well}' \
+    --stack-image-pattern '{plate}-{well}' \
+    --channel-rename '{"0":"ISS","s0":"PHENO"}'
+
+
+Compute correlation in nuclei bounding boxes between ISS DAPI channel at t=0 and other times::
+
+    scallops features \
+    --features-nuclei correlationpearsonbox_0_0:35:5 \
+    --labels s3://xxx/ops/pheno-to-iss-registered.zarr \
+    --objects s3://xxx/ops/objects-nuclei-iss \
+    --groupby plate well \
+    --subset A-3 \
+    --output s3://xxx/ops/iss-to-iss-qc \
+    --images s3://xxx/ops/iss-registered-t0.zarr \
+    --image-pattern '{plate}-{well}'
+
+
+Compute correlation in nuclei bounding boxes between IF DAPI channel and FISH DAPI channel::
+
+    scallops features \
+    --features-nuclei correlationpearsonbox_0_4 \
+    --labels s3://xxx/ops/segment.zarr \
+    --objects s3://xxx/ops/objects-nuclei \
+    --groupby plate well \
+    --subset A-3 \
+    --output s3://xxx/ops/pheno-to-pheno-qc \
+    --images s3://xxx/ops/pheno-registered.zarr \
+    --image-pattern '{plate}-{well}' \
+    --channel-rename '{"0":"FISH","4":"IF"}'
+
 Merge
 ======
 Merge the phenotype features, ISS barcode assignments, and QC info.
@@ -362,6 +401,8 @@ Example::
     s3://xxx/ops/intersects-boundary \
     s3://xxx/ops/intersects-boundary-t \
     s3://xxx/ops/pheno-to-iss-qc \
+    s3://xxx/ops/iss-to-iss-qc \
+    s3://xxx/ops/pheno-to-pheno-qc \
     --subset A-3
 
 
@@ -371,10 +412,13 @@ Example::
 
     scallops rank-features \
     --input s3://xxx/ops/merge/A-3.parquet \
+    --reference "NTC" \
+    --features Nuclei_Intensity_MedianIntensity_Channel5 \
     --label-filter "barcode_Q_mean_0/barcode_Q_mean==1 & \
-   `Nuclei_Correlation_PearsonBox_ISS_PHENO`>0.9 & \
+    Nuclei_Correlation_PearsonBox_ISS_PHENO>0.9 & \
+    Nuclei_Correlation_PearsonBox_FISH_IF>0.9 & \
     ~Cells_Location_IntersectsBoundary_Channel0==False & \
-    ~Cells_Location_IntersectsBoundary_Channel0-intersects-boundary-t==False" \
+    ~Cells_Location_IntersectsBoundary_Channel0_intersects_boundary_t==False" \
     --output s3://xxx/ops/rank-features/A-3.parquet
 
 
@@ -386,19 +430,22 @@ Volcano Plot:
     import pandas as pd
     from adjustText import adjust_text
     from matplotlib import pyplot as plt
+    import seaborn as sns
+    import numpy as np
 
     rank_features_df = pd.read_parquet('s3://xxx/ops/rank-features/A-3.parquet')
     feature = 'Nuclei_Intensity_MedianIntensity_Channel5'
     fig, ax = plt.subplots()
     ax.set_title(feature)
     df = rank_features_df.query(f"feature=='{feature}'")
-    highlight_df = df.query("abs(fold_change)>2 & `FDR-BH pval`<0.05")
-    sns.scatterplot(df, x="fold_change", y="-log2FDR", ax=ax)
+    df["-log10FDR"] = np.minimum(10, -np.log10(df["FDR"]))
+    highlight_df = df.query("abs(fold_change)>2 & FDR<0.05")
+    sns.scatterplot(df, x="fold_change", y="-log10FDR", ax=ax)
     texts = [
         ax.text(
             x=r["fold_change"],
-            y=r["-log2FDR"],
-            s=r["group"],
+            y=r["-log10FDR"],
+            s=r["perturbation"],
         )
         for i, r in highlight_df.iterrows()
     ]
@@ -407,7 +454,7 @@ Volcano Plot:
         arrowprops=dict(arrowstyle="->", color="Grey"),
         ax=ax,
         x=highlight_df["fold_change"],
-        y=highlight_df["-log2FDR"],
+        y=highlight_df["-log10FDR"],
         expand_axes=True
     );
 

@@ -9,6 +9,9 @@ import json
 import os
 
 import dask.dataframe as dd
+import fsspec
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from scallops.cli.util import (
     _create_dask_client,
@@ -112,11 +115,25 @@ def run_pipeline_rank_features(arguments: argparse.Namespace):
             min_labels=min_labels,
             iqr_multiplier=iqr_multiplier,
         )
+        if isinstance(rank_df, dd.DataFrame):
+            _to_parquet(
+                rank_df,
+                rank_output,
+                write_index=False,
+                custom_metadata=dict(scallops=json.dumps(metadata)),
+            )
+        else:
+            table = pa.Table.from_pandas(rank_df, preserve_index=False)
+            table = table.replace_schema_metadata(
+                {
+                    "scallops".encode(): json.dumps(metadata).encode(),
+                    **table.schema.metadata,
+                }
+            )
 
-        _to_parquet(
-            rank_df,
-            rank_output,
-            write_index=False,
-            compute=True,
-            custom_metadata=dict(scallops=json.dumps(metadata)),
-        )
+            fs, rank_output = fsspec.url_to_fs(rank_output)
+            pq.write_table(
+                table,
+                rank_output,
+                filesystem=fs,
+            )
