@@ -46,7 +46,6 @@ from skimage.measure import label
 from skimage.morphology import dilation, flood
 from skimage.transform import rescale, resize
 from xarray import DataArray
-from xarray import concat as xr_concat
 
 logger = logging.getLogger("scallops")
 
@@ -178,37 +177,6 @@ def match_size(
     return resize(image, target.shape, preserve_range=True, order=order).astype(
         image.dtype
     )
-
-
-def concatenate_arrays(
-    arrays: Sequence[DataArray],
-    suppl_attr: Optional[Sequence[dict[str, np.ndarray]]] = None,
-    dim: str = "Image",
-    swap: Optional[dict[str, str]] = None,
-) -> DataArray:
-    """Concatenate a list of arrays over the new dimension `dim`, and setting new attributes with
-    the option of extra images in dim.
-
-    :param swap: Swap dimensions based on the mapping AFTER concatenation
-    :param arrays: List of DataArrays with the images to be concatenated
-    :param suppl_attr: Supplemental attributes as dictionary of numpy arrays
-    :param dim: Name of the dimension to create the concatenation by
-    :return: A :DataArray: with the concatenation
-    """
-    assert isinstance(arrays, list), (
-        "A list of DataArrays to concatenate must be supplied"
-    )
-    new_attr = {i: x.attrs for i, x in enumerate(arrays)}
-    if suppl_attr is not None:
-        assert len(suppl_attr) == len(arrays), (
-            "arrays and suppl_coordinates must match!!"
-        )
-        for i, x in enumerate(suppl_attr):
-            new_attr[i]["supplementary"] = x
-    new_arr = xr_concat(arrays, dim=dim, combine_attrs="drop", coords="all")
-    if swap is not None:
-        new_arr = new_arr.swap_dims(swap)
-    return new_arr.assign_attrs(new_attr)
 
 
 def mlcs(strings: Sequence[str]):
