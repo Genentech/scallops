@@ -162,7 +162,6 @@ def test_stitch_channels(tmp_path):
         "--channel-name",
         "a",
         "b",
-        "--force",
     ]
     subprocess.check_call(cmd)
     result = read_image(str(tmp_path / "stitch.zarr"))
