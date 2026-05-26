@@ -32,7 +32,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import is_ome_zarr_array
+from scallops.zarr_io import _da_to_zarr_kwargs, is_ome_zarr_array
 
 logger = _get_cli_logger()
 
@@ -417,14 +417,14 @@ def _write_arrays(
     if not no_save_labels:
         labels_group = image_output_root.require_group("labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
-
+        zarr_kwargs = _da_to_zarr_kwargs()
         array = group.create_dataset(
             name="0",
             shape=(fused_y_size, fused_x_size),
             chunks=chunk_size,
             dtype=np.uint8,
-            dimension_separator="/",
             overwrite=True,
+            **zarr_kwargs,
         )
 
         da.store(
@@ -449,8 +449,8 @@ def _write_arrays(
                 shape=(fused_y_size, fused_x_size),
                 chunks=chunk_size,
                 dtype=np.uint16,
-                dimension_separator="/",
                 overwrite=True,
+                **zarr_kwargs,
             )
 
             da.store(
