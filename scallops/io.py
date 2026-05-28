@@ -997,9 +997,6 @@ def to_label_crops(
         centroid_cols = sorted(centroid_cols, reverse=True)  # y before x
 
     centroid_cols = list(centroid_cols)
-    cols = centroid_cols
-    if label_col is not None:
-        cols.append(label_col)
 
     crop1 = crop_size[0] // 2
     crop2 = math.ceil(crop_size[0] / 2)
@@ -1044,6 +1041,9 @@ def to_label_crops(
 
     fs, _ = fsspec.url_to_fs(output_dir)
     fs.makedirs(output_dir, exist_ok=True)
+    cols = ["crop-bbox-0", "crop-bbox-2", "crop-bbox-1", "crop-bbox-3"]
+    if label_col is not None:
+        cols.append(label_col)
     df_delayed = delayed(df[cols].copy())
     for sl in chunk_slices:
         array_start = [s.start for s in sl]
