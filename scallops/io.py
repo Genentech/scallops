@@ -977,7 +977,7 @@ def to_label_crops(
     :return: Input data frame with objects at well edges removed. Adds columns `crop_url`, the URL to
     output label crops, and crop-bbox-0, crop-bbox-2, crop-bbox-1, crop-bbox-3 containing the coordinates of the crop.
     """
-
+    output_dir = output_dir.rstrip("/")
     is_dask_array = isinstance(intensity_image, da.Array)
     image_shape = intensity_image.shape[-2:]
     label_shape = label_image.shape
