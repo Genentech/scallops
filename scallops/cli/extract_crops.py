@@ -8,6 +8,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from array_api_compat import get_namespace
+from skimage.util import img_as_ubyte
 from zarr import Group
 
 from scallops.cli.features import get_labels
@@ -161,7 +162,11 @@ def single_crop(
                     image.ndim - 1: local_normalize_overlap,
                 }
             image = da.map_overlap(
-                _norm_block, image, percentiles=percentile_normalize, depth=depth
+                _norm_block,
+                image,
+                percentiles=percentile_normalize,
+                depth=depth,
+                dtype=float,
             )
         else:
             percentiles = da.percentile(
@@ -169,12 +174,13 @@ def single_crop(
             )
             image = (image - percentiles[0]) / (percentiles[1] - percentiles[0])
             image = da.clip(image, 0, 1)
-    image = (image * 255).astype(np.uint8)
-
-    index = to_label_crops(
+    image = da.map_blocks(img_as_ubyte, image)
+    label_col = "label" if "label" in merged_df.columns else None
+    merged_df = to_label_crops(
         label_image=da.from_zarr(zarr_labels),
         intensity_image=image,
-        objects_df=merged_df,
+        df=merged_df,
+        label_col=label_col,
         output_dir=output_dir,
         crop_size=crop_size,
         output_format=output_format,
@@ -184,11 +190,9 @@ def single_crop(
         ],
         gaussian_sigma=gaussian_sigma,
     )
-    merged_df = merged_df.loc[index]
+
     output_metadata = cli_metadata() if not no_version else dict()
-    merged_df["crop_url"] = (
-        output_dir + "/" + merged_df.index.astype(str) + "." + output_format
-    )
+
     table = pa.Table.from_pandas(merged_df, preserve_index=True)
     table = table.replace_schema_metadata(
         {
