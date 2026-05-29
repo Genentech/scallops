@@ -129,6 +129,11 @@ def _create_stitch_parser(
         "--image-output",
         help="Output zarr directory for stitched images and masks.",
     )
+    parser.add_argument(
+        "--channel-name",
+        nargs="*",
+        help="Channel names to save in output image. If specified, must equal the number of channels in input tiles.",
+    )
 
     image_pattern_arg(parser)
     groupby_arg(parser)

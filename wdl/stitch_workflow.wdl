@@ -13,6 +13,7 @@ workflow stitch_workflow {
         Array[String]? subset
 
         Int? expected_images
+        Array[String]? channel_names
         Float? stitch_max_shift
         String? stitch_blend
         String? stitch_radial_correction_k
@@ -119,6 +120,7 @@ workflow stitch_workflow {
                 channel=stitch_channel,
                 flatfield_url=illumination_correction.output_url,
                 radial_correction_k=stitch_radial_correction_k,
+                channel_names=channel_names,
                 stage_positions=stitch_stage_positions,
                 crop_y=stitch_crop_y,
                 crop_x=stitch_crop_x,
