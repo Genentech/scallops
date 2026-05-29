@@ -76,11 +76,6 @@ def test_stitch_wdl_z_stack(tmp_path):
 
 @pytest.mark.cli_e2e
 def test_stitch_wdl(tmp_path):
-    # cromwell_config = "scallops/tests/data/wdl/cromwell.conf"
-    # local_config = "scallops/tests/data/wdl/config.json"
-    # jar_file = os.environ.get("CROMWELL_JAR", "cromwell.jar")
-    # if not os.path.exists(jar_file):
-    #     pytest.skip("Could not find cromwell jar")
     # top-left, top-right, bottom-left, bottom-right
     coords = [(0, 0), (0.5, 1024 - 50.5), (1000, 0.5), (999, 1024 - 49.5)]
     input_path = tmp_path / "input"
@@ -95,12 +90,13 @@ def test_stitch_wdl(tmp_path):
             c[0],
             c[1],
         )
-
+    output_directory = tmp_path / "out"
     input_json = {
-        "stitch_workflow.urls": [str(input_path)],
-        "stitch_workflow.image_pattern": "{well}-{skip}.zarr",
-        "stitch_workflow.output_directory": str(tmp_path / "out"),
-        "stitch_workflow.docker": "",
+        "urls": [str(input_path)],
+        "image_pattern": "{well}-{skip}.zarr",
+        "output_directory": str(output_directory),
+        "channel_names": ["a", "b"],
+        "docker": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:
@@ -117,6 +113,8 @@ def test_stitch_wdl(tmp_path):
     env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
     env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
+    image = read_image(tmp_path / "out" / "stitch" / "stitch.zarr" / "images" / "test")
+    np.testing.assert_array_equal(image.coords["c"].values, ["a", "b"])
 
 
 @pytest.mark.cli_e2e
@@ -154,31 +152,29 @@ def test_ops_wdl(tmp_path):
     exp.save(str(pheno_dir))
 
     input_json = {
-        "ops_workflow.model_dir": "",
-        "ops_workflow.iss_url": str(sbs_dir.absolute()),
-        "ops_workflow.iss_image_pattern": "{mag}X_c{t}-{experiment}-{t}_{well}_Tile-{tile}.{datatype}.tif",
-        "ops_workflow.output_directory": str(output.absolute()),
-        "ops_workflow.iss_registration_extra_arguments": "--no-landmarks",
-        "ops_workflow.pheno_to_iss_registration_extra_arguments": "--no-landmarks",
-        "ops_workflow.pheno_registration_extra_arguments": "--no-landmarks",
-        "ops_workflow.phenotype_cyto_channel": [1],
-        "ops_workflow.phenotype_dapi_channel": 0,
-        "ops_workflow.phenotype_url": str(pheno_dir.absolute()),
-        "ops_workflow.phenotype_nuclei_features": ["intensity_0", "intensity_1"],
+        "model_dir": "",
+        "iss_url": str(sbs_dir.absolute()),
+        "iss_image_pattern": "{mag}X_c{t}-{experiment}-{t}_{well}_Tile-{tile}.{datatype}.tif",
+        "output_directory": str(output.absolute()),
+        "iss_registration_extra_arguments": "--no-landmarks",
+        "pheno_to_iss_registration_extra_arguments": "--no-landmarks",
+        "pheno_registration_extra_arguments": "--no-landmarks",
+        "phenotype_cyto_channel": [1],
+        "phenotype_dapi_channel": 0,
+        "phenotype_url": str(pheno_dir.absolute()),
+        "phenotype_nuclei_features": ["intensity_0", "intensity_1"],
         # 2 batches
-        "ops_workflow.phenotype_cell_features": ["intensity_0"],
-        # "ops_workflow.phenotype_cytosol_features": ["mean_0 area"], # no cytosol features
-        "ops_workflow.phenotype_image_pattern": "{well}-{tile}-{t}",
-        "ops_workflow.groupby": ["well", "tile"],
-        "ops_workflow.reads_threshold_peaks": "0",
-        "ops_workflow.reads_threshold_peaks_crosstalk": "20",
-        "ops_workflow.barcodes": os.path.abspath(
-            "scallops/tests/data/experimentC/barcodes.csv"
-        ),
-        "ops_workflow.mark_stitch_boundary_cells": False,
-        "ops_workflow.reads_labels": "cell",
-        "ops_workflow.merge_extra_arguments": "--format parquet",
-        "ops_workflow.docker": "",
+        "phenotype_cell_features": ["intensity_0"],
+        # "phenotype_cytosol_features": ["mean_0 area"], # no cytosol features
+        "phenotype_image_pattern": "{well}-{tile}-{t}",
+        "groupby": ["well", "tile"],
+        "reads_threshold_peaks": "0",
+        "reads_threshold_peaks_crosstalk": "20",
+        "barcodes": os.path.abspath("scallops/tests/data/experimentC/barcodes.csv"),
+        "mark_stitch_boundary_cells": False,
+        "reads_labels": "cell",
+        "merge_extra_arguments": "--format parquet",
+        "docker": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:

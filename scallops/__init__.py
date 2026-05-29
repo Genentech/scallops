@@ -8,3 +8,10 @@ warnings.filterwarnings(
     category=UserWarning,
     module="anndata",
 )
+
+warnings.filterwarnings(
+    "ignore",
+    message="anndata will no longer support zarr v2 in the near future",
+    category=DeprecationWarning,
+    module="anndata",
+)

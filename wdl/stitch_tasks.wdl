@@ -84,6 +84,7 @@ task stitch {
         String subset
         Array[String] groupby
         Array[Int]? output_channels
+        Array[String]? channel_names
         String? image_pattern
         String output_directory
 
@@ -130,6 +131,7 @@ task stitch {
         flatfield_url = "~{flatfield_url}"
         groupby = '~{sep="," groupby}'.split(",")
         images = '~{sep="," images}'.split(",")
+        channel_names = [s.strip() for s in '~{sep="," channel_names}'.split(",") if s.strip()!='']
         output_channels = [s.strip() for s in '~{sep="," output_channels}'.split(",") if s.strip()!='']
         channel = "~{channel}"
         z_index_url = None
@@ -171,6 +173,8 @@ task stitch {
             cmd.append(expected_images)
         if len(output_channels) > 0:
              cmd += ["--output-channels"] + output_channels
+        if len(channel_names) > 0:
+            cmd += ["--channel-name"] + channel_names
         if z_index != "":
             cmd.append("--z-index")
             if z_index=="focus" and z_index_url is not None:
