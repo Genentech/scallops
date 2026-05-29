@@ -32,7 +32,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import _da_to_zarr_kwargs, is_ome_zarr_array
+from scallops.zarr_io import _da_to_zarr_kwargs, _omero_channels, is_ome_zarr_array
 
 logger = _get_cli_logger()
 
@@ -66,6 +66,7 @@ def _single_stitch(
     flip_y_axis: int | None,
     flip_x_axis: int | None,
     swap_axes: bool | None,
+    channel_names: list[str] | None,
 ):
     """Process a single cycle of images."""
     _, image_filepaths, image_metadata = image_tuple
@@ -387,6 +388,7 @@ def _single_stitch(
         fuse_crop_width,
         radial_correction_k,
         output_metadata,
+        channel_names,
     )
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -412,6 +414,7 @@ def _write_arrays(
     fuse_crop_width,
     radial_correction_k,
     metadata,
+    channel_names,
 ):
     gc.collect()
     if not no_save_labels:
@@ -539,6 +542,11 @@ def _write_arrays(
             stitch_coords=stitch_positions_df,
             **metadata,
         )
+        if channel_names is not None:
+            if output_channels is not None:
+                channel_names = channel_names[output_channels]
+
+            ome_metadata["omero"] = _omero_channels(channel_names)
         group.attrs.update(ome_metadata)
 
     # cleanup
