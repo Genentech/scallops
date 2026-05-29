@@ -185,7 +185,7 @@ def test_ops_wdl(tmp_path):
         "run",
         "-i",
         str(tmp_path / "inputs.json"),
-        "wdl/wdl",
+        "wdl/ops_workflow.wdl",
     ]
     env = os.environ.copy()
     env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
