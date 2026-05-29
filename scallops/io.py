@@ -60,7 +60,7 @@ from scallops.experiment.elements import Experiment, _LazyLoadData
 from scallops.externals.tifffile2014 import imsave
 from scallops.utils import forceTCZYX, mlcs
 from scallops.xr import _crop
-from scallops.zarr_io import _read_zarr_experiment, read_ome_zarr_array
+from scallops.zarr_io import _get_store_path, _read_zarr_experiment, read_ome_zarr_array
 
 logger = logging.getLogger("scallops")
 
@@ -889,20 +889,21 @@ def _get_processed_spacing(attrs: dict) -> tuple[float, float] | None:
 def _extract_crops(
     intensity_image: np.ndarray | zarr.Array,
     label_image: np.ndarray | zarr.Array | None,
-    objects_df: pd.DataFrame,
+    df: pd.DataFrame,
     query: str,
     sl: tuple[slice],
     output_dir: str,
+    label_col: str,
     output_format: Literal["tiff", "npy"],
     gaussian_sigma: float | None,
 ):
-    objects_df = objects_df.query(query)
-    labels = objects_df.index.values
+    df = df.query(query)
+    labels = df.index.values if label_col is None else df[label_col].values
     # global coordinates
-    bbox0 = objects_df["bbox-0"].values
-    bbox2 = objects_df["bbox-2"].values
-    bbox1 = objects_df["bbox-1"].values
-    bbox3 = objects_df["bbox-3"].values
+    bbox0 = df["crop-bbox-0"].values
+    bbox2 = df["crop-bbox-2"].values
+    bbox1 = df["crop-bbox-1"].values
+    bbox3 = df["crop-bbox-3"].values
 
     if isinstance(intensity_image, np.ndarray):
         bbox0 = bbox0 - sl[0].start
@@ -911,13 +912,15 @@ def _extract_crops(
         bbox3 = bbox3 - sl[1].start
     fs = fsspec.core.url_to_fs(output_dir)[0]
     protocol = _get_fs_protocol(fs)
-    for i in range(len(objects_df)):
+    for i in range(len(df)):
         label = labels[i]
         y, x = (slice(bbox0[i], bbox2[i]), slice(bbox1[i], bbox3[i]))
         img = intensity_image[..., y, x]
+
         if label_image is not None:
             img_type = img.dtype
             label_mask = label_image[y, x] == label
+
             if gaussian_sigma is not None:
                 # apply gaussian-smoothed mask to isolate target cell
                 label_mask = gaussian_filter(
@@ -925,7 +928,9 @@ def _extract_crops(
                 )
                 if label_mask.max() > 0:
                     label_mask = label_mask / label_mask.max()
+
             img = (img * label_mask).astype(img_type, copy=False)
+
         output_url = f"{output_dir}/{label}.{output_format}"
         if output_format == "tiff":
             if protocol == "file":
@@ -950,28 +955,29 @@ def _extract_crops(
 def to_label_crops(
     intensity_image: zarr.Array | da.Array,
     label_image: zarr.Array | da.Array,
-    objects_df: pd.DataFrame,
+    df: pd.DataFrame,
     output_dir: str,
     crop_size: tuple[int, int] = (224, 224),
     output_format: Literal["tiff", "npy"] = "tiff",
     centroid_cols: Sequence[str] | None = None,
+    label_col: str | None = None,
     gaussian_sigma: float | None = None,
-) -> pd.Index:
+) -> pd.DataFrame:
     """Export individual label crops as tiff or npy files.
 
     :param intensity_image: Image data
     :param label_image: Label data. If supplied, image is masked by corresponding segmentation mask
-    :param objects_df: DataFrame containing objects from `find-objects`.
+    :param df: DataFrame containing centroid_cols and label_col. Typically output from `find-objects`.
     :param crop_size: Size of label crop
     :param output_dir: Crop output directory
     :param output_format: Crop output format
-    :param centroid_cols: Columns in objects_df containing y and x centroids.
+    :param centroid_cols: Columns in df containing y and x centroids.
+    :param label_col: Column in `df` containing label id. Set to `None` if label is found in data frame index.
     :param gaussian_sigma: If not None, apply gaussian-smoothed mask to isolate target mask
-    :return: Objects dataframe index (with objects at well edges removed)
+    :return: Input data frame with objects at well edges removed. Adds columns `crop_url`, the URL to
+    output label crops, and crop-bbox-0, crop-bbox-2, crop-bbox-1, crop-bbox-3 containing the coordinates of the crop.
     """
-    assert not isinstance(objects_df.index, pd.RangeIndex), (
-        "Index should contain `label`"
-    )
+    output_dir = output_dir.rstrip("/")
     is_dask_array = isinstance(intensity_image, da.Array)
     image_shape = intensity_image.shape[-2:]
     label_shape = label_image.shape
@@ -983,40 +989,43 @@ def to_label_crops(
         label_image = label_image.rechunk(intensity_image.chunksize[-2:])
 
     if centroid_cols is None:
-        centroid_cols = objects_df.columns[
-            objects_df.columns.str.contains("AreaShape_Center_Y")
-            | objects_df.columns.str.contains("AreaShape_Center_X")
+        centroid_cols = df.columns[
+            df.columns.str.contains("AreaShape_Center_Y")
+            | df.columns.str.contains("AreaShape_Center_X")
         ]
         assert len(centroid_cols) == 2, "Unable to infer centroid columns."
         centroid_cols = sorted(centroid_cols, reverse=True)  # y before x
 
     centroid_cols = list(centroid_cols)
-    objects_df = objects_df[centroid_cols].copy()
+
     crop1 = crop_size[0] // 2
     crop2 = math.ceil(crop_size[0] / 2)
 
     for c in centroid_cols:
-        objects_df[c] = objects_df[c].round().astype(int)
+        df[c] = df[c].round().astype(int)
 
-    objects_df["bbox-0"] = objects_df[centroid_cols[0]] - crop1
-    objects_df["bbox-2"] = objects_df[centroid_cols[0]] + crop2
+    df["crop-bbox-0"] = df[centroid_cols[0]] - crop1
+    df["crop-bbox-2"] = df[centroid_cols[0]] + crop2
 
     crop1 = crop_size[1] // 2
     crop2 = math.ceil(crop_size[1] / 2)
-    objects_df["bbox-1"] = objects_df[centroid_cols[1]] - crop1
-    objects_df["bbox-3"] = objects_df[centroid_cols[1]] + crop2
-
-    n_objects = len(objects_df)
-    # filter small objects at well edge
-    objects_df = objects_df.query(
-        f"`bbox-0`>=0 & `bbox-2` <={image_shape[0]} "
-        f"& `bbox-1`>=0 & `bbox-3` <={image_shape[1]}"
+    df["crop-bbox-1"] = df[centroid_cols[1]] - crop1
+    df["crop-bbox-3"] = df[centroid_cols[1]] + crop2
+    labels = (
+        df[label_col].astype(str) if label_col is not None else df.index.astype(str)
     )
-    n_objects_filtered = len(objects_df)
+    df["crop_url"] = output_dir + "/" + labels + "." + output_format
+    n_objects = len(df)
+    # filter small objects at well edge
+    df = df.query(
+        f"`crop-bbox-0`>=0 & `crop-bbox-2` <={image_shape[0]} "
+        f"& `crop-bbox-1`>=0 & `crop-bbox-3` <={image_shape[1]}"
+    )
+    n_objects_filtered = len(df)
 
     if n_objects_filtered < n_objects:
         logger.info(
-            f"Removed {n_objects - n_objects_filtered:,} {pluralize('label', n_objects - n_objects_filtered)}"
+            f"Removed {n_objects - n_objects_filtered:,} {pluralize('label', n_objects - n_objects_filtered)} at edge."
         )
 
     chunk_slices = da.core.slices_from_chunks(
@@ -1035,26 +1044,29 @@ def to_label_crops(
 
     fs, _ = fsspec.url_to_fs(output_dir)
     fs.makedirs(output_dir, exist_ok=True)
-    objects_df_delayed = delayed(objects_df)
+    cols = ["crop-bbox-0", "crop-bbox-2", "crop-bbox-1", "crop-bbox-3"]
+    if label_col is not None:
+        cols.append(label_col)
+    df_delayed = delayed(df[cols].copy())
     for sl in chunk_slices:
         array_start = [s.start for s in sl]
         array_end = [s.stop for s in sl]
-        query = f"{array_start[0]}<=`bbox-0`<{array_end[0]} & {array_start[1]}<=`bbox-1`<{array_end[1]}"
-        objects_df_slice = objects_df.query(query)
-        if len(objects_df_slice) > 0:
+        query = f"{array_start[0]}<=`crop-bbox-0`<{array_end[0]} & {array_start[1]}<=`crop-bbox-1`<{array_end[1]}"
+        df_slice = df.query(query)
+        if len(df_slice) > 0:
             sl = (
                 slice(
-                    max(0, objects_df_slice["bbox-0"].min() - padding),
+                    max(0, df_slice["crop-bbox-0"].min() - padding),
                     min(
                         label_shape[0],
-                        objects_df_slice["bbox-2"].max() + padding,
+                        df_slice["crop-bbox-2"].max() + padding,
                     ),
                 ),
                 slice(
-                    max(0, objects_df_slice["bbox-1"].min() - padding),
+                    max(0, df_slice["crop-bbox-1"].min() - padding),
                     min(
                         label_shape[1],
-                        objects_df_slice["bbox-3"].max() + padding,
+                        df_slice["crop-bbox-3"].max() + padding,
                     ),
                 ),
             )
@@ -1069,14 +1081,16 @@ def to_label_crops(
                     label_image=label_block if is_dask_array else label_image,
                     output_dir=output_dir,
                     sl=sl,
+                    label_col=label_col,
                     query=query,
                     output_format=output_format,
-                    objects_df=objects_df_delayed,
+                    df=df_delayed,
                     gaussian_sigma=gaussian_sigma,
                 )
             )
     dask.compute(*results)
-    return objects_df.index
+
+    return df
 
 
 def example_image_coords(
@@ -1368,7 +1382,7 @@ def _images2fov(
             name = (
                 os.path.basename(file_list[i])
                 if not isinstance(file_list[i], zarr.Group)
-                else file_list[i].store.path
+                else _get_store_path(file_list[i])
             )
             src_metadata.append(dict(attrs=image_attrs[i], name=name))
 
@@ -1641,7 +1655,7 @@ def _set_up_experiment(
                             group_to_matches[group].append((x, d))
             else:
                 x = root
-                name = Path(x.store.path).stem
+                name = Path(_get_store_path(x)).stem
                 m = file_regex.match(name)
                 if m:
                     d = m.groupdict()
@@ -1794,7 +1808,9 @@ def _set_up_experiment(
                 src=file_list,
                 common_src=mlcs(
                     [
-                        Path(x).stem if not isinstance(x, zarr.Group) else x.store.path
+                        Path(x).stem
+                        if not isinstance(x, zarr.Group)
+                        else _get_store_path(x)
                         for x in file_list
                     ]
                 ),

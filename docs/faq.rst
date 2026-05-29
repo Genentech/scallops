@@ -28,3 +28,14 @@ FAQ
         aws s3 cp python_2D_versatile_fluo.zip s3://my-bucket/model/
 
     In your OPS workflow input JSON, set `model_dir` to `s3://my-bucket/model/`
+
+#. How do I pass configuration parameters when reading or writing to S3, GCP, or other file systems?
+    SCALLOPS uses fsspec_ for I/O operations. Please see `fsspec configuration documentation`_ for more details.
+
+    Example::
+
+        export FSSPEC_s3='{"anon":true}'
+
+
+.. _fsspec: https://filesystem-spec.readthedocs.io/
+.. _`fsspec configuration documentation`: https://filesystem-spec.readthedocs.io/en/latest/features.html#configuration
