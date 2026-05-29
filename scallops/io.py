@@ -1011,7 +1011,10 @@ def to_label_crops(
     crop2 = math.ceil(crop_size[1] / 2)
     df["crop-bbox-1"] = df[centroid_cols[1]] - crop1
     df["crop-bbox-3"] = df[centroid_cols[1]] + crop2
-
+    labels = (
+        df[label_col].astype(str) if label_col is not None else df.index.astype(str)
+    )
+    df["crop_url"] = output_dir + "/" + labels + "." + output_format
     n_objects = len(df)
     # filter small objects at well edge
     df = df.query(
@@ -1022,7 +1025,7 @@ def to_label_crops(
 
     if n_objects_filtered < n_objects:
         logger.info(
-            f"Removed {n_objects - n_objects_filtered:,} {pluralize('label', n_objects - n_objects_filtered)}"
+            f"Removed {n_objects - n_objects_filtered:,} {pluralize('label', n_objects - n_objects_filtered)} at edge."
         )
 
     chunk_slices = da.core.slices_from_chunks(
@@ -1086,10 +1089,7 @@ def to_label_crops(
                 )
             )
     dask.compute(*results)
-    labels = (
-        df[label_col].astype(str) if label_col is not None else df.index.astype(str)
-    )
-    df["crop_url"] = output_dir + "/" + labels + "." + output_format
+
     return df
 
 

@@ -392,6 +392,8 @@ def imcomposite(
                 ncols=ncol, nrows=nrow, figsize=figsize, layout="compressed"
             )
             ax = ax.ravel()
+        for i in range(len(ax)):
+            ax[i].axis("off")
         for i in range(len(facet_values)):
             sel = {}
             sel[facet] = facet_values[i]
