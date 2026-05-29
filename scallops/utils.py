@@ -40,14 +40,12 @@ from dask.tokenize import tokenize
 from dask.utils import SerializableLock
 from decorator import decorator
 from kneed import KneeLocator
-from ome_zarr.writer import write_image
 from skimage import restoration
 from skimage.feature import hog
 from skimage.measure import label
 from skimage.morphology import dilation, flood
 from skimage.transform import rescale, resize
 from xarray import DataArray
-from xarray import concat as xr_concat
 
 logger = logging.getLogger("scallops")
 
@@ -179,83 +177,6 @@ def match_size(
     return resize(image, target.shape, preserve_range=True, order=order).astype(
         image.dtype
     )
-
-
-def concatenate_arrays(
-    arrays: Sequence[DataArray],
-    suppl_attr: Optional[Sequence[dict[str, np.ndarray]]] = None,
-    dim: str = "Image",
-    swap: Optional[dict[str, str]] = None,
-) -> DataArray:
-    """Concatenate a list of arrays over the new dimension `dim`, and setting new attributes with
-    the option of extra images in dim.
-
-    :param swap: Swap dimensions based on the mapping AFTER concatenation
-    :param arrays: List of DataArrays with the images to be concatenated
-    :param suppl_attr: Supplemental attributes as dictionary of numpy arrays
-    :param dim: Name of the dimension to create the concatenation by
-    :return: A :DataArray: with the concatenation
-    """
-    assert isinstance(arrays, list), (
-        "A list of DataArrays to concatenate must be supplied"
-    )
-    new_attr = {i: x.attrs for i, x in enumerate(arrays)}
-    if suppl_attr is not None:
-        assert len(suppl_attr) == len(arrays), (
-            "arrays and suppl_coordinates must match!!"
-        )
-        for i, x in enumerate(suppl_attr):
-            new_attr[i]["supplementary"] = x
-    new_arr = xr_concat(arrays, dim=dim, combine_attrs="drop", coords="all")
-    if swap is not None:
-        new_arr = new_arr.swap_dims(swap)
-    return new_arr.assign_attrs(new_attr)
-
-
-def grid_search(
-    function: Callable,
-    parameters_ranges: dict[str, Union[range, Sequence]],
-    cpus: int = -1,
-    to_zarr: Optional[str] = None,
-    **kwargs,
-) -> dict[Any, Union[Union[str, Path], np.ndarray]]:
-    """Generate a line or grid search of the `parameters` of `function`
-
-    :param function: Function to be evaluated.
-    :param parameters_ranges: dictionary of ranges (or lists) with the parameter space.
-    :param cpus: Number of cpus to use. By default, is -1 which means all available cpus.
-    :param to_zarr: If not None, dump the function's results to specified path.
-    :param kwargs: All argument as keyword arguments for `function`. Positional arguments can be passed as keyword
-                   arguments with their name.
-    :return: A dictionary with the parameter combination as keys and the function results as values.
-    """
-    from joblib import Parallel
-    from joblib import delayed as joblib_delayed
-
-    pairs = [product([k], v) for k, v in parameters_ranges.items()]
-    grid = list(product(*pairs))
-    keys = ["-".join("{0}_{1}".format(*x) for x in y) for y in grid]
-    results = Parallel(n_jobs=cpus)(
-        joblib_delayed(function)(**dict(parameter), **kwargs) for parameter in grid
-    )
-    res_dict = dict(zip(keys, results))
-    if to_zarr is not None:
-        from scallops.zarr_io import open_ome_zarr
-
-        ome_zarr_root = open_ome_zarr(to_zarr, mode="w")
-        image_keys = []
-        for thresh, image in res_dict:
-            name = str(thresh)
-            image_keys.append(name)
-            write_image(
-                image=image,
-                group=ome_zarr_root.create_group(name),
-                scaler=None,
-                axes=["t", "c", "z", "y", "x"],
-                storage_options=dict(dimension_separator="/"),
-            )
-        ome_zarr_root.create_group("OME").attrs["series"] = image_keys
-    return res_dict
 
 
 def mlcs(strings: Sequence[str]):

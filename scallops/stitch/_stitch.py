@@ -32,7 +32,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import _omero_channels, is_ome_zarr_array
+from scallops.zarr_io import _da_to_zarr_kwargs, is_ome_zarr_array
 
 logger = _get_cli_logger()
 
@@ -55,7 +55,6 @@ def _single_stitch(
     no_save_labels: bool,
     no_save_image: bool,
     output_channels: list[int] | None,
-    channel_names: list[str] | None,
     no_version: bool,
     other_output_path: str,
     rename: dict[str, str] | None,
@@ -118,6 +117,7 @@ def _single_stitch(
         expected_images=expected_images,
     )
     z_index = init["z_index"]
+
     metadata_fields = init["metadata_fields"]
     n_scenes = init["n_scenes"]
     tmp_dir = init["tmp_dir"]
@@ -367,7 +367,6 @@ def _single_stitch(
         math.ceil(fused_y_size / n_partitions_y),
         math.ceil(fused_x_size / n_partitions_x),
     )
-
     _write_arrays(
         stitch_positions_df,
         stitch_positions_df_local,
@@ -385,7 +384,6 @@ def _single_stitch(
         dfp_path,
         z_index,
         output_channels,
-        channel_names,
         fuse_crop_width,
         radial_correction_k,
         output_metadata,
@@ -411,7 +409,6 @@ def _write_arrays(
     dfp_path,
     z_index,
     output_channels,
-    channel_names,
     fuse_crop_width,
     radial_correction_k,
     metadata,
@@ -420,14 +417,14 @@ def _write_arrays(
     if not no_save_labels:
         labels_group = image_output_root.require_group("labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
-
+        zarr_kwargs = _da_to_zarr_kwargs()
         array = group.create_dataset(
             name="0",
             shape=(fused_y_size, fused_x_size),
             chunks=chunk_size,
             dtype=np.uint8,
-            dimension_separator="/",
             overwrite=True,
+            **zarr_kwargs,
         )
 
         da.store(
@@ -452,8 +449,8 @@ def _write_arrays(
                 shape=(fused_y_size, fused_x_size),
                 chunks=chunk_size,
                 dtype=np.uint16,
-                dimension_separator="/",
                 overwrite=True,
+                **zarr_kwargs,
             )
 
             da.store(
@@ -542,12 +539,6 @@ def _write_arrays(
             stitch_coords=stitch_positions_df,
             **metadata,
         )
-        if channel_names is not None:
-            if output_channels is not None:
-                channel_names = channel_names[output_channels]
-            metadata = ome_metadata["multiscales"][0]["metadata"]
-            metadata["omero"] = _omero_channels(channel_names)
-
         group.attrs.update(ome_metadata)
 
     # cleanup

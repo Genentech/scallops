@@ -45,6 +45,7 @@ from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
     _get_fs,
+    _get_store_path,
     _write_zarr_image,
     is_ome_zarr_array,
     open_ome_zarr,
@@ -447,7 +448,7 @@ def get_matching_names(
     zarr_dir = "labels" if labels else "images"
     if isinstance(image_dir, Group):
         protocol = _get_fs_protocol(_get_fs(image_dir))
-        image_dir = f"{image_dir.store.path}{image_dir.name}"
+        image_dir = f"{_get_store_path(image_dir)}{image_dir.name}"
         if protocol != "file":
             image_dir = f"{protocol}://{image_dir}"
 
@@ -464,7 +465,7 @@ def get_matching_names(
     results = []
     for path in paths:
         name = os.path.basename(path)
-        if not name.startswith(".") and is_ome_zarr_array(zarr.open(path, "r")):
+        if not name.startswith(".") and is_ome_zarr_array(zarr.open(path, mode="r")):
             results.append(path)
     return results
 

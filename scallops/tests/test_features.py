@@ -34,6 +34,55 @@ __data__ = __tests__.joinpath("data")
 
 
 @pytest.mark.features
+def test_extract_crops_cmd(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
+    image = (
+        array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x")).rename(
+            {"z": "t", "t": "z"}
+        )
+    ).isel(t=0, z=0)  # ops swaps z and t in saved tif
+
+    image.data = da.from_array(image.data, chunks=(1, 200, 200))
+    labels = array_A1_102_cells.squeeze().copy()
+    labels.values[labels.values != 1523] = 0
+
+    zarr_path = str(tmp_path / "test.zarr")
+    crops_output_path = str(tmp_path / "crop-out")
+    objects_output_path = str(tmp_path / "objects-out")
+    exp = Experiment()
+    exp.images["test"] = image
+    exp.labels["test-cell"] = labels
+    exp.save(zarr_path)
+
+    cmd = [
+        "scallops",
+        "find-objects",
+        "--labels",
+        zarr_path,
+        "--label-pattern",
+        "{well}",
+        "--output",
+        objects_output_path,
+    ]
+    check_call(cmd)
+    cmd = [
+        "scallops",
+        "extract-crops",
+        "-i",
+        zarr_path,
+        "--labels",
+        zarr_path,
+        "--merge",
+        objects_output_path,
+        "--output",
+        crops_output_path,
+    ]
+
+    check_call(cmd)
+    img = read_image(crops_output_path + "/cell/test/1523.tiff")
+    assert img.max() > 0
+
+
+@pytest.mark.features
 def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     label_image = da.from_array(array_A1_102_cells.squeeze().data)
     intensity_image = (
@@ -48,15 +97,15 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     objects_df = find_objects(label_image).compute()
     crop_size = (30, 30)
 
-    result_index = to_label_crops(
+    result_df = to_label_crops(
         intensity_image=intensity_image,
         label_image=label_image,
-        objects_df=objects_df.query("index==2603|index==17"),
+        df=objects_df.query("index==2603|index==17"),
         crop_size=crop_size,
         output_dir=output_dir_dask,
     )
     # 17 should be filtered b/c on tile edge
-    assert len(result_index) == 1 and result_index.values[0] == 2603
+    assert len(result_df) == 1 and result_df.index.values[0] == 2603
 
     group = zarr.group()
     intensity_image_zarr = group.create_dataset(
@@ -70,7 +119,7 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     to_label_crops(
         intensity_image=intensity_image_zarr,
         label_image=label_image_zarr,
-        objects_df=objects_df.query("index==2603"),
+        df=objects_df.query("index==2603"),
         crop_size=crop_size,
         output_dir=output_dir_zarr,
     )
