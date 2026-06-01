@@ -276,6 +276,8 @@ def spot_detection_pipeline(
         )
     else:
         sigma_log = np.array(sigma_log)
+        if sigma_log.ndim == 0:
+            sigma_log = np.expand_dims(sigma_log, 0)
         loged_list = []
         maxed_list = []
         std_arr_list = []
