@@ -172,6 +172,73 @@ def test_spot_detect_invalid_t(tmp_path):
         subprocess.check_call(spot_detection_args)
 
 
+@pytest.mark.cli_e2e
+def test_spot_detect_multi_sigma(tmp_path):
+    segment_path = str(tmp_path / "segment-register.zarr")
+
+    cell_labels_known_good = (
+        read_image(str(data_path.joinpath("process_fig4", "10X_A1_Tile-102.cells.tif")))
+        .squeeze()
+        .data
+    )
+    exp = Experiment()
+    exp.labels["A1-102-cell"] = cell_labels_known_good
+    exp.save(segment_path)
+    sigmas = [["1"], ["2"], ["1", "2"]]
+    for sigma in sigmas:
+        spot_detect_zarr = str(tmp_path / f"spot_detect{'-'.join(sigma)}.zarr")
+        reads_output = str(tmp_path / f"reads{'-'.join(sigma)}")
+        spot_detection_args = [
+            "scallops",
+            "pooled-sbs",
+            "spot-detect",
+            "--images",
+            str(data_path.joinpath("experimentC", "input")),
+            "--channel",
+            "1",
+            "2",
+            "3",
+            "4",
+            "--output=" + spot_detect_zarr,
+            "--subset=A1-102",
+            "--groupby",
+            "well",
+            "tile",
+            "--image-pattern=10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
+            "--dask-cluster",
+            '{"n_workers":1, "threads_per_worker":1}',
+            "--sigma-log",
+        ]
+        spot_detection_args += sigma
+        subprocess.check_call(spot_detection_args)
+        reads_args = [
+            "scallops",
+            "pooled-sbs",
+            "reads",
+            "--spots",
+            spot_detect_zarr,
+            "--labels",
+            segment_path,
+            "--barcodes",
+            str(data_path.joinpath("experimentC", "barcodes.csv")),
+            "--threshold-peaks",
+            "150",
+            "--crosstalk-correction-method",
+            "none",
+            "--output=" + reads_output,
+            "--label-name",
+            "cell",
+            "--dask-cluster",
+            '{"n_workers":1, "threads_per_worker":1}',
+        ]
+        subprocess.check_call(reads_args)
+    df1 = pd.read_parquet(str(tmp_path / "reads1" / "reads" / "A1-102.parquet"))
+    df2 = pd.read_parquet(str(tmp_path / "reads2" / "reads" / "A1-102.parquet"))
+    df3 = pd.read_parquet(str(tmp_path / "reads1-2" / "reads" / "A1-102.parquet"))
+
+    assert len(df1) + len(df2) == len(df3)
+
+
 @pytest.mark.cli_spot
 def test_spot_detect_subset_t(tmp_path):
     # spot-detect
