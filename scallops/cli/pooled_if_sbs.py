@@ -260,15 +260,9 @@ def spot_detection_pipeline(
             image.data, qmin=qmin, qmax=qmax, eps=eps
         )
 
-    if match_ops_image_scale:
-        # include DAPI channel to match ops rescaling
-        loged = transform_log(image, sigma=sigma_log)
-        loged = loged.isel(c=iss_channels)
-    else:
-        loged = transform_log(image, sigma=sigma_log)
-
-    maxed = max_filter(loged, max_filter_width)
+    loged = None
     std_arr = None
+    maxed = None
     cycles_spot_detection = (
         None if spot_detection_n_cycles is None else np.arange(spot_detection_n_cycles)
     )
@@ -281,17 +275,47 @@ def spot_detection_pipeline(
             method=spot_detection_method,
         )
     else:
-        std_arr = std(
-            loged.isel(t=cycles_spot_detection)
-            if cycles_spot_detection is not None
-            else loged
+        sigma_log = np.array(sigma_log)
+        loged_list = []
+        maxed_list = []
+        std_arr_list = []
+        peaks_list = []
+        for sigma in sigma_log:
+            if match_ops_image_scale:
+                # include DAPI channel to match ops rescaling
+                loged = transform_log(image, sigma=sigma)
+                loged = loged.isel(c=iss_channels)
+            else:
+                loged = transform_log(image, sigma=sigma)
+
+            maxed = max_filter(loged, max_filter_width)
+            std_arr = std(
+                loged.isel(t=cycles_spot_detection)
+                if cycles_spot_detection is not None
+                else loged
+            )
+            peaks = find_peaks(std_arr, peak_neighborhood_size)
+            loged_list.append(loged)
+            maxed_list.append(maxed)
+            std_arr_list.append(std_arr)
+            peaks_list.append(peaks)
+        loged = (
+            xr.concat(loged_list, dim="sigma") if len(loged_list) > 1 else loged_list[0]
         )
-        peaks = find_peaks(std_arr, peak_neighborhood_size)
+        maxed = (
+            xr.concat(maxed_list, dim="sigma") if len(maxed_list) > 1 else maxed_list[0]
+        )
+        std_arr = (
+            xr.concat(std_arr_list, dim="sigma")
+            if len(std_arr_list) > 1
+            else std_arr_list[0]
+        )
+        peaks = dd.concat(peaks_list) if len(peaks_list) > 1 else peaks_list[0]
     dask_delayed = []
     compute = True
     metadata = cli_metadata() if not no_version else dict()
     metadata["image_metadata"] = image_metadata
-    if "log" in save_keys:
+    if "log" in save_keys and loged is not None:
         loged.attrs.update(metadata)
         dask_delayed.append(
             _write_image(
@@ -321,7 +345,7 @@ def spot_detection_pipeline(
         )
     else:
         del std_arr
-    if "max" in save_keys:
+    if "max" in save_keys and maxed is not None:
         maxed.attrs.update(metadata)
         dask_delayed.append(
             _write_image(
@@ -952,6 +976,7 @@ def reads_pipeline(
 
     iss_cycles = maxed.coords["t"].values
     custom_metadata = dict(scallops=dict(sbs_cycles=iss_cycles.tolist()))
+    w = None
     if not labels_only:
         crosstalk_bases_array = crosstalk_bases_array.query(dict(read="label>0"))
     if (
@@ -1012,6 +1037,7 @@ def reads_pipeline(
         bases_array_reads = bases_array_reads.astype(int)
 
     df_reads = decode_max(bases_array_reads, barcodes=df_barcode)
+
     if n_mismatches is not None and n_mismatches > 0:
         df_reads = correct_mismatches(
             reads=df_reads, barcodes=df_barcode, n_mismatches=n_mismatches
