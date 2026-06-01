@@ -235,8 +235,10 @@ def test_spot_detect_multi_sigma(tmp_path):
     df1 = pd.read_parquet(str(tmp_path / "reads1" / "reads" / "A1-102.parquet"))
     df2 = pd.read_parquet(str(tmp_path / "reads2" / "reads" / "A1-102.parquet"))
     df3 = pd.read_parquet(str(tmp_path / "reads1-2" / "reads" / "A1-102.parquet"))
-
-    assert len(df1) + len(df2) == len(df3)
+    df1_2 = pd.concat((df1, df2))
+    pd.testing.assert_frame_equal(
+        df1_2.reset_index(drop=True), df3.reset_index(drop=True)[df1_2.columns]
+    )
 
 
 @pytest.mark.cli_spot
