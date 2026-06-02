@@ -120,6 +120,7 @@ def filter_data(
             max_variance = np.inf
         if isinstance(keep_cells, da.Array):
             keep_cells = keep_cells.compute()
+        if keep_cells is not None:
             data = _slice_anndata(data, keep_cells)
             keep_cells = None
         if by is not None:

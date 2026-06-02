@@ -5,10 +5,7 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import PowerTransformer
 
-from scallops.features.preprocessing import (
-    filter_data,
-    transform_features_yj,
-)
+from scallops.features.preprocessing import filter_data, transform_features_yj
 
 
 @pytest.mark.parametrize("by", [None, "well"])
@@ -30,18 +27,26 @@ def test_filter_data(use_dask, by):
     adata.X = adata.X.astype(np.float32)
     adata.X[1, 0] = 100
     adata.X[0, 0] = np.nan
-
+    # np.var(adata.X, axis=0) array([nan,  5.], dtype=float32)
     test_nan_filter = filter_data(
         adata, max_fraction_not_finite=0, min_variance=None, max_variance=None
     )
-    assert test_nan_filter.shape == (3, 2)  # drop one cell
-
-    # np.var(adata.X, axis=0) array([nan,  5.], dtype=float32)
+    assert test_nan_filter.shape == (3, 2)
+    # np.var(adata.X, axis=0) # array([nan,  5.]
+    # np.var(adata[adata.obs['well'] == 'well1'].X, axis=0)  # array([nan,  4.])
+    # np.var(adata[adata.obs['well'] == 'well2'].X, axis=0)  # array([2209.,    4.]
     d1 = filter_data(
-        adata, max_fraction_not_finite=None, min_variance=4, max_variance=None, by=by
+        adata, max_fraction_not_finite=None, min_variance=0, max_variance=None, by=by
     )
+    # np.var(adata[1:].X, axis=0)  array([2006.2222, 2.6666667]
+    d2 = filter_data(
+        adata, max_fraction_not_finite=0, min_variance=5, max_variance=None, by=by
+    )
+
     assert d1.shape == (4, 1)
+    assert d2.shape == (3, 1)
     assert d1.var.index.values[0] == "gene2"
+    assert d2.var.index.values[0] == "gene1"
 
 
 @pytest.mark.parametrize("by", [None, ["pert", "well"], ["well"]])
