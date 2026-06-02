@@ -58,6 +58,36 @@ def transform_features_yj(
     )
 
 
+def feature_variance(
+    data: anndata.AnnData, by: str | Sequence
+) -> np.ndarray | da.Array:
+    """Compute feature variance stratified by column(s) in `data.obs`
+
+    :param data: AnnData object
+    :param by: Column(s) in `data.obs` to stratify by when computing variance.
+    :return: Median feature variance
+    """
+
+    xp = get_namespace(data.X)
+
+    if not isinstance(by, str) and isinstance(by, Sequence):
+        # xarray outputs all combinations, even ones that don't exist
+        # https://github.com/pydata/xarray/issues/11264
+        xdata = xr.DataArray(
+            data.X,
+            dims=("obs", "var"),
+            name="",
+            coords={"obs": data.obs[by].apply(tuple, axis=1)},
+        )
+        by = "obs"
+    else:
+        xdata = _anndata_to_xr(data, by)
+
+    variance = xdata.groupby(by).var(skipna=False)  # dims (by, 'var')
+    variance = xp.median(variance.data, axis=0)
+    return variance
+
+
 def filter_data(
     data: anndata.AnnData,
     max_fraction_not_finite: float | None = 0.25,
@@ -88,34 +118,17 @@ def filter_data(
             min_variance = -np.inf
         if max_variance is None:
             max_variance = np.inf
-
+        if isinstance(keep_cells, da.Array):
+            keep_cells = keep_cells.compute()
+        if keep_cells is not None:
+            data = _slice_anndata(data, keep_cells)
+            keep_cells = None
         if by is not None:
-            if isinstance(keep_cells, da.Array):
-                keep_cells = keep_cells.compute()
+            variance = feature_variance(data, by)
 
-            if not isinstance(by, str) and isinstance(by, Sequence):
-                # xarray outputs all combinations, even ones that don't exist
-                # https://github.com/pydata/xarray/issues/11264
-                xdata = xr.DataArray(
-                    data.X,
-                    dims=("obs", "var"),
-                    name="",
-                    coords={"obs": data.obs[by].apply(tuple, axis=1)},
-                )
-                by = "obs"
-            else:
-                xdata = _anndata_to_xr(data, by)
-            if keep_cells is not None:
-                xdata = xdata[keep_cells]
-
-            variance = xdata.groupby(by).var(skipna=False)  # dims (by, 'var')
-            variance = xp.median(variance.data, axis=0)
         else:
-            variance = (
-                xp.var(data.X[keep_cells], axis=0)
-                if keep_cells is not None
-                else xp.var(data.X, axis=0)
-            )
+            variance = xp.var(data.X, axis=0)
+
         keep_features = (
             (variance >= min_variance)
             & (variance <= max_variance)
