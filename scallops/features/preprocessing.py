@@ -124,6 +124,7 @@ def filter_data(
             keep_cells = None
         if by is not None:
             variance = feature_variance(data, by)
+
         else:
             variance = xp.var(data.X, axis=0)
 
