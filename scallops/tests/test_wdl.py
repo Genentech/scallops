@@ -205,7 +205,12 @@ def test_ops_wdl(tmp_path):
         "Cells_AreaShape_Area",
     ]:
         assert col in merge_sbs_metadata_df.columns
-
+    for col in [
+        "Nuclei_Intensity_MeanIntensity_Channel0",
+        "Nuclei_Intensity_MeanIntensity_Channel1",
+        "Cells_Intensity_MeanIntensity_Channel0",
+    ]:
+        assert col not in merge_sbs_metadata_df.columns
     merge_features_df = pd.read_parquet(output / "merge-features" / "A1-102.parquet")
     for col in [
         "Nuclei_AreaShape_Area",
@@ -215,6 +220,6 @@ def test_ops_wdl(tmp_path):
         "Cells_Intensity_MeanIntensity_Channel0",
     ]:
         assert col in merge_features_df.columns
-    assert len(merge_features_df) == len(
-        merge_sbs_metadata_df.query("barcode_Q_mean_0/barcode_Q_mean > 0.5")
-    )
+    assert len(
+        merge_features_df.query("~Nuclei_Intensity_MeanIntensity_Channel0.isna()")
+    ) == len(merge_sbs_metadata_df.query("barcode_Q_mean_0/barcode_Q_mean > 0.5"))
