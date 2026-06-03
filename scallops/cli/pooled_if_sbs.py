@@ -472,10 +472,10 @@ def _rename_unique(columns, unique_values, prefix):
 
 def merge_sbs_phenotype_pipeline(
     image_key: str,
-    sbs_path: str,
+    sbs_path: str | None,
     phenotype_paths: list[str],
     phenotype_suffix: list[str],
-    df_barcode: pd.DataFrame,
+    df_barcode: pd.DataFrame | None,
     output_dir: str,
     join_sbs: Literal["left", "right", "inner", "outer", "cross"] = "inner",
     join_phenotype: Literal["left", "right", "inner", "outer", "cross"] = "inner",
@@ -512,16 +512,28 @@ def merge_sbs_phenotype_pipeline(
             path += f" ({phenotype_suffix[i]})"
         paths_and_suffixes.append(path)
     logger.info(f"Running merge for {image_key} with {', '.join(paths_and_suffixes)}.")
-    fs, sbs_path_ = fsspec.core.url_to_fs(sbs_path)
-    iss_dataset = pq.ParquetDataset(sbs_path_, filesystem=fs)
     image_metadata = None
     sbs_cycles = None
-    if b"scallops" in iss_dataset.schema.metadata:
-        iss_meta = json.loads(iss_dataset.schema.metadata[b"scallops"])
-        sbs_cycles = iss_meta["sbs_cycles"]
-        sbs_cycles = _fix_cycles(sbs_cycles)
-        image_metadata = iss_meta.get("image_metadata")
+    unique_columns = set()
+    if df_barcode is not None:
+        unique_columns.update(df_barcode.columns.tolist())
+    if sbs_path is not None:
+        fs, sbs_path_ = fsspec.core.url_to_fs(sbs_path)
+        iss_dataset = pq.ParquetDataset(sbs_path_, filesystem=fs)
 
+        if b"scallops" in iss_dataset.schema.metadata:
+            iss_meta = json.loads(iss_dataset.schema.metadata[b"scallops"])
+            sbs_cycles = iss_meta["sbs_cycles"]
+            sbs_cycles = _fix_cycles(sbs_cycles)
+            image_metadata = iss_meta.get("image_metadata")
+        df_labels = dd.read_parquet(sbs_path)
+        if "label" in df_labels.columns:
+            df_labels = df_labels.set_index("label")
+        if sbs_cycles is None:
+            sbs_cycles = df_labels[["barcode_0"]].head()["barcode_0"].str.len().max()
+            logger.info(f"ISS cycle metadata not found. Assuming {sbs_cycles} cycles.")
+            sbs_cycles = np.arange(1, sbs_cycles + 1)
+        unique_columns.update(df_labels.columns.tolist())
     df_phenotypes = []
     # can have duplicate columns if features is called in multiple batches
 
@@ -529,17 +541,8 @@ def merge_sbs_phenotype_pipeline(
     metadata_columns = []
     feature_columns = []  # used to read in subset of columns when merging to zarr
     # df_labels has 'mismatch', 'barcode_Q_mean', 'barcode_Q_min', 'barcode_peak', 'barcode_count', 'barcode_0', ...
-    df_labels = dd.read_parquet(sbs_path)
-    if "label" in df_labels.columns:
-        df_labels = df_labels.set_index("label")
-    if sbs_cycles is None:
-        sbs_cycles = df_labels[["barcode_0"]].head()["barcode_0"].str.len().max()
-        logger.info(f"ISS cycle metadata not found. Assuming {sbs_cycles} cycles.")
-        sbs_cycles = np.arange(1, sbs_cycles + 1)
+
     prefixes = []
-    unique_columns = set()
-    unique_columns.update(df_barcode.columns.tolist())
-    unique_columns.update(df_labels.columns.tolist())
 
     for i in range(len(phenotype_paths)):
         df = dd.read_parquet(phenotype_paths[i])
@@ -576,23 +579,26 @@ def merge_sbs_phenotype_pipeline(
         unique_columns.update(df.columns.tolist())
 
     df_labels, df_phenotypes = dask.compute(df_labels, df_phenotypes)
-
+    df_phenotype = None
     if len(df_phenotypes) > 1:
         if isinstance(df_phenotypes[0], dd.DataFrame):
             df_phenotype = dd.concat(df_phenotypes, axis=1, join=join_phenotype)
         else:
             df_phenotype = pd.concat(df_phenotypes, axis=1, join=join_phenotype)
-    else:
+    elif len(df_phenotypes) == 1:
         df_phenotype = df_phenotypes[0]
-
-    merged_df = merge_sbs_phenotype(
-        df_labels=df_labels,
-        df_phenotype=df_phenotype,
-        df_barcode=df_barcode,
-        sbs_cycles=sbs_cycles,
-        how=join_sbs,
-    )
-
+    if df_labels is not None and df_phenotype is not None and df_barcode is not None:
+        merged_df = merge_sbs_phenotype(
+            df_labels=df_labels,
+            df_phenotype=df_phenotype,
+            df_barcode=df_barcode,
+            sbs_cycles=sbs_cycles,
+            how=join_sbs,
+        )
+    elif df_phenotype is not None:
+        merged_df = df_phenotype
+    else:
+        raise ValueError("Nothing to merge")
     if image_metadata is not None:
         for col in image_metadata.keys():
             value = image_metadata[col]

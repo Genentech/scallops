@@ -163,6 +163,7 @@ def test_ops_wdl(tmp_path):
         "phenotype_dapi_channel": 0,
         "phenotype_url": str(pheno_dir.absolute()),
         "phenotype_nuclei_features": ["intensity_0", "intensity_1"],
+        "features_label_filter": " barcode_Q_mean_0/barcode_Q_mean > 0.5",
         # 2 batches
         "phenotype_cell_features": ["intensity_0"],
         # "phenotype_cytosol_features": ["mean_0 area"], # no cytosol features
