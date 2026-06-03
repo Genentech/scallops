@@ -19,6 +19,7 @@ workflow ops_workflow {
         String? reference_phenotype_time
 
         # features
+        String? features_label_filter
         Array[String]? phenotype_cell_features
         Array[String]? phenotype_nuclei_features
         Array[String]? phenotype_cytosol_features
@@ -180,7 +181,8 @@ workflow ops_workflow {
         String register_iss_to_iss_qc_directory = "iss-to-iss-qc"
         String spot_detect_suffix = "spot-detect.zarr"
         String reads_suffix = "reads"
-        String merge_suffix = "merge"
+        String merge_meta_suffix = "merge-sbs-metadata"
+        String merge_features_suffix = "merge-features"
         String cell_intersects_boundary_suffix = "intersects-boundary"
         String cell_intersects_boundary_non_reference_t_suffix = "intersects-boundary-t"
     }
@@ -202,7 +204,8 @@ workflow ops_workflow {
     String register_pheno_to_pheno_transform_directory = output_stripped + register_pheno_to_pheno_transform_suffix
     String spot_detect_directory = output_stripped + spot_detect_suffix
     String reads_directory = output_stripped + reads_suffix
-    String merge_directory = output_stripped + merge_suffix
+    String merge_meta_directory = output_stripped + merge_meta_suffix
+    String merge_features_directory = output_stripped + merge_features_suffix
     String register_pheno_to_iss_qc_directory = output_stripped + register_pheno_to_iss_qc_suffix
     String cell_intersects_boundary_directory = output_stripped + cell_intersects_boundary_suffix
     String cell_intersects_boundary_directory_non_reference_t = output_stripped + cell_intersects_boundary_non_reference_t_suffix
@@ -324,6 +327,25 @@ workflow ops_workflow {
                         cpu = find_objects_cpu,
                         max_retries = max_retries
                 }
+
+                call tasks.find_objects as find_objects_cytosol {
+                    input:
+                        labels=segment_cell.output_url,
+                        label_pattern=image_pattern_after_registration,
+                        suffix="cytosol",
+                        output_directory=cytosol_objects_directory,
+                        subset = group,
+                        force = force_find_objects,
+                        docker=docker,
+                        zones = zones,
+                        preemptible = preemptible,
+                        aws_queue_arn = aws_queue_arn,
+                        disks = find_objects_disks,
+                        memory = find_objects_memory,
+                        cpu = find_objects_cpu,
+                        max_retries = max_retries
+                }
+
 
                 # determine whether cells intersect stitch boundary
                 # using stitch mask as image
@@ -500,128 +522,6 @@ workflow ops_workflow {
             }
 
         }
-
-        if (defined(phenotype_nuclei_features)) {
-
-            Array[String] phenotype_nuclei_features_ = select_first([phenotype_nuclei_features])
-            # cromwell hack
-            Int features_nuclei_min_area_ = select_first([features_nuclei_min_area, -1])
-            Int features_nuclei_max_area_ = select_first([features_nuclei_max_area, -1])
-            scatter (index in range(length(phenotype_nuclei_features_))) {
-
-                call tasks.features as features_nuclei {
-                    input:
-                        images = select_first([register_pheno_to_pheno_output_url]),
-                        image_pattern=register_pheno_to_pheno_image_pattern,
-                        nuclei_features = phenotype_nuclei_features_[index],
-                        nuclei_min_area = features_nuclei_min_area_,
-                        nuclei_max_area = features_nuclei_max_area_,
-                        features_extra_arguments=features_extra_arguments,
-                        labels= segment_cell.output_url,
-                        objects=find_objects_nuclei.output_url,
-                        model_dir=model_dir,
-                        groupby=groupby,
-                        output_directory=nuclei_features_directory + '-' + index,
-                        subset = group,
-                        force = force_features,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = features_disks,
-                        memory = features_memory,
-                        cpu = features_cpu,
-                        max_retries = max_retries
-                }
-            }
-        }
-
-        if (defined(phenotype_cell_features)) {
-
-            Array[String] phenotype_cell_features_ = select_first([phenotype_cell_features])
-            # cromwell hack
-            Int features_cell_min_area_ = select_first([features_cell_min_area, -1])
-            Int features_cell_max_area_ = select_first([features_cell_max_area, -1])
-            scatter (index in range(length(phenotype_cell_features_))) {
-                call tasks.features as features_cell {
-                    input:
-                        images = select_first([register_pheno_to_pheno_output_url]),
-                        image_pattern=register_pheno_to_pheno_image_pattern,
-                        cell_features = phenotype_cell_features_[index],
-                        cell_min_area = features_cell_min_area_,
-                        cell_max_area = features_cell_max_area_,
-                        features_extra_arguments=features_extra_arguments,
-                        labels= segment_cell.output_url,
-                        objects=find_objects_cell.output_url,
-                        model_dir=model_dir,
-                        groupby=groupby,
-                        output_directory=cell_features_directory + '-' + index,
-                        subset = group,
-                        force = force_features,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = features_disks,
-                        memory = features_memory,
-                        cpu = features_cpu,
-                        max_retries = max_retries
-                }
-            }
-        }
-         if (run_cell_segmentation) {
-            call tasks.find_objects as find_objects_cytosol {
-                input:
-                    labels=segment_cell.output_url,
-                    label_pattern=image_pattern_after_registration,
-                    suffix="cytosol",
-                    output_directory=cytosol_objects_directory,
-                    subset = group,
-                    force = force_find_objects,
-                    docker=docker,
-                    zones = zones,
-                    preemptible = preemptible,
-                    aws_queue_arn = aws_queue_arn,
-                    disks = find_objects_disks,
-                    memory = find_objects_memory,
-                    cpu = find_objects_cpu,
-                    max_retries = max_retries
-            }
-         }
-        if (defined(phenotype_cytosol_features)) {
-
-            Array[String] phenotype_cytosol_features_ = select_first([phenotype_cytosol_features])
-            # cromwell hack
-            Int features_cytosol_min_area_ = select_first([features_cytosol_min_area, -1])
-            Int features_cytosol_max_area_ = select_first([features_cytosol_max_area, -1])
-            scatter (index in range(length(phenotype_cytosol_features_))) {
-                call tasks.features as features_cytosol {
-                    input:
-                        images = select_first([register_pheno_to_pheno_output_url]),
-                        image_pattern=register_pheno_to_pheno_image_pattern,
-                        cytosol_features = phenotype_cytosol_features_[index],
-                        cytosol_min_area = features_cytosol_min_area_,
-                        cytosol_max_area = features_cytosol_max_area_,
-                        labels = segment_cell.output_url,
-                        objects = find_objects_cytosol.output_url,
-                        features_extra_arguments=features_extra_arguments,
-                        model_dir=model_dir,
-                        groupby=groupby,
-                        output_directory=cytosol_features_directory + '-' + index,
-                        subset = group,
-                        force = force_features,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = features_disks,
-                        memory = features_memory,
-                        cpu = features_cpu,
-                        max_retries = max_retries
-                }
-            }
-        }
-
         if(iss_url_supplied && run_spot_detect) {
             call tasks.spot_detect {
                 input:
@@ -677,12 +577,12 @@ workflow ops_workflow {
             }
             if (defined(barcodes)) {
 
-                call tasks.merge {
+                call tasks.merge as merge_sbs_metadata {
                     input:
                         iss_reads=select_first([reads.output_url]) + '/labels',
-                        phenotypes_nuclei=features_nuclei.output_url,
-                        phenotypes_cell=features_cell.output_url,
-                        phenotypes_cytosol=features_cytosol.output_url,
+#                        phenotypes_nuclei=features_nuclei.output_url,
+#                        phenotypes_cell=features_cell.output_url,
+#                        phenotypes_cytosol=features_cytosol.output_url,
                         objects_nuclei=find_objects_nuclei.output_url,
                         objects_cell=find_objects_cell.output_url,
                         objects_cytosol=find_objects_cytosol.output_url,
@@ -692,7 +592,7 @@ workflow ops_workflow {
                         register_iss_to_iss_qc=register_iss_to_iss_qc.output_url,
                         barcodes=select_first([barcodes]),
                         barcode_column=barcode_column,
-                        output_directory=merge_directory,
+                        output_directory=merge_meta_directory,
                         subset = group,
                         extra_arguments=merge_extra_arguments,
                         force = force_merge,
@@ -707,6 +607,135 @@ workflow ops_workflow {
                 }
             }
         }
+        if (defined(phenotype_nuclei_features)) {
+
+            Array[String] phenotype_nuclei_features_ = select_first([phenotype_nuclei_features])
+            # cromwell hack
+            Int features_nuclei_min_area_ = select_first([features_nuclei_min_area, -1])
+            Int features_nuclei_max_area_ = select_first([features_nuclei_max_area, -1])
+            scatter (index in range(length(phenotype_nuclei_features_))) {
+
+                call tasks.features as features_nuclei {
+                    input:
+                        images = select_first([register_pheno_to_pheno_output_url]),
+                        image_pattern=register_pheno_to_pheno_image_pattern,
+                        objects=merge_sbs_metadata.output_url,
+                        label_filter=features_label_filter,
+                        nuclei_features = phenotype_nuclei_features_[index],
+                        nuclei_min_area = features_nuclei_min_area_,
+                        nuclei_max_area = features_nuclei_max_area_,
+                        features_extra_arguments=features_extra_arguments,
+                        labels= segment_cell.output_url,
+                        model_dir=model_dir,
+                        groupby=groupby,
+                        output_directory=nuclei_features_directory + '-' + index,
+                        subset = group,
+                        force = force_features,
+                        docker=docker,
+                        zones = zones,
+                        preemptible = preemptible,
+                        aws_queue_arn = aws_queue_arn,
+                        disks = features_disks,
+                        memory = features_memory,
+                        cpu = features_cpu,
+                        max_retries = max_retries
+                }
+            }
+        }
+
+        if (defined(phenotype_cell_features)) {
+
+            Array[String] phenotype_cell_features_ = select_first([phenotype_cell_features])
+            # cromwell hack
+            Int features_cell_min_area_ = select_first([features_cell_min_area, -1])
+            Int features_cell_max_area_ = select_first([features_cell_max_area, -1])
+            scatter (index in range(length(phenotype_cell_features_))) {
+                call tasks.features as features_cell {
+                    input:
+                        images = select_first([register_pheno_to_pheno_output_url]),
+                        image_pattern=register_pheno_to_pheno_image_pattern,
+                        objects=merge_sbs_metadata.output_url,
+                        label_filter=features_label_filter,
+                        cell_features = phenotype_cell_features_[index],
+                        cell_min_area = features_cell_min_area_,
+                        cell_max_area = features_cell_max_area_,
+                        features_extra_arguments=features_extra_arguments,
+                        labels= segment_cell.output_url,
+                        model_dir=model_dir,
+                        groupby=groupby,
+                        output_directory=cell_features_directory + '-' + index,
+                        subset = group,
+                        force = force_features,
+                        docker=docker,
+                        zones = zones,
+                        preemptible = preemptible,
+                        aws_queue_arn = aws_queue_arn,
+                        disks = features_disks,
+                        memory = features_memory,
+                        cpu = features_cpu,
+                        max_retries = max_retries
+                }
+            }
+        }
+
+        if (defined(phenotype_cytosol_features)) {
+
+            Array[String] phenotype_cytosol_features_ = select_first([phenotype_cytosol_features])
+            # cromwell hack
+            Int features_cytosol_min_area_ = select_first([features_cytosol_min_area, -1])
+            Int features_cytosol_max_area_ = select_first([features_cytosol_max_area, -1])
+            scatter (index in range(length(phenotype_cytosol_features_))) {
+                call tasks.features as features_cytosol {
+                    input:
+                        images = select_first([register_pheno_to_pheno_output_url]),
+                        image_pattern=register_pheno_to_pheno_image_pattern,
+                        objects=merge_sbs_metadata.output_url,
+                        label_filter=features_label_filter,
+                        cytosol_features = phenotype_cytosol_features_[index],
+                        cytosol_min_area = features_cytosol_min_area_,
+                        cytosol_max_area = features_cytosol_max_area_,
+                        labels = segment_cell.output_url,
+                        features_extra_arguments=features_extra_arguments,
+                        model_dir=model_dir,
+                        groupby=groupby,
+                        output_directory=cytosol_features_directory + '-' + index,
+                        subset = group,
+                        force = force_features,
+                        docker=docker,
+                        zones = zones,
+                        preemptible = preemptible,
+                        aws_queue_arn = aws_queue_arn,
+                        disks = features_disks,
+                        memory = features_memory,
+                        cpu = features_cpu,
+                        max_retries = max_retries
+                }
+            }
+        }
+         if (defined(barcodes)) {
+
+                call tasks.merge as merge_features {
+                    input:
+                        phenotypes_nuclei=features_nuclei.output_url,
+                        phenotypes_cell=features_cell.output_url,
+                        phenotypes_cytosol=features_cytosol.output_url,
+                        objects_nuclei=merge_sbs_metadata.output_url,
+                        output_directory=merge_features_directory,
+                        subset = group,
+                        extra_arguments=merge_extra_arguments,
+                        force = force_merge,
+                        docker=docker,
+                        zones = zones,
+                        preemptible = preemptible,
+                        aws_queue_arn = aws_queue_arn,
+                        disks = merge_disks,
+                        memory = merge_memory,
+                        cpu = merge_cpu,
+                        max_retries = max_retries
+                }
+            }
+
+
     }
     output {
         Array[String?] segment_nuclei_output_url = segment_nuclei.output_url
@@ -723,7 +752,8 @@ workflow ops_workflow {
         Array[Array[String]?] features_nuclei_output_url = features_nuclei.output_url
         Array[Array[String]?] features_cell_output_url = features_cell.output_url
         Array[Array[String]?] features_cytosol_output_url = features_cytosol.output_url
-        Array[String?] merge_output_url = merge.output_url
+        Array[String?] merge_sbs_metadata_output_url = merge_sbs_metadata.output_url
+        Array[String?] merge_features_output_url = merge_features.output_url
         Array[String] list_images_groups = list_images.groups
 
     }

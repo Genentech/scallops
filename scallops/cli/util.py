@@ -427,7 +427,7 @@ def dask_cluster_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def barcodes_arg(parser: argparse.ArgumentParser) -> None:
+def barcodes_arg(parser: argparse.ArgumentParser, required: bool = True) -> None:
     """Add the barcodes file argument to a parser.
 
     :param parser: The argument parser to which the barcodes file argument is added.
@@ -435,7 +435,7 @@ def barcodes_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--barcodes",
         dest="barcodes",
-        required=True,
+        required=required,
         help="Path to the barcode CSV file containing a column named 'barcode'.",
     )
 
