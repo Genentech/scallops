@@ -532,8 +532,8 @@ task features {
         ~{if defined(cytosol_max_area) && select_first([cytosol_max_area])>0 then '--cytosol-max-area ' + cytosol_max_area else ''} \
         ~{if defined(features_extra_arguments) then features_extra_arguments else ''} \
         --labels "~{labels}" \
-        ~{"--objects " +objects} \
-        ~{"--label-filter " +label_filter} \
+        ~{"--objects " + objects} \
+        ~{"--label-filter " + '"' + label_filter + '"'} \
         --subset ~{subset} \
         ~{"--image-pattern " + image_pattern} \
         --groupby ~{sep=" " groupby} \
