@@ -240,8 +240,7 @@ def single_feature(
         )
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
-    join_df = False
-    features_output_suffix = "" if join_df else "-features"
+
     zarr_inputs = True
 
     for f in file_list:
@@ -283,7 +282,9 @@ def single_feature(
 
     for label_name in label_name_to_features:
         features = label_name_to_features[label_name]
-        output_parquet_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}{features_output_suffix}.parquet"
+        output_parquet_path = (
+            f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}.parquet"
+        )
 
         if not force and is_parquet_file(output_parquet_path):
             logger.info(f"Skipping features for {image_key} {label_name}")

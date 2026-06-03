@@ -529,7 +529,7 @@ def merge_sbs_phenotype_pipeline(
         df_labels = dd.read_parquet(sbs_path)
         if "label" in df_labels.columns:
             df_labels = df_labels.set_index("label")
-        if sbs_cycles is None:
+        if sbs_cycles is None and df_barcode is not None:
             sbs_cycles = df_labels[["barcode_0"]].head()["barcode_0"].str.len().max()
             logger.info(f"ISS cycle metadata not found. Assuming {sbs_cycles} cycles.")
             sbs_cycles = np.arange(1, sbs_cycles + 1)
@@ -595,6 +595,8 @@ def merge_sbs_phenotype_pipeline(
             sbs_cycles=sbs_cycles,
             how=join_sbs,
         )
+    elif df_labels is not None and df_phenotype is not None:
+        merged_df = df_labels.join(df_phenotype, how=join_sbs)
     elif df_phenotype is not None:
         merged_df = df_phenotype
     else:
@@ -642,6 +644,36 @@ def merge_sbs_phenotype_pipeline(
         )
 
 
+def _find_phenotype_paths(
+    phenotype_paths, phenotype_filesystems, phenotype_suffix, image_key
+):
+    _phenotype_paths = []
+    _phenotype_suffix = []
+
+    for i in range(len(phenotype_paths)):
+        # match */A1-*.parquet and */A1.parquet
+        sep = phenotype_filesystems[i].sep
+        matches = phenotype_filesystems[i].glob(
+            f"{phenotype_paths[i]}{sep}*{sep}{image_key}-*.parquet"
+        ) + phenotype_filesystems[i].glob(
+            f"{phenotype_paths[i]}{sep}*{sep}{image_key}.parquet"
+        )
+
+        if len(matches) == 0:
+            # match A1-*.parquet and A1.parquet
+            matches = phenotype_filesystems[i].glob(
+                f"{phenotype_paths[i]}{sep}{image_key}-*.parquet"
+            ) + phenotype_filesystems[i].glob(
+                f"{phenotype_paths[i]}{sep}{image_key}.parquet"
+            )
+
+        for x in matches:
+            _phenotype_paths.append(phenotype_filesystems[i].unstrip_protocol(x))
+            if phenotype_suffix is not None:
+                _phenotype_suffix.append(phenotype_suffix[i])
+    return _phenotype_paths, _phenotype_suffix
+
+
 def merge_main(arguments: argparse.Namespace):
     """Merge single-cell sequencing (SCS) and phenotype data.
 
@@ -669,18 +701,19 @@ def merge_main(arguments: argparse.Namespace):
     subset = arguments.subset
     force = arguments.force
     no_version = arguments.no_version
-    sbs_fs, _ = fsspec.core.url_to_fs(sbs)
 
-    sbs = sbs.rstrip(sbs_fs.sep)
-    df_barcode = pd.read_csv(arguments.barcodes)
+    df_barcode = (
+        pd.read_csv(arguments.barcodes) if arguments.barcodes is not None else None
+    )
     barcode_column = arguments.barcode_col
-    if barcode_column != "barcode":
+    if df_barcode is not None and barcode_column != "barcode":
         rename = dict()
         rename[barcode_column] = "barcode"
         df_barcode = df_barcode.rename(rename, axis=1)
-    assert "barcode" in df_barcode.columns, (
-        f"`barcode` column not found in {arguments.barcodes}"
-    )
+    if df_barcode is not None:
+        assert "barcode" in df_barcode.columns, (
+            f"`barcode` column not found in {arguments.barcodes}"
+        )
     phenotype_filesystems = []
     if len(set(phenotype_paths)) != len(phenotype_paths):
         raise ValueError("Duplicate phenotype paths")
@@ -689,52 +722,36 @@ def merge_main(arguments: argparse.Namespace):
         phenotype_paths[i] = phenotype_paths[i].rstrip(phenotype_fs.sep)
         phenotype_filesystems.append(phenotype_fs)
     paths = []
-    sbs_fs_protocol = _get_fs_protocol(sbs_fs)
-    sbs_matches = sbs_fs.glob(sbs + sbs_fs.sep + "*.parquet")
 
-    if sbs_fs_protocol != "file":
-        sbs_matches = [f"{sbs_fs_protocol}://{m}" for m in sbs_matches]
     if subset is not None:
         subset = _create_subset_function(subset)
-    for sbs_path in sbs_matches:
-        name = os.path.splitext(os.path.basename(sbs_path))[0]
-        if not name.startswith("."):  # ignore hidden files
-            image_key, _ = os.path.splitext(name)
-            if subset is None or subset(image_key):
-                _phenotype_paths = []
-                _phenotype_suffix = []
-                for i in range(len(phenotype_paths)):
-                    # match */A1-*.parquet and */A1.parquet
-                    matches = phenotype_filesystems[i].glob(
-                        f"{phenotype_paths[i]}{phenotype_filesystems[i].sep}*{phenotype_filesystems[i].sep}{name}-*.parquet"
-                    ) + phenotype_filesystems[i].glob(
-                        f"{phenotype_paths[i]}{phenotype_filesystems[i].sep}*{phenotype_filesystems[i].sep}{name}.parquet"
+    if sbs is not None:
+        sbs_fs, _ = fsspec.core.url_to_fs(sbs)
+        sbs = sbs.rstrip(sbs_fs.sep)
+        sbs_matches = sbs_fs.glob(sbs + sbs_fs.sep + "*.parquet")
+        sbs_matches = [sbs_fs.unstrip_protocol(m) for m in sbs_matches]
+        for sbs_path in sbs_matches:
+            name = os.path.splitext(os.path.basename(sbs_path))[0]
+            if not name.startswith("."):  # ignore hidden files
+                image_key, _ = os.path.splitext(name)
+                if subset is None or subset(image_key):
+                    _phenotype_paths, _phenotype_suffix = _find_phenotype_paths(
+                        phenotype_paths,
+                        phenotype_filesystems,
+                        phenotype_suffix,
+                        image_key,
                     )
-
-                    if len(matches) == 0:
-                        # match A1-*.parquet and A1.parquet
-                        matches = phenotype_filesystems[i].glob(
-                            f"{phenotype_paths[i]}{phenotype_filesystems[i].sep}{name}-*.parquet"
-                        ) + phenotype_filesystems[i].glob(
-                            f"{phenotype_paths[i]}{phenotype_filesystems[i].sep}{name}.parquet"
+                    if len(_phenotype_paths) > 0:
+                        paths.append(
+                            (
+                                image_key,
+                                sbs_path,
+                                _phenotype_paths,
+                                _phenotype_suffix
+                                if phenotype_suffix is not None
+                                else None,
+                            )
                         )
-                    pheno_fs_protocol = _get_fs_protocol(phenotype_filesystems[i])
-                    if pheno_fs_protocol != "file":
-                        matches = [f"{pheno_fs_protocol}://{m}" for m in matches]
-                    for x in matches:
-                        _phenotype_paths.append(x)
-                        if phenotype_suffix is not None:
-                            _phenotype_suffix.append(phenotype_suffix[i])
-
-                if len(_phenotype_paths) > 0:
-                    paths.append(
-                        (
-                            image_key,
-                            sbs_path,
-                            _phenotype_paths,
-                            _phenotype_suffix if phenotype_suffix is not None else None,
-                        )
-                    )
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)

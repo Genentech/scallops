@@ -719,7 +719,7 @@ workflow ops_workflow {
                         phenotypes_nuclei=features_nuclei.output_url,
                         phenotypes_cell=features_cell.output_url,
                         phenotypes_cytosol=features_cytosol.output_url,
-                        objects_nuclei=merge_sbs_metadata.output_url,
+                        iss_reads=merge_sbs_metadata.output_url,
                         output_directory=merge_features_directory,
                         subset = group,
                         extra_arguments=merge_extra_arguments,
