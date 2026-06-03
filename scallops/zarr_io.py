@@ -41,9 +41,6 @@ def _current_format() -> Format:
     return FormatV04()
 
 
-_chunk_key_encoding = {"name": "v2", "separator": "/"}
-
-
 def _da_to_zarr_kwargs(fmt: Format | None = None) -> dict[str, Any]:
     if fmt is None:
         fmt = _current_format()
@@ -423,7 +420,7 @@ def write_zarr(
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
             grp.create_dataset(
-                "0", data=data, overwrite=True, chunk_key_encoding=_chunk_key_encoding
+                "0", data=data, overwrite=True, **_da_to_zarr_kwargs(fmt)
             )
 
         datasets = [{"path": "0"}]
