@@ -395,6 +395,12 @@ def single_feature(
             intensity_image=image if zarr_inputs else image.data,
             features=features,
             normalize=normalize,
+            bounding_box_columns=[
+                f"{label_prefix}_AreaShape_BoundingBoxMinimum_Y",
+                f"{label_prefix}_AreaShape_BoundingBoxMinimum_X",
+                f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
+                f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
+            ],
             channel_names=channel_names,
         )
         # df will be None if only area and coordinates requested
