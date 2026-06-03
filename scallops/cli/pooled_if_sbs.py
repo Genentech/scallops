@@ -523,8 +523,9 @@ def merge_sbs_phenotype_pipeline(
 
         if b"scallops" in iss_dataset.schema.metadata:
             iss_meta = json.loads(iss_dataset.schema.metadata[b"scallops"])
-            sbs_cycles = iss_meta["sbs_cycles"]
-            sbs_cycles = _fix_cycles(sbs_cycles)
+            sbs_cycles = iss_meta.get("sbs_cycles")
+            if sbs_cycles is not None:
+                sbs_cycles = _fix_cycles(sbs_cycles)
             image_metadata = iss_meta.get("image_metadata")
         df_labels = dd.read_parquet(sbs_path)
         if "label" in df_labels.columns:
