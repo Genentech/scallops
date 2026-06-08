@@ -30,7 +30,6 @@ from scallops.io import (
     get_image_spacing,
     pluralize,
 )
-from scallops.registration.crosscorrelation import align_image
 from scallops.registration.itk import (
     _itk_align_reference_time_zarr,
     _itk_transform_image_zarr,
@@ -850,103 +849,5 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
             force=force,
             no_version=no_version,
             itk_channel_parameters=itk_channel_parameters,
-        )
-        bag.compute()
-
-
-def single_cross_correlation(
-    _,
-    file_list: list[str],
-    metadata: dict,
-    across_t_channel: None | int,
-    within_t_channel: None | list[int],
-    filter_percentiles: tuple[float, float],
-    output_dir: zarr.Group,
-    force: bool = False,
-) -> None:
-    """Perform cross-correlation-based registration for a single image.
-
-    This function aligns a single image across or within timepoints using cross-correlation. It
-    allows filtering based on specified percentiles to refine the alignment and saves the aligned
-    image to the provided Zarr output directory.
-
-    :param _: Unused placeholder parameter required by the Dask starmap call.
-    :param file_list: List of file paths for the images to process.
-    :param metadata: Metadata dictionary containing information about the image.
-    :param across_t_channel: Channel index used for alignment across timepoints. If None, no across-
-        time alignment is performed.
-    :param within_t_channel: List of channel indices to align within the same timepoint. If None, no
-        within-time alignment is performed.
-    :param filter_percentiles: Tuple containing the lower and upper percentiles for filtering pixel
-        intensities (e.g., (0.1, 0.9)).
-    :param output_dir: Zarr group where the aligned images will be saved.
-    :param force: If True, forces the re-alignment even if the output already exists.
-    """
-    image_key = metadata["id"]
-    if not force and output_dir.get(f"images/{image_key}") is not None:
-        return logger.info(f"Skipping cross correlation for {image_key}")
-    logger.info(f"Running cross correlation for {image_key}")
-    image = _images2fov(file_list, metadata)
-    image = align_image(
-        image,
-        align_within_time_channels=within_t_channel,
-        align_between_time_channel=across_t_channel,
-        filter_percentiles=filter_percentiles,
-    )
-    _write_zarr_image(name=image_key, root=output_dir, image=image)
-
-
-def run_cross_correlation_registration(arguments: argparse.Namespace) -> None:
-    """Run image registration using cross-correlation.
-
-    This function orchestrates the image registration process using cross-correlation, aligning a
-    collection of images across and within cycles. It considers parameters such as filter
-    percentiles, within-time channels, and output directories for storing the registered images.
-
-    :param arguments: An argparse.Namespace object containing command-line arguments.
-    """
-    dask_server_url = arguments.client
-    dask_cluster_parameters = (
-        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
-    )
-    if dask_server_url == "none" and dask_cluster_parameters:
-        # If a JSON is passed to dask_cluster avoid null_context
-        dask_server_url = None
-
-    if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = dict(threads_per_worker=1, n_workers=_cpu_count())
-
-    filter_percentiles = (
-        arguments.registration_filter_min,
-        arguments.registration_filter_max,
-    )
-    within_t_channel = arguments.within_t_channel
-    images = arguments.images
-    image_pattern = arguments.image_pattern
-    across_t_channel = arguments.across_t_channel
-    group_by = arguments.groupby
-    subset = arguments.subset
-    force = arguments.force
-    output_dir = arguments.output
-    output_dir = _add_suffix(output_dir, ".zarr")
-
-    output_dir = open_ome_zarr(output_dir, mode="a")
-
-    moving_image_gen = _set_up_experiment(
-        images, image_pattern, group_by, subset=subset
-    )
-
-    image_bag = from_sequence(moving_image_gen)
-    with (
-        _create_default_dask_config(),
-        _create_dask_client(dask_server_url, **dask_cluster_parameters),
-    ):
-        bag = image_bag.starmap(
-            single_cross_correlation,
-            output_dir=output_dir,
-            filter_percentiles=filter_percentiles,
-            within_t_channel=within_t_channel,
-            across_t_channel=across_t_channel,
-            force=force,
         )
         bag.compute()

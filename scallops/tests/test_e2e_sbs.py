@@ -403,9 +403,8 @@ def test_e2e_cli(tmp_path, group_by_tile):
 
     # cross-correlation
     registration_args = [
-        "scallops",
-        "registration",
-        "cross-correlation",
+        "python",
+        "scallops/tests/cross_correlation.py",
         "--images",
         str(data_path.joinpath("experimentC", "input")),
         "--across-t-channel=0",
