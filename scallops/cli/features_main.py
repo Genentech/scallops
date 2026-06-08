@@ -110,7 +110,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     parser.add_argument(
         "--objects",
         required=False,
-        help="Path to directory containing output from `find-objects`",
+        help="Path to directory containing output from `find-objects` or `merge`",
     )
     parser.add_argument(
         "--stack-images",
@@ -118,10 +118,16 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
         " to stack image channel index (e.g. corr_0_s0).",
         nargs="*",
     )
+    required.add_argument(
+        "--merge",
+        required=False,
+        help="Path to directory containing output from `merge`",
+    )
     parser.add_argument(
         "--label-filter",
-        help="Path to Parquet containing labels to include.",
+        help="Expression to filter labels (e.g. barcode_Q_mean_0/barcode_Q_mean > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
     )
+
     parser.add_argument(
         "--stack-image-pattern",
         help="Format string to extract metadata from the image file name.",

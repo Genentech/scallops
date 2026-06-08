@@ -43,16 +43,64 @@ from scallops.features.constants import (
 )
 from scallops.features.find_objects import find_objects
 from scallops.features.generate import label_features, normalize_features
+from scallops.features.util import _get_names_from_pd_query
 from scallops.io import (
     _images2fov,
     _set_up_experiment,
     _to_parquet,
     is_parquet_file,
     pluralize,
+    read_anndata_zarr,
 )
 from scallops.zarr_io import _read_ome_zarr_array
 
 logger = _get_cli_logger()
+
+
+def _read_merged_or_objects(
+    merge_dir: str,
+    merge_dir_sep: str,
+    label_name: str,
+    image_key: str,
+    label_filter: str | None,
+):
+    merge_dir = merge_dir.rstrip(merge_dir_sep)
+    merge_paths = [
+        f"{merge_dir}{merge_dir_sep}{label_name}{merge_dir_sep}{image_key}.parquet",
+        f"{merge_dir}{merge_dir_sep}{image_key}.zarr",
+        f"{merge_dir}{merge_dir_sep}{image_key}.parquet",
+        f"{merge_dir}{merge_dir_sep}{label_name}{merge_dir_sep}{image_key}-objects.parquet",
+    ]
+    merge_path = None
+    for path in merge_paths:
+        if fsspec.core.url_to_fs(path)[0].exists(path):
+            merge_path = path
+            break
+    if merge_path is None:
+        return None
+
+    area_column = f"{_label_name_to_prefix[label_name]}_AreaShape_Area"
+    if merge_path.lower().endswith(".zarr"):
+        data = read_anndata_zarr(merge_path, dask=True)
+        merged_df = data.obs
+        columns = {area_column}
+        assert area_column in data.var.index
+        if label_filter is not None:
+            query_columns = _get_names_from_pd_query(label_filter)
+            columns.update(
+                c
+                for c in query_columns
+                if c not in merged_df.columns and c in data.var.index
+            )
+        columns = list(columns)
+        values = data[:, columns].X.compute()
+        for i in range(len(columns)):
+            merged_df[columns[i]] = values[:, i]
+
+    else:
+        merged_df = pd.read_parquet(merge_path)
+
+    return merged_df
 
 
 def get_labels(labels_group: Group, name: str, suffix: str) -> zarr.Array | None:
@@ -176,8 +224,7 @@ def single_feature(
         If True, existing files with the same names will be overwritten. If False,
         skip computation for labels with existing output files.
     :param channel_names: Dict mapping channel index to channel name
-    :param label_filter: Path to Parquet file containing `label` column. The path can
-        contain expressions (e.g. s3://foo/{well}.parquet).
+    :param label_filter: Expression to filter labels (e.g.barcode_Q_mean_0/barcode_Q_mean > 0.5).
     :param no_version: Whether to skip version/CLI information in output.
     :param normalize: Normalize image.
     :returns: List of delayed results
@@ -185,9 +232,6 @@ def single_feature(
     _, file_list, metadata = image_tuple
     image_key = metadata["id"]
 
-    if label_filter is not None:
-        label_filter = label_filter.format(**metadata["file_metadata"][0])
-        label_filter = pd.read_parquet(label_filter, columns=["label"])["label"]
     if stacked_image_tuple is not None:
         _, stacked_file_list, stacked_metadata = stacked_image_tuple
         assert metadata["id"] == stacked_metadata["id"], (
@@ -195,8 +239,7 @@ def single_feature(
         )
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
-    join_df = False
-    features_output_suffix = "" if join_df else "-features"
+
     zarr_inputs = True
 
     for f in file_list:
@@ -238,12 +281,10 @@ def single_feature(
 
     for label_name in label_name_to_features:
         features = label_name_to_features[label_name]
-        output_parquet_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}{features_output_suffix}.parquet"
-        objects_path = (
-            f"{objects_dir}{objects_dir_sep}{label_name}{objects_dir_sep}{image_key}-objects.parquet"
-            if objects_dir is not None
-            else None
+        output_parquet_path = (
+            f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}.parquet"
         )
+
         if not force and is_parquet_file(output_parquet_path):
             logger.info(f"Skipping features for {image_key} {label_name}")
             continue
@@ -257,14 +298,24 @@ def single_feature(
             logger.info(f"Unable to read {label_name} labels for {image_key}.")
             continue
         label_prefix = _label_name_to_prefix[label_name]
-        if objects_path is None:
+        merged_df = None
+        if objects_dir is not None:
+            merged_df = _read_merged_or_objects(
+                merge_dir=objects_dir,
+                merge_dir_sep=objects_dir_sep,
+                label_name=label_name,
+                image_key=image_key,
+                label_filter=label_filter,
+            )
+
+        if merged_df is None:
             logger.info(f"Find {label_name} objects for {image_key}.")
-            objects_df = find_objects(zarr_labels)
+            merged_df = find_objects(zarr_labels)
             objects_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
-            objects_df.index.name = "label"
-            objects_df.columns = f"{label_prefix}_" + objects_df.columns
+            merged_df.index.name = "label"
+            merged_df.columns = f"{label_prefix}_" + merged_df.columns
             _to_parquet(
-                objects_df,
+                merged_df,
                 objects_path,
                 write_index=True,
                 compute=True,
@@ -272,10 +323,7 @@ def single_feature(
                 if not no_version
                 else None,
             )
-        else:
-            logger.info(f"Loading objects from {objects_path}.")
-
-        objects_df = pd.read_parquet(objects_path)
+            merged_df = pd.read_parquet(objects_path)
 
         features = normalize_features(features)
         # strip nuclei_, etc. from features_plot
@@ -322,10 +370,10 @@ def single_feature(
             f"{', '.join(features)}"
         )
         if label_filter is not None:
-            objects_df = objects_df[objects_df.index.isin(label_filter)]
+            merged_df = merged_df.query(label_filter)
         min_max_area = label_name_to_min_max_area.get(label_name)
         area_column = f"{label_prefix}_AreaShape_Area"
-        n_labels = len(objects_df)
+        n_labels = len(merged_df)
         prefix = ""
         if min_max_area[0] is not None or min_max_area[1] is not None:
             area_query = []
@@ -333,20 +381,26 @@ def single_feature(
                 area_query.append(f"{area_column}>={min_max_area[0]}")
             if min_max_area[1] is not None:
                 area_query.append(f"{area_column}<={min_max_area[1]}")
-            objects_df = objects_df.query("&".join(area_query))
-            n_labels_filtered = n_labels - len(objects_df)
+            merged_df = merged_df.query("&".join(area_query))
+            n_labels_filtered = n_labels - len(merged_df)
             prefix = f"Removed {n_labels_filtered:,} out of "
         logger.info(
             f"{prefix}{n_labels:,} {pluralize('label', n_labels)}. "
-            f"Area: {objects_df[area_column].min():,.0f} to {objects_df[area_column].max():,.0f}."
+            f"Area: {merged_df[area_column].min():,.0f} to {merged_df[area_column].max():,.0f}."
         )
 
         df = label_features(
-            objects_df=objects_df,
+            objects_df=merged_df,
             label_image=zarr_labels if zarr_inputs else da.from_zarr(zarr_labels),
             intensity_image=image if zarr_inputs else image.data,
             features=features,
             normalize=normalize,
+            bounding_box_columns=[
+                f"{label_prefix}_AreaShape_BoundingBoxMinimum_Y",
+                f"{label_prefix}_AreaShape_BoundingBoxMinimum_X",
+                f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
+                f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
+            ],
             channel_names=channel_names,
         )
         # df will be None if only area and coordinates requested
@@ -396,7 +450,7 @@ def single_feature(
                 label_prefix + "_centroid-1",
                 label_name + "_centroid-0",
             ]
-            df = objects_df[centroid_columns].join(df_features)
+            df = merged_df[centroid_columns].join(df_features)
             pdf_path = (
                 f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}.pdf"
             )

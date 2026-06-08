@@ -183,7 +183,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
 
     parser.add_argument(
         "--label-filter",
-        help="Expression to filter labels (e.g. barcode_Q_mean_0/barcode_Q_mean > 0.5) or path to Parquet file containing labels to include.",
+        help="Expression to filter labels (e.g. barcode_Q_mean_0/barcode_Q_mean > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
     )
 
     parser.add_argument(

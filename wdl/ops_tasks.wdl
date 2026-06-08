@@ -481,6 +481,7 @@ task find_objects {
 
 task features {
     input {
+        String? label_filter
         String? nuclei_features
         String? cell_features
         String? cytosol_features
@@ -531,7 +532,8 @@ task features {
         ~{if defined(cytosol_max_area) && select_first([cytosol_max_area])>0 then '--cytosol-max-area ' + cytosol_max_area else ''} \
         ~{if defined(features_extra_arguments) then features_extra_arguments else ''} \
         --labels "~{labels}" \
-        ~{"--objects " +objects} \
+        ~{"--objects " + objects} \
+        ~{"--label-filter " + '"' + label_filter + '"'} \
         --subset ~{subset} \
         ~{"--image-pattern " + image_pattern} \
         --groupby ~{sep=" " groupby} \
@@ -687,7 +689,7 @@ task reads {
 
 task merge {
     input {
-        String iss_reads
+        String? iss_reads
         Array[String]? phenotypes_nuclei
         Array[String]? phenotypes_cell
         Array[String]? phenotypes_cytosol
@@ -700,7 +702,7 @@ task merge {
         String? cell_intersects_boundary_t
 
         String output_directory
-        String barcodes
+        String? barcodes
         String? barcode_column
         String subset
         String? extra_arguments
@@ -721,9 +723,9 @@ task merge {
 
 
         scallops pooled-sbs merge \
-        --sbs "~{iss_reads}" \
+         ~{"--sbs " + iss_reads} \
+         ~{"--barcodes " + barcodes} \
         --output "~{output_directory}" \
-        --barcodes "~{barcodes}" \
         --phenotype \
         ~{sep=" " phenotypes_nuclei} \
         ~{sep=" " phenotypes_cell} \
