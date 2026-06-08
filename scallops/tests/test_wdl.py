@@ -163,7 +163,6 @@ def test_ops_wdl(tmp_path):
         "phenotype_dapi_channel": 0,
         "phenotype_url": str(pheno_dir.absolute()),
         "phenotype_nuclei_features": ["intensity_0", "intensity_1"],
-        "features_label_filter": "barcode_Q_mean_0/barcode_Q_mean > 0.5",
         # 2 batches
         "phenotype_cell_features": ["intensity_0"],
         # "phenotype_cytosol_features": ["mean_0 area"], # no cytosol features
@@ -197,7 +196,7 @@ def test_ops_wdl(tmp_path):
         output / "merge-sbs-metadata" / "A1-102.parquet"
     )
     assert len(merge_sbs_metadata_df) > len(
-        merge_sbs_metadata_df.query("barcode_Q_mean_0/barcode_Q_mean > 0.5")
+        merge_sbs_metadata_df.query("~barcode_count_0.isna()")
     )
 
     for col in [
@@ -222,4 +221,4 @@ def test_ops_wdl(tmp_path):
         assert col in merge_features_df.columns
     assert len(
         merge_features_df.query("~Nuclei_Intensity_MeanIntensity_Channel0.isna()")
-    ) == len(merge_sbs_metadata_df.query("barcode_Q_mean_0/barcode_Q_mean > 0.5"))
+    ) == len(merge_sbs_metadata_df.query("~barcode_count_0.isna()"))
