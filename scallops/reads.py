@@ -604,7 +604,7 @@ def peaks_to_bases(
 ) -> xr.DataArray:
     """Convert peaks to bases.
 
-    :param maxed: Maxed array (sigma,t,c,y,x)
+    :param maxed: Maxed array (sigma,t,c,y,x) or (t,c,y,x)
     :param peaks: Peaks data frame which has been filtered to retain only peaks of interest. Note
         that if peaks is a dask data frame, it is loaded into memory using dask.compute.
     :param labels: Segmentation array (y,x)
@@ -635,12 +635,25 @@ def peaks_to_bases(
 
     if labels_only and labels is not None:
         peaks = peaks[labels[peaks["y"], peaks["x"]] > 0]
-
+    sigma_indices = None
+    if "sigma" in maxed.dims:
+        sigma = maxed.coords["sigma"].values
+        sigma_to_index = {}
+        for i in range(len(sigma)):
+            sigma_to_index[sigma[i]] = i
+        sigma_indices = peaks["sigma"].replace(sigma_to_index).values.astype(int)
     maxed_spots = (
-        maxed.isel(y=xr.DataArray(peaks["y"]), x=xr.DataArray(peaks["x"]))
-        .rename({"dim_0": "read"})
-        .transpose("read", ...)
+        (
+            maxed.isel(
+                y=xr.DataArray(peaks["y"]),
+                x=xr.DataArray(peaks["x"]),
+                sigma=xr.DataArray(sigma_indices),
+            )
+        )
+        if sigma_indices is not None
+        else maxed.isel(y=xr.DataArray(peaks["y"]), x=xr.DataArray(peaks["x"]))
     )
+    maxed_spots = maxed_spots.rename({"dim_0": "read"}).transpose("read", ...)
     maxed_spots.name = "maxed"
 
     for c in peaks.columns:
