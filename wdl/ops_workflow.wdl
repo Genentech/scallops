@@ -19,7 +19,7 @@ workflow ops_workflow {
         String? reference_phenotype_time
 
         # features
-        String? features_label_filter = "barcode_count_0/barcode_count>0.5" # 50% rule
+        String? features_label_filter = "~barcode_count_0.isna()" # valid barcodes
         Array[String]? phenotype_cell_features
         Array[String]? phenotype_nuclei_features
         Array[String]? phenotype_cytosol_features
