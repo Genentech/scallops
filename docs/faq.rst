@@ -37,5 +37,23 @@ FAQ
         export FSSPEC_s3='{"anon":true}'
 
 
+
+#. How long it takes SCALLOPS to install?
+    This is highly dependant on your mahcine, internet speed, network speed, and resource manege used.
+    On a Macbook air laptop, using regular pip install command on a virtual environment on a comercial network:
+
+    ::
+
+        real	2m32.125s
+        user	0m38.533s
+        sys	0m15.782s
+
+    but using uv engine:
+    ::
+
+        real	0m26.296s
+        user	0m4.659s
+        sys	0m6.972s
+
 .. _fsspec: https://filesystem-spec.readthedocs.io/
 .. _`fsspec configuration documentation`: https://filesystem-spec.readthedocs.io/en/latest/features.html#configuration
