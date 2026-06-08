@@ -537,8 +537,12 @@ def test_e2e_cli(tmp_path, group_by_tile):
     subprocess.check_call(features_args)
     pheno_df = []
     for compartment in ["cell", "nuclei"]:
-        for dataset in ["features", "objects"]:
-            pattern = os.path.join(features_path, compartment, f"*-{dataset}.parquet")
+        for suffix in ["", "objects"]:
+            pattern = os.path.join(
+                features_path,
+                compartment,
+                f"{image_key}{'-' + suffix if suffix != '' else suffix}.parquet",
+            )
             matches = glob.glob(pattern)
             assert len(matches) == 1, pattern
             pheno_df.append(pd.read_parquet(matches[0]))
