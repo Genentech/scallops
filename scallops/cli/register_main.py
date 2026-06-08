@@ -12,8 +12,6 @@ from scallops.cli.util import (
     dask_cluster_arg,
     force_arg,
     groupby_arg,
-    image_pattern_arg,
-    images_arg,
     no_version_arg,
     subset_arg,
     verbose_arg,
@@ -55,13 +53,6 @@ def _run_itk_transform(arguments: Namespace) -> None:
     run_itk_transform(arguments)
 
 
-def _run_cross_correlation_registration(arguments: Namespace) -> None:
-    """Run cross-correlation registration."""
-    from scallops.cli.register import run_cross_correlation_registration
-
-    run_cross_correlation_registration(arguments)
-
-
 def _create_parser(subparsers: ArgumentParser, default_help: bool) -> None:
     """Create the main parser for image registration."""
     parser = subparsers.add_parser(
@@ -75,60 +66,6 @@ def _create_parser(subparsers: ArgumentParser, default_help: bool) -> None:
     subparsers = parser.add_subparsers(help="sub-command help")
     _create_elastix_parser(subparsers, default_help)
     _create_transform_parser(subparsers, default_help)
-    _create_cross_correlation_parser(subparsers, default_help)
-
-
-def _create_cross_correlation_parser(
-    subparsers: ArgumentParser, default_help: bool
-) -> None:
-    """Create the parser for cross-correlation registration."""
-    parser = subparsers.add_parser(
-        "cross-correlation",
-        description="Register image across and within cycles",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
-    )
-    required = parser.add_argument_group("required arguments")
-    images_arg(required)
-    required.add_argument("-o", "--output", help="Zarr output directory", required=True)
-    image_pattern_arg(parser)
-
-    parser.add_argument(
-        "--across-t-channel",
-        dest="across_t_channel",
-        type=int,
-        help="Channel index (0-based) to use to register across cycles",
-    )
-    parser.add_argument(
-        "--within-t-channel",
-        nargs="*",
-        type=int,
-        dest="within_t_channel",
-        help="Channel indices (0-based) to use to register within cycles",
-    )
-    parser.add_argument(
-        "--within-t-filter-min",
-        dest="registration_filter_min",
-        type=float,
-        default=0,
-        help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning within t",
-    )
-    parser.add_argument(
-        "--within-t-filter-max",
-        dest="registration_filter_max",
-        type=float,
-        default=90,
-        help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning within t",
-    )
-
-    groupby_arg(parser)
-    subset_arg(parser)
-    force_arg(parser)
-    dask_client_arg(parser, value="none")
-    dask_cluster_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_run_cross_correlation_registration)
 
 
 def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> None:

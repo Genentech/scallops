@@ -69,9 +69,8 @@ def create_itk_param_file(tmp_path):
 def test_register_cross_correlation_cli(tmp_path, array_A1_102_aln):
     output_dir = os.path.join(tmp_path, "cross-correlation-output.zarr")
     cmd = [
-        "scallops",
-        "registration",
-        "cross-correlation",
+        "python",
+        "scallops/tests/cross_correlation.py",
         "--images",
         "scallops/tests/data/experimentC/input",
         "--image-pattern",
