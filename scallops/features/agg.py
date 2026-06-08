@@ -85,7 +85,14 @@ def agg_features(
 
         result = grouped.map(weighted_agg)
     else:
-        result = grouped.mean() if agg_func == "mean" else grouped.median()
+        kwargs = dict()
+        if (
+            isinstance(xdata.data, da.Array)
+            and agg_func == "mean"
+            and len(grouped.groups) > 100_000
+        ):
+            kwargs["method"] = "map-reduce"
+        result = grouped.mean(**kwargs) if agg_func == "mean" else grouped.median()
     X = result.data
     counts = []
     groups = []
