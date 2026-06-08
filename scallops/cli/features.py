@@ -87,12 +87,11 @@ def _read_merged_or_objects(
         assert area_column in data.var.index
         if label_filter is not None:
             query_columns = _get_names_from_pd_query(label_filter)
-            query_columns = [
+            columns.update(
                 c
                 for c in query_columns
                 if c not in merged_df.columns and c in data.var.index
-            ]
-            columns.update(query_columns)
+            )
         columns = list(columns)
         values = data[:, columns].X.compute()
         for i in range(len(columns)):
