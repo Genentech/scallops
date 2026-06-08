@@ -2,31 +2,13 @@
 Command Line Examples
 *********************
 
-Example Data
-============
-MCF7 cells at 24 hours.
+Welcome to the command-line guide for Scallops. This documentation walks you through the complete image processing and
+analysis pipeline, designed specifically for large-scale optical pooled screens (OPS).
 
-Data Location: "s3://xxx-input/"
+The Scallops pipeline takes you from raw, uncorrected microscope image tiles to fully registered, segmented datasets,
+feature extraction, and downstream statistical analysis.
 
-FISH Channels: DAPI, ESR1, CCND1, GREB1
-
-IF Channels: DAPI, ER, ConA
-
-
-* ISS Image Pattern: "20231010_10x_6W_SBS_c{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2"
-* FISH & IF Image Pattern: "{skip}_20x_6W_{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2"
-
-
-.. list-table::
-   :widths: 50 50 50
-   :header-rows: 0
-
-   * - DMSO
-     -
-     - ARV-471 100nM
-   * - DMSO
-     -
-     - ARV-471 100nM
+.. note:: A complete notebook tutorial with real data is also available to help you walk through this pipeline step-by-step on the `periscope data <https://github.com/broadinstitute/2022_PERISCOPE>`_.
 
 
 Illumination Correction
