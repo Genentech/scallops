@@ -602,18 +602,19 @@ def _list_images_wdl(
             f.write("{")
             f.write(g)
             f.write("}")
-    groupby_with_reference_time = list(groupby)
+    reference_time_suffix = ""
     if reference_time is not None:
-        groupby_with_reference_time.append(reference_time)
+        reference_time_suffix = f"-{reference_time}"
     elif times is not None and len(times) > 0:
-        groupby_with_reference_time.append(times[0])
+        reference_time_suffix = f"-{times[0]}"
 
     with open("groupby_pattern_with_reference_t.txt", "wt") as f:
         first = True
-        for g in groupby_with_reference_time:
+        for g in groupby:
             if not first:
                 f.write("-")
             first = False
             f.write("{")
             f.write(g)
             f.write("}")
+            f.write(reference_time_suffix)
