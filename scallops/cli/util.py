@@ -520,8 +520,7 @@ def _list_images_wdl(
     exp_gen = _set_up_experiment(
         image_path=urls, files_pattern=image_pattern, group_by=groupby, subset=subset
     )
-    # "groups.txt": each line passed to --subset in cli
-    # "groupby.txt": filtered groupby with values not in image_pattern removed
+
     groupby_t = "t" in groupby
     times = None
 
@@ -617,4 +616,4 @@ def _list_images_wdl(
             f.write("{")
             f.write(g)
             f.write("}")
-            f.write(reference_time_suffix)
+        f.write(reference_time_suffix)
