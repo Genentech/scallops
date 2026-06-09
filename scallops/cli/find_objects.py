@@ -36,7 +36,6 @@ def _execute(
 ):
     group, file_list, metadata = label_tuple
     assert len(file_list) == 1
-
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
     path = (
@@ -53,7 +52,9 @@ def _execute(
     array = file_list[0][list(file_list[0].keys())[0]]
     df = find_objects(array)
     df.index.name = "label"
-    df.columns = f"{_label_name_to_prefix[label_name]}_" + df.columns
+    prefix = _label_name_to_prefix.get(label_name)
+    if prefix is not None:
+        df.columns = f"{prefix}_" + df.columns
     _to_parquet(
         df,
         path,
@@ -67,7 +68,7 @@ def _execute(
 
 
 def run_pipeline_find_objects(arguments: argparse.Namespace) -> None:
-    labels_path = arguments.labels
+    labels_paths = arguments.labels
     label_pattern = arguments.label_pattern
     label_suffix = arguments.label_suffix
     label_suffix = set(label_suffix) if label_suffix is not None else None
@@ -90,12 +91,16 @@ def run_pipeline_find_objects(arguments: argparse.Namespace) -> None:
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
-
-    label_root = zarr.open(labels_path, mode="r")
-    labels_group = label_root["labels"]
+    paths = []
+    for path in labels_paths:
+        label_root = zarr.open(path, mode="r")
+        labels_group = label_root.get("labels")
+        if labels_group is None:
+            raise ValueError(f"Labels group not found for {path}")
+        paths.append(labels_group)
     _, _, keys = _create_file_regex(label_pattern)
     gen = _set_up_experiment(
-        image_path=labels_group,
+        image_path=paths,
         files_pattern=label_pattern,
         group_by=list(keys),
         subset=subset,
