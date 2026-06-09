@@ -150,7 +150,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
     reference_t = 2
     test_t = 10
     array_A1_102_nuclei = array_A1_102_nuclei.squeeze()
-    exp.labels[f"A1-102-{test_t}-mask"] = array_A1_102_nuclei
+    exp.labels[f"A1-102-{reference_t}-mask"] = array_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
 
     cmd = [
@@ -195,6 +195,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         .images["A1-102"]
         .squeeze()
     )
+    assert len(result_exp.labels.keys()) == 8
     np.testing.assert_array_equal(transformed_image.t.values, original_image.t.values)
     np.testing.assert_array_equal(transformed_image.c.values, original_image.c.values)
     np.testing.assert_array_equal(
@@ -225,7 +226,6 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         err_msg=f"t {test_t} images not equal using itk_transform_image and CLI",
     )
     # test load and apply saved transform for labels
-    assert len(result_exp.labels.keys()) == 1
     warped_labels = itk_transform_labels(
         image=array_A1_102_nuclei,
         transform_parameter_object=transform_parameter_object,
