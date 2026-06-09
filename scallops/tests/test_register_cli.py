@@ -150,7 +150,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
     reference_t = 2
     test_t = 10
     array_A1_102_nuclei = array_A1_102_nuclei.squeeze()
-    exp.labels[f"A1-102-{test_t}-mask"] = array_A1_102_nuclei
+    exp.labels[f"A1-102-{reference_t}-mask"] = array_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
 
     cmd = [
@@ -195,6 +195,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         .images["A1-102"]
         .squeeze()
     )
+    assert len(result_exp.labels.keys()) == 8
     np.testing.assert_array_equal(transformed_image.t.values, original_image.t.values)
     np.testing.assert_array_equal(transformed_image.c.values, original_image.c.values)
     np.testing.assert_array_equal(
@@ -225,7 +226,6 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         err_msg=f"t {test_t} images not equal using itk_transform_image and CLI",
     )
     # test load and apply saved transform for labels
-    assert len(result_exp.labels.keys()) == 1
     warped_labels = itk_transform_labels(
         image=array_A1_102_nuclei,
         transform_parameter_object=transform_parameter_object,
@@ -300,6 +300,62 @@ def test_register_itk_cli_concat_t(tmp_path):
     )
     assert transformed_image.attrs["stitch_coords"] == ["test1", "test2"]
     assert transformed_image.sizes["c"] == 7
+
+
+@pytest.mark.registration
+def test_register_transform_labels_moving_only(tmp_path):
+    image_zarr = tmp_path / "images.zarr"
+    output_zarr = tmp_path / "out.zarr"
+    output_transforms = tmp_path / "transforms"
+
+    img = read_image(
+        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+    )
+    img.attrs["physical_pixel_sizes"] = (1, 1)
+
+    rng = np.random.default_rng(0)
+
+    segmentation = rng.integers(low=0, high=10, size=(img.sizes["y"], img.sizes["x"]))
+
+    Experiment(
+        images={"plateA-A1-IF": img, "plateA-A1-FISH": img},
+        labels={
+            "plateA-A1-IF-cell": segmentation,
+        },
+    ).save(image_zarr)
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--moving",
+        str(image_zarr),
+        "--moving-image-pattern",
+        "{plate}-{well}-{t}",
+        "--moving-label",
+        str(image_zarr),
+        "--subset",
+        "plateA-A1",
+        "--groupby",
+        "plate",
+        "well",
+        "--no-landmarks",
+        "--moving-output",
+        str(output_zarr),
+        "--label-output",
+        str(output_zarr),
+        "--output-aligned-channels-only",
+        "--time",
+        "IF",
+        "--transform-output",
+        str(output_transforms),
+        "--itk-parameters",
+        create_itk_param_file(tmp_path),
+    ]
+    subprocess.check_call(cmd)
+    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-FISH-cell")
+    assert transformed_labels.max() > 0
+    transformed_image = read_image(output_zarr / "images" / "plateA-A1")
+    assert transformed_image.shape[0] == 2
 
 
 @pytest.mark.registration
@@ -493,7 +549,6 @@ def test_register_itk_cli(tmp_path, array_A1_102_nuclei):
         "100",
         "--landmark-initialization",
         "none",
-        "--force",
     ]
     subprocess.check_call(cmd)
     df = pd.read_parquet(os.path.join(transform_output_dir2, "1", "landmarks.parquet"))
