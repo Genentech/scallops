@@ -223,11 +223,12 @@ workflow ops_workflow {
             aws_queue_arn = aws_queue_arn,
             max_retries = max_retries
     }
-    String groupby_pattern = list_images.groupby_pattern # plate-well
-    Array[String] subsets = list_images.subsets
-    Array[String] subset_with_reference_times = list_images.subset_with_reference_times
-    Array[String] times = list_images.t
-    Array[String] groupby_with_time = list_images.filtered_groupby_with_t
+    String groupby_pattern = list_images.groupby_pattern # "{plate}-{well}"
+    Array[String] subsets = list_images.subsets # e.g. ["plate1-A1", "plate1-A2", ...]
+    Array[String] subset_with_reference_times = list_images.subset_with_reference_times # e.g. ["plate1-A1-IF", "plate1-A2-IF", ...]
+    Array[String] times = list_images.t # e.g. ["FISH", "IF"]
+    Array[String] groupby_with_time = list_images.filtered_groupby_with_t  # e.g. ['plate', 'well', 't']
+    String groupby_pattern_with_reference_t = list_images.groupby_pattern_with_reference_t # e.g. "{plate}-{well}-IF"
     scatter (subset_index in range(length(subsets))) {
         String subset_ = subsets[subset_index]
         String subset_with_reference_time = subset_with_reference_times[subset_index]
@@ -369,10 +370,6 @@ workflow ops_workflow {
                             max_retries = max_retries
                     }
                 }
-                #   String register_pheno_to_pheno_output_url = select_first([register_pheno_to_pheno.moving_output_url, phenotype_url])
-                # String phenotype_image_pattern = if(length(times)>1) then image_pattern_after_registration else phenotype_image_pattern
-
-
 
                 # determine whether cells intersect stitch boundary
                 # use stitch mask as image and segment output for reference phenotype or transformed phenotype for others
@@ -438,14 +435,14 @@ workflow ops_workflow {
                     fixed_channel=iss_dapi_channel,
                     moving_label=segment_cell.output_url,
                     moving=select_all([phenotype_url]),
-                    moving_image_pattern=phenotype_image_pattern,
+                    moving_image_pattern=groupby_pattern_with_reference_t,
                     fixed_image_pattern=iss_image_pattern,
                     moving_channel=phenotype_dapi_channel,
                     output_aligned_channels_only=true,
                     moving_output_directory=register_pheno_to_iss_directory,
                     label_output_directory=register_pheno_to_iss_directory,
                     transform_output_directory=register_pheno_to_iss_transforms_directory,
-                    subset = subset_with_reference_time,
+                    subset = subset_,
                     groupby=groupby,
                     extra_arguments=pheno_to_iss_registration_extra_arguments,
                     force = force_register_pheno_to_iss,

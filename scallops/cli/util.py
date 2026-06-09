@@ -523,7 +523,7 @@ def _list_images_wdl(
     # "groups.txt": each line passed to --subset in cli
     # "groupby.txt": filtered groupby with values not in image_pattern removed
     groupby_t = "t" in groupby
-    times = []
+    times = None
 
     if not save_group_size:
         with open("group_size.txt", "wt") as f:
@@ -596,6 +596,21 @@ def _list_images_wdl(
     with open("groupby_pattern.txt", "wt") as f:
         first = True
         for g in groupby:
+            if not first:
+                f.write("-")
+            first = False
+            f.write("{")
+            f.write(g)
+            f.write("}")
+    groupby_with_reference_time = list(groupby)
+    if reference_time is not None:
+        groupby_with_reference_time.append(reference_time)
+    elif times is not None and len(times) > 0:
+        groupby_with_reference_time.append(times[0])
+
+    with open("groupby_pattern_with_reference_t.txt", "wt") as f:
+        first = True
+        for g in groupby_with_reference_time:
             if not first:
                 f.write("-")
             first = False
