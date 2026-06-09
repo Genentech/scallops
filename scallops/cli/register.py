@@ -137,9 +137,9 @@ def single_registration(
                     image_key=image_key, image_dir=moving_label, labels=True
                 )
             )
-    moving_label_keys = sorted(moving_label_keys)
-    if len(moving_label_keys) > 0 and len(moving_label_keys) == 0:
-        logger.warning(f"No labels found for {image_key}")
+        moving_label_keys = sorted(moving_label_keys)
+        if len(moving_label_keys) == 0:
+            logger.warning(f"No labels found for {image_key}")
 
     if not force:
         labels_exist = True
@@ -340,20 +340,32 @@ def single_registration(
         if output_aligned_channels_only:
             del moving_image_align
         if moving_labels is not None:
-            transform_all_labels(
+            _transform_labels(
                 transform_parameter_object=elastix_object.GetTransformParameterObject(),
                 attrs=moving_image.attrs,
                 matching_keys=moving_label_keys,
+                output_names=None,
                 moving_image_spacing=moving_image_spacing,
                 output_root=label_output_root,
             )
 
     else:  # align to t=reference_timepoint
+        reference_timepoint_str = reference_timepoint
         if isinstance(reference_timepoint, str):
+            reference_timepoint_found = False
             for i in range(len(moving_image)):
                 if moving_image[i].coords["t"].values[0] == reference_timepoint:
                     reference_timepoint = i
+                    reference_timepoint_found = True
                     break
+            if not reference_timepoint_found:
+                raise ValueError(
+                    f"Reference timepoint not found: {reference_timepoint}."
+                )
+        elif reference_timepoint_str is not None:
+            reference_timepoint_str = (
+                moving_image[reference_timepoint].coords["t"].values[0]
+            )
         set_automatic_transform_initialization(parameter_object, False)
         if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
             new_moving_image = []
@@ -390,7 +402,7 @@ def single_registration(
         if len(moving_label_keys) > 0:
             # transform_dest structure is image_key/t=1
             # assume labels are named image_key-t-suffix
-            transform_fs_protocol = _get_fs_protocol(transform_fs)
+
             for transform_file in transform_fs.ls(
                 transform_dest, detail=True, refresh=True
             ):
@@ -400,29 +412,33 @@ def single_registration(
                     if basename.startswith("t="):
                         time = basename[2:]
                         moving_label_keys_t = []
-                        label_prefix = f"{image_key}-{time}-"
+                        output_label_prefix = f"{image_key}-{time}"
+                        output_names = []
+                        # e.g. transform plateA-A1-IF-cell to plateA-A1-FISH-cell
                         for moving_label_key in moving_label_keys:
-                            basename = os.path.basename(moving_label_key)
-                            if basename.startswith(label_prefix):
-                                moving_label_keys_t.append(moving_label_key)
+                            moving_label_key_basename = os.path.basename(
+                                moving_label_key
+                            )
+                            output_label_suffix = (
+                                "-" + moving_label_key_basename.split("-")[-1]
+                            )
+                            output_name = f"{output_label_prefix}{output_label_suffix}"
+                            moving_label_keys_t.append(moving_label_key)
+                            output_names.append(output_name)
 
                         if len(moving_label_keys_t) > 0:
-                            if transform_fs_protocol != "file":
-                                transform_name = (
-                                    f"{transform_fs_protocol}://{transform_name}"
-                                )
-
                             transform_parameter_object = _load_itk_parameters_from_dir(
-                                transform_name
+                                transform_fs.unstrip_protocol(transform_name)
                             )
                             if (
                                 transform_parameter_object.GetNumberOfParameterMaps()
                                 > 0
                             ):
-                                transform_all_labels(
+                                _transform_labels(
                                     transform_parameter_object=transform_parameter_object,
                                     attrs=moving_image_attrs,
                                     matching_keys=moving_label_keys_t,
+                                    output_names=output_names,
                                     moving_image_spacing=moving_image_spacing,
                                     output_root=label_output_root,
                                 )
@@ -512,9 +528,10 @@ def transform_all_images(
         )
 
 
-def transform_all_labels(
+def _transform_labels(
     transform_parameter_object: itk.ParameterObject,
     matching_keys: Sequence[str],
+    output_names: Sequence[str] | None,
     output_root: zarr.Group,
     moving_image_spacing: None | tuple[float, float],
     attrs: None | dict,
@@ -525,19 +542,25 @@ def transform_all_labels(
     It is designed to work with ITK transformations and Zarr storage.
 
     :param transform_parameter_object: ITK parameter object.
-    :param matching_keys: Matching keys for transformation.
+    :param matching_keys: Paths to zarr labels.
+    :param output_names: Names of labels.
     :param output_root: Root for output storage.
     :param moving_image_spacing: Spacing of the moving image.
     :param attrs: Additional attributes for the transformed array.
     """
-    for key in matching_keys:
+    if output_names is None:
+        output_names = [os.path.basename(key) for key in matching_keys]
+    for i in range(len(matching_keys)):
+        key = matching_keys[i]
         name = os.path.basename(key)
         array = read_ome_zarr_array(key)
 
         if attrs is not None:
             array.attrs = attrs  # e.g. copy physical size
-
-        logger.info(f"Running transformation for {name}.")
+        to = ""
+        if name != output_names[i]:
+            to = f" to {output_names[i]}"
+        logger.info(f"Running transformation for {name}{to}.")
         transformed_array = itk_transform_labels(
             image=array,
             transform_parameter_object=transform_parameter_object,
@@ -546,7 +569,7 @@ def transform_all_labels(
         del array
 
         _write_zarr_image(
-            name=name,
+            name=output_names[i],
             root=output_root,
             image=transformed_array,
             group="labels",
@@ -607,9 +630,10 @@ def single_transform(
                 _matching_keys = matching_keys
         matching_keys = _matching_keys
     if labels:
-        transform_all_labels(
+        _transform_labels(
             transform_parameter_object=_load_itk_parameters_from_dir(transform_dir),
             matching_keys=matching_keys,
+            output_names=None,
             output_root=output_root,
             moving_image_spacing=image_spacing,
             attrs=None,

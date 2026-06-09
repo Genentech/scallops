@@ -303,6 +303,52 @@ def test_register_itk_cli_concat_t(tmp_path):
 
 
 @pytest.mark.registration
+def test_register_transform_labels_moving_only(tmp_path):
+    image_zarr = tmp_path / "images.zarr"
+    output_zarr = tmp_path / "out.zarr"
+
+    img = read_image(
+        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+    )
+    img.attrs["physical_pixel_sizes"] = (1, 1)
+    segmentation = np.ones((img.sizes["y"], img.sizes["x"]), dtype=np.uint8)
+
+    Experiment(
+        images={"plateA-A1-IF": img, "plateA-A1-FISH": img},
+        labels={
+            "plateA-A1-IF-cell": segmentation,
+        },
+    ).save(image_zarr)
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--moving",
+        str(image_zarr),
+        "--moving-image-pattern",
+        "{plate}-{well}-{t}",
+        "--moving-label",
+        str(image_zarr),
+        "--subset",
+        "plateA-A1",
+        "--groupby",
+        "plate",
+        "well",
+        "--no-landmarks",
+        "--moving-output",
+        str(output_zarr),
+        "--label-output",
+        str(output_zarr),
+        "--output-aligned-channels-only",
+        "--time",
+        "IF",
+    ]
+    subprocess.check_call(cmd)
+    assert (output_zarr / "labels" / "plateA-A1-FISH-cell").exists()
+    assert (output_zarr / "images" / "plateA-A1").exists()
+
+
+@pytest.mark.registration
 def test_register_itk_cli(tmp_path, array_A1_102_nuclei):
     st = SimilarityTransform(translation=[100, 20])
     image = read_image(
@@ -493,7 +539,6 @@ def test_register_itk_cli(tmp_path, array_A1_102_nuclei):
         "100",
         "--landmark-initialization",
         "none",
-        "--force",
     ]
     subprocess.check_call(cmd)
     df = pd.read_parquet(os.path.join(transform_output_dir2, "1", "landmarks.parquet"))
