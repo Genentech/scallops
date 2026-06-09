@@ -131,15 +131,18 @@ def single_registration(
     moving_label_keys = []
 
     if moving_labels is not None:
+        matching_label_prefix = image_key
+        if register_self:
+            matching_label_prefix = f"{matching_label_prefix}-{reference_timepoint}"
         for moving_label in moving_labels:
             moving_label_keys.extend(
                 get_matching_names(
-                    image_key=image_key, image_dir=moving_label, labels=True
+                    image_key=matching_label_prefix, image_dir=moving_label, labels=True
                 )
             )
-    moving_label_keys = sorted(moving_label_keys)
-    if len(moving_label_keys) > 0 and len(moving_label_keys) == 0:
-        logger.warning(f"No labels found for {image_key}")
+        moving_label_keys = sorted(moving_label_keys)
+        if len(moving_label_keys) == 0:
+            logger.warning(f"No labels found for {image_key}")
 
     if not force:
         labels_exist = True
@@ -340,20 +343,28 @@ def single_registration(
         if output_aligned_channels_only:
             del moving_image_align
         if moving_labels is not None:
-            transform_all_labels(
+            _transform_labels(
                 transform_parameter_object=elastix_object.GetTransformParameterObject(),
                 attrs=moving_image.attrs,
                 matching_keys=moving_label_keys,
+                output_names=None,
                 moving_image_spacing=moving_image_spacing,
                 output_root=label_output_root,
             )
 
     else:  # align to t=reference_timepoint
         if isinstance(reference_timepoint, str):
+            reference_timepoint_found = False
             for i in range(len(moving_image)):
                 if moving_image[i].coords["t"].values[0] == reference_timepoint:
                     reference_timepoint = i
+                    reference_timepoint_found = True
                     break
+            if not reference_timepoint_found:
+                raise ValueError(
+                    f"Reference timepoint not found: {reference_timepoint}."
+                )
+
         set_automatic_transform_initialization(parameter_object, False)
         if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
             new_moving_image = []
@@ -388,46 +399,61 @@ def single_registration(
         del moving_image
 
         if len(moving_label_keys) > 0:
-            # transform_dest structure is image_key/t=1
-            # assume labels are named image_key-t-suffix
-            transform_fs_protocol = _get_fs_protocol(transform_fs)
-            for transform_file in transform_fs.ls(
-                transform_dest, detail=True, refresh=True
-            ):
-                if transform_file["type"] == "directory":
-                    transform_name = transform_file["name"]
-                    basename = os.path.basename(transform_name)
-                    if basename.startswith("t="):
-                        time = basename[2:]
-                        moving_label_keys_t = []
-                        label_prefix = f"{image_key}-{time}-"
-                        for moving_label_key in moving_label_keys:
-                            basename = os.path.basename(moving_label_key)
-                            if basename.startswith(label_prefix):
-                                moving_label_keys_t.append(moving_label_key)
-
-                        if len(moving_label_keys_t) > 0:
-                            if transform_fs_protocol != "file":
-                                transform_name = (
-                                    f"{transform_fs_protocol}://{transform_name}"
-                                )
-
-                            transform_parameter_object = _load_itk_parameters_from_dir(
-                                transform_name
-                            )
-                            if (
-                                transform_parameter_object.GetNumberOfParameterMaps()
-                                > 0
-                            ):
-                                transform_all_labels(
-                                    transform_parameter_object=transform_parameter_object,
-                                    attrs=moving_image_attrs,
-                                    matching_keys=moving_label_keys_t,
-                                    moving_image_spacing=moving_image_spacing,
-                                    output_root=label_output_root,
-                                )
+            _transform_labels_t(
+                image_key=image_key,
+                transform_fs=transform_fs,
+                transform_dest=transform_dest,
+                moving_label_keys=moving_label_keys,
+                moving_image_attrs=moving_image_attrs,
+                moving_image_spacing=moving_image_spacing,
+                label_output_root=label_output_root,
+            )
 
     return image_key
+
+
+def _transform_labels_t(
+    image_key: str,
+    transform_fs,
+    transform_dest: str,
+    moving_label_keys: Sequence[str],
+    moving_image_attrs,
+    moving_image_spacing,
+    label_output_root,
+):
+    # transform_dest structure is image_key/t=1
+    # assume labels are named image_key-t-suffix
+    print("moving_label_keys", moving_label_keys)
+    for transform_file in transform_fs.ls(transform_dest, detail=True, refresh=True):
+        if transform_file["type"] == "directory":
+            transform_name = transform_file["name"]
+            basename = os.path.basename(transform_name)
+            if basename.startswith("t="):
+                time = basename[2:]
+                moving_label_keys_t = []
+                output_label_prefix = f"{image_key}-{time}"
+                output_names = []
+                # e.g. transform plateA-A1-IF-cell to plateA-A1-FISH-cell
+                for moving_label_key in moving_label_keys:
+                    moving_label_key_basename = os.path.basename(moving_label_key)
+                    output_label_suffix = "-" + moving_label_key_basename.split("-")[-1]
+                    output_name = f"{output_label_prefix}{output_label_suffix}"
+                    moving_label_keys_t.append(moving_label_key)
+                    output_names.append(output_name)
+
+                if len(moving_label_keys_t) > 0:
+                    transform_parameter_object = _load_itk_parameters_from_dir(
+                        transform_fs.unstrip_protocol(transform_name)
+                    )
+                    if transform_parameter_object.GetNumberOfParameterMaps() > 0:
+                        _transform_labels(
+                            transform_parameter_object=transform_parameter_object,
+                            attrs=moving_image_attrs,
+                            matching_keys=moving_label_keys_t,
+                            output_names=output_names,
+                            moving_image_spacing=moving_image_spacing,
+                            output_root=label_output_root,
+                        )
 
 
 def get_matching_names(
@@ -512,9 +538,10 @@ def transform_all_images(
         )
 
 
-def transform_all_labels(
+def _transform_labels(
     transform_parameter_object: itk.ParameterObject,
     matching_keys: Sequence[str],
+    output_names: Sequence[str] | None,
     output_root: zarr.Group,
     moving_image_spacing: None | tuple[float, float],
     attrs: None | dict,
@@ -525,19 +552,25 @@ def transform_all_labels(
     It is designed to work with ITK transformations and Zarr storage.
 
     :param transform_parameter_object: ITK parameter object.
-    :param matching_keys: Matching keys for transformation.
+    :param matching_keys: Paths to zarr labels.
+    :param output_names: Names of labels.
     :param output_root: Root for output storage.
     :param moving_image_spacing: Spacing of the moving image.
     :param attrs: Additional attributes for the transformed array.
     """
-    for key in matching_keys:
+    if output_names is None:
+        output_names = [os.path.basename(key) for key in matching_keys]
+    for i in range(len(matching_keys)):
+        key = matching_keys[i]
         name = os.path.basename(key)
         array = read_ome_zarr_array(key)
 
         if attrs is not None:
             array.attrs = attrs  # e.g. copy physical size
-
-        logger.info(f"Running transformation for {name}.")
+        to = ""
+        if name != output_names[i]:
+            to = f" to {output_names[i]}"
+        logger.info(f"Running transformation for {name}{to}.")
         transformed_array = itk_transform_labels(
             image=array,
             transform_parameter_object=transform_parameter_object,
@@ -546,14 +579,14 @@ def transform_all_labels(
         del array
 
         _write_zarr_image(
-            name=name,
+            name=output_names[i],
             root=output_root,
             image=transformed_array,
             group="labels",
         )
 
 
-def single_transform(
+def single_transformix(
     transform_dir: str,
     image_dir: str,
     image_spacing: None | tuple[float, float],
@@ -581,6 +614,7 @@ def single_transform(
     labels = transform_type == "labels"
     if len(matching_keys) == 0:  # see if directory is A1/t=0 for example
         tokens = transform_dir.split("/")
+
         if len(tokens) >= 2:
             image_key = tokens[-2]
             matching_keys = get_matching_names(
@@ -591,7 +625,7 @@ def single_transform(
 
     if len(matching_keys) == 0:
         logger.info(f"No matching {transform_type} to transform found for {image_key}.")
-
+    # TODO see if transform dir has subdirectory for t
     if not force:
         _matching_keys = []
         if labels:
@@ -607,9 +641,10 @@ def single_transform(
                 _matching_keys = matching_keys
         matching_keys = _matching_keys
     if labels:
-        transform_all_labels(
+        _transform_labels(
             transform_parameter_object=_load_itk_parameters_from_dir(transform_dir),
             matching_keys=matching_keys,
+            output_names=None,
             output_root=output_root,
             moving_image_spacing=image_spacing,
             attrs=None,
@@ -687,7 +722,7 @@ def run_itk_transform(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         transform_dirs.map(
-            single_transform,
+            single_transformix,
             image_dir=images,
             image_spacing=image_spacing,
             transform_type=transform_type,

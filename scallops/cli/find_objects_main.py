@@ -33,6 +33,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     required.add_argument(
         "--labels",
         required=True,
+        nargs="+",
         help="Path to zarr directory containing labels",
     )
     output_dir_arg(required)
