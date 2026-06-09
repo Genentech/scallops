@@ -1,4 +1,4 @@
-version 1.0
+version 1.1
 
 task segment_nuclei {
     input {
@@ -430,7 +430,7 @@ task intersects_boundary {
 
 task find_objects {
     input {
-        String? labels
+        Array[String] labels
         String subset
         Boolean? force
         String? label_pattern
@@ -454,7 +454,7 @@ task find_objects {
         fi
 
         scallops find-objects \
-        --labels "~{labels}" \
+        --labels ~{sep=" " labels} \
         --subset ~{subset} \
         ~{"--label-pattern " + label_pattern} \
         --label-suffix ~{suffix} \

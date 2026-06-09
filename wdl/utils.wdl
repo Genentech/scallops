@@ -1,10 +1,11 @@
-version 1.0
+version 1.1
 
 task list_images {
     input {
         Boolean? save_group_size
         Array[String] urls
         String? image_pattern
+        String? reference_time
         Array[String] groupby
         Array[String]? subset
         Int? expected_cycles
@@ -23,26 +24,31 @@ task list_images {
     command <<<
         set -e
         python <<CODE
-        from scallops.utils import _list_images_wdl
+        from scallops.cli.util import _list_images_wdl
 
         save_group_size =  "~{save_group_size}" == 'true'
         image_pattern = "~{image_pattern}"
+        reference_time = "~{reference_time}"
         urls = '~{sep="," urls}'.split(",")
         groupby = "~{sep=',' groupby}".split(",")
         subset = "~{sep=',' subset}".split(",")
         batch_size_str = "~{batch_size}"
         expected_cycles = "~{expected_cycles}"
-        _list_images_wdl(image_pattern, urls, groupby, subset, batch_size_str, save_group_size, expected_cycles)
+        _list_images_wdl(image_pattern, urls, groupby, reference_time, subset, batch_size_str, save_group_size, expected_cycles)
         CODE
     >>>
 
     output {
-        Array[String] groups = read_lines('groups.txt')
+        Array[String] subsets = read_lines('subsets.txt')
+        Array[String] subset_with_reference_times = read_lines('subsets_with_t.txt')
         Array[String] t = read_lines('t.txt')
-        Array[String] filtered_groupby = read_lines('groupby.txt')
-        String groupby_pattern = read_lines('groupby_pattern.txt')[0]
-        Int group_size = read_int('group_size.txt')
+        String groupby_pattern = read_lines('groupby_pattern.txt')[0] # e.g. {plate}-{well}
 
+
+        Array[String] filtered_groupby_with_t = read_lines('groupby_with_t.txt') # e.g. [plate, well, t]
+        Array[String] filtered_groupby = read_lines('groupby.txt') # e.g. [plate, well]
+
+        Int group_size = read_int('group_size.txt')
     }
 
     meta {

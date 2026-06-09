@@ -93,7 +93,7 @@ DEFAULT_DASK_CONFIG = {
 }
 
 
-def _create_default_dask_config(config: dict | None = None) -> set:
+def _create_default_dask_config(config: dict | None = None) -> dask.config.set:
     if config is None:
         return dask.config.set(DEFAULT_DASK_CONFIG)
 
@@ -450,3 +450,155 @@ def load_json(path_or_str: str) -> dict:
         with fs.open(path_or_str, "rt") as fp:
             return json.load(fp)
     return json.loads(path_or_str)
+
+
+def _write_img_size(file_list: list[str]):
+    from scallops.io import _images2fov, _localize_path
+
+    local_file_list = []
+    cleanup_file_list = []
+    for path in file_list:
+        local_path = _localize_path(path)
+        if local_path is not None:
+            cleanup_file_list.append(local_path)
+            local_file_list.append(local_path)
+        else:
+            local_file_list.append(path)
+    sizes = _images2fov(local_file_list, dask=True).sizes
+    for path in cleanup_file_list:
+        os.remove(path)
+    with open("img_size.txt", "wt") as f:
+        for dim in ["t", "c", "z", "y", "x"]:
+            s = sizes[dim] if dim in sizes else 0
+            f.write(f"{s}")
+            f.write("\n")
+
+
+def _write_group_size(metadata: dict):
+    n_tiles = len(metadata["file_metadata"])
+    metadata_fields = [v for v in ("c", "z") if v in metadata["file_metadata"][0]]
+    if len(metadata_fields) > 0:
+        from scallops.cli.util import _group_src_attrs
+
+        keys, channel_sources, filepaths = _group_src_attrs(
+            metadata=metadata, metadata_fields=tuple(metadata_fields)
+        )
+        n_tiles = len(filepaths)
+    with open("group_size.txt", "wt") as f:
+        f.write(f"{n_tiles}")
+        f.write("\n")
+
+
+def _list_images_wdl(
+    image_pattern: str,
+    urls: list[str],
+    groupby: list[str],
+    reference_time: str | None,
+    subset: list[str] | None,
+    batch_size_str: str | None,
+    save_group_size: bool = False,
+    expected_cycles_str: int | None = None,
+):
+    """Used by WDL workflow to output info about images"""
+    from scallops.io import _set_up_experiment
+
+    batch_size = 1
+    expected_cycles = None
+    if expected_cycles_str is not None and expected_cycles_str != "":
+        expected_cycles = int(expected_cycles_str)
+    if batch_size_str is not None and batch_size_str != "":
+        batch_size = int(batch_size_str)
+    if reference_time == "":
+        reference_time = None
+
+    if subset is not None and (
+        len(subset) == 0 or (len(subset) == 1 and subset[0] == "")
+    ):
+        subset = None
+    if image_pattern != "":
+        groupby = [g for g in groupby if "{" + g + "}" in image_pattern]
+    exp_gen = _set_up_experiment(
+        image_path=urls, files_pattern=image_pattern, group_by=groupby, subset=subset
+    )
+    # "groups.txt": each line passed to --subset in cli
+    # "groupby.txt": filtered groupby with values not in image_pattern removed
+    groupby_t = "t" in groupby
+    times = []
+
+    if not save_group_size:
+        with open("group_size.txt", "wt") as f:
+            f.write("0\n")
+
+    with (
+        open("subsets.txt", "wt") as groups_out,
+        open("subsets_with_t.txt", "wt") as groups_with_t_out,
+    ):
+        subset_ids = []
+        subset_ids_with_reference_times = []
+        first = True
+
+        for g, file_list, metadata in exp_gen:
+            times = None
+            if first:
+                first = False
+                if save_group_size:
+                    _write_group_size(metadata)
+            if not groupby_t and "t" in metadata["file_metadata"][0]:
+                times = [md["t"] for md in metadata["file_metadata"]]
+                if expected_cycles is not None:
+                    assert len(times) == expected_cycles
+            t_suffix = ""
+            if times is not None and len(times) > 0:
+                t_suffix = (
+                    f"-{times[0]}" if reference_time is None else f"-{reference_time}"
+                )
+
+            subset_ids.append('"' + metadata["id"] + '"')
+            subset_ids_with_reference_times.append(
+                '"' + metadata["id"] + t_suffix + '"'
+            )
+            if len(subset_ids) == batch_size:
+                groups_out.write(" ".join(subset_ids))
+                groups_out.write("\n")
+
+                groups_with_t_out.write(" ".join(subset_ids_with_reference_times))
+                groups_with_t_out.write("\n")
+
+                subset_ids = []
+                subset_ids_with_reference_times = []
+        if len(subset_ids) > 0:
+            groups_out.write(" ".join(subset_ids))
+            groups_out.write("\n")
+
+            groups_with_t_out.write(" ".join(subset_ids_with_reference_times))
+            groups_with_t_out.write("\n")
+
+    with open("groupby.txt", "wt") as f:
+        for g in groupby:
+            f.write(g)
+            f.write("\n")
+    groupby_with_t = list(groupby)
+
+    if not groupby_t and times is not None:
+        groupby_with_t.append("t")
+
+    with open("groupby_with_t.txt", "wt") as f:
+        for g in groupby_with_t:
+            f.write(g)
+            f.write("\n")
+
+    with open("t.txt", "wt") as f:
+        if times is not None:
+            for val in times:
+                f.write(str(val))
+                f.write("\n")
+
+    with open("groupby_pattern.txt", "wt") as f:
+        first = True
+        for g in groupby:
+            if not first:
+                f.write("-")
+            first = False
+            f.write("{")
+            f.write(g)
+            f.write("}")
