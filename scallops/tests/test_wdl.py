@@ -194,7 +194,6 @@ def test_ops_wdl(tmp_path):
         "model_dir": "",
         "iss_url": str(sbs_dir.absolute()),
         "output_directory": str(output.absolute()),
-        "nuclei_segmentation_method": "cellpose",
         "iss_registration_extra_arguments": "--no-landmarks",
         "pheno_to_iss_registration_extra_arguments": "--no-landmarks",
         "pheno_registration_extra_arguments": "--no-landmarks",
