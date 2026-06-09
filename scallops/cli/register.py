@@ -350,7 +350,6 @@ def single_registration(
             )
 
     else:  # align to t=reference_timepoint
-        reference_timepoint_str = reference_timepoint
         if isinstance(reference_timepoint, str):
             reference_timepoint_found = False
             for i in range(len(moving_image)):
@@ -362,10 +361,7 @@ def single_registration(
                 raise ValueError(
                     f"Reference timepoint not found: {reference_timepoint}."
                 )
-        elif reference_timepoint_str is not None:
-            reference_timepoint_str = (
-                moving_image[reference_timepoint].coords["t"].values[0]
-            )
+
         set_automatic_transform_initialization(parameter_object, False)
         if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
             new_moving_image = []
