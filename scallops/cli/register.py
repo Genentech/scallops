@@ -400,50 +400,61 @@ def single_registration(
         del moving_image
 
         if len(moving_label_keys) > 0:
-            # transform_dest structure is image_key/t=1
-            # assume labels are named image_key-t-suffix
-
-            for transform_file in transform_fs.ls(
-                transform_dest, detail=True, refresh=True
-            ):
-                if transform_file["type"] == "directory":
-                    transform_name = transform_file["name"]
-                    basename = os.path.basename(transform_name)
-                    if basename.startswith("t="):
-                        time = basename[2:]
-                        moving_label_keys_t = []
-                        output_label_prefix = f"{image_key}-{time}"
-                        output_names = []
-                        # e.g. transform plateA-A1-IF-cell to plateA-A1-FISH-cell
-                        for moving_label_key in moving_label_keys:
-                            moving_label_key_basename = os.path.basename(
-                                moving_label_key
-                            )
-                            output_label_suffix = (
-                                "-" + moving_label_key_basename.split("-")[-1]
-                            )
-                            output_name = f"{output_label_prefix}{output_label_suffix}"
-                            moving_label_keys_t.append(moving_label_key)
-                            output_names.append(output_name)
-
-                        if len(moving_label_keys_t) > 0:
-                            transform_parameter_object = _load_itk_parameters_from_dir(
-                                transform_fs.unstrip_protocol(transform_name)
-                            )
-                            if (
-                                transform_parameter_object.GetNumberOfParameterMaps()
-                                > 0
-                            ):
-                                _transform_labels(
-                                    transform_parameter_object=transform_parameter_object,
-                                    attrs=moving_image_attrs,
-                                    matching_keys=moving_label_keys_t,
-                                    output_names=output_names,
-                                    moving_image_spacing=moving_image_spacing,
-                                    output_root=label_output_root,
-                                )
+            _transform_labels_t(
+                image_key=image_key,
+                transform_fs=transform_fs,
+                transform_dest=transform_dest,
+                moving_label_keys=moving_label_keys,
+                moving_image_attrs=moving_image_attrs,
+                moving_image_spacing=moving_image_spacing,
+                label_output_root=label_output_root,
+            )
 
     return image_key
+
+
+def _transform_labels_t(
+    image_key: str,
+    transform_fs,
+    transform_dest: str,
+    moving_label_keys: Sequence[str],
+    moving_image_attrs,
+    moving_image_spacing,
+    label_output_root,
+):
+    # transform_dest structure is image_key/t=1
+    # assume labels are named image_key-t-suffix
+
+    for transform_file in transform_fs.ls(transform_dest, detail=True, refresh=True):
+        if transform_file["type"] == "directory":
+            transform_name = transform_file["name"]
+            basename = os.path.basename(transform_name)
+            if basename.startswith("t="):
+                time = basename[2:]
+                moving_label_keys_t = []
+                output_label_prefix = f"{image_key}-{time}"
+                output_names = []
+                # e.g. transform plateA-A1-IF-cell to plateA-A1-FISH-cell
+                for moving_label_key in moving_label_keys:
+                    moving_label_key_basename = os.path.basename(moving_label_key)
+                    output_label_suffix = "-" + moving_label_key_basename.split("-")[-1]
+                    output_name = f"{output_label_prefix}{output_label_suffix}"
+                    moving_label_keys_t.append(moving_label_key)
+                    output_names.append(output_name)
+
+                if len(moving_label_keys_t) > 0:
+                    transform_parameter_object = _load_itk_parameters_from_dir(
+                        transform_fs.unstrip_protocol(transform_name)
+                    )
+                    if transform_parameter_object.GetNumberOfParameterMaps() > 0:
+                        _transform_labels(
+                            transform_parameter_object=transform_parameter_object,
+                            attrs=moving_image_attrs,
+                            matching_keys=moving_label_keys_t,
+                            output_names=output_names,
+                            moving_image_spacing=moving_image_spacing,
+                            output_root=label_output_root,
+                        )
 
 
 def get_matching_names(
@@ -576,7 +587,7 @@ def _transform_labels(
         )
 
 
-def single_transform(
+def single_transformix(
     transform_dir: str,
     image_dir: str,
     image_spacing: None | tuple[float, float],
@@ -604,6 +615,7 @@ def single_transform(
     labels = transform_type == "labels"
     if len(matching_keys) == 0:  # see if directory is A1/t=0 for example
         tokens = transform_dir.split("/")
+
         if len(tokens) >= 2:
             image_key = tokens[-2]
             matching_keys = get_matching_names(
@@ -614,7 +626,7 @@ def single_transform(
 
     if len(matching_keys) == 0:
         logger.info(f"No matching {transform_type} to transform found for {image_key}.")
-
+    # TODO see if transform dir has subdirectory for t
     if not force:
         _matching_keys = []
         if labels:
@@ -711,7 +723,7 @@ def run_itk_transform(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         transform_dirs.map(
-            single_transform,
+            single_transformix,
             image_dir=images,
             image_spacing=image_spacing,
             transform_type=transform_type,

@@ -306,12 +306,16 @@ def test_register_itk_cli_concat_t(tmp_path):
 def test_register_transform_labels_moving_only(tmp_path):
     image_zarr = tmp_path / "images.zarr"
     output_zarr = tmp_path / "out.zarr"
+    output_transforms = tmp_path / "transforms"
 
     img = read_image(
         "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
     img.attrs["physical_pixel_sizes"] = (1, 1)
-    segmentation = np.ones((img.sizes["y"], img.sizes["x"]), dtype=np.uint8)
+
+    rng = np.random.default_rng(0)
+
+    segmentation = rng.integers(low=0, high=10, size=(img.sizes["y"], img.sizes["x"]))
 
     Experiment(
         images={"plateA-A1-IF": img, "plateA-A1-FISH": img},
@@ -342,10 +346,16 @@ def test_register_transform_labels_moving_only(tmp_path):
         "--output-aligned-channels-only",
         "--time",
         "IF",
+        "--transform-output",
+        str(output_transforms),
+        "--itk-parameters",
+        create_itk_param_file(tmp_path),
     ]
     subprocess.check_call(cmd)
-    assert (output_zarr / "labels" / "plateA-A1-FISH-cell").exists()
-    assert (output_zarr / "images" / "plateA-A1").exists()
+    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-FISH-cell")
+    assert transformed_labels.max() > 0
+    transformed_image = read_image(output_zarr / "images" / "plateA-A1")
+    assert transformed_image.shape[0] == 2
 
 
 @pytest.mark.registration
