@@ -15,11 +15,14 @@ import shapely
 import zarr
 from dask import delayed
 from dask.diagnostics import ProgressBar
+from skimage.transform import SimilarityTransform, warp
 from skimage.util import img_as_float
 from sklearn.cluster import AgglomerativeClustering
 
 from scallops.io import _images2fov, _localize_path, pluralize
+from scallops.registration.crosscorrelation import _apply_window, _filter_percentiles
 from scallops.stitch._radial import radial_correct
+from scallops.stitch.shift_utils import calc_best_shift
 from scallops.stitch.utils import _crop_image, dtype_convert
 from scallops.utils import _cpu_count, _dask_from_array_no_copy
 from scallops.zarr_io import _da_to_zarr_kwargs
@@ -110,6 +113,10 @@ def _fuse(
     radial_correction_k: float | None = None,
     chunk_size: tuple[int, int] | None = None,
     channels_per_batch: int | None = None,
+    channel_reference: int | None = None,
+    channel_window: int = 2,
+    channel_cross_correlation_upsample: int = 2,
+    channel_filter_percentiles: tuple[float, float] | None = None,
 ):
     """Use stitching coordinates to fuse tiles.
 
@@ -126,6 +133,12 @@ def _fuse(
         tile positions into a grid to estimate number of rows and columns.
     :param channels_per_batch: Number of channels to output per batch. If `None`,
         auto determine from available memory
+    :param channel_reference: Reference channel to use to register across channels within a tile. If `None`, no
+        registration across channels is performed
+    :param channel_window: Use a centered subset of data for registration across channels if greater than one
+    :param channel_cross_correlation_upsample: Perform subpixel alignment for registration across channels if greater than one
+    :param channel_filter_percentiles: Replace data outside of percentile range [q1, q2] with uniform noise over the range
+        [q1,q2] for registration across channels.
     """
     assert blend in ["none", "linear"]
     if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
@@ -353,6 +366,10 @@ def _fuse(
                 if len(intersecting_boxes) > 0
                 else None,
                 scene_id=scene_ids[i] if has_scenes else None,
+                channel_reference=channel_reference,
+                channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+                channel_window=channel_window,
+                channel_filter_percentiles=channel_filter_percentiles,
             )
 
             delayed_results.append(d)
@@ -396,6 +413,10 @@ def _fuse_image(
     weights: np.ndarray | None = None,
     weights_sum: np.ndarray | None = None,
     scene_id: int | None = None,
+    channel_reference: int | None = None,
+    channel_cross_correlation_upsample: int = 1,
+    channel_window: int = 1,
+    channel_filter_percentiles: tuple[float, float] | None = None,
 ):
     local_image_paths = [_localize_path(path) for path in image_paths]
     image_paths = [
@@ -407,12 +428,47 @@ def _fuse_image(
         t=0, missing_dims="ignore"
     )
     [os.remove(path) for path in local_image_paths if path is not None]
-
-    if output_channels is not None:
-        img = img.isel(c=output_channels)
     if "z" in img.dims:
         img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
     img = img.values
+    if channel_reference is not None:
+        ref_values = img[channel_reference]
+        img_dtype = ref_values.dtype
+        if channel_window > 1:
+            ref_values = _apply_window(ref_values, channel_window)
+        if channel_filter_percentiles is not None:
+            ref_values = _filter_percentiles(
+                ref_values,
+                q1=channel_filter_percentiles[0],
+                q2=channel_filter_percentiles[1],
+            )
+
+        for c in range(img.shape[0]):
+            if c != channel_reference:
+                moving = img[c]
+                if channel_window > 1:
+                    moving = _apply_window(moving, channel_window)
+                if channel_filter_percentiles is not None:
+                    moving = _filter_percentiles(
+                        moving,
+                        q1=channel_filter_percentiles[0],
+                        q2=channel_filter_percentiles[1],
+                    )
+
+                offset, _ = calc_best_shift(
+                    moving,
+                    ref_values,
+                    upsample_factor=channel_cross_correlation_upsample,
+                    overlap_min=0,
+                )
+                #   offset, _, _ = phase_cross_correlation(moving, ref_values)
+
+                if not np.all(offset == 0.0):
+                    # skimage SimilarityTransform has (x,y,[z]) convention
+                    st = SimilarityTransform(translation=offset[::-1])
+                    img[c] = warp(img[c], st, preserve_range=True).astype(img_dtype)
+    if output_channels is not None:
+        img = img[output_channels]
 
     # order: radial, illumination, crop
     if radial_correction_k is not None:
