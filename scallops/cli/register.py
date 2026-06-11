@@ -5,7 +5,7 @@ import argparse
 import os
 from collections.abc import Sequence
 from itertools import zip_longest
-from typing import Literal
+from typing import Any, Literal
 
 import fsspec
 import itk
@@ -13,6 +13,8 @@ import numpy as np
 import xarray as xr
 import zarr
 from dask.bag import from_sequence
+from natsort import natsorted
+from xarray import DataArray
 from zarr import Group
 
 from scallops.cli.util import (
@@ -52,6 +54,48 @@ from scallops.zarr_io import (
 )
 
 logger = _get_cli_logger()
+
+
+def _output_exists(
+    register_self, label_output_root, moving_label_keys, image_output_root, image_key
+):
+    labels_exist = True
+    if label_output_root is not None:
+        if not register_self:
+            for key in moving_label_keys:
+                key = os.path.basename(key)
+                if not is_ome_zarr_array(label_output_root.get(f"labels/{key}")):
+                    labels_exist = False
+                    break
+        # TODO check for transformed labels when register_self
+
+    image_exists = True
+    if image_output_root is not None:
+        if not is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
+            image_exists = False
+    elif label_output_root is None:
+        image_exists = False
+    return labels_exist and image_exists
+
+
+def _get_reference_timepoint(
+    reference_timepoint: str, moving_image: Sequence[DataArray]
+) -> tuple[int, Any]:
+    reference_timepoint_value = reference_timepoint
+    if isinstance(reference_timepoint, str):
+        reference_timepoint_found = False
+        for i in range(len(moving_image)):
+            if moving_image[i].coords["t"].values[0] == reference_timepoint:
+                reference_timepoint = i
+                reference_timepoint_found = True
+                break
+        if not reference_timepoint_found:
+            raise ValueError(f"Reference timepoint not found: {reference_timepoint}.")
+    else:
+        reference_timepoint_value = (
+            moving_image[reference_timepoint].coords["t"].values[0]
+        )
+    return reference_timepoint, reference_timepoint_value
 
 
 def single_registration(
@@ -130,51 +174,44 @@ def single_registration(
     transform_dest = f"{transform_output_dir}{transform_fs.sep}{image_key}"
     moving_label_keys = []
 
+    # when registering self, transforms written to output_dir/time={t}/
+    moving_image = _images2fov(
+        moving_file_list,
+        moving_metadata,
+        dask=True,
+        concat_dims=("c",),
+    )
+    if register_self:
+        reference_timepoint, reference_timepoint_value = _get_reference_timepoint(
+            reference_timepoint=reference_timepoint, moving_image=moving_image
+        )
     if moving_labels is not None:
-        matching_label_prefix = image_key
-        if register_self:
-            matching_label_prefix = f"{matching_label_prefix}-{reference_timepoint}"
+        matching_label_prefix = (
+            f"{image_key}-{reference_timepoint_value}" if register_self else image_key
+        )
+
         for moving_label in moving_labels:
             moving_label_keys.extend(
                 get_matching_names(
                     image_key=matching_label_prefix, image_dir=moving_label, labels=True
                 )
             )
-        moving_label_keys = sorted(moving_label_keys)
+        moving_label_keys = natsorted(moving_label_keys)
         if len(moving_label_keys) == 0:
             logger.warning(f"No labels found for {image_key}")
 
-    if not force:
-        labels_exist = True
-        if label_output_root is not None:
-            if not register_self:
-                for key in moving_label_keys:
-                    key = os.path.basename(key)
-                    if not is_ome_zarr_array(label_output_root.get(f"labels/{key}")):
-                        labels_exist = False
-                        break
-            # TODO check for transformed labels when register_self
-
-        image_exists = True
-        if image_output_root is not None:
-            if not is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
-                image_exists = False
-        elif label_output_root is None:
-            image_exists = False
-        if labels_exist and image_exists:
-            logger.info(f"Skipping registration for {image_key}")
-            return image_key
-
-    if register_self:
-        logger.info(f"Running registration for {image_key} t={reference_timepoint}")
-        logger.info(
-            f"{len(moving_file_list):,} {pluralize('input', len(moving_file_list))}:"
-            f" {', '.join([s.name.replace('/images/', '') if isinstance(s, zarr.Group) else str(s) for s in moving_file_list])}"
-        )
-    else:
-        logger.info(f"Running registration for {image_key}")
+    if not force and _output_exists(
+        register_self,
+        label_output_root,
+        moving_label_keys,
+        image_output_root,
+        image_key,
+    ):
+        logger.info(f"Skipping registration for {image_key}")
+        return image_key
 
     if not register_self:
+        logger.info(f"Running registration for {image_key}")
         _, fixed_file_list, fixed_metadata = fixed_tuple
 
         assert fixed_metadata["id"] == moving_metadata["id"], (
@@ -192,12 +229,6 @@ def single_registration(
         fixed_image = _z_projection(fixed_image, z_index).isel(
             t=0, c=fixed_channel, missing_dims="ignore"
         )
-    moving_image = _images2fov(
-        moving_file_list,
-        moving_metadata,
-        dask=True,
-        concat_dims=("c",),
-    )
 
     parameter_object = _load_itk_parameters(itk_parameters)
     parameter_object_across_channels = (
@@ -353,17 +384,11 @@ def single_registration(
             )
 
     else:  # align to t=reference_timepoint
-        if isinstance(reference_timepoint, str):
-            reference_timepoint_found = False
-            for i in range(len(moving_image)):
-                if moving_image[i].coords["t"].values[0] == reference_timepoint:
-                    reference_timepoint = i
-                    reference_timepoint_found = True
-                    break
-            if not reference_timepoint_found:
-                raise ValueError(
-                    f"Reference timepoint not found: {reference_timepoint}."
-                )
+        logger.info(f"Running registration for {image_key} t={reference_timepoint}")
+        logger.info(
+            f"{len(moving_file_list):,} {pluralize('input', len(moving_file_list))}:"
+            f" {', '.join([s.name.replace('/images/', '') if isinstance(s, zarr.Group) else str(s) for s in moving_file_list])}"
+        )
 
         set_automatic_transform_initialization(parameter_object, False)
         if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
@@ -423,7 +448,7 @@ def _transform_labels_t(
 ):
     # transform_dest structure is image_key/t=1
     # assume labels are named image_key-t-suffix
-    print("moving_label_keys", moving_label_keys)
+
     for transform_file in transform_fs.ls(transform_dest, detail=True, refresh=True):
         if transform_file["type"] == "directory":
             transform_name = transform_file["name"]
@@ -457,7 +482,10 @@ def _transform_labels_t(
 
 
 def get_matching_names(
-    image_key: str, image_dir: str | Group, labels: bool = True
+    image_key: str,
+    image_dir: str | Group,
+    labels: bool = True,
+    label_suffixes: Sequence[str] = {"cell", "nuclei", "cytosol"},
 ) -> list[str]:
     """Get matching keys for the given image key and directory.
 
@@ -472,24 +500,21 @@ def get_matching_names(
     # look for f'labels/image_key-{suffix} or  f'images/image_key
     zarr_dir = "labels" if labels else "images"
     if isinstance(image_dir, Group):
-        protocol = _get_fs_protocol(_get_fs(image_dir))
+        fs = _get_fs(image_dir)
         image_dir = f"{_get_store_path(image_dir)}{image_dir.name}"
-        if protocol != "file":
-            image_dir = f"{protocol}://{image_dir}"
+        image_dir = fs.unstrip_protocol(image_dir)
 
     image_fs, _ = fsspec.core.url_to_fs(image_dir)
     image_dir = image_dir.rstrip(image_fs.sep)
 
     glob_pattern = f"{image_dir}{image_fs.sep}{zarr_dir}{image_fs.sep}{image_key}"
-    if labels:
-        glob_pattern += "-*"
-    paths = image_fs.glob(glob_pattern)
-    protocol = _get_fs_protocol(image_fs)
-    if protocol != "file":
-        paths = [f"{protocol}://{x}" for x in paths]
+
     results = []
-    for path in paths:
+    for path in image_fs.glob(glob_pattern):
+        path = image_fs.unstrip_protocol(path)
         name = os.path.basename(path)
+        if labels and name.split("-")[-1] not in label_suffixes:
+            continue
         if not name.startswith(".") and is_ome_zarr_array(zarr.open(path, mode="r")):
             results.append(path)
     return results
