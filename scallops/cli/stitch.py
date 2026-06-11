@@ -330,6 +330,15 @@ def run_stitch(args: argparse.Namespace) -> None:
     min_overlap_fraction = args.min_overlap_fraction
     random_seed = args.random_seed
     max_shifts = args.max_shift
+    channel_reference = args.channel_reference
+    channel_cross_correlation_upsample = args.channel_cross_correlation_upsample
+    channel_window = args.channel_window
+    channel_filter_min = args.channel_filter_min
+    channel_filter_max = args.channel_filter_max
+    channel_filter_percentiles = [channel_filter_min, channel_filter_max]
+    if channel_filter_percentiles[0] <= 0 and channel_filter_percentiles[1] >= 100:
+        channel_filter_percentiles = None
+
     assert all(shift >= 0 for shift in max_shifts), "Max shift must be non-negative."
 
     assert 0 <= stitch_alpha <= 1, "stitch alpha must be between 0 and 1"
@@ -393,4 +402,8 @@ def run_stitch(args: argparse.Namespace) -> None:
             flip_y_axis=flip_y_axis,
             flip_x_axis=flip_x_axis,
             swap_axes=swap_axes,
+            channel_reference=channel_reference,
+            channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+            channel_window=channel_window,
+            channel_filter_percentiles=channel_filter_percentiles,
         ).compute()
