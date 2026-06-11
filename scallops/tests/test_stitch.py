@@ -450,9 +450,6 @@ def test_stitch_z_stack(tmp_path):
 
 @pytest.mark.io
 def test_stitch_align_across_channels(tmp_path, array_A1_102_pheno):
-    import shutil
-
-    shutil.rmtree(str(tmp_path), ignore_errors=True)
     input_path = tmp_path / "input"
     data = array_A1_102_pheno.squeeze().data
 
