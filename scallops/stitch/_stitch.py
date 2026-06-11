@@ -67,6 +67,10 @@ def _single_stitch(
     flip_x_axis: int | None,
     swap_axes: bool | None,
     channel_names: list[str] | None,
+    channel_reference: int | None,
+    channel_cross_correlation_upsample: int | None,
+    channel_window: int | None,
+    channel_filter_percentiles: tuple[float, float] | None,
 ):
     """Process a single cycle of images."""
     _, image_filepaths, image_metadata = image_tuple
@@ -389,6 +393,10 @@ def _single_stitch(
         radial_correction_k,
         output_metadata,
         channel_names,
+        channel_reference=channel_reference,
+        channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+        channel_window=channel_window,
+        channel_filter_percentiles=channel_filter_percentiles,
     )
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -415,6 +423,10 @@ def _write_arrays(
     radial_correction_k,
     metadata,
     channel_names,
+    channel_reference,
+    channel_cross_correlation_upsample,
+    channel_window,
+    channel_filter_percentiles,
 ):
     gc.collect()
     if not no_save_labels:
@@ -535,6 +547,10 @@ def _write_arrays(
             crop_width=fuse_crop_width,
             radial_correction_k=radial_correction_k,
             chunk_size=chunk_size,
+            channel_reference=channel_reference,
+            channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+            channel_window=channel_window,
+            channel_filter_percentiles=channel_filter_percentiles,
         )
 
         ome_metadata = _create_ome_metadata(
