@@ -5,6 +5,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 import zarr
+from scipy.ndimage import shift
+from skimage.registration import phase_cross_correlation
 
 from scallops.io import read_image
 from scallops.stitch._radial import radial_correct
@@ -444,3 +446,56 @@ def test_stitch_z_stack(tmp_path):
     assert np.all(max_img == constant_img_val)
     focus_img = read_image(str(tmp_path / "focus.zarr")).squeeze().data
     assert np.all(focus_img < constant_img_val)
+
+
+@pytest.mark.io
+def test_stitch_align_across_channels(tmp_path, array_A1_102_pheno):
+    input_path = tmp_path / "input"
+    data = array_A1_102_pheno.squeeze().data
+
+    img = data[0]
+    img = np.stack((img, img))
+    img[1] = shift(img[1], (20, 10))
+    # top-left, top-right, bottom-left, bottom-right
+    coords = [(0, 0), (0, 1024), (1024, 0), (1024, 1024)]
+    for i in range(len(coords)):
+        c = coords[i]
+        _write_image_with_position(
+            input_path / f"test-{i}.zarr",
+            xr.DataArray(img, dims=["c", "y", "x"]),
+            c[0],
+            c[1],
+        )
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-{skip}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "stitch.zarr"),
+        "--report-output",
+        str(tmp_path / "stitch"),
+        "--radial-correction-k",
+        "none",
+        "--no-evaluate",
+        "--channel-reference",
+        "0",
+        "--channel-filter-max",
+        "100",
+        "--channel-cross-correlation-upsample",
+        "1",
+        "--channel-window",
+        "1",
+        "--force",
+    ]
+
+    subprocess.check_call(cmd)
+    result_image = read_image(tmp_path / "stitch.zarr").squeeze().data
+    ch1 = result_image[0]
+    ch2 = result_image[1]
+    offset, _, _ = phase_cross_correlation(ch1, ch2)
+    assert np.all(offset == 0)

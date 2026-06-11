@@ -268,7 +268,36 @@ def _create_stitch_parser(
         help="Whether to swap tile y and x axes. Determined automatically if not "
         "provided.",
     )
+    parser.add_argument(
+        "--channel-reference",
+        type=int,
+        help="If provided, perform alignment across channels within a tile using the specified reference channel (0-based).",
+    )
+    parser.add_argument(
+        "--channel-cross-correlation-upsample",
+        type=int,
+        default=2,
+        help="Upsampling factor for registration precision when aligning across channels.",
+    )
+    parser.add_argument(
+        "--channel-window",
+        type=int,
+        default=2,
+        help="Use a centered subset of a tile if greater than one when aligning across channels.",
+    )
 
+    parser.add_argument(
+        "--channel-filter-min",
+        type=float,
+        default=0,
+        help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning across channels.",
+    )
+    parser.add_argument(
+        "--channel-filter-max",
+        type=float,
+        default=90,
+        help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning across channels.",
+    )
     z_index_tile_arg(parser)
     force_arg(parser)
     dask_client_arg(parser, value="none")
