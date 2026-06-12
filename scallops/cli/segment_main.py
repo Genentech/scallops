@@ -71,6 +71,10 @@ def _add_common_args(parser: ArgumentParser) -> None:
         default=0,
         help="Channel index (0-based) where DAPI is found",
     )
+    parser.add_argument(
+        "--time",
+        help="Time index (0-based) or value.",
+    )
 
     parser.add_argument(
         "--min-area",
@@ -252,13 +256,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
         type=int,
     )
 
-    parser.add_argument(
-        "--time",
-        dest="cell_segmentation_t",
-        help="Time indices (0-based) to include when computing cell segmentation mask. Defaults to all time points.",
-        type=int,
-        action="append",
-    )
     parser.add_argument(
         "--shrink-nuclei",
         help="Shrink nuclei prior to subtraction of nuclei from cells to identify the "

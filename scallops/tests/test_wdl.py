@@ -1,4 +1,3 @@
-import glob
 import json
 import os.path
 from subprocess import check_call
@@ -10,6 +9,7 @@ import pytest
 import xarray as xr
 
 from scallops import Experiment
+from scallops.cli.util import _list_images_wdl
 from scallops.io import read_image, save_ome_tiff
 from scallops.tests.test_stitch import _write_image_with_position
 
@@ -25,6 +25,42 @@ def add_physical_size(input_path, output_path):
     img.attrs["processed"].images[0].pixels.physical_size_x = 1
     img.attrs["processed"].images[0].pixels.physical_size_y = 1
     save_ome_tiff(img.values, uri=output_path, ome_xml=img.attrs["processed"].to_xml())
+
+
+@pytest.mark.parametrize("reference_time", ["IF", None])
+@pytest.mark.cli_e2e
+def test_list_images_wdl(reference_time, tmp_path, monkeypatch):
+    (tmp_path / "plate1-A1-IF").touch()
+    (tmp_path / "plate1-A1-FISH").touch()
+    monkeypatch.chdir(tmp_path)
+    _list_images_wdl(
+        image_pattern="{plate}-{well}-{t}",
+        reference_time=reference_time,
+        urls=[str(tmp_path)],
+        groupby=["plate", "well"],
+        subset=None,
+        batch_size_str=None,
+        save_group_size=False,
+        expected_cycles_str=None,
+    )
+    groups = pd.read_csv(tmp_path / "groups.txt", header=None)[0].values
+    np.testing.assert_array_equal(groups, ["plate1-A1"])
+    groupby = pd.read_csv(tmp_path / "groupby.txt", header=None)[0].values
+    np.testing.assert_array_equal(groupby, ["plate", "well"])
+    groupby_pattern = pd.read_csv(tmp_path / "groupby_pattern.txt", header=None)[
+        0
+    ].values
+    np.testing.assert_array_equal(groupby_pattern, ["{plate}-{well}"])
+
+    times = pd.read_csv(tmp_path / "t.txt", header=None)[0].values
+    np.testing.assert_array_equal(times, ["FISH", "IF"])
+    groups_with_times = pd.read_csv(tmp_path / "groups_with_t.txt", header=None)[
+        0
+    ].values
+    if reference_time == "IF":
+        np.testing.assert_array_equal(groups_with_times, ["plate1-A1-IF"])
+    else:
+        np.testing.assert_array_equal(groups_with_times, ["plate1-A1-FISH"])
 
 
 @pytest.mark.cli_e2e
@@ -119,15 +155,15 @@ def test_stitch_wdl(tmp_path):
 
 @pytest.mark.cli_e2e
 def test_ops_wdl(tmp_path):
-    sbs_dir = tmp_path / "sbs"
-    pheno_dir = tmp_path / "pheno"
+    sbs_dir = tmp_path / "sbs.zarr"
+    pheno_dir = tmp_path / "pheno.zarr"
     output = tmp_path / "out"
-    sbs_dir.mkdir()
-    pheno_dir.mkdir()
     output.mkdir()
-    for p in glob.glob("scallops/tests/data/experimentC/input/*/*Tile-102*"):
-        add_physical_size(p, str(sbs_dir / os.path.basename(p)))
 
+    iss_img = read_image(
+        "scallops/tests/data/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
+    )
+    iss_img.attrs["physical_pixel_sizes"] = (1, 1)
     pheno_img = read_image(
         "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
@@ -135,45 +171,46 @@ def test_ops_wdl(tmp_path):
     phenotype_mask = np.ones(
         (pheno_img.sizes["y"], pheno_img.sizes["x"]), dtype=np.uint8
     )
-    phenotype_mask[10, 10] = 1
+    phenotype_mask[10, 10] = 0
     phenotype_tile = np.ones(
         (pheno_img.sizes["y"], pheno_img.sizes["x"]), dtype=np.uint16
     )
     phenotype_tile[10, 10] = 2
-    exp = Experiment(
-        images={"A1-102-1": pheno_img, "A1-102-2": pheno_img},
+    Experiment(
+        images={"plateA-A1-IF": pheno_img, "plateA-A1-FISH": pheno_img},
         labels={
-            "A1-102-1-mask": phenotype_mask,
-            "A1-102-1-tile": phenotype_tile,
-            "A1-102-2-mask": phenotype_mask,
-            "A1-102-2-tile": phenotype_tile,
+            "plateA-A1-IF-mask": phenotype_mask,
+            "plateA-A1-IF-tile": phenotype_tile,
+            "plateA-A1-FISH-mask": phenotype_mask,
+            "plateA-A1-FISH-tile": phenotype_tile,
         },
-    )
-    exp.save(str(pheno_dir))
+    ).save(pheno_dir)
+
+    Experiment(
+        images={"plateA-A1-1": iss_img, "plateA-A1-2": iss_img},
+    ).save(sbs_dir)
 
     input_json = {
         "model_dir": "",
         "iss_url": str(sbs_dir.absolute()),
-        "iss_image_pattern": "{mag}X_c{t}-{experiment}-{t}_{well}_Tile-{tile}.{datatype}.tif",
         "output_directory": str(output.absolute()),
         "iss_registration_extra_arguments": "--no-landmarks",
         "pheno_to_iss_registration_extra_arguments": "--no-landmarks",
         "pheno_registration_extra_arguments": "--no-landmarks",
         "phenotype_cyto_channel": [1],
-        "phenotype_dapi_channel": 0,
+        "reference_phenotype_time": "IF",
         "phenotype_url": str(pheno_dir.absolute()),
-        "phenotype_nuclei_features": ["intensity_0", "intensity_1"],
+        "phenotype_nuclei_features": {
+            "IF": ["intensity_0", "intensity_1"],
+            "FISH": ["intensity_0", "intensity_1"],
+        },
         # 2 batches
-        "phenotype_cell_features": ["intensity_0"],
+        "phenotype_cell_features": {"IF": ["intensity_0"]},
         # "phenotype_cytosol_features": ["mean_0 area"], # no cytosol features
-        "phenotype_image_pattern": "{well}-{tile}-{t}",
-        "groupby": ["well", "tile"],
         "reads_threshold_peaks": "0",
         "reads_threshold_peaks_crosstalk": "20",
         "barcodes": os.path.abspath("scallops/tests/data/experimentC/barcodes.csv"),
-        "mark_stitch_boundary_cells": False,
         "reads_labels": "cell",
-        "merge_extra_arguments": "--format parquet",
         "docker": "",
     }
 

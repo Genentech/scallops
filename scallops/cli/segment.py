@@ -12,15 +12,19 @@ Authors:
 
 import argparse
 import importlib
+from collections.abc import Sequence
 from typing import Callable, Literal, Optional
 
 import dask.array as da
 import fsspec
 import numpy as np
+import xarray as xr
 import zarr
+from array_api_compat import get_namespace
 from dask.bag import from_sequence
 from zarr import Group
 
+from scallops.cli.register import _get_timepoint_index_and_value
 from scallops.cli.util import (
     _create_dask_client,
     _create_default_dask_config,
@@ -51,6 +55,7 @@ def segment_nuclei(
     dapi_channel: int,
     method: Callable,
     root: Group,
+    timepoint: int | str,
     z_index: int | str,
     min_area: float | None = None,
     max_area: float | None = None,
@@ -71,6 +76,7 @@ def segment_nuclei(
     :param method: Segmentation method.
     :param root: Zarr hierarchy root.
     :param z_index: Either 'max' or z-index
+    :param timepoint: Time to use.
     :param min_area: Minimum area threshold for filtering labels.
     :param max_area: Maximum area threshold for filtering labels.
     :param chunks: Tuple specifying chunking size for Dask arrays.
@@ -88,7 +94,19 @@ def segment_nuclei(
         logger.info(f"Skipping nuclei segmentation for {image_key}")
         return root
     logger.info(f"Running nuclei segmentation for {image_key}")
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = _images2fov(
+        file_list,
+        metadata,
+        concat_dims=("c",),
+        dask=True,
+    )
+    timepoint, timepoint_value = _get_timepoint_index_and_value(timepoint, image)
+
+    image = (
+        image[timepoint]
+        if isinstance(image, Sequence)
+        else image.isel(t=timepoint, missing_dims="ignore")
+    )
     image = _z_projection(image, z_index)
 
     nuclei_seg_args = {}
@@ -125,10 +143,17 @@ def segment_nuclei(
         group_metadata = {
             "image-label": {"source": {"image": f"../../images/{image_key}"}}
         }
-        additional_metadata = label_metadata.get(key) if label_metadata else None
+        additional_metadata = label_metadata.get(key) if label_metadata else dict()
         storage_options = None
         if isinstance(label_data, np.ndarray):
             storage_options = {"chunks": image.data.chunksize[-2:]}
+        if timepoint_value is not None:
+            label_data = xr.DataArray(
+                get_namespace(label_data).expand_dims(label_data, 0),
+                dims=["t", "y", "x"],
+                coords={"t": [timepoint_value]},
+            )
+            additional_metadata.update(label_data.attrs)
         _write_zarr_labels(
             name=f"{image_key}-{key}",
             root=root,
@@ -150,6 +175,7 @@ def segment_cells(
     method: Callable,
     root: Group,
     z_index: int | str,
+    timepoint: int | str,
     min_area: float | None = None,
     max_area: float | None = None,
     chunks: None | tuple[int, int] = None,
@@ -160,7 +186,6 @@ def segment_cells(
     cell_segmentation_rolling_ball: bool = False,
     cell_segmentation_sigma: Optional[float] = None,
     closing_radius: Optional[int] = None,
-    cell_segmentation_t: Optional[list[int]] = None,
     force: bool = False,
     shrink_primary: bool = False,
     no_version: bool = False,
@@ -178,6 +203,7 @@ def segment_cells(
     :param method: Segmentation method.
     :param root: Zarr hierarchy root.
     :param z_index: Either 'max' or z-index
+    :param timepoint: Time to use.
     :param min_area: Minimum area threshold for filtering labels.
     :param max_area: Maximum area threshold for filtering labels.
     :param chunks: Tuple specifying chunking size for Dask arrays.
@@ -188,7 +214,6 @@ def segment_cells(
     :param cell_segmentation_rolling_ball: Use rolling ball mask for cell segmentation.
     :param cell_segmentation_sigma: Standard deviation for smoothing in cell segmentation.
     :param closing_radius: Radius for closing operation in cell segmentation.
-    :param cell_segmentation_t: List of timepoints to consider for cell segmentation.
     :param force: Whether to overwrite existing output
     :param shrink_primary: Whether to shrink primary labels.
     :param no_version: Whether to skip version/CLI information in output.
@@ -197,7 +222,20 @@ def segment_cells(
     if not force and is_ome_zarr_array(root.get(f"labels/{image_key}-cell")):
         logger.info(f"Skipping cell segmentation for {image_key}")
         return root
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = _images2fov(
+        file_list,
+        metadata,
+        concat_dims=("c",),
+        dask=True,
+    )
+
+    timepoint, timepoint_value = _get_timepoint_index_and_value(timepoint, image)
+
+    image = (
+        image[timepoint]
+        if isinstance(image, Sequence)
+        else image.isel(t=timepoint, missing_dims="ignore")
+    )
     image = _z_projection(image, z_index)
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), dapi_channel)
@@ -210,7 +248,14 @@ def segment_cells(
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
         nuclei = read_ome_zarr_array(
             nuclei_image_root["labels"][image_key + "-nuclei"]
-        ).values
+        ).squeeze()
+        if (
+            timepoint_value is not None
+            and nuclei.sizes.get("t", 0) > 0
+            and "t" in nuclei.coords
+        ):
+            nuclei = nuclei.sel(t=timepoint_value)
+        nuclei = nuclei.values
         assert nuclei.shape == (
             image.sizes["y"],
             image.sizes["x"],
@@ -223,7 +268,6 @@ def segment_cells(
         cell_seg_args["rolling_ball"] = cell_segmentation_rolling_ball
         cell_seg_args["sigma"] = cell_segmentation_sigma
         cell_seg_args["closing_radius"] = closing_radius
-        cell_seg_args["t"] = cell_segmentation_t
     if method.__name__ == "segment_cells_watershed":
         cell_seg_args["watershed_method"] = watershed_method
     if chunks is not None:
@@ -267,10 +311,17 @@ def segment_cells(
         group_metadata = {
             "image-label": {"source": {"image": f"../../images/{image_key}"}}
         }
-        additional_metadata = label_metadata.get(key) if label_metadata else None
+        additional_metadata = label_metadata.get(key) if label_metadata else dict()
         storage_options = None
         if isinstance(label_data, np.ndarray):
             storage_options = {"chunks": image.data.chunksize[-2:]}
+        if timepoint_value is not None:
+            label_data = xr.DataArray(
+                get_namespace(label_data).expand_dims(label_data, 0),
+                dims=["t", "y", "x"],
+                coords={"t": [timepoint_value]},
+            )
+            additional_metadata.update(label_data.attrs)
         _write_zarr_labels(
             name=f"{image_key}-{key}",
             root=root,
@@ -332,7 +383,12 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
     output_root = open_ome_zarr(output, mode="a")
 
     kwargs = dict()
-
+    timepoint = arguments.time if arguments.time is not None else 0
+    if isinstance(timepoint, str) and timepoint.isdigit():
+        try:
+            timepoint = int(timepoint)
+        except ValueError:
+            pass
     if not nuclei:
         kwargs["nuclei_min_area"] = arguments.nuclei_min_area
         kwargs["nuclei_max_area"] = arguments.nuclei_max_area
@@ -353,7 +409,6 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 "Please provide sigma for `local` threshold"
             )
 
-        kwargs["cell_segmentation_t"] = arguments.cell_segmentation_t
         if method in ["watershed", "watershed-intensity", "propagation"]:
             nuclei_label = arguments.nuclei_label
             if nuclei_label is None:
@@ -381,10 +436,12 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
         kwargs["clip"] = arguments.stardist_clip
         kwargs["pmin"] = arguments.stardist_pmin
         kwargs["pmax"] = arguments.stardist_pmax
+
     method = getattr(
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",
     )
+
     image_seq = from_sequence(
         _set_up_experiment(data_path, image_pattern, group_by, subset=subset)
     )
@@ -399,6 +456,7 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
             root=output_root,
             min_area=min_area,
             max_area=max_area,
+            timepoint=timepoint,
             chunks=chunks,
             chunk_overlap=chunk_overlap,
             z_index=z_index,

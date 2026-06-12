@@ -1,4 +1,4 @@
-version 1.0
+version 1.1
 
 task segment_nuclei {
     input {
@@ -7,6 +7,7 @@ task segment_nuclei {
         String? image_pattern
         Array[String] groupby
         Int? dapi_channel
+        String? time
         String output_directory
         String subset
         Boolean? force
@@ -33,6 +34,7 @@ task segment_nuclei {
         --groupby ~{sep=" " groupby} \
         ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
         ~{'--dapi-channel ' + dapi_channel} \
+        ~{'--time ' + time} \
         --output "~{output_directory}" \
         --subset ~{subset} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \
@@ -64,6 +66,7 @@ task segment_cell {
         Array[String] groupby
         Int? dapi_channel
         Array[Int] cyto_channel
+        String? time
         Int? chunks
         String? nuclei_label
         String? threshold
@@ -94,6 +97,7 @@ task segment_cell {
         --groupby ~{sep=" " groupby} \
         ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
         ~{'--dapi-channel ' + dapi_channel} \
+        ~{'--time ' + time} \
         --cyto-channel ~{sep=" " cyto_channel} \
         ~{"--nuclei-label " + nuclei_label} \
         ~{"--method " + method} \
@@ -134,7 +138,8 @@ task register_elastix {
         Boolean? output_aligned_channels_only
         Boolean? unroll_channels
         String? fixed
-        String? reference_time
+        String? moving_time
+        String? fixed_time
         Int? fixed_channel
         Boolean? register_across_channels
         String transform_output_directory
@@ -174,7 +179,8 @@ task register_elastix {
         --subset ~{subset} \
         ~{if defined(label_output_directory) then '--label-output "' + label_output_directory + '"' else ''} \
         ~{true="--unroll-channels" false="" unroll_channels} \
-        ~{if defined(reference_time) then '--time "' + reference_time + '"' else ''} \
+        ~{if defined(moving_time) then '--moving-time "' + moving_time + '"' else ''} \
+        ~{if defined(fixed_time) then '--fixed-time "' + fixed_time + '"' else ''} \
         ~{true="--force" false="" force} \
         ~{true="--align-across-channels" false="" register_across_channels} \
         ~{true="--output-aligned-channels-only" false="" output_aligned_channels_only} \
@@ -430,7 +436,7 @@ task intersects_boundary {
 
 task find_objects {
     input {
-        String? labels
+        Array[String] labels
         String subset
         Boolean? force
         String? label_pattern
@@ -454,7 +460,7 @@ task find_objects {
         fi
 
         scallops find-objects \
-        --labels "~{labels}" \
+        --labels ~{sep=" " labels} \
         --subset ~{subset} \
         ~{"--label-pattern " + label_pattern} \
         --label-suffix ~{suffix} \

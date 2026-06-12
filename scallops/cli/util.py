@@ -24,6 +24,7 @@ import dask
 import dask.array as da
 import fsspec
 import numpy as np
+import pandas as pd
 import xarray as xr
 import zarr
 from distributed import Client
@@ -93,7 +94,7 @@ DEFAULT_DASK_CONFIG = {
 }
 
 
-def _create_default_dask_config(config: dict | None = None) -> set:
+def _create_default_dask_config(config: dict | None = None) -> dask.config.set:
     if config is None:
         return dask.config.set(DEFAULT_DASK_CONFIG)
 
@@ -450,3 +451,245 @@ def load_json(path_or_str: str) -> dict:
         with fs.open(path_or_str, "rt") as fp:
             return json.load(fp)
     return json.loads(path_or_str)
+
+
+def _write_img_size(file_list: list[str]):
+    from scallops.io import _images2fov, _localize_path
+
+    local_file_list = []
+    cleanup_file_list = []
+    for path in file_list:
+        local_path = _localize_path(path)
+        if local_path is not None:
+            cleanup_file_list.append(local_path)
+            local_file_list.append(local_path)
+        else:
+            local_file_list.append(path)
+    sizes = _images2fov(local_file_list, dask=True).sizes
+    for path in cleanup_file_list:
+        os.remove(path)
+    with open("img_size.txt", "wt") as f:
+        for dim in ["t", "c", "z", "y", "x"]:
+            s = sizes[dim] if dim in sizes else 0
+            f.write(f"{s}")
+            f.write("\n")
+
+
+def _n_files_in_group(metadata: dict) -> int:
+    n_tiles = len(metadata["file_metadata"])
+    metadata_fields = [v for v in ("c", "z") if v in metadata["file_metadata"][0]]
+    if len(metadata_fields) > 0:
+        from scallops.cli.util import _group_src_attrs
+
+        keys, channel_sources, filepaths = _group_src_attrs(
+            metadata=metadata, metadata_fields=tuple(metadata_fields)
+        )
+        n_tiles = len(filepaths)
+    return n_tiles
+
+
+def _list_images_wdl(
+    image_pattern1: str,
+    urls1: list[str],
+    reference_time1: str | None,
+    n_cycles1: str | None,
+    image_pattern2: str,
+    urls2: list[str],
+    reference_time2: str | None,
+    n_cycles2: str | None,
+    groupby: list[str],
+    subset: list[str] | None,
+    batch_size: str | None,
+    save_group_size: bool = False,
+):
+    """Used by WDL workflow to output info about images"""
+
+    urls1 = [url.strip() for url in urls1 if url.strip() != ""]
+    reference_time1 = None if reference_time1 == "" else reference_time1
+    n_cycles1 = int(n_cycles1) if n_cycles1 is not None and n_cycles1 != "" else None
+
+    urls2 = [url.strip() for url in urls2 if url.strip() != ""]
+    reference_time2 = None if reference_time2 == "" else reference_time2
+    n_cycles2 = int(n_cycles2) if n_cycles2 is not None and n_cycles2 != "" else None
+    batch_size = int(batch_size) if batch_size is not None and batch_size != "" else 1
+
+    if subset is not None and (
+        len(subset) == 0 or (len(subset) == 1 and subset[0] == "")
+    ):
+        subset = None
+    if image_pattern1 != "":
+        groupby1 = [g for g in groupby if "{" + g + "}" in image_pattern1]
+    if image_pattern2 != "":
+        groupby2 = [g for g in groupby if "{" + g + "}" in image_pattern2]
+    if len(urls1) > 0 and len(urls2) > 0:
+        groupby = groupby1
+        assert groupby1 == groupby2
+    elif len(urls1) > 0:
+        groupby = groupby1
+    elif len(urls2) > 0:
+        groupby = groupby2
+    else:
+        raise ValueError()
+
+    result1 = _list_images(
+        urls=urls1,
+        image_pattern=image_pattern1,
+        groupby=groupby,
+        subset=subset,
+        save_group_size=save_group_size,
+        reference_time=reference_time1,
+        n_cycles=n_cycles1,
+    )
+    result2 = _list_images(
+        urls=urls2,
+        image_pattern=image_pattern2,
+        groupby=groupby,
+        subset=subset,
+        save_group_size=save_group_size,
+        reference_time=reference_time2,
+        n_cycles=n_cycles2,
+    )
+    results = [result1, result2]
+
+    if len(urls1) > 0 and len(urls2) > 0:
+        df1 = result1["subset_df"]
+        df2 = result2["subset_df"]
+        subset_ids = df1.index.intersection(df2.index)
+        result1["subset_df"] = df1.loc[subset_ids]
+        result2["subset_df"] = df2.loc[subset_ids]
+    elif len(urls1) > 0:
+        subset_ids = result1["subset_df"].index.values
+    elif len(urls2) > 0:
+        subset_ids = result2["subset_df"].index.values
+
+    with open("subsets.txt", "wt") as f:  # ["plate1-A1", "plate1-A2", ...]
+        for i in range(0, len(subset_ids), batch_size):
+            selected = subset_ids[i : i + batch_size]
+            f.write(" ".join(selected))
+            f.write("\n")
+
+    with open("groupby_array.txt", "wt") as f:  # ['plate', 'well']
+        for g in groupby:
+            f.write(g)
+            f.write("\n")
+    with open("groupby_pattern.txt", "wt") as f:  # "{plate}-{well}"
+        first = True
+        for g in groupby:
+            if not first:
+                f.write("-")
+            first = False
+            f.write("{")
+            f.write(g)
+            f.write("}")
+    for index in range(len(results)):
+        result = results[index]
+        url_val = index + 1
+        subset_df = result["subset_df"]
+
+        with open(f"group_size_{url_val}.txt", "wt") as f:
+            f.write(f"{result['group_size']}")
+            f.write("\n")
+
+        with open(f"reference_time_{url_val}.txt", "wt") as f:  # IF
+            f.write(result["reference_time"])
+            f.write("\n")
+        with open(f"times_{url_val}.txt", "wt") as f:  # ["FISH", "IF"]
+            if result["times"] is not None:
+                for val in result["times"]:
+                    f.write(str(val))
+                    f.write("\n")
+
+        with open(
+            f"subsets_with_reference_time_{url_val}.txt", "wt"
+        ) as f:  # ["plate1-A1-IF", "plate1-A2-IF", ...]
+            subset_ids_with_reference_times = (
+                subset_df["subset_ids_with_reference_times"].values
+                if subset_df is not None
+                else []
+            )
+            for i in range(0, len(subset_ids_with_reference_times), batch_size):
+                selected = subset_ids_with_reference_times[i : i + batch_size]
+                f.write(" ".join(selected))
+                f.write("\n")
+
+        with open(
+            f"image_pattern_with_reference_time_{url_val}.txt", "wt"
+        ) as f:  # "{plate}-{well}-IF"
+            first = True
+            for g in groupby:
+                if not first:
+                    f.write("-")
+                first = False
+                f.write("{")
+                f.write(g)
+                f.write("}")
+            f.write(f"-{result['reference_time']}")
+
+
+def _list_images(
+    urls: Sequence[str],
+    image_pattern: str,
+    groupby: list[str],
+    subset: list[str] | None,
+    save_group_size: bool,
+    reference_time: str | None,
+    n_cycles: int | None,
+):
+    reference_time_suffix = ""
+    group_size = 0
+    if len(urls) == 0:
+        return dict(
+            group_size=group_size,
+            subset_df=None,
+            times=None,
+            reference_time_suffix=reference_time_suffix,
+        )
+    from scallops.io import _set_up_experiment
+
+    exp_gen = _set_up_experiment(
+        image_path=urls, files_pattern=image_pattern, group_by=groupby, subset=subset
+    )
+
+    groupby_t = "t" in groupby
+    times = None
+    subset_ids = []
+    subset_ids_with_reference_times = []
+    first = True
+
+    for g, file_list, metadata in exp_gen:
+        times = None
+        if first:
+            first = False
+            if save_group_size:
+                group_size = _n_files_in_group(metadata)
+        if not groupby_t and "t" in metadata["file_metadata"][0]:
+            times = [md["t"] for md in metadata["file_metadata"]]
+            if n_cycles is not None:
+                assert len(times) == n_cycles
+        t_suffix = ""
+        if times is not None and len(times) > 0:
+            t_suffix = (
+                f"-{times[0]}" if reference_time is None else f"-{reference_time}"
+            )
+
+        subset_ids.append('"' + metadata["id"] + '"')
+        subset_ids_with_reference_times.append('"' + metadata["id"] + t_suffix + '"')
+    subset_df = pd.DataFrame(
+        index=subset_ids,
+        data=dict(subset_ids_with_reference_times=subset_ids_with_reference_times),
+    )
+
+    groupby_with_t = list(groupby)
+    if not groupby_t and times is not None:
+        groupby_with_t.append("t")
+
+    if reference_time is None:
+        reference_time = times[0] if times is not None and len(times) > 0 else "0"
+
+    return dict(
+        group_size=group_size,
+        subset_df=subset_df,
+        groupby=groupby,
+        times=times,
+        reference_time=reference_time,
+    )
