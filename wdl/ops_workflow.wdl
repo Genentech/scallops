@@ -336,7 +336,7 @@ workflow ops_workflow {
                     call tasks.find_objects as find_objects_nuclei {
                         input:
                             labels=select_all([segment_nuclei.output_url, register_pheno_to_pheno.label_output_url]),
-                            label_pattern=phenotype_image_pattern,
+                            label_pattern=groupby_pattern,
                             suffix="nuclei",
                             output_directory=nuclei_objects_directory,
                             subset = subset_,
@@ -355,7 +355,7 @@ workflow ops_workflow {
                     call tasks.find_objects as find_objects_cell {
                         input:
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
-                            label_pattern=phenotype_image_pattern,
+                            label_pattern=groupby_pattern,
                             suffix="cell",
                             output_directory=cell_objects_directory,
                             subset = subset_,
@@ -374,7 +374,7 @@ workflow ops_workflow {
                     call tasks.find_objects as find_objects_cytosol {
                         input:
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
-                            label_pattern=phenotype_image_pattern,
+                            label_pattern=groupby_pattern,
                             suffix="cytosol",
                             output_directory=cytosol_objects_directory,
                             subset = subset_,
@@ -400,7 +400,7 @@ workflow ops_workflow {
                         input:
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             images=phenotype_url_stripped + '/labels/',
-                            image_pattern=phenotype_image_pattern,
+                            image_pattern=groupby_pattern,
                             output_directory=cell_intersects_boundary_directory,
                             label_type='cell',
                             objects=find_objects_cell.output_url,
