@@ -118,7 +118,7 @@ def test_register_itk_cli_known_shift(tmp_path):
         "scallops",
         "registration",
         "elastix",
-        "--time",
+        "--moving-time",
         "1",
         "--moving",
         str(data_path),
@@ -147,10 +147,11 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         tmp_path, "registration-input.zarr"
     )
     exp = Experiment()
-    reference_t = 2
+
+    reference_t_index = 2
     test_t = 10
     array_A1_102_nuclei = array_A1_102_nuclei.squeeze()
-    exp.labels[f"A1-102-{reference_t}-mask"] = array_A1_102_nuclei
+    exp.labels["A1-102-nuclei"] = array_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
 
     cmd = [
@@ -179,8 +180,8 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         registration_input_moving_labels_path,
         "--label-output",
         elastix_output_dir,
-        "--time",
-        str(reference_t),
+        "--moving-time",
+        str(reference_t_index),
     ]
     subprocess.check_call(cmd)
     result_exp = read_experiment(elastix_output_dir)
@@ -195,16 +196,24 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         .images["A1-102"]
         .squeeze()
     )
-    assert len(result_exp.labels.keys()) == 8
+    times = list(original_image.t.values)
+    del times[reference_t_index]
+    times = [str(t) for t in times]
+    transformed_times = list(result_exp.labels["A1-102-nuclei"].coords["t"].values)
+    transformed_times = [str(t) for t in transformed_times]
+    assert times == transformed_times, (
+        f"{', '.join(times)} != {', '.join(transformed_times)}"
+    )
+    assert len(result_exp.labels.keys()) == 1
     np.testing.assert_array_equal(transformed_image.t.values, original_image.t.values)
     np.testing.assert_array_equal(transformed_image.c.values, original_image.c.values)
     np.testing.assert_array_equal(
-        transformed_image.isel(t=reference_t),
-        original_image.isel(t=reference_t),
+        transformed_image.isel(t=reference_t_index),
+        original_image.isel(t=reference_t_index),
         err_msg="Reference t not equal via CLI",
     )
     for t in range(original_image.sizes["t"]):
-        if t != reference_t:
+        if t != reference_t_index:
             with np.testing.assert_raises(AssertionError):
                 np.testing.assert_array_equal(
                     transformed_image.isel(t=t), original_image.isel(t=t)
@@ -232,8 +241,9 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         image_spacing=(1, 1),
     )
     assert warped_labels.min() == 0
+
     np.testing.assert_array_equal(
-        result_exp.labels[f"A1-102-{test_t}-mask"].values,
+        result_exp.labels["A1-102-nuclei"].sel(t=str(test_t)).values,
         warped_labels,
         err_msg=f"t {test_t} labels not equal using itk_transform_labels and CLI",
     )
@@ -245,7 +255,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         moving_channel=[0],
         parameter_object=parameter_object,
         moving_image_spacing=(1, 1),
-        reference_timepoint=reference_t,
+        reference_timepoint=reference_t_index,
     )
 
     xr.testing.assert_equal(result_np, transformed_image)
@@ -308,19 +318,25 @@ def test_register_transform_labels_moving_only(tmp_path):
     output_zarr = tmp_path / "out.zarr"
     output_transforms = tmp_path / "transforms"
 
-    img = read_image(
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
-    )
-    img.attrs["physical_pixel_sizes"] = (1, 1)
-
     rng = np.random.default_rng(0)
+    img = rng.integers(low=0, high=10, size=(2, 2, 100, 100))
+    img = xr.DataArray(
+        img,
+        dims=["t", "c", "y", "x"],
+        coords={"t": ["IF", "FISH"]},
+        attrs={"physical_pixel_sizes": (1, 1)},
+    )
 
-    segmentation = rng.integers(low=0, high=10, size=(img.sizes["y"], img.sizes["x"]))
+    segmentation = rng.integers(low=0, high=10, size=(100, 100))
 
     Experiment(
-        images={"plateA-A1-IF": img, "plateA-A1-FISH": img},
+        images={"plateA-A1": img},
         labels={
-            "plateA-A1-IF-cell": segmentation,
+            "plateA-A1-cell": xr.DataArray(
+                np.expand_dims(segmentation, 0),
+                dims=["t", "y", "x"],
+                coords={"t": ["IF"]},
+            ),
         },
     ).save(image_zarr)
     cmd = [
@@ -330,7 +346,7 @@ def test_register_transform_labels_moving_only(tmp_path):
         "--moving",
         str(image_zarr),
         "--moving-image-pattern",
-        "{plate}-{well}-{t}",
+        "{plate}-{well}",
         "--moving-label",
         str(image_zarr),
         "--subset",
@@ -344,7 +360,7 @@ def test_register_transform_labels_moving_only(tmp_path):
         "--label-output",
         str(output_zarr),
         "--output-aligned-channels-only",
-        "--time",
+        "--moving-time",
         "IF",
         "--transform-output",
         str(output_transforms),
@@ -352,7 +368,8 @@ def test_register_transform_labels_moving_only(tmp_path):
         create_itk_param_file(tmp_path),
     ]
     subprocess.check_call(cmd)
-    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-FISH-cell")
+    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-cell")
+    assert list(transformed_labels.coords["t"].values) == ["FISH"]
     assert transformed_labels.max() > 0
     transformed_image = read_image(output_zarr / "images" / "plateA-A1")
     assert transformed_image.shape[0] == 2

@@ -211,10 +211,14 @@ workflow ops_workflow {
 
     call utils.list_images {
         input:
-            urls = [select_first([phenotype_url, iss_url])],
-            image_pattern = if pheno_url_supplied then phenotype_image_pattern else iss_image_pattern,
+            urls1 = select_all([phenotype_url]),
+            image_pattern1 = phenotype_image_pattern,
+            reference_time1=reference_phenotype_time,
+
+            urls2 = select_all([iss_url]),
+            image_pattern2 = iss_image_pattern,
             batch_size=batch_size,
-            reference_time=reference_phenotype_time,
+
             groupby=groupby,
             subset = subset,
             docker=docker,
@@ -223,27 +227,40 @@ workflow ops_workflow {
             aws_queue_arn = aws_queue_arn,
             max_retries = max_retries
     }
-    String groupby_pattern = list_images.groupby_pattern # "{plate}-{well}"
-    Array[String] subsets = list_images.subsets # e.g. ["plate1-A1", "plate1-A2", ...]
-    Array[String] subset_with_reference_times = list_images.subset_with_reference_times # e.g. ["plate1-A1-IF", "plate1-A2-IF", ...]
-    Array[String] times = list_images.t # e.g. ["FISH", "IF"]
-    Array[String] groupby_with_time = list_images.filtered_groupby_with_t  # e.g. ['plate', 'well', 't']
-    String groupby_pattern_with_reference_t = list_images.groupby_pattern_with_reference_t # e.g. "{plate}-{well}-IF"
+    Array[String] subsets = list_images.subsets
+    String groupby_pattern = list_images.groupby_pattern # e.g. {plate}-{well}
+    Array[String] groupby_array = list_images.groupby_array # e.g. ["plate", "well"]
+
+
+   # Array[String] subsets_with_reference_times_pheno = list_images.subsets_with_reference_times_1
+   # Array[String] subsets_with_reference_times_iss = list_images.subsets_with_reference_times_2
+
+    Array[String] times_pheno = list_images.times_1
+    Array[String] times_iss = list_images.times_2
+
+    String reference_time_pheno = list_images.reference_time_1
+    String reference_time_iss = list_images.reference_time_2
+
+    #String image_pattern_with_reference_time_pheno = list_images.image_pattern_with_reference_time_1 # e.g. {plate}-{well}-IF
+   # String image_pattern_with_reference_time_iss = list_images.image_pattern_with_reference_time_2 # e.g. {plate}-{well}-1
     scatter (subset_index in range(length(subsets))) {
         String subset_ = subsets[subset_index]
-        String subset_with_reference_time = subset_with_reference_times[subset_index]
+       # String subset_with_reference_times_pheno = subsets_with_reference_times_pheno[subset_index]
+       # String subset_with_reference_times_iss = subsets_with_reference_times_iss[subset_index]
         if(pheno_url_supplied) {
             if(run_nuclei_segmentation) {
                 call tasks.segment_nuclei {
                     input:
                         images = select_first([phenotype_url]),
                         image_pattern = phenotype_image_pattern,
+                        time=reference_time_pheno,
+                        subset = subset_,
                         method = nuclei_segmentation_method,
-                        groupby=groupby_with_time,
+                        groupby=groupby,
                         dapi_channel = phenotype_dapi_channel,
                         output_directory=segment_directory,
                         model_dir=model_dir,
-                        subset = subset_with_reference_time,
+
                         extra_arguments=nuclei_segmentation_extra_arguments,
                         force = force_segment_nuclei,
                         docker=docker,
@@ -262,9 +279,10 @@ workflow ops_workflow {
                     input:
                         images = select_first([phenotype_url]),
                         image_pattern = phenotype_image_pattern,
+                        time=reference_time_pheno,
                         method = cell_segmentation_method,
-                        groupby = groupby_with_time,
-                        subset = subset_with_reference_time,
+                        groupby = groupby,
+                        subset = subset_,
                         dapi_channel = phenotype_dapi_channel,
                         cyto_channel=phenotype_cyto_channel,
                         nuclei_label=select_first([segment_nuclei.output_url]),
@@ -285,14 +303,15 @@ workflow ops_workflow {
                         max_retries = max_retries
                 }
 
-                if(length(times)>1) {
+                if(length(times_pheno)>1) {
                     call tasks.register_elastix as register_pheno_to_pheno {
                         input:
                             moving=select_all([phenotype_url]),
                             moving_label=segment_cell.output_url,
                             moving_channel=phenotype_dapi_channel,
                             moving_image_pattern=phenotype_image_pattern,
-                            reference_time=reference_phenotype_time,
+                            moving_time=reference_time_pheno,
+
                             extra_arguments=pheno_registration_extra_arguments,
                             output_aligned_channels_only=true,
                             groupby=groupby,
@@ -375,7 +394,7 @@ workflow ops_workflow {
                 # use stitch mask as image and segment output for reference phenotype or transformed phenotype for others
 
                 if(mark_stitch_boundary_cells) {
-                    String phenotype_url_stripped = if (pheno_url_supplied) then sub(select_first([phenotype_url]), "/+$", "")  else ""
+                    String phenotype_url_stripped = sub(select_first([phenotype_url]), "/+$", "")
                     call tasks.intersects_boundary as cell_intersects_boundary {
 
                         input:
@@ -435,9 +454,11 @@ workflow ops_workflow {
                     fixed_channel=iss_dapi_channel,
                     moving_label=segment_cell.output_url,
                     moving=select_all([phenotype_url]),
-                    moving_image_pattern=groupby_pattern_with_reference_t,
+                    moving_image_pattern=phenotype_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
                     moving_channel=phenotype_dapi_channel,
+                    moving_time=reference_time_pheno,
+                    fixed_time=reference_time_iss,
                     output_aligned_channels_only=true,
                     moving_output_directory=register_pheno_to_iss_directory,
                     label_output_directory=register_pheno_to_iss_directory,
@@ -459,10 +480,10 @@ workflow ops_workflow {
                 # ISS t0 to phenotype reference time
                 call tasks.register_pheno_to_iss_qc as register_pheno_to_iss_qc {
                     input:
-                        images=select_first([iss_url]),
-                        image_pattern=iss_image_pattern,
-                        stacked_images=register_pheno_to_iss.moving_output_url,
-                        stacked_image_pattern=phenotype_image_pattern,
+                        images=register_pheno_to_iss.moving_output_url,
+                        image_pattern=groupby_pattern,
+                        stacked_images=select_first([iss_url]),
+                        stacked_image_pattern=groupby_pattern,
                         image_channel=iss_dapi_channel,
                         stacked_image_channel=0,
                         label_type='nuclei',

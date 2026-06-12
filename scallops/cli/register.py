@@ -13,7 +13,7 @@ import numpy as np
 import xarray as xr
 import zarr
 from dask.bag import from_sequence
-from natsort import natsorted
+from natsort import index_natsorted, natsorted
 from xarray import DataArray
 from zarr import Group
 
@@ -48,6 +48,7 @@ from scallops.zarr_io import (
     _get_fs,
     _get_store_path,
     _write_zarr_image,
+    _write_zarr_labels,
     is_ome_zarr_array,
     open_ome_zarr,
     read_ome_zarr_array,
@@ -78,24 +79,40 @@ def _output_exists(
     return labels_exist and image_exists
 
 
-def _get_reference_timepoint(
-    reference_timepoint: str, moving_image: Sequence[DataArray]
+def _get_timepoint_index_and_value(
+    timepoint: str | int, image: Sequence[DataArray] | xr.DataArray
 ) -> tuple[int, Any]:
-    reference_timepoint_value = reference_timepoint
-    if isinstance(reference_timepoint, str):
-        reference_timepoint_found = False
-        for i in range(len(moving_image)):
-            if moving_image[i].coords["t"].values[0] == reference_timepoint:
-                reference_timepoint = i
-                reference_timepoint_found = True
-                break
-        if not reference_timepoint_found:
-            raise ValueError(f"Reference timepoint not found: {reference_timepoint}.")
+    timepoint_value = None
+    timepoint_index = None
+    if isinstance(timepoint, str):
+        if isinstance(image, Sequence):
+            for i in range(len(image)):
+                if (
+                    "t" in image[i].coords
+                    and image[i].coords["t"].values[0] == timepoint
+                ):
+                    timepoint_index = i
+                    timepoint_value = image[i].coords["t"].values[0]
+                    break
+        elif "t" in image.coords:
+            times = list(image.coords["t"].values)
+            if timepoint in times:
+                timepoint_index = times.index(timepoint)
+                timepoint_value = times[timepoint_index]
+
+        if timepoint_index is None:
+            raise ValueError(f"Reference timepoint not found: {timepoint}.")
+    elif isinstance(timepoint, int):
+        timepoint_index = timepoint
+        if isinstance(image, Sequence):
+            if "t" in image[timepoint_index].coords:
+                timepoint_value = image[timepoint_index].coords["t"].values[0]
+        elif "t" in image.coords:
+            times = list(image.coords["t"].values)
+            timepoint_value = times[timepoint_index]
     else:
-        reference_timepoint_value = (
-            moving_image[reference_timepoint].coords["t"].values[0]
-        )
-    return reference_timepoint, reference_timepoint_value
+        raise ValueError()
+    return timepoint_index, timepoint_value
 
 
 def single_registration(
@@ -111,7 +128,8 @@ def single_registration(
     moving_labels: list[str],
     moving_image_spacing: tuple[float, float] | None,
     fixed_image_spacing: tuple[float, float] | None,
-    reference_timepoint: int | str,
+    moving_timepoint: int | str,
+    fixed_timepoint: int | str,
     unroll_channels: bool = False,
     force: bool = False,
     z_index: int | str = "max",
@@ -149,8 +167,8 @@ def single_registration(
     :param moving_image_spacing: Spacing of the moving image.
     :param fixed_image_spacing: Spacing of the fixed image.
     :param force: Whether to overwrite existing output
-    :param reference_timepoint: Index or value of timepoint to register to when registering
-        across timepoints
+    :param moving_timepoint: Index or value of moving timepoint to use
+    :param fixed_timepoint: Index or value of fixed timepoint to use
     :param unroll_channels: Whether to unroll channels across timepoints.
     :param landmarks_initialize: Use landmarks to initialize registration.
     :param landmark_slice_size: The slice size in physical coordinates
@@ -174,31 +192,28 @@ def single_registration(
     transform_dest = f"{transform_output_dir}{transform_fs.sep}{image_key}"
     moving_label_keys = []
 
-    # when registering self, transforms written to output_dir/time={t}/
+    # when registering self, transforms written to output_dir/time={t_value}/
     moving_image = _images2fov(
         moving_file_list,
         moving_metadata,
         dask=True,
         concat_dims=("c",),
     )
-    if register_self:
-        reference_timepoint, reference_timepoint_value = _get_reference_timepoint(
-            reference_timepoint=reference_timepoint, moving_image=moving_image
-        )
-    if moving_labels is not None:
-        matching_label_prefix = (
-            f"{image_key}-{reference_timepoint_value}" if register_self else image_key
-        )
+    moving_timepoint, moving_timepoint_value = _get_timepoint_index_and_value(
+        moving_timepoint, moving_image
+    )
 
+    if moving_labels is not None:
         for moving_label in moving_labels:
             moving_label_keys.extend(
                 get_matching_names(
-                    image_key=matching_label_prefix, image_dir=moving_label, labels=True
+                    image_key=image_key, image_dir=moving_label, labels=True
                 )
             )
         moving_label_keys = natsorted(moving_label_keys)
         if len(moving_label_keys) == 0:
-            logger.warning(f"No labels found for {image_key}")
+            logger.warning(f"No labels found for {image_key}.")
+            return image_key
 
     if not force and _output_exists(
         register_self,
@@ -224,12 +239,16 @@ def single_registration(
             concat_dims=("c",),
             dask=True,
         )
-        if isinstance(fixed_image, Sequence):
-            fixed_image = fixed_image[0]
-        fixed_image = _z_projection(fixed_image, z_index).isel(
-            t=0, c=fixed_channel, missing_dims="ignore"
+        fixed_timepoint, fixed_timepoint_value = _get_timepoint_index_and_value(
+            fixed_timepoint, fixed_image
         )
-
+        if isinstance(fixed_image, Sequence):
+            fixed_image = fixed_image[fixed_timepoint]
+        else:
+            fixed_image = fixed_image.isel(
+                t=fixed_timepoint, c=fixed_channel, missing_dims="ignore"
+            )
+        fixed_image = _z_projection(fixed_image, z_index)
     parameter_object = _load_itk_parameters(itk_parameters)
     parameter_object_across_channels = (
         _load_itk_parameters(itk_channel_parameters)
@@ -242,8 +261,15 @@ def single_registration(
     transform_fs.makedirs(transform_dest, exist_ok=True)
 
     if not register_self:
-        if isinstance(moving_image, Sequence):
-            moving_image = moving_image[0]
+        moving_image = (
+            moving_image[moving_timepoint].isel(c=moving_channel, missing_dims="ignore")
+            if isinstance(moving_image, Sequence)
+            else moving_image.isel(
+                t=moving_timepoint, c=moving_channel, missing_dims="ignore"
+            )
+        )
+        moving_image_align = _z_projection(moving_image, z_index)
+
         if (
             moving_image_spacing is None
             and get_image_spacing(moving_image.attrs) is None
@@ -257,9 +283,6 @@ def single_registration(
                 f"Physical size not found for fixed image for {image_key}."
             )
 
-        moving_image_align = _z_projection(moving_image, z_index).isel(
-            t=0, c=moving_channel, missing_dims="ignore"
-        )
         if "c" in moving_image_align.dims and moving_image_align.sizes["c"] > 1:
             moving_image_align = moving_image_align.median(dim="c", keep_attrs=True)
 
@@ -383,8 +406,8 @@ def single_registration(
                 output_root=label_output_root,
             )
 
-    else:  # align to t=reference_timepoint
-        logger.info(f"Running registration for {image_key} t={reference_timepoint}")
+    else:  # align to t=moving_timepoint
+        logger.info(f"Running registration for {image_key} t={moving_timepoint}")
         logger.info(
             f"{len(moving_file_list):,} {pluralize('input', len(moving_file_list))}:"
             f" {', '.join([s.name.replace('/images/', '') if isinstance(s, zarr.Group) else str(s) for s in moving_file_list])}"
@@ -398,10 +421,10 @@ def single_registration(
             moving_channel = 0
             moving_image = new_moving_image
         if not no_version:
-            moving_image[reference_timepoint].attrs.update(cli_metadata())
+            moving_image[moving_timepoint].attrs.update(cli_metadata())
         _itk_align_reference_time_zarr(
             unroll_channels=unroll_channels,
-            reference_timepoint=reference_timepoint,
+            reference_timepoint=moving_timepoint,
             moving_image=moving_image,
             moving_channel=moving_channel,
             parameter_object=parameter_object,
@@ -421,64 +444,90 @@ def single_registration(
             parameter_object_across_channels=parameter_object_across_channels,
         )
         moving_image_attrs = moving_image[0].attrs.copy()
+        chunksize = moving_image[0].data.chunksize[-2:]
         del moving_image
-
+        if moving_image_spacing is None:
+            moving_image_spacing = get_image_spacing(moving_image_attrs)
         if len(moving_label_keys) > 0:
             _transform_labels_t(
-                image_key=image_key,
                 transform_fs=transform_fs,
                 transform_dest=transform_dest,
-                moving_label_keys=moving_label_keys,
-                moving_image_attrs=moving_image_attrs,
-                moving_image_spacing=moving_image_spacing,
                 label_output_root=label_output_root,
+                moving_image_attrs=moving_image_attrs,
+                moving_label_keys=moving_label_keys,
+                moving_image_spacing=moving_image_spacing,
+                moving_timepoint_value=moving_timepoint_value,
+                chunksize=chunksize,
             )
 
     return image_key
 
 
 def _transform_labels_t(
-    image_key: str,
     transform_fs,
     transform_dest: str,
-    moving_label_keys: Sequence[str],
-    moving_image_attrs,
-    moving_image_spacing,
     label_output_root,
+    moving_image_attrs: dict,
+    moving_label_keys: Sequence[str],
+    moving_image_spacing: tuple[int, int],
+    moving_timepoint_value: str,
+    chunksize: tuple[int, int],
 ):
     # transform_dest structure is image_key/t=1
-    # assume labels are named image_key-t-suffix
-
-    for transform_file in transform_fs.ls(transform_dest, detail=True, refresh=True):
-        if transform_file["type"] == "directory":
-            transform_name = transform_file["name"]
-            basename = os.path.basename(transform_name)
-            if basename.startswith("t="):
-                time = basename[2:]
-                moving_label_keys_t = []
-                output_label_prefix = f"{image_key}-{time}"
-                output_names = []
-                # e.g. transform plateA-A1-IF-cell to plateA-A1-FISH-cell
-                for moving_label_key in moving_label_keys:
-                    moving_label_key_basename = os.path.basename(moving_label_key)
-                    output_label_suffix = "-" + moving_label_key_basename.split("-")[-1]
-                    output_name = f"{output_label_prefix}{output_label_suffix}"
-                    moving_label_keys_t.append(moving_label_key)
-                    output_names.append(output_name)
-
-                if len(moving_label_keys_t) > 0:
-                    transform_parameter_object = _load_itk_parameters_from_dir(
-                        transform_fs.unstrip_protocol(transform_name)
+    if len(moving_label_keys) > 0:
+        times = []
+        transform_file_paths = []
+        for transform_file in transform_fs.ls(
+            transform_dest, detail=True, refresh=True
+        ):
+            if transform_file["type"] == "directory":
+                transform_file_path = transform_file["name"]
+                basename = os.path.basename(transform_file_path)
+                if basename.startswith("t="):
+                    times.append(basename[2:])
+                    transform_file_paths.append(
+                        transform_fs.unstrip_protocol(transform_file_path)
                     )
-                    if transform_parameter_object.GetNumberOfParameterMaps() > 0:
-                        _transform_labels(
+        index = index_natsorted(times)
+        times = [times[val] for val in index]
+        transform_file_paths = [transform_file_paths[val] for val in index]
+        storage_options = {"chunks": chunksize}
+        for moving_label_key in moving_label_keys:
+            moving_label_key_basename = os.path.basename(moving_label_key)
+            transformed_labels = []
+            times_ = []
+            for i in range(len(times)):
+                transform_parameter_object = _load_itk_parameters_from_dir(
+                    transform_file_paths[i]
+                )
+                if transform_parameter_object.GetNumberOfParameterMaps() > 0:
+                    src = read_ome_zarr_array(moving_label_key).squeeze()
+                    times_.append(times[i])
+                    if src.sizes.get("t", 0) > 0 and "t" in src.coords:
+                        src = src.sel(t=moving_timepoint_value)
+                    transformed_labels.append(
+                        itk_transform_labels(
+                            image=src,
                             transform_parameter_object=transform_parameter_object,
-                            attrs=moving_image_attrs,
-                            matching_keys=moving_label_keys_t,
-                            output_names=output_names,
-                            moving_image_spacing=moving_image_spacing,
-                            output_root=label_output_root,
+                            image_spacing=moving_image_spacing,
                         )
+                    )
+
+            transformed_labels = xr.DataArray(
+                np.stack(transformed_labels),
+                dims=["t", "y", "x"],
+                coords={"t": times_},
+                attrs=moving_image_attrs,
+            )
+
+            _write_zarr_labels(
+                name=moving_label_key_basename,
+                root=label_output_root,
+                metadata=None,
+                group_metadata=None,
+                labels=transformed_labels,
+                storage_options=storage_options,
+            )
 
 
 def get_matching_names(
@@ -506,15 +555,19 @@ def get_matching_names(
 
     image_fs, _ = fsspec.core.url_to_fs(image_dir)
     image_dir = image_dir.rstrip(image_fs.sep)
-
     glob_pattern = f"{image_dir}{image_fs.sep}{zarr_dir}{image_fs.sep}{image_key}"
-
+    if labels:
+        glob_pattern = f"{glob_pattern}-*"  # for suffix
     results = []
+
     for path in image_fs.glob(glob_pattern):
         path = image_fs.unstrip_protocol(path)
         name = os.path.basename(path)
-        if labels and name.split("-")[-1] not in label_suffixes:
-            continue
+
+        if labels:
+            tokens = name.split("-")
+            if tokens[-1] not in label_suffixes and tokens[:-1] == image_key:
+                continue
         if not name.startswith(".") and is_ome_zarr_array(zarr.open(path, mode="r")):
             results.append(path)
     return results
@@ -782,10 +835,16 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     moving_image_pattern = arguments.moving_image_pattern
     fixed_image_pattern = arguments.fixed_image_pattern
     group_by = arguments.groupby
-    reference_timepoint = arguments.time
-    if reference_timepoint is not None:
+    fixed_timepoint = arguments.fixed_time if arguments.fixed_time is not None else 0
+    moving_timepoint = arguments.moving_time if arguments.moving_time is not None else 0
+    if isinstance(fixed_timepoint, str) and fixed_timepoint.isdigit():
         try:
-            reference_timepoint = int(reference_timepoint)
+            fixed_timepoint = int(fixed_timepoint)
+        except ValueError:
+            pass
+    if isinstance(moving_timepoint, str) and moving_timepoint.isdigit():
+        try:
+            moving_timepoint = int(moving_timepoint)
         except ValueError:
             pass
     unroll_channels = arguments.unroll_channels
@@ -895,7 +954,8 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
             image_output_root=image_output_root,
             moving_image_spacing=moving_image_spacing,
             fixed_image_spacing=fixed_image_spacing,
-            reference_timepoint=reference_timepoint,
+            fixed_timepoint=fixed_timepoint,
+            moving_timepoint=moving_timepoint,
             landmarks_initialize=landmarks_initialize,
             landmark_slice_size=landmark_slice_size,
             landmark_min_count=landmark_min_count,
