@@ -317,7 +317,7 @@ def _write_zarr_labels(
 
     label_attrs = None
     coords = None
-    dims = None
+    dims = ["y", "x"]
     if isinstance(labels, xr.DataArray):
         data = labels.data
         label_attrs = labels.attrs.copy()
@@ -341,6 +341,7 @@ def _write_zarr_labels(
         metadata=metadata,
         zarr_format="ome_zarr",
         compute=compute,
+        storage_options=storage_options,
     )
 
 
@@ -405,6 +406,7 @@ def write_zarr(
     metadata: dict[str, Any] | None = None,
     zarr_format: Literal["ome_zarr", "zarr"] = "ome_zarr",
     compute: bool = True,
+    storage_options: JSONDict | None = None,
 ) -> list[Delayed]:
     """Write data to a Zarr group with optional metadata and scaling.
 
@@ -425,6 +427,7 @@ def write_zarr(
     :param compute: If True, compute immediately. Otherwise, return a list of
         dask.delayed. Delayed objects representing the value to be computed by dask.
         Default is True.
+    :param storage_options: Optional storage options.
     :return: Empty list if the compute flag is True, otherwise a list of
         dask.delayed.Delayed objects.
 
@@ -467,19 +470,26 @@ def write_zarr(
     dask_delayed = []
     fmt = _current_format()
     if zarr_format == "zarr":  # No axis validation
+        chunks_opt = None
+        if storage_options is not None:
+            chunks_opt = storage_options.pop("chunks", None)
         if isinstance(data, da.Array):
             d = da.to_zarr(
                 arr=data,
                 url=grp.store,
                 component=str(Path(grp.path, "0")),
                 compute=compute,
+                storage_options=storage_options,
                 **_da_to_zarr_kwargs(fmt),
             )
             if not compute:
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
+            kwds = _da_to_zarr_kwargs(fmt)
+            if storage_options is not None:
+                kwds.update(storage_options)
             grp.create_dataset(
-                "0", data=data, overwrite=True, **_da_to_zarr_kwargs(fmt)
+                "0", data=data, overwrite=True, chunks=chunks_opt, **kwds
             )
 
         datasets = [{"path": "0"}]
@@ -529,6 +539,7 @@ def write_zarr(
                 if coordinate_transformations is not None
                 else None
             ),
+            storage_options=storage_options,
         )
 
 
