@@ -68,7 +68,6 @@ def _output_exists(
                 if not is_ome_zarr_array(label_output_root.get(f"labels/{key}")):
                     labels_exist = False
                     break
-        # TODO check for transformed labels when register_self
 
     image_exists = True
     if image_output_root is not None:
@@ -262,13 +261,13 @@ def single_registration(
 
     if not register_self:
         moving_image = (
-            moving_image[moving_timepoint].isel(c=moving_channel, missing_dims="ignore")
+            moving_image[moving_timepoint]
             if isinstance(moving_image, Sequence)
-            else moving_image.isel(
-                t=moving_timepoint, c=moving_channel, missing_dims="ignore"
-            )
+            else moving_image.isel(t=moving_timepoint, missing_dims="ignore")
         )
-        moving_image_align = _z_projection(moving_image, z_index)
+        moving_image_align = _z_projection(
+            moving_image.isel(c=moving_channel, missing_dims="ignore"), z_index
+        )
 
         if (
             moving_image_spacing is None

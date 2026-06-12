@@ -401,6 +401,9 @@ def test_register_itk_cli(tmp_path, array_A1_102_nuclei):
         dims=["c", "y", "x"],
     )
     moving_image = moving_image.isel(c=[0, 1, 2])
+    moving_image.coords["c"] = ["a", "b", "c"]
+    moving_image.attrs["physical_pixel_sizes"] = (2, 2)
+    moving_image.attrs["physical_pixel_units"] = ("micrometer", "micrometer")
 
     moving_labels = array_A1_102_nuclei.squeeze().values
     moving_labels = warp(moving_labels, st, order=0, preserve_range=True)
@@ -413,9 +416,6 @@ def test_register_itk_cli(tmp_path, array_A1_102_nuclei):
         ),
         dims=["y", "x"],
     )
-    moving_image.coords["c"] = ["a", "b", "c"]
-    moving_image.attrs["physical_pixel_sizes"] = (2, 2)
-    moving_image.attrs["physical_pixel_units"] = ("micrometer", "micrometer")
 
     fixed_image = xr.DataArray(
         resize(
