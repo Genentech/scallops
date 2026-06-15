@@ -41,12 +41,10 @@ def _execute(
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
     path = (
-        f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
+        (f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet")
+        if timepoint is None
+        else f"{output_dir}{output_sep}{label_name}{output_sep}t={timepoint}{output_sep}{image_key}-objects.parquet"
     )
-    if timepoint is not None:
-        path = (
-            f"{path}/t={timepoint}/{label_name}{output_sep}{image_key}-objects.parquet"
-        )
     fs = fsspec.url_to_fs(path)[0]
     if fs.exists(path):
         if force:
