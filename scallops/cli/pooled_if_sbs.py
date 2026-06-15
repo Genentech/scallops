@@ -973,9 +973,11 @@ def reads_pipeline(
     points_path = f"{points_path}/{image_key}-peaks.parquet"
     peaks = dd.read_parquet(points_path)
     maxed = read_ome_zarr_array(spots_root["images"][image_key + "-max"], dask=True)
-    labels = read_ome_zarr_array(
-        labels_root[image_key + "-" + label_name], dask=True
-    ).data.compute()
+    labels = (
+        read_ome_zarr_array(labels_root[image_key + "-" + label_name], dask=True)
+        .data.squeeze()
+        .compute()
+    )
     if expand_labels_distance is not None and expand_labels_distance > 0:
         labels = expand_labels(labels, distance=expand_labels_distance)
     iss_cycles = maxed.coords["t"].values
