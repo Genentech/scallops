@@ -483,7 +483,7 @@ workflow ops_workflow {
                     input:
                         images=register_pheno_to_iss.moving_output_url,
                         image_pattern=groupby_pattern,
-                        stacked_images=select_first([iss_url]),
+                        stacked_images=select_first([register_pheno_to_iss.moving_output_url]),
                         stacked_image_pattern=groupby_pattern,
                         image_channel=iss_dapi_channel,
                         stacked_image_channel=0,

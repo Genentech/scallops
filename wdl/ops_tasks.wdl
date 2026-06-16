@@ -407,7 +407,7 @@ task intersects_boundary {
         --features-~{label_type} "intersects-boundary_0" \
         --labels ~{sep=" " labels} \
         --groupby ~{sep=" " groupby} \
-        --subset ~{subset} \
+        --subset "~{subset}" \
         --output "~{output_directory}" \
         --images "~{images}" \
         --objects "~{objects}" \
