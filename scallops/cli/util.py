@@ -93,7 +93,7 @@ DEFAULT_DASK_CONFIG = {
 }
 
 
-def _create_default_dask_config(config: dict | None = None) -> set:
+def _create_default_dask_config(config: dict | None = None) -> dask.config.set:
     if config is None:
         return dask.config.set(DEFAULT_DASK_CONFIG)
 
