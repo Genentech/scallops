@@ -697,7 +697,7 @@ workflow ops_workflow {
             Array[String] phenotype_cytosol_times = keys(phenotype_cytosol_features_)
 
             scatter (phenotype_time in phenotype_cytosol_times) {
-                 Array[String] cytosol_features = phenotype_cytosol_features_[phenotype_time]
+                Array[String] cytosol_features = phenotype_cytosol_features_[phenotype_time]
                 scatter (feature_index in range(length(cytosol_features))) {
                     call tasks.features as features_cytosol {
                         input:

@@ -460,7 +460,7 @@ task features {
         Int? cytosol_max_area
         String? features_extra_arguments
         String? model_dir
-        String? labels
+        Array[String] labels
         String? objects
         String images
         String subset
@@ -498,7 +498,7 @@ task features {
         ~{if defined(cell_max_area) && select_first([cell_max_area])>0 then '--cell-max-area ' + cell_max_area else ''} \
         ~{if defined(cytosol_max_area) && select_first([cytosol_max_area])>0 then '--cytosol-max-area ' + cytosol_max_area else ''} \
         ~{if defined(features_extra_arguments) then features_extra_arguments else ''} \
-        --labels "~{labels}" \
+        --labels ~{sep=" " labels} \
         ~{"--objects " + objects} \
         ~{"--label-filter " + '"' + label_filter + '"'} \
         --subset ~{subset} \
