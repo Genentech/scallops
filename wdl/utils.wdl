@@ -61,6 +61,9 @@ task list_images {
         String groupby_pattern = read_lines('groupby_pattern.txt')[0] # e.g. {plate}-{well}
         Array[String] groupby_array = read_lines('groupby_array.txt') # e.g. ["plate", "well"]
 
+        Array[String] groupby_array_with_time_1 = read_lines('groupby_array_with_time_1.txt') # e.g. ["plate", "well", "t"]
+        Array[String] groupby_array_with_time_2 = read_lines('groupby_array_with_time_2.txt') # e.g. ["plate", "well", "t"]
+
         Int group_size_1 = read_int('group_size_1.txt')
         Int group_size_2 = read_int('group_size_2.txt')
         Array[String] subsets_with_reference_times_1 = read_lines('subsets_with_reference_time_1.txt')

@@ -586,6 +586,13 @@ def _list_images_wdl(
         url_val = index + 1
         subset_df = result["subset_df"]
 
+        with open(
+            f"groupby_array_with_time_{url_val}.txt", "wt"
+        ) as f:  # ['plate', 'well', 't']
+            for g in result["groupby_with_time"]:
+                f.write(g)
+                f.write("\n")
+
         with open(f"group_size_{url_val}.txt", "wt") as f:
             f.write(f"{result['group_size']}")
             f.write("\n")
@@ -679,9 +686,9 @@ def _list_images(
         data=dict(subset_ids_with_reference_times=subset_ids_with_reference_times),
     )
 
-    groupby_with_t = list(groupby)
+    groupby_with_time = list(groupby)
     if not groupby_t and times is not None:
-        groupby_with_t.append("t")
+        groupby_with_time.append("t")
 
     if reference_time is None:
         reference_time = times[0] if times is not None and len(times) > 0 else "0"
@@ -690,6 +697,7 @@ def _list_images(
         group_size=group_size,
         subset_df=subset_df,
         groupby=groupby,
+        groupby_with_time=groupby_with_time,
         times=times,
         reference_time=reference_time,
     )

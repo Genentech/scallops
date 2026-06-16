@@ -379,7 +379,7 @@ task intersects_boundary {
         String images
         String? image_pattern
         String label_type
-        String labels
+        Array[String] labels
         String subset
         String? objects
         String output_directory
@@ -405,7 +405,7 @@ task intersects_boundary {
 
         scallops features \
         --features-~{label_type} "intersects-boundary_0" \
-        --labels "~{labels}" \
+        --labels ~{sep=" " labels} \
         --groupby ~{sep=" " groupby} \
         --subset ~{subset} \
         --output "~{output_directory}" \

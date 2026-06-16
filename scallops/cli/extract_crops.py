@@ -10,7 +10,7 @@ from array_api_compat import get_namespace
 from skimage.util import img_as_ubyte
 from zarr import Group
 
-from scallops.cli.features import _read_merged_or_objects, get_labels
+from scallops.cli.features import _read_merged_or_objects
 from scallops.cli.util import (
     _get_cli_logger,
     cli_metadata,
@@ -69,14 +69,11 @@ def single_crop(
     output_fs.makedirs(output_dir, exist_ok=True)
     image = _images2fov(file_list, metadata, dask=True).squeeze().data
     logger.info(f"{image_key} image shape {image.shape}")
-    zarr_labels = get_labels(
-        labels_group=labels_group,
-        name=image_key,
-        suffix=label_name,  # e.g. nuclei
-    )
-
-    if zarr_labels is None:
+    g = labels_group.get(f"{image_key}-{label_name}")
+    if g is None:
         raise ValueError(f"Unable to read {label_name} labels for {image_key}.")
+    zarr_labels = g[list(g.keys())[0]]
+
     merged_df = _read_merged_or_objects(
         merge_dir=merge_dir,
         merge_dir_sep=merge_dir_sep,

@@ -240,11 +240,11 @@ workflow ops_workflow {
 
     String reference_time_pheno = list_images.reference_time_1
     String reference_time_iss = list_images.reference_time_2
-
+    Array[String] phenotype_group_by_with_time = list_images.groupby_array_with_time_2
     #String image_pattern_with_reference_time_pheno = list_images.image_pattern_with_reference_time_1 # e.g. {plate}-{well}-IF
    # String image_pattern_with_reference_time_iss = list_images.image_pattern_with_reference_time_2 # e.g. {plate}-{well}-1
     scatter (subset_index in range(length(subsets))) {
-        String subset_ = subsets[subset_index]
+        String subset_ = subsets[subset_index] # e.g. plate1-A1
        # String subset_with_reference_times_pheno = subsets_with_reference_times_pheno[subset_index]
        # String subset_with_reference_times_iss = subsets_with_reference_times_iss[subset_index]
         if(pheno_url_supplied) {
@@ -304,6 +304,7 @@ workflow ops_workflow {
                 }
 
                 if(length(times_pheno)>1) {
+
                     call tasks.register_elastix as register_pheno_to_pheno {
                         input:
                             moving=select_all([phenotype_url]),
@@ -400,12 +401,12 @@ workflow ops_workflow {
                         input:
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             images=phenotype_url_stripped + '/labels/',
-                            image_pattern=groupby_pattern,
+                            image_pattern=phenotype_image_pattern + '-mask',
                             output_directory=cell_intersects_boundary_directory,
                             label_type='cell',
                             objects=find_objects_cell.output_url,
-                            groupby=groupby,
-                            subset = subset_,
+                            groupby=phenotype_group_by_with_time,
+                            subset = subset_ + '-*',
                             force = force_segment_cell,
                             docker=docker,
                             zones = zones,

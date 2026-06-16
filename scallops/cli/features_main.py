@@ -73,7 +73,8 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
         "--labels",
         dest="labels",
         required=True,
-        help="Path to zarr directory containing labels",
+        nargs="+",
+        help="Path(s) to zarr directory containing labels",
     )
 
     generic_features_help = (

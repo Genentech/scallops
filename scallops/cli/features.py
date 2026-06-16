@@ -8,15 +8,13 @@ Authors:
 
 import argparse
 import json
-import warnings
 from collections.abc import Sequence
 from itertools import zip_longest
-from typing import get_type_hints
+from typing import Any, get_type_hints
 
 import dask.array
 import dask.array as da
 import fsspec
-import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,6 +24,7 @@ from dask.delayed import Delayed
 from natsort import natsorted
 from zarr import Group
 
+from scallops.cli.find_objects import get_path
 from scallops.cli.util import (
     _create_dask_client,
     _create_default_dask_config,
@@ -52,27 +51,28 @@ from scallops.io import (
     pluralize,
     read_anndata_zarr,
 )
-from scallops.zarr_io import _read_ome_zarr_array
 
 logger = _get_cli_logger()
 
 
 def _read_merged_or_objects(
-    merge_dir: str,
-    merge_dir_sep: str,
+    path: str,
+    path_sep: str,
+    timepoint: str | None,
     label_name: str,
     image_key: str,
     label_filter: str | None,
 ):
-    merge_dir = merge_dir.rstrip(merge_dir_sep)
-    merge_paths = [
-        f"{merge_dir}{merge_dir_sep}{label_name}{merge_dir_sep}{image_key}.parquet",
-        f"{merge_dir}{merge_dir_sep}{image_key}.zarr",
-        f"{merge_dir}{merge_dir_sep}{image_key}.parquet",
-        f"{merge_dir}{merge_dir_sep}{label_name}{merge_dir_sep}{image_key}-objects.parquet",
+    path = path.rstrip(path_sep)
+    paths = [
+        f"{path}{path_sep}{label_name}{path_sep}{image_key}.parquet",
+        f"{path}{path_sep}{image_key}.zarr",
+        f"{path}{path_sep}{image_key}.parquet",
+        get_path(path, path_sep, label_name, image_key, timepoint),
     ]
+
     merge_path = None
-    for path in merge_paths:
+    for path in paths:
         if fsspec.core.url_to_fs(path)[0].exists(path):
             merge_path = path
             break
@@ -103,51 +103,6 @@ def _read_merged_or_objects(
     return merged_df
 
 
-def get_labels(labels_group: Group, name: str, suffix: str) -> zarr.Array | None:
-    """Retrieve labels from a zarr group.
-
-    :param labels_group: The zarr group containing labels.
-    :param name: The identifier associated with the labels.
-    :param suffix: The suffix used to identify the specific set of labels (e.g., 'nuclei').
-    :return: The retrieved labels as a DataArray or None if the labels are not found.
-    """
-    try:
-        g = labels_group[f"{name}-{suffix}"]
-        return g[list(g.keys())[0]]
-    except KeyError as e:
-        logger.warning(f'"{name}-{suffix}" not found in {labels_group}.')
-        raise e
-
-
-def _read_image(file_list: list[str], metadata: dict) -> xr.DataArray:
-    """Read image files and preprocess them into a standardized format.
-
-    This function reads image files specified in the file_list and processes them into an
-    xarray.DataArray with dimensions adjusted as needed. It handles missing dimensions and stacks
-    time and channel dimensions for further processing.
-
-    :param file_list: List of file paths to the image files.
-    :param metadata: Dictionary containing metadata associated with the images.
-    :return: DataArray containing the processed image data.
-    """
-    image = _images2fov(file_list, metadata, dask=True)
-    dims = tuple([d for d in ["t", "c", "z"] if d in image.dims])
-
-    if len(dims) > 0:
-        image = image.stack(t_c_z=dims, create_index=False).transpose(
-            *("y", "x", "t_c_z")
-        )
-        with warnings.catch_warnings():
-            # ignore UserWarning: rename 't_c_z' to 'c' does not create an index anymore.
-            # Try using swap_dims instead or use set_index after rename to create an indexed coordinate.
-            warnings.filterwarnings("ignore", "rename .*", UserWarning)
-            image = image.rename({"t_c_z": "c"})
-    else:
-        # add trailing c dimension
-        image = image.expand_dims("c", -1)
-    return image
-
-
 def _get_feature_channel_indices(tokens):
     """Get indices of channel parameters in a feature name.
 
@@ -172,10 +127,47 @@ def _get_feature_channel_indices(tokens):
     ]
 
 
+def _find_labels(
+    label_paths: list[str],
+    image_key: str,
+    label_name: str,
+    image_key_no_t: str | None,
+    selected_timepoint: Any,
+):
+    timepoints = None
+    g = None
+    for label_path in label_paths:
+        label_root = zarr.open(label_path, mode="r")
+        labels_group = label_root.get("labels")
+        if labels_group is not None:
+            g = labels_group.get(f"{image_key}-{label_name}")
+            if g is not None:
+                timepoints = (
+                    g.attrs["multiscales"][0]["metadata"]["t"]
+                    if "t" in g.attrs["multiscales"][0]["metadata"]
+                    else [None]
+                )
+                return g, timepoints
+            if g is None and image_key_no_t is not None:
+                g = labels_group.get(f"{image_key_no_t}-{label_name}")
+                zarr_metadata = g.attrs["multiscales"][0]["metadata"]
+
+                if "t" in zarr_metadata:
+                    timepoints = zarr_metadata["t"]
+                    if selected_timepoint in timepoints:
+                        index = timepoints.index(selected_timepoint)
+                        timepoints = [timepoints[index]]
+                        return g, timepoints
+                else:
+                    timepoints = [None]
+                    return g, timepoints
+    return g, timepoints
+
+
 def single_feature(
     stacked_image_tuple: tuple[tuple[str, ...], list[str | Group], dict] | None,
     image_tuple: tuple[tuple[str, ...], list[str | Group], dict],
-    labels_group: Group,
+    label_paths: list[str],
     output_dir: str,
     output_sep: str,
     objects_dir: str,
@@ -240,221 +232,246 @@ def single_feature(
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
 
-    zarr_inputs = True
-
-    for f in file_list:
-        if not isinstance(f, (zarr.Group, zarr.Array)):
-            zarr_inputs = False
-            break
-
-    if zarr_inputs and stacked_image_tuple is not None:
-        for f in stacked_file_list:
-            if not isinstance(f, (zarr.Group, zarr.Array)):
-                zarr_inputs = False
-                break
-    if not zarr_inputs:
-        image = _read_image(file_list, metadata)
-    else:
-        image = []
-        for f in file_list:
-            array, _, _, _ = _read_ome_zarr_array(f)
-            image.append(array)
+    image = _images2fov(file_list, metadata, dask=True)
+    image_dims = tuple([d for d in ["t", "c", "z"] if d in image.dims])
     n_channels1 = None
+    stacked_image = None
     if stacked_image_tuple is not None:
-        if not zarr_inputs:
-            stacked_image = _read_image(stacked_file_list, stacked_metadata)
-            n_channels1 = image.sizes["c"]
-            # clear coords to avoid issues with xr.concat
-            for c in list(image.coords.keys()):
-                del image.coords[c]
-            for c in list(stacked_image.coords.keys()):
-                del stacked_image.coords[c]
-            image = xr.concat((image, stacked_image), dim="c")
-        else:
-            n_channels1 = 0
-            for img in image:
-                n_channels1 += np.prod(img.shape[:-2])
-            n_channels1 = int(n_channels1)
-            for f in stacked_file_list:
-                array, _, _, _ = _read_ome_zarr_array(f)
-                image.append(array)
+        stacked_image = _images2fov(stacked_file_list, stacked_metadata, dask=True)
+        n_channels1 = image.sizes["c"]
+        stacked_image_dims = tuple(
+            [d for d in ["t", "c", "z"] if d in stacked_image.dims]
+        )
+    image_key_no_t = None
+    selected_timepoint = None
+    if "t" in metadata["group_metadata"]["group"]:
+        image_key_no_t = []
+        for key in metadata["group_metadata"]["group"]:
+            if key != "t":
+                image_key_no_t.append(str(metadata["group_metadata"]["group"][key]))
+            else:
+                selected_timepoint = metadata["group_metadata"]["group"][key]
+        image_key_no_t = "-".join(image_key_no_t).replace("/", "-")
 
     for label_name in label_name_to_features:
-        features = label_name_to_features[label_name]
-        output_parquet_path = (
-            f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}.parquet"
-        )
-
-        if not force and is_parquet_file(output_parquet_path):
-            logger.info(f"Skipping features for {image_key} {label_name}")
-            continue
-        zarr_labels = get_labels(
-            labels_group=labels_group,
-            name=image_key,
-            suffix=label_name,  # e.g. nuclei
-        )
-
-        if zarr_labels is None:
-            logger.info(f"Unable to read {label_name} labels for {image_key}.")
-            continue
         label_prefix = _label_name_to_prefix[label_name]
-        merged_df = None
-        if objects_dir is not None:
-            merged_df = _read_merged_or_objects(
-                merge_dir=objects_dir,
-                merge_dir_sep=objects_dir_sep,
-                label_name=label_name,
-                image_key=image_key,
-                label_filter=label_filter,
+        features = label_name_to_features[label_name]
+        g, timepoints = _find_labels(
+            label_paths=label_paths,
+            image_key=image_key,
+            label_name=label_name,
+            image_key_no_t=image_key_no_t,
+            selected_timepoint=selected_timepoint,
+        )
+        if g is None:
+            logger.info(f"No labels found for {image_key}")
+            continue
+        labels_array = da.from_array(g[list(g.keys())[0]])
+        for timepoint in timepoints:
+            image_ = (
+                image.sel(t=timepoint)
+                if timepoint is not None and image.sizes.get("t", 0) > 1
+                else image
             )
-
-        if merged_df is None:
-            logger.info(f"Find {label_name} objects for {image_key}.")
-            merged_df = find_objects(zarr_labels)
-            objects_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
-            merged_df.index.name = "label"
-            merged_df.columns = f"{label_prefix}_" + merged_df.columns
-            _to_parquet(
-                merged_df,
-                objects_path,
-                write_index=True,
-                compute=True,
-                custom_metadata=dict(scallops=json.dumps(cli_metadata()))
-                if not no_version
-                else None,
+            image_ = (
+                image_.stack(t_c_z=image_dims, create_index=False)
+                .transpose(*("y", "x", "t_c_z"))
+                .rename({"t_c_z": "c"})
+                if len(image_dims) > 0
+                else image_.expand_dims("c", -1)
             )
-            merged_df = pd.read_parquet(objects_path)
-
-        features = normalize_features(features)
-        # strip nuclei_, etc. from features_plot
-        features_plot_label = []
-        for feature in features_plot:
-            tokens = feature.lower().split("_")
-            if tokens[0] == label_prefix:
-                features_plot_label.append("_".join(tokens[1:]))
-
-        features_plot_label = normalize_features(features_plot_label)
-        if stacked_image_tuple is not None:
-            stacked_features = set()
-            stacked_features_plot = set()
-            for feature in features:  # add offset for image1
-                tokens = feature.lower().split("_")
-
-                if (
-                    tokens[0] in _features_multichannel.keys()
-                    or tokens[0] in _features_single_channel.keys()
-                ):
-                    for token_index in range(
-                        1,
-                        3 if tokens[0] in _features_multichannel.keys() else 2,
-                    ):
-                        c = tokens[token_index]
-                        if c[0] == "s":
-                            if c in channel_names:
-                                channel_names[str(n_channels1 + int(c[1:]))] = (
-                                    channel_names.pop(c)
-                                )
-                            tokens[token_index] = str(n_channels1 + int(c[1:]))
-
-                new_feature = "_".join(tokens)
-                if feature in features_plot_label:
-                    stacked_features_plot.add(new_feature)
-                stacked_features.add(new_feature)
-
-            features = stacked_features
-            features_plot_label = stacked_features_plot
-
-        features = list(set(natsorted(features)))
-        logger.info(
-            f"{image_key} {label_name} {len(features):,} {pluralize('feature', len(features))}: "
-            f"{', '.join(features)}"
-        )
-        if label_filter is not None:
-            merged_df = merged_df.query(label_filter)
-        min_max_area = label_name_to_min_max_area.get(label_name)
-        area_column = f"{label_prefix}_AreaShape_Area"
-        n_labels = len(merged_df)
-        prefix = ""
-        if min_max_area[0] is not None or min_max_area[1] is not None:
-            area_query = []
-            if min_max_area[0] is not None:
-                area_query.append(f"{area_column}>={min_max_area[0]}")
-            if min_max_area[1] is not None:
-                area_query.append(f"{area_column}<={min_max_area[1]}")
-            merged_df = merged_df.query("&".join(area_query))
-            n_labels_filtered = n_labels - len(merged_df)
-            prefix = f"Removed {n_labels_filtered:,} out of "
-        logger.info(
-            f"{prefix}{n_labels:,} {pluralize('label', n_labels)}. "
-            f"Area: {merged_df[area_column].min():,.0f} to {merged_df[area_column].max():,.0f}."
-        )
-
-        df = label_features(
-            objects_df=merged_df,
-            label_image=zarr_labels if zarr_inputs else da.from_zarr(zarr_labels),
-            intensity_image=image if zarr_inputs else image.data,
-            features=features,
-            normalize=normalize,
-            bounding_box_columns=[
-                f"{label_prefix}_AreaShape_BoundingBoxMinimum_Y",
-                f"{label_prefix}_AreaShape_BoundingBoxMinimum_X",
-                f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
-                f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
-            ],
-            channel_names=channel_names,
-        )
-        # df will be None if only area and coordinates requested
-
-        if df is not None:
-            fs = fsspec.url_to_fs(output_parquet_path)[0]
-            if fs.exists(output_parquet_path):
-                fs.rm(output_parquet_path, recursive=True)
-            df.index.name = "label"
-            df.columns = f"{label_prefix}_" + df.columns
-
-            if isinstance(df, pd.DataFrame):
-                table = pa.Table.from_pandas(df, preserve_index=True)
-                if not no_version:
-                    table = table.replace_schema_metadata(
-                        {
-                            "scallops".encode(): json.dumps(cli_metadata()).encode(),
-                            **table.schema.metadata,
-                        }
-                    )
-                fs, output_file = fsspec.url_to_fs(output_parquet_path)
-                pq.write_table(
-                    table,
-                    output_parquet_path,
-                    filesystem=fs,
+            if stacked_image is not None:
+                stacked_image_ = (
+                    stacked_image.stack(t_c_z=stacked_image_dims, create_index=False)
+                    .transpose(*("y", "x", "t_c_z"))
+                    .rename({"t_c_z": "c"})
+                    if len(stacked_image_dims) > 0
+                    else stacked_image.expand_dims("c", -1)
                 )
 
-            else:
+            intensity_image = (
+                xr.concat((image_, stacked_image_), dim="c", join="outer")
+                if stacked_image is not None
+                else image_
+            )
+
+            features_path = get_path(
+                output_dir, output_sep, label_name, image_key, timepoint, ".parquet"
+            )
+            if not force and is_parquet_file(features_path):
+                logger.info(
+                    f"Skipping features for {image_key} {label_name}{' at t=' + timepoint if timepoint is not None else ''}."
+                )
+                continue
+
+            merged_df = None
+            if objects_dir is not None:
+                merged_df = _read_merged_or_objects(
+                    path=objects_dir,
+                    timepoint=timepoint,
+                    path_sep=objects_dir_sep,
+                    label_name=label_name,
+                    image_key=image_key,
+                    label_filter=label_filter,
+                )
+            label_image = labels_array[
+                timepoints.index(timepoint)
+                if timepoint is not None and labels_array.ndim == 3
+                else labels_array
+            ]
+
+            if merged_df is None:
+                logger.info(
+                    f"Find {label_name} objects for {image_key}{' at t=' + timepoint if timepoint is not None else ''}."
+                )
+                merged_df = find_objects(label_image)
+                objects_path = get_path(
+                    output_dir, output_sep, label_name, image_key, timepoint
+                )
+
+                merged_df.index.name = "label"
+                merged_df.columns = f"{label_prefix}_" + merged_df.columns
                 _to_parquet(
-                    df,
-                    output_parquet_path,
+                    merged_df,
+                    objects_path,
                     write_index=True,
                     compute=True,
                     custom_metadata=dict(scallops=json.dumps(cli_metadata()))
                     if not no_version
                     else None,
                 )
+                merged_df = pd.read_parquet(objects_path)
 
-        if len(features_plot_label) > 0:
-            features_plot_label = [
-                label_prefix + "_" + feature for feature in features_plot_label
-            ]
-            df_features = pd.read_parquet(
-                output_parquet_path, columns=features_plot_label
+            features = normalize_features(features)
+            # strip nuclei_, etc. from features_plot
+            features_plot_label = []
+            for feature in features_plot:
+                tokens = feature.lower().split("_")
+                if tokens[0] == label_prefix:
+                    features_plot_label.append("_".join(tokens[1:]))
+
+            features_plot_label = normalize_features(features_plot_label)
+            if stacked_image_tuple is not None:
+                stacked_features = set()
+                stacked_features_plot = set()
+                for feature in features:  # add offset for image1
+                    tokens = feature.lower().split("_")
+
+                    if (
+                        tokens[0] in _features_multichannel.keys()
+                        or tokens[0] in _features_single_channel.keys()
+                    ):
+                        for token_index in range(
+                            1,
+                            3 if tokens[0] in _features_multichannel.keys() else 2,
+                        ):
+                            c = tokens[token_index]
+                            if c[0] == "s":
+                                if c in channel_names:
+                                    channel_names[str(n_channels1 + int(c[1:]))] = (
+                                        channel_names.pop(c)
+                                    )
+                                tokens[token_index] = str(n_channels1 + int(c[1:]))
+
+                    new_feature = "_".join(tokens)
+                    if feature in features_plot_label:
+                        stacked_features_plot.add(new_feature)
+                    stacked_features.add(new_feature)
+
+                features = stacked_features
+                features_plot_label = stacked_features_plot
+
+            features = list(set(natsorted(features)))
+
+            if label_filter is not None:
+                merged_df = merged_df.query(label_filter)
+            min_max_area = label_name_to_min_max_area.get(label_name)
+            area_column = f"{label_prefix}_AreaShape_Area"
+            n_labels = len(merged_df)
+            prefix = ""
+            if min_max_area[0] is not None or min_max_area[1] is not None:
+                area_query = []
+                if min_max_area[0] is not None:
+                    area_query.append(f"{area_column}>={min_max_area[0]}")
+                if min_max_area[1] is not None:
+                    area_query.append(f"{area_column}<={min_max_area[1]}")
+                merged_df = merged_df.query("&".join(area_query))
+                n_labels_filtered = n_labels - len(merged_df)
+                prefix = f"Removed {n_labels_filtered:,} out of "
+            logger.info(
+                f"{prefix}{n_labels:,} {pluralize('label', n_labels)}. "
+                f"Area: {merged_df[area_column].min():,.0f} to {merged_df[area_column].max():,.0f}."
             )
-            centroid_columns = [
-                label_prefix + "_centroid-1",
-                label_name + "_centroid-0",
-            ]
-            df = merged_df[centroid_columns].join(df_features)
-            pdf_path = (
-                f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}.pdf"
+
+            df = label_features(
+                objects_df=merged_df,
+                label_image=label_image,
+                intensity_image=intensity_image,
+                features=features,
+                normalize=normalize,
+                bounding_box_columns=[
+                    f"{label_prefix}_AreaShape_BoundingBoxMinimum_Y",
+                    f"{label_prefix}_AreaShape_BoundingBoxMinimum_X",
+                    f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
+                    f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
+                ],
+                channel_names=channel_names,
             )
-            _plot_features(df, features_plot_label, pdf_path, centroid_columns)
+            # df will be None if only area and coordinates requested
+
+            if df is not None:
+                fs = fsspec.url_to_fs(features_path)[0]
+                if fs.exists(features_path):
+                    fs.rm(features_path, recursive=True)
+                df.index.name = "label"
+                df.columns = f"{label_prefix}_" + df.columns
+
+                if isinstance(df, pd.DataFrame):
+                    table = pa.Table.from_pandas(df, preserve_index=True)
+                    if not no_version:
+                        table = table.replace_schema_metadata(
+                            {
+                                "scallops".encode(): json.dumps(
+                                    cli_metadata()
+                                ).encode(),
+                                **table.schema.metadata,
+                            }
+                        )
+                    fs, output_file = fsspec.url_to_fs(features_path)
+                    pq.write_table(
+                        table,
+                        features_path,
+                        filesystem=fs,
+                    )
+
+                else:
+                    _to_parquet(
+                        df,
+                        features_path,
+                        write_index=True,
+                        compute=True,
+                        custom_metadata=dict(scallops=json.dumps(cli_metadata()))
+                        if not no_version
+                        else None,
+                    )
+
+            if len(features_plot_label) > 0:
+                features_plot_label = [
+                    label_prefix + "_" + feature for feature in features_plot_label
+                ]
+                df_features = pd.read_parquet(
+                    features_path, columns=features_plot_label
+                )
+                centroid_columns = [
+                    label_prefix + "_centroid-1",
+                    label_name + "_centroid-0",
+                ]
+                df = merged_df[centroid_columns].join(df_features)
+                pdf_path = get_path(
+                    output_dir, output_sep, label_name, image_key, timepoint, ".pdf"
+                )
+
+                _plot_features(df, features_plot_label, pdf_path, centroid_columns)
     return []
 
 
@@ -481,6 +498,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
     channel_names = arguments.channel_rename
     stack_images = arguments.stack_images
     label_filter = arguments.label_filter
+    label_paths = arguments.labels
     normalize = not arguments.no_normalize
     stack_image_pattern = arguments.stack_image_pattern
     cell_features = arguments.features_cell
@@ -522,11 +540,9 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
     output_dir = output_dir.rstrip(output_fs.sep)
     for label in label_name_to_features:
         output_fs.makedirs(output_dir + output_fs.sep + label, exist_ok=True)
-    labels_path = arguments.labels
+
     no_version = arguments.no_version
-    assert labels_path is not None, "No labels provided"
-    label_root = zarr.open(labels_path, mode="r")
-    labels_group = label_root["labels"]
+
     if channel_names is not None:
         # keys are strings in json
         try:
@@ -566,7 +582,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
                 output_sep=output_fs.sep,
                 objects_dir=objects_dir,
                 objects_dir_sep=objects_dir_sep,
-                labels_group=labels_group,
+                label_paths=label_paths,
                 label_filter=label_filter,
                 label_name_to_min_max_area=label_name_to_min_max_area,
                 label_name_to_features=label_name_to_features,

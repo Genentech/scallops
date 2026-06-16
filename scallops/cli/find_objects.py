@@ -28,6 +28,21 @@ from scallops.io import _create_file_regex, _set_up_experiment, _to_parquet
 logger = _get_cli_logger()
 
 
+def get_path(
+    output_dir: str,
+    output_sep: str,
+    label_name: str,
+    image_key: str,
+    timepoint: str | None,
+    suffix="-objects.parquet",
+):
+    return (
+        (f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}{suffix}")
+        if timepoint is None
+        else f"{output_dir}{output_sep}{label_name}{output_sep}t={timepoint}{output_sep}{image_key}{suffix}"
+    )
+
+
 def _execute(
     label_tuple: tuple[tuple[str, ...], list[str | Group], dict],
     timepoint: str | None,
@@ -40,11 +55,7 @@ def _execute(
     assert len(file_list) == 1
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
-    path = (
-        (f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet")
-        if timepoint is None
-        else f"{output_dir}{output_sep}{label_name}{output_sep}t={timepoint}{output_sep}{image_key}-objects.parquet"
-    )
+    path = get_path(output_dir, output_sep, label_name, image_key, timepoint)
     fs = fsspec.url_to_fs(path)[0]
     if fs.exists(path):
         if force:
