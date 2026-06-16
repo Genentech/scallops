@@ -101,18 +101,18 @@ def single_crop(
     # e.g. CHAMMI-75
 
     if percentile_normalize is not None:
-        chunksize = list(image.chunksize)
-        for i in range(len(chunksize) - 2):
-            chunksize[i] = -1
-        if chunks is not None:
-            chunksize[-2] = chunks
-            chunksize[-1] = chunks
-        else:
-            logger.info(
-                f"{image_key} chunk size: {chunksize[-2]:,} by {chunksize[-1]:,}"
-            )
-        image = image.rechunk(tuple(chunksize))
         if local_percentile_normalize:
+            chunksize = list(image.chunksize)
+            for i in range(len(chunksize) - 2):
+                chunksize[i] = -1
+            if chunks is not None:
+                chunksize[-2] = chunks
+                chunksize[-1] = chunks
+            else:
+                logger.info(
+                    f"{image_key} chunk size: {chunksize[-2]:,} by {chunksize[-1]:,}"
+                )
+            image = image.rechunk(tuple(chunksize))
             depth = None
             if local_normalize_overlap is not None and local_normalize_overlap > 0:
                 depth = {
