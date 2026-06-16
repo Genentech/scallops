@@ -8,6 +8,7 @@ Authors:
 
 import argparse
 import json
+import warnings
 from collections.abc import Sequence
 from itertools import zip_longest
 from typing import Any, get_type_hints
@@ -164,6 +165,21 @@ def _find_labels(
     return g, timepoints
 
 
+def _stack_and_rename(image: xr.DataArray) -> xr.DataArray:
+    image_dims = tuple([d for d in ["t", "c", "z"] if d in image.dims])
+    with warnings.catch_warnings():
+        # ignore UserWarning: rename 't_c_z' to 'c' does not create an index anymore.
+        # Try using swap_dims instead or use set_index after rename to create an indexed coordinate.
+        warnings.filterwarnings("ignore", "rename .*", UserWarning)
+        return (
+            image.stack(t_c_z=image_dims, create_index=False)
+            .transpose(*("y", "x", "t_c_z"))
+            .rename({"t_c_z": "c"})
+            if len(image_dims) > 0
+            else image.expand_dims("c", -1)
+        )
+
+
 def single_feature(
     stacked_image_tuple: tuple[tuple[str, ...], list[str | Group], dict] | None,
     image_tuple: tuple[tuple[str, ...], list[str | Group], dict],
@@ -233,15 +249,13 @@ def single_feature(
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
 
     image = _images2fov(file_list, metadata, dask=True)
-    image_dims = tuple([d for d in ["t", "c", "z"] if d in image.dims])
+
     n_channels1 = None
     stacked_image = None
     if stacked_image_tuple is not None:
         stacked_image = _images2fov(stacked_file_list, stacked_metadata, dask=True)
         n_channels1 = image.sizes["c"]
-        stacked_image_dims = tuple(
-            [d for d in ["t", "c", "z"] if d in stacked_image.dims]
-        )
+
     image_key_no_t = None
     selected_timepoint = None
     if "t" in metadata["group_metadata"]["group"]:
@@ -273,21 +287,9 @@ def single_feature(
                 if timepoint is not None and image.sizes.get("t", 0) > 1
                 else image
             )
-            image_ = (
-                image_.stack(t_c_z=image_dims, create_index=False)
-                .transpose(*("y", "x", "t_c_z"))
-                .rename({"t_c_z": "c"})
-                if len(image_dims) > 0
-                else image_.expand_dims("c", -1)
-            )
+            image_ = _stack_and_rename(image_)
             if stacked_image is not None:
-                stacked_image_ = (
-                    stacked_image.stack(t_c_z=stacked_image_dims, create_index=False)
-                    .transpose(*("y", "x", "t_c_z"))
-                    .rename({"t_c_z": "c"})
-                    if len(stacked_image_dims) > 0
-                    else stacked_image.expand_dims("c", -1)
-                )
+                stacked_image_ = _stack_and_rename(stacked_image)
 
             intensity_image = (
                 xr.concat((image_, stacked_image_), dim="c", join="outer")
@@ -314,11 +316,11 @@ def single_feature(
                     image_key=image_key,
                     label_filter=label_filter,
                 )
-            label_image = labels_array[
-                timepoints.index(timepoint)
-                if timepoint is not None and labels_array.ndim == 3
-                else labels_array
-            ]
+            if timepoint is not None and labels_array.ndim == 3:
+                timepoint_index = timepoints.index(timepoint)
+                label_image = labels_array[timepoint_index]
+            else:
+                label_image = labels_array
 
             if merged_df is None:
                 logger.info(

@@ -503,13 +503,14 @@ workflow ops_workflow {
                         max_retries = max_retries
                 }
                 # ISS t0 to other times
-                call tasks.register_qc as register_iss_to_iss_qc {
+                call tasks.register_iss_iss_qc as register_iss_to_iss_qc {
                     input:
                         images=select_first([register_iss_t0.moving_output_url]),
                         image_pattern=groupby_pattern,
-                        channel=select_first([iss_dapi_channel, 0]),
+                        dapi_channel=select_first([iss_dapi_channel, 0]),
+                        n_timepoints=length(times_iss),
                         label_type='nuclei',
-                        channel_prefix="ISS",
+
                         output_directory=register_iss_to_iss_qc_directory,
                         labels=register_pheno_to_iss.label_output_url,
                         subset = subset_,

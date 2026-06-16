@@ -1,3 +1,4 @@
+import glob
 import json
 import os.path
 from subprocess import check_call
@@ -155,15 +156,17 @@ def test_stitch_wdl(tmp_path):
 
 @pytest.mark.cli_e2e
 def test_ops_wdl(tmp_path):
-    sbs_dir = tmp_path / "sbs.zarr"
-    pheno_dir = tmp_path / "pheno.zarr"
+    sbs_dir = tmp_path / "sbs"
     output = tmp_path / "out"
+    pheno_dir = tmp_path / "pheno.zarr"
+    sbs_dir.mkdir()
     output.mkdir()
+    for p in glob.glob("scallops/tests/data/experimentC/input/*/*Tile-102*"):
+        cycles = os.path.basename(p).split("_")[1]
+        cycles = cycles.split("-")[0]
+        dest = f"plateA-A1-{cycles[1:]}.tif"
+        add_physical_size(p, str(sbs_dir / dest))
 
-    iss_img = read_image(
-        "scallops/tests/data/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
-    )
-    iss_img.attrs["physical_pixel_sizes"] = (1, 1)
     pheno_img = read_image(
         "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
@@ -186,13 +189,10 @@ def test_ops_wdl(tmp_path):
         },
     ).save(pheno_dir)
 
-    Experiment(
-        images={"plateA-A1-1": iss_img, "plateA-A1-2": iss_img},
-    ).save(sbs_dir)
-
     input_json = {
         "model_dir": "",
         "iss_url": str(sbs_dir.absolute()),
+        "iss_image_pattern": "{plate}-{well}-{t}.tif",
         "output_directory": str(output.absolute()),
         "iss_registration_extra_arguments": "--no-landmarks",
         "pheno_to_iss_registration_extra_arguments": "--no-landmarks",

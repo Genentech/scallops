@@ -272,16 +272,17 @@ task register_pheno_to_iss_qc {
 }
 
 
-task register_qc {
+task register_iss_iss_qc {
     input {
         String images
         String? image_pattern
         String label_type
         String labels
-        Int channel
+        Int dapi_channel
+        Int n_timepoints
         String subset
         String output_directory
-        String channel_prefix
+
         Array[String] groupby
         Boolean? force
 
@@ -294,6 +295,7 @@ task register_qc {
         String memory
         Int max_retries
     }
+    Int n_channels = n_timepoints*5
 
     command <<<
         set -ex
@@ -302,58 +304,17 @@ task register_qc {
             ulimit -n 100000
         fi
 
-        python <<CODE
-        import json
-        from subprocess import check_call
+         scallops features \
+        --features-~{label_type} "correlationpearsonbox_~{dapi_channel}_5:~{n_channels}:5" \
+        --labels "~{labels}" \
+        --groupby ~{sep=" " groupby} \
+        --subset ~{subset} \
+        --output "~{output_directory}" \
+        --images "~{images}" \
+        ~{'--image-pattern ' + image_pattern} \
+        ~{true="--force" false="" force}
 
-        from scallops.io import read_experiment
 
-        images = "~{images}"
-        image_pattern = "~{image_pattern}"
-        label_type = "~{label_type}"
-        labels = "~{labels}"
-
-        channel = "~{channel}"
-        subset = "~{subset}".split(" ")
-        output_directory = "~{output_directory}"
-        groupby = "~{sep=',' groupby}".split(",")
-        force = "~{force}"
-        channel_prefix = "~{channel_prefix}"
-
-        exp = read_experiment(images, image_pattern, group_by=groupby, subset=subset, dask=True)
-        keys = list(exp.images.keys())
-        if len(keys) == 0:
-            raise ValueError("No images found")
-        image = exp.images[keys[0]]
-        size_t = image.sizes['t']
-        size_c = image.sizes['c']
-        channel_rename = {}
-        t = 0
-        for i in range(int(channel), size_t * size_c, size_c):
-            channel_rename[f"{i}"] = f"{channel_prefix}{t}"
-            t += 1
-
-        cmd = ["scallops", "features"]
-        cmd += [f"--features-{label_type}", f"correlationpearsonbox_{channel}_{channel}:{size_t * size_c}:{size_c}"]
-        cmd += ["--labels", labels]
-
-        if image_pattern != "":
-            cmd += ["--image-pattern", image_pattern]
-        cmd.append("--groupby")
-        cmd += groupby
-        if len(subset) > 0:
-            cmd.append("--subset")
-            cmd += subset
-        cmd += ["--output", output_directory]
-        cmd += ["--images", images]
-        cmd += ["--channel-rename", f"{json.dumps(channel_rename)}"]
-
-        if force == "true":
-            cmd.append("--force")
-        print(" ".join(cmd))
-        check_call(cmd)
-
-        CODE
 
     >>>
 
