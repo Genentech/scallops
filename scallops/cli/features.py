@@ -210,7 +210,7 @@ def single_feature(
     image_tuple: tuple[tuple[str, ...], list[str | Group], dict],
     label_paths: list[str],
     output_dir: str,
-    merge_paths: list[str],
+    merge_paths: list[str] | None,
     label_name_to_features: dict[str, set[str]],
     label_name_to_min_max_area: dict[str, tuple[float | None, float | None]],
     features_plot: set[str],
@@ -319,7 +319,7 @@ def single_feature(
                 continue
 
             merged_df = None
-            if len(merge_paths) > 0:
+            if merge_paths is not None and len(merge_paths) > 0:
                 merged_df = _read_merged_or_objects(
                     paths=merge_paths,
                     timepoint=timepoint,
