@@ -57,51 +57,61 @@ logger = _get_cli_logger()
 
 
 def _read_merged_or_objects(
-    path: str,
-    path_sep: str,
+    paths: list[str],
     timepoint: str | None,
     label_name: str,
     image_key: str,
     label_filter: str | None,
 ):
-    path = path.rstrip(path_sep)
-    paths = [
-        f"{path}{path_sep}{label_name}{path_sep}{image_key}.parquet",
-        f"{path}{path_sep}{image_key}.zarr",
-        f"{path}{path_sep}{image_key}.parquet",
-        get_path(path, path_sep, label_name, image_key, timepoint),
-    ]
-
-    merge_path = None
+    found_paths = []
     for path in paths:
-        if fsspec.core.url_to_fs(path)[0].exists(path):
-            merge_path = path
-            break
-    if merge_path is None:
+        path_sep = fsspec.core.url_to_fs(path)[0].sep
+        path = path.rstrip(path_sep)
+
+        test_paths = [
+            f"{path}{path_sep}{label_name}{path_sep}{image_key}.parquet",
+            f"{path}{path_sep}{image_key}.zarr",
+            f"{path}{path_sep}{image_key}.parquet",
+            get_path(path, path_sep, label_name, image_key, timepoint),
+        ]
+
+        for test_path in test_paths:
+            if fsspec.core.url_to_fs(path)[0].exists(test_path):
+                found_paths.append(test_path)
+
+    if len(found_paths) == 0:
         return None
 
     area_column = f"{_label_name_to_prefix[label_name]}_AreaShape_Area"
-    if merge_path.lower().endswith(".zarr"):
-        data = read_anndata_zarr(merge_path, dask=True)
-        merged_df = data.obs
-        columns = {area_column}
-        assert area_column in data.var.index
-        if label_filter is not None:
-            query_columns = _get_names_from_pd_query(label_filter)
-            columns.update(
-                c
-                for c in query_columns
-                if c not in merged_df.columns and c in data.var.index
-            )
-        columns = list(columns)
-        values = data[:, columns].X.compute()
-        for i in range(len(columns)):
-            merged_df[columns[i]] = values[:, i]
+    merged_dfs = []
+    for path in found_paths:
+        if path.lower().endswith(".zarr"):
+            data = read_anndata_zarr(path, dask=True)
+            merged_df = data.obs
+            columns = {area_column}
+            assert area_column in data.var.index
+            if label_filter is not None:
+                query_columns = _get_names_from_pd_query(label_filter)
+                columns.update(
+                    c
+                    for c in query_columns
+                    if c not in merged_df.columns and c in data.var.index
+                )
+            columns = list(columns)
+            values = data[:, columns].X.compute()
+            for i in range(len(columns)):
+                merged_df[columns[i]] = values[:, i]
 
-    else:
-        merged_df = pd.read_parquet(merge_path)
-
-    return merged_df
+        else:
+            merged_df = pd.read_parquet(path)
+        if "label" in merged_df.columns:
+            merged_df = merged_df.set_index("label")
+        merged_dfs.append(merged_df)
+    return (
+        merged_dfs[0]
+        if len(merged_dfs) == 1
+        else pd.concat(merged_dfs, axis=1, join="inner")
+    )
 
 
 def _get_feature_channel_indices(tokens):
@@ -180,14 +190,27 @@ def _stack_and_rename(image: xr.DataArray) -> xr.DataArray:
         )
 
 
+def _image_key_without_time_and_selected_time(metadata):
+    image_key_no_t = None
+    selected_timepoint = None
+    if "t" in metadata["group_metadata"]["group"]:
+        image_key_no_t = []
+        for key in metadata["group_metadata"]["group"]:
+            if key != "t":
+                image_key_no_t.append(str(metadata["group_metadata"]["group"][key]))
+            else:
+                selected_timepoint = metadata["group_metadata"]["group"][key]
+        image_key_no_t = "-".join(image_key_no_t).replace("/", "-")
+
+    return image_key_no_t, selected_timepoint
+
+
 def single_feature(
     stacked_image_tuple: tuple[tuple[str, ...], list[str | Group], dict] | None,
     image_tuple: tuple[tuple[str, ...], list[str | Group], dict],
     label_paths: list[str],
     output_dir: str,
-    output_sep: str,
-    objects_dir: str,
-    objects_dir_sep: str,
+    merge_paths: list[str],
     label_name_to_features: dict[str, set[str]],
     label_name_to_min_max_area: dict[str, tuple[float | None, float | None]],
     features_plot: set[str],
@@ -215,13 +238,10 @@ def single_feature(
                         - A tuple of metadata strings.
                         - A list of file paths or Zarr groups containing the primary image data.
                         - A dictionary with additional metadata.
-    :param labels_group: Zarr group containing labels used to identify regions of interest in the image
+    :param label_paths: Zarr paths containing labels used to identify regions of interest in the image
                          for feature computation.
     :param output_dir: Directory path where the computed feature files will be saved.
-    :param output_sep: Separator string used to construct the output file names. This helps in organizing
-                       the output files systematically.
-    :param objects_dir: Directory path containing find objects output.
-    :param objects_dir_sep: File separator for `objects_dir`
+    :param merge_paths: Directory path containing output to merge
     :param label_name_to_features: Dictionary mapping label names (keys) to sets of
         feature names (values). Label names correspond to components in the labeled
         image (e.g. nuclei), and feature names specify the features to compute.
@@ -247,7 +267,8 @@ def single_feature(
         )
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
-
+    output_sep = output_fs.sep
+    output_dir = output_dir.rstrip(output_fs.sep)
     image = _images2fov(file_list, metadata, dask=True)
 
     n_channels1 = None
@@ -255,18 +276,9 @@ def single_feature(
     if stacked_image_tuple is not None:
         stacked_image = _images2fov(stacked_file_list, stacked_metadata, dask=True)
         n_channels1 = image.sizes["c"]
-
-    image_key_no_t = None
-    selected_timepoint = None
-    if "t" in metadata["group_metadata"]["group"]:
-        image_key_no_t = []
-        for key in metadata["group_metadata"]["group"]:
-            if key != "t":
-                image_key_no_t.append(str(metadata["group_metadata"]["group"][key]))
-            else:
-                selected_timepoint = metadata["group_metadata"]["group"][key]
-        image_key_no_t = "-".join(image_key_no_t).replace("/", "-")
-
+    image_key_no_t, selected_timepoint = _image_key_without_time_and_selected_time(
+        metadata
+    )
     for label_name in label_name_to_features:
         label_prefix = _label_name_to_prefix[label_name]
         features = label_name_to_features[label_name]
@@ -307,11 +319,10 @@ def single_feature(
                 continue
 
             merged_df = None
-            if objects_dir is not None:
+            if len(merge_paths) > 0:
                 merged_df = _read_merged_or_objects(
-                    path=objects_dir,
+                    paths=merge_paths,
                     timepoint=timepoint,
-                    path_sep=objects_dir_sep,
                     label_name=label_name,
                     image_key=image_key,
                     label_filter=label_filter,
@@ -493,7 +504,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
 
     image_patterns = arguments.image_pattern
     output_dir = arguments.output
-    objects_dir = arguments.objects
+    merge_paths = arguments.merge
     subset = arguments.subset
     force = arguments.force
     groupby = arguments.groupby
@@ -527,10 +538,6 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
             threads_per_worker=4 if "sizeshape" in unique_features else 1
         )
 
-    objects_dir_sep = None
-    if objects_dir is not None:
-        objects_dir_sep = fsspec.core.url_to_fs(objects_dir)[0].sep
-        objects_dir = objects_dir.rstrip(objects_dir_sep)
     label_name_to_min_max_area = dict(
         nuclei=[arguments.nuclei_min_area, arguments.nuclei_max_area],
         cytosol=[arguments.cytosol_min_area, arguments.cytosol_max_area],
@@ -581,9 +588,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
                 img_tuple[0],
                 img_tuple[1],
                 output_dir=output_dir,
-                output_sep=output_fs.sep,
-                objects_dir=objects_dir,
-                objects_dir_sep=objects_dir_sep,
+                merge_paths=merge_paths,
                 label_paths=label_paths,
                 label_filter=label_filter,
                 label_name_to_min_max_area=label_name_to_min_max_area,

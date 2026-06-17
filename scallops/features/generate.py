@@ -134,7 +134,7 @@ def label_features(
 ) -> dd.DataFrame | pd.DataFrame:
     """Extract features from labeled regions in the image.
 
-    :param objects_df: Data frame containing labeled regions from `find_objects`.
+    :param objects_df: Data frame containing labeled regions from `find_objects` with frame index set to label id.
     :param label_image: Labeled regions.
     :param intensity_image: Intensity image with dimensions (y, x, c) or zarr array(s)
         with dimensions with leading dimensions unrolled to channel dimension

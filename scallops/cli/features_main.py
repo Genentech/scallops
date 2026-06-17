@@ -121,8 +121,8 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     )
     required.add_argument(
         "--merge",
-        required=False,
-        help="Path to directory containing output from `merge`",
+        nargs="*",
+        help="Path(s) to directory containing output from `merge`",
     )
     parser.add_argument(
         "--label-filter",
