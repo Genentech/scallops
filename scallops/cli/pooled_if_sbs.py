@@ -614,6 +614,8 @@ def merge_sbs_phenotype_pipeline(
             df_phenotype = pd.concat(df_phenotypes, axis=1, join=join_phenotype)
     elif len(df_phenotypes) == 1:
         df_phenotype = df_phenotypes[0]
+    if df_phenotype is not None:
+        assert not df_phenotype.columns.has_duplicates, "Duplicate columns"
     if df_labels is not None and df_phenotype is not None and df_barcode is not None:
         merged_df = merge_sbs_phenotype(
             df_labels=df_labels,
