@@ -481,6 +481,7 @@ def _rename_unique(columns, unique_values, prefix):
     replace_chars = " |-"
     for value in columns:
         new_value = value
+        new_value = re.sub(replace_chars, "_", new_value)
         if value in unique_values:
             new_value = f"{value}_{prefix}"
             if new_value in unique_values:
@@ -489,7 +490,7 @@ def _rename_unique(columns, unique_values, prefix):
                 while new_value in unique_values:
                     counter += 1
                     new_value = f"{value}_{prefix}_{counter}"
-        new_value = re.sub(replace_chars, "_", new_value)
+
         if value != new_value:
             rename[value] = new_value
 
@@ -615,7 +616,9 @@ def merge_sbs_phenotype_pipeline(
     elif len(df_phenotypes) == 1:
         df_phenotype = df_phenotypes[0]
     if df_phenotype is not None:
-        assert not df_phenotype.columns.has_duplicates, "Duplicate columns"
+        assert not df_phenotype.columns.has_duplicates, (
+            f"Duplicate columns: {', '.join(df_phenotype.columns[df_phenotype.columns.duplicated()].to_list())}"
+        )
     if df_labels is not None and df_phenotype is not None and df_barcode is not None:
         merged_df = merge_sbs_phenotype(
             df_labels=df_labels,
