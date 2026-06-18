@@ -61,30 +61,46 @@ def _read_merged_or_objects(
     timepoint: str | None,
     label_name: str,
     image_key: str,
+    image_key_without_t: str | None,
     label_filter: str | None,
 ):
-    found_paths = []
+    found_paths = []  # tuple of (path, time)
+
     for path in paths:
         path_sep = fsspec.core.url_to_fs(path)[0].sep
         path = path.rstrip(path_sep)
 
         test_paths = [
-            f"{path}{path_sep}{label_name}{path_sep}{image_key}.parquet",
-            f"{path}{path_sep}{image_key}.zarr",
-            f"{path}{path_sep}{image_key}.parquet",
-            get_path(path, path_sep, label_name, image_key, timepoint),
+            (f"{path}{path_sep}{label_name}{path_sep}{image_key}.parquet", None),
+            (f"{path}{path_sep}{image_key}.zarr", None),
+            (f"{path}{path_sep}{image_key}.parquet", None),
+            (
+                get_path(
+                    path,
+                    path_sep,
+                    label_name,
+                    image_key_without_t
+                    if image_key_without_t is not None
+                    else image_key,
+                    timepoint,
+                    "-objects.parquet",
+                ),
+                timepoint if image_key_without_t is not None else None,
+            ),
         ]
 
-        for test_path in test_paths:
+        for test_path, t in test_paths:
             if fsspec.core.url_to_fs(path)[0].exists(test_path):
-                found_paths.append(test_path)
+                logger.info(f"Reading {test_path}")
+                found_paths.append((test_path, t))
 
     if len(found_paths) == 0:
         return None
 
     area_column = f"{_label_name_to_prefix[label_name]}_AreaShape_Area"
     merged_dfs = []
-    for path in found_paths:
+    # add suffix for time specific paths
+    for path, t in found_paths:
         if path.lower().endswith(".zarr"):
             data = read_anndata_zarr(path, dask=True)
             merged_df = data.obs
@@ -106,6 +122,8 @@ def _read_merged_or_objects(
             merged_df = pd.read_parquet(path)
         if "label" in merged_df.columns:
             merged_df = merged_df.set_index("label")
+        if t is not None:
+            merged_df.columns = merged_df.columns + f"_{t}"
         merged_dfs.append(merged_df)
     return (
         merged_dfs[0]
@@ -142,7 +160,7 @@ def _find_labels(
     label_paths: list[str],
     image_key: str,
     label_name: str,
-    image_key_no_t: str | None,
+    image_key_without_t: str | None,
     selected_timepoint: Any,
 ):
     timepoints = None
@@ -159,8 +177,8 @@ def _find_labels(
                     else [None]
                 )
                 return g, timepoints
-            if g is None and image_key_no_t is not None:
-                g = labels_group.get(f"{image_key_no_t}-{label_name}")
+            if g is None and image_key_without_t is not None:
+                g = labels_group.get(f"{image_key_without_t}-{label_name}")
                 zarr_metadata = g.attrs["multiscales"][0]["metadata"]
 
                 if "t" in zarr_metadata:
@@ -191,18 +209,20 @@ def _stack_and_rename(image: xr.DataArray) -> xr.DataArray:
 
 
 def _image_key_without_time_and_selected_time(metadata):
-    image_key_no_t = None
+    image_key_without_t = None
     selected_timepoint = None
     if "t" in metadata["group_metadata"]["group"]:
-        image_key_no_t = []
+        image_key_without_t = []
         for key in metadata["group_metadata"]["group"]:
             if key != "t":
-                image_key_no_t.append(str(metadata["group_metadata"]["group"][key]))
+                image_key_without_t.append(
+                    str(metadata["group_metadata"]["group"][key])
+                )
             else:
                 selected_timepoint = metadata["group_metadata"]["group"][key]
-        image_key_no_t = "-".join(image_key_no_t).replace("/", "-")
+        image_key_without_t = "-".join(image_key_without_t).replace("/", "-")
 
-    return image_key_no_t, selected_timepoint
+    return image_key_without_t, selected_timepoint
 
 
 def single_feature(
@@ -276,7 +296,7 @@ def single_feature(
     if stacked_image_tuple is not None:
         stacked_image = _images2fov(stacked_file_list, stacked_metadata, dask=True)
         n_channels1 = image.sizes["c"]
-    image_key_no_t, selected_timepoint = _image_key_without_time_and_selected_time(
+    image_key_without_t, selected_timepoint = _image_key_without_time_and_selected_time(
         metadata
     )
     for label_name in label_name_to_features:
@@ -286,7 +306,7 @@ def single_feature(
             label_paths=label_paths,
             image_key=image_key,
             label_name=label_name,
-            image_key_no_t=image_key_no_t,
+            image_key_without_t=image_key_without_t,
             selected_timepoint=selected_timepoint,
         )
         if g is None:
@@ -325,8 +345,11 @@ def single_feature(
                     timepoint=timepoint,
                     label_name=label_name,
                     image_key=image_key,
+                    image_key_without_t=image_key_without_t,
                     label_filter=label_filter,
                 )
+                if merged_df is None:
+                    raise ValueError(f"Metadata not found for {image_key}")
             if timepoint is not None and labels_array.ndim == 3:
                 timepoint_index = timepoints.index(timepoint)
                 label_image = labels_array[timepoint_index]
@@ -339,7 +362,12 @@ def single_feature(
                 )
                 merged_df = find_objects(label_image)
                 objects_path = get_path(
-                    output_dir, output_sep, label_name, image_key, timepoint
+                    output_dir,
+                    output_sep,
+                    label_name,
+                    image_key,
+                    timepoint,
+                    "-objects.parquet",
                 )
 
                 merged_df.index.name = "label"

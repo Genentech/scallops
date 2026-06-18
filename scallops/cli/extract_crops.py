@@ -65,7 +65,7 @@ def single_crop(
     image_key = metadata["id"]
     image = _images2fov(file_list, metadata, dask=True).squeeze().data
 
-    image_key_no_t, selected_timepoint = _image_key_without_time_and_selected_time(
+    image_key_without_t, selected_timepoint = _image_key_without_time_and_selected_time(
         metadata
     )
 
@@ -73,7 +73,7 @@ def single_crop(
         label_paths=label_paths,
         image_key=image_key,
         label_name=label_name,
-        image_key_no_t=image_key_no_t,
+        image_key_without_t=image_key_without_t,
         selected_timepoint=selected_timepoint,
     )
     if g is None:
@@ -110,10 +110,11 @@ def single_crop(
             label_name=label_name,
             timepoint=timepoint,
             image_key=image_key,
+            image_key_without_t=image_key_without_t,
             label_filter=label_filter,
         )
         if merged_df is None:
-            raise ValueError(f"Unable to read merged data for {image_key}.")
+            raise ValueError(f"Unable to read metadata for {image_key}.")
         n_labels_before_filtering = len(merged_df)
         if label_filter is not None:
             merged_df = merged_df.query(label_filter)

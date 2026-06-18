@@ -33,8 +33,8 @@ def get_path(
     output_sep: str,
     label_name: str,
     image_key: str,
-    timepoint: str | None,
-    suffix="-objects.parquet",
+    timepoint: str | None = None,
+    suffix="",
 ):
     return (
         (f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}{suffix}")
@@ -55,7 +55,14 @@ def _execute(
     assert len(file_list) == 1
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
-    path = get_path(output_dir, output_sep, label_name, image_key, timepoint)
+    path = get_path(
+        output_dir,
+        output_sep,
+        label_name,
+        image_key,
+        timepoint,
+        suffix="-objects.parquet",
+    )
     fs = fsspec.url_to_fs(path)[0]
     if fs.exists(path):
         if force:

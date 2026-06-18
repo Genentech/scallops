@@ -77,6 +77,7 @@ workflow ops_workflow {
         String? cell_segmentation_extra_arguments
 
         Boolean mark_stitch_boundary_cells = true
+        String intersects_stitch_boundary_label = "cell" # nuclei
 
         # merge
         String? merge_extra_arguments
@@ -151,9 +152,9 @@ workflow ops_workflow {
         String merge_memory = "256 GiB"
         String merge_disks = "local-disk 20 HDD"
 
-        Int cell_intersects_boundary_cpu = 16
-        String cell_intersects_boundary_memory = "32 GiB"
-        String cell_intersects_boundary_disks = "local-disk 200 HDD"
+        Int intersects_boundary_cpu = 16
+        String intersects_boundary_memory = "32 GiB"
+        String intersects_boundary_disks = "local-disk 200 HDD"
 
         String docker
 
@@ -167,9 +168,7 @@ workflow ops_workflow {
         String register_iss_transforms_suffix = "iss-transforms-t0"
         String register_pheno_to_iss_suffix = "pheno-to-iss-registered.zarr"
         String register_pheno_to_iss_transforms_suffix = "pheno-to-iss-transforms"
-        String nuclei_objects_suffix = "objects-nuclei"
-        String cell_objects_suffix = "objects-cell"
-        String cytosol_objects_suffix = "objects-cytosol"
+        String objects_suffix = "objects"
         String nuclei_features_suffix = "features-nuclei"
         String cell_features_suffix = "features-cell"
         String cytosol_features_suffix = "features-cytosol"
@@ -181,8 +180,7 @@ workflow ops_workflow {
         String reads_suffix = "reads"
         String merge_meta_suffix = "merge-sbs-metadata"
         String merge_features_suffix = "merge-features"
-        String cell_intersects_boundary_suffix = "intersects-boundary"
-        String cell_intersects_boundary_non_reference_t_suffix = "intersects-boundary-t"
+        String intersects_boundary_suffix = "intersects-boundary"
     }
 
     String output_stripped = sub(output_directory, "/+$", "") + "/"
@@ -194,9 +192,7 @@ workflow ops_workflow {
     String nuclei_features_directory = output_stripped + nuclei_features_suffix
     String cell_features_directory = output_stripped + cell_features_suffix
     String cytosol_features_directory = output_stripped + cytosol_features_suffix
-    String nuclei_objects_directory =  output_stripped + nuclei_objects_suffix
-    String cell_objects_directory =  output_stripped + cell_objects_suffix
-    String cytosol_objects_directory =  output_stripped + cytosol_objects_suffix
+    String objects_directory =  output_stripped + objects_suffix
     String register_pheno_to_pheno_directory = output_stripped + register_pheno_to_pheno_suffix
     String register_pheno_to_pheno_transform_directory = output_stripped + register_pheno_to_pheno_transform_suffix
     String spot_detect_directory = output_stripped + spot_detect_suffix
@@ -204,7 +200,7 @@ workflow ops_workflow {
     String merge_meta_directory = output_stripped + merge_meta_suffix
     String merge_features_directory = output_stripped + merge_features_suffix
     String register_pheno_to_iss_qc_directory = output_stripped + register_pheno_to_iss_qc_suffix
-    String cell_intersects_boundary_directory = output_stripped + cell_intersects_boundary_suffix
+    String intersects_boundary_directory = output_stripped + intersects_boundary_suffix
 
     Boolean iss_url_supplied = defined(iss_url)
     Boolean pheno_url_supplied = defined(phenotype_url)
@@ -339,7 +335,7 @@ workflow ops_workflow {
                             labels=select_all([segment_nuclei.output_url, register_pheno_to_pheno.label_output_url]),
                             label_pattern=groupby_pattern,
                             suffix="nuclei",
-                            output_directory=nuclei_objects_directory,
+                            output_directory=objects_directory,
                             subset = subset_,
                             force = force_find_objects,
                             docker=docker,
@@ -358,7 +354,7 @@ workflow ops_workflow {
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             label_pattern=groupby_pattern,
                             suffix="cell",
-                            output_directory=cell_objects_directory,
+                            output_directory=objects_directory,
                             subset = subset_,
                             force = force_find_objects,
                             docker=docker,
@@ -377,7 +373,7 @@ workflow ops_workflow {
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             label_pattern=groupby_pattern,
                             suffix="cytosol",
-                            output_directory=cytosol_objects_directory,
+                            output_directory=objects_directory,
                             subset = subset_,
                             force = force_find_objects,
                             docker=docker,
@@ -396,25 +392,25 @@ workflow ops_workflow {
 
                 if(mark_stitch_boundary_cells) {
                     String phenotype_url_stripped = sub(select_first([phenotype_url]), "/+$", "")
-                    call tasks.intersects_boundary as cell_intersects_boundary {
+                    call tasks.intersects_boundary as intersects_boundary {
 
                         input:
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             images=phenotype_url_stripped + '/labels/',
                             image_pattern=phenotype_image_pattern + '-mask',
-                            output_directory=cell_intersects_boundary_directory,
-                            label_type='cell',
-                            objects=find_objects_cell.output_url,
+                            output_directory=intersects_boundary_directory,
+                            label_type=intersects_stitch_boundary_label,
+                            objects=if(intersects_stitch_boundary_label=='cell') then find_objects_cell.output_url else find_objects_nuclei.output_url,
                             groupby=phenotype_group_by_with_time,
                             subset = subset_ + '-*',
-                            force = force_segment_cell,
+                            force = if(intersects_stitch_boundary_label=='cell') then force_segment_cell else force_segment_nuclei,
                             docker=docker,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
-                            disks = cell_intersects_boundary_disks,
-                            memory = cell_intersects_boundary_memory,
-                            cpu = cell_intersects_boundary_cpu,
+                            disks = intersects_boundary_disks,
+                            memory = intersects_boundary_memory,
+                            cpu = intersects_boundary_cpu,
                             max_retries = max_retries
                     }
 
@@ -586,10 +582,8 @@ workflow ops_workflow {
                 call tasks.merge as merge_sbs_metadata {
                     input:
                         iss_reads=select_first([reads.output_url]) + '/labels',
-                        objects_nuclei=find_objects_nuclei.output_url, # all rounds
-                        objects_cell=find_objects_cell.output_url,
-                        objects_cytosol=find_objects_cytosol.output_url,
-                        cell_intersects_boundary=cell_intersects_boundary.output_url,
+                        objects_nuclei=if(run_cell_segmentation) then find_objects_nuclei.output_url else find_objects_cell.output_url,
+                        cell_intersects_boundary=intersects_boundary.output_url,
                         register_pheno_to_iss_qc=register_pheno_to_iss_qc.output_url,
                         register_iss_to_iss_qc=register_iss_to_iss_qc.output_url,
                         barcodes=select_first([barcodes]),
@@ -623,7 +617,7 @@ workflow ops_workflow {
                         input:
                             images = select_first([phenotype_url]),
                             image_pattern=phenotype_image_pattern,
-                            objects=merge_sbs_metadata.output_url,
+                            merge=merge_sbs_metadata.output_url,
                             labels=select_all([segment_nuclei.output_url, register_pheno_to_pheno.label_output_url]),
                             label_filter=features_label_filter,
                             groupby=phenotype_group_by_with_time,
@@ -634,7 +628,7 @@ workflow ops_workflow {
 
                             model_dir=model_dir,
 
-                            output_directory=nuclei_features_directory + '-' + phenotype_time + '-' + feature_index,
+                            output_directory=nuclei_features_directory + '-' + phenotype_time + '-batch' + feature_index,
                             subset = subset_ + '-' + phenotype_time,
                             force = force_features,
                             docker=docker,
@@ -664,7 +658,7 @@ workflow ops_workflow {
                         input:
                             images = select_first([phenotype_url]),
                             image_pattern=phenotype_image_pattern,
-                            objects=merge_sbs_metadata.output_url,
+                            merge=merge_sbs_metadata.output_url,
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             label_filter=features_label_filter,
                             groupby=phenotype_group_by_with_time,
@@ -705,7 +699,7 @@ workflow ops_workflow {
                         input:
                             images = select_first([phenotype_url]),
                             image_pattern=phenotype_image_pattern,
-                            objects=merge_sbs_metadata.output_url,
+                            merge=merge_sbs_metadata.output_url,
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             label_filter=features_label_filter,
                             groupby=phenotype_group_by_with_time,

@@ -572,7 +572,7 @@ def merge_sbs_phenotype_pipeline(
     prefixes = []
 
     for i in range(len(phenotype_paths)):
-        df = dd.read_parquet(phenotype_paths[i])
+        df = dd.read_parquet(path)
         _metadata_cols = df.columns[
             df.columns.str.contains(_metadata_columns_whitelist_str)
         ].tolist()
@@ -584,7 +584,7 @@ def merge_sbs_phenotype_pipeline(
         if phenotype_suffix is not None:
             df.columns = df.columns + phenotype_suffix[i]
 
-        prefixes.append(phenotype_paths[i].split("/")[-3])
+        prefixes.append(path.split("/")[-3])
 
         if output_format == "zarr":  # read index and metadata
             if len(_metadata_cols) > 0:
@@ -595,7 +595,7 @@ def merge_sbs_phenotype_pipeline(
             )
             for key in rename_features:
                 feature_names_i[feature_names_i.index(key)] = rename_features[key]
-            df = dd.read_parquet(phenotype_paths[i], columns=_metadata_cols)
+            df = dd.read_parquet(path, columns=_metadata_cols)
             feature_names += feature_names_i
             unique_columns.update(feature_names_i)
 
@@ -671,34 +671,38 @@ def merge_sbs_phenotype_pipeline(
         )
 
 
-def _find_phenotype_paths(
-    phenotype_paths, phenotype_filesystems, phenotype_suffix, image_key
-):
-    _phenotype_paths = []
-    _phenotype_suffix = []
-
-    for i in range(len(phenotype_paths)):
-        # match */A1-*.parquet and */A1.parquet
-        sep = phenotype_filesystems[i].sep
-        matches = phenotype_filesystems[i].glob(
-            f"{phenotype_paths[i]}{sep}*{sep}{image_key}-*.parquet"
-        ) + phenotype_filesystems[i].glob(
-            f"{phenotype_paths[i]}{sep}*{sep}{image_key}.parquet"
-        )
-
-        if len(matches) == 0:
-            # match A1-*.parquet and A1.parquet
-            matches = phenotype_filesystems[i].glob(
-                f"{phenotype_paths[i]}{sep}{image_key}-*.parquet"
-            ) + phenotype_filesystems[i].glob(
-                f"{phenotype_paths[i]}{sep}{image_key}.parquet"
+def _find_phenotype_paths(paths: list[str], image_key: str, image_metadata: dict):
+    found_paths = []
+    for path in paths:
+        path_ = path
+        path = path.format(**image_metadata["file_metadata"][0])
+        fs, path = fsspec.url_to_fs(path)
+        if path_ == path and "*" not in path:  # directory
+            # match */A1-*.parquet and */A1.parquet
+            sep = fs.sep
+            matches = fs.glob(f"{path}{sep}*{sep}{image_key}-*.parquet") + fs.glob(
+                f"{path}{sep}*{sep}{image_key}.parquet"
             )
 
-        for x in matches:
-            _phenotype_paths.append(phenotype_filesystems[i].unstrip_protocol(x))
-            if phenotype_suffix is not None:
-                _phenotype_suffix.append(phenotype_suffix[i])
-    return _phenotype_paths, _phenotype_suffix
+            if len(matches) == 0:
+                # match A1-*.parquet and A1.parquet
+                matches = fs.glob(f"{path}{sep}{image_key}-*.parquet") + fs.glob(
+                    f"{path}{sep}{image_key}.parquet"
+                )
+
+            for x in matches:
+                path.append(fs.unstrip_protocol(x))
+                # if phenotype_suffix is not None:
+                #     _phenotype_suffix.append(phenotype_suffix[i])
+
+        else:
+            if "*" in path:
+                matches = fs.glob(path)
+                for match in matches:
+                    found_paths.append(fs.unstrip_protocol(match))
+            elif fs.exists(path):
+                found_paths.append(fs.unstrip_protocol(path))
+    return found_paths
 
 
 def merge_main(arguments: argparse.Namespace):
@@ -745,8 +749,9 @@ def merge_main(arguments: argparse.Namespace):
     if len(set(phenotype_paths)) != len(phenotype_paths):
         raise ValueError("Duplicate phenotype paths")
     for i in range(len(phenotype_paths)):
-        phenotype_fs, _ = fsspec.core.url_to_fs(phenotype_paths[i])
-        phenotype_paths[i] = phenotype_paths[i].rstrip(phenotype_fs.sep)
+        path = phenotype_paths[i]
+        phenotype_fs, _ = fsspec.core.url_to_fs(path)
+        path = path.rstrip(phenotype_fs.sep)
         phenotype_filesystems.append(phenotype_fs)
     paths = []
 
@@ -757,6 +762,7 @@ def merge_main(arguments: argparse.Namespace):
         sbs = sbs.rstrip(sbs_fs.sep)
         sbs_matches = sbs_fs.glob(sbs + sbs_fs.sep + "*.parquet")
         sbs_matches = [sbs_fs.unstrip_protocol(m) for m in sbs_matches]
+        print("sbs_matches", sbs_matches)
         for sbs_path in sbs_matches:
             name = os.path.splitext(os.path.basename(sbs_path))[0]
             if not name.startswith("."):  # ignore hidden files

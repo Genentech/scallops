@@ -371,7 +371,7 @@ task intersects_boundary {
         --subset "~{subset}" \
         --output "~{output_directory}" \
         --images "~{images}" \
-        --objects "~{objects}" \
+        --merge "~{objects}" \
         --no-normalize \
         ~{'--image-pattern ' + image_pattern} \
         ~{true="--force" false="" force}
@@ -461,7 +461,7 @@ task features {
         String? features_extra_arguments
         String? model_dir
         Array[String] labels
-        String? objects
+        String? merge
         String images
         String subset
         Boolean? force
@@ -498,8 +498,8 @@ task features {
         ~{if defined(cell_max_area) && select_first([cell_max_area])>0 then '--cell-max-area ' + cell_max_area else ''} \
         ~{if defined(cytosol_max_area) && select_first([cytosol_max_area])>0 then '--cytosol-max-area ' + cytosol_max_area else ''} \
         ~{if defined(features_extra_arguments) then features_extra_arguments else ''} \
+        --merge ~{merge} \
         --labels ~{sep=" " labels} \
-        ~{"--objects " + objects} \
         ~{"--label-filter " + '"' + label_filter + '"'} \
         --subset ~{subset} \
         ~{"--image-pattern " + image_pattern} \

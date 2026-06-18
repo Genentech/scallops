@@ -66,7 +66,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads()
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=4)
 
     no_version = arguments.no_version
     image_seq = from_sequence(
