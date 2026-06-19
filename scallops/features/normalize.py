@@ -113,6 +113,11 @@ def typical_variation_normalization(
     # Adapted from EFAAR_benchmarking <https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/efaar.py>_
     X = data.X
     ref_indices = data.obs.index.get_indexer_for(data.obs.query(reference_query).index)
+
+    _ref_X = np.asarray(X[ref_indices])
+    pre_scale_mean = np.nanmean(_ref_X, axis=0)
+    pre_scale_std = np.nanstd(_ref_X, axis=0)
+
     X = _normalize_features_array(
         X,
         X[ref_indices],
@@ -129,6 +134,8 @@ def typical_variation_normalization(
     mean_ = d.mean_
     variance_ratio = d.explained_variance_ratio_
     variance = d.explained_variance_
+
+    covariance_alignment_inv = {}
 
     if by is not None:
         group_to_indices = data.obs.groupby(by, observed=True, sort=False).indices
@@ -149,6 +156,7 @@ def typical_variation_normalization(
         target_cov = np.cov(X[ref_indices], rowvar=False, ddof=1) + 0.5 * np.eye(
             X.shape[1]
         )
+        tgt_half = scipy.linalg.fractional_matrix_power(target_cov, 0.5)
 
         for group in group_to_indices.keys():
             group_indices = group_to_indices[group]
@@ -157,13 +165,13 @@ def typical_variation_normalization(
             source_cov = np.cov(
                 X[group_control_indices], rowvar=False, ddof=1
             ) + 0.5 * np.eye(X.shape[1])
+            src_half_inv = scipy.linalg.fractional_matrix_power(source_cov, -0.5)
 
-            X[group_indices] = np.matmul(
-                X[group_indices], scipy.linalg.fractional_matrix_power(source_cov, -0.5)
-            )
-            X[group_indices] = np.matmul(
-                X[group_indices], scipy.linalg.fractional_matrix_power(target_cov, 0.5)
-            )
+            X[group_indices] = np.matmul(X[group_indices], src_half_inv)
+            X[group_indices] = np.matmul(X[group_indices], tgt_half)
+
+            forward_mat = src_half_inv @ tgt_half
+            covariance_alignment_inv[str(group)] = np.linalg.inv(forward_mat)
     else:
         X = _normalize_features_array(
             X,
@@ -175,7 +183,7 @@ def typical_variation_normalization(
             scaling=True,
             max_value=None,
         )
-    return anndata.AnnData(
+    result = anndata.AnnData(
         X=X,
         obs=data.obs.copy(),
         var=data.var.copy(),
@@ -185,9 +193,18 @@ def typical_variation_normalization(
                 "variance": variance,
                 "mean": mean_,
                 "PCs": components_,
-            }
+            },
+            "normalization_arguments": {
+                "reference_query": reference_query,
+                "by": by,
+            },
+            "tvn_pre_scale_mean": pre_scale_mean,
+            "tvn_pre_scale_std": pre_scale_std,
+            "covariance_alignment_inv": covariance_alignment_inv,
         },
     )
+    result.varm["PCs"] = components_.T
+    return result
 
 
 def normalize_features(
