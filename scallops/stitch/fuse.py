@@ -117,7 +117,7 @@ def _fuse(
     channel_window: int = 2,
     channel_cross_correlation_upsample: int = 2,
     channel_filter_percentiles: tuple[float, float] | None = None,
-):
+) -> list[str] | None:
     """Use stitching coordinates to fuse tiles.
 
     :param df: Stitch output dataframe.

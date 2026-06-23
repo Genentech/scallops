@@ -565,7 +565,9 @@ def _write_arrays(
         if channel_names is not None:
             if output_channels is not None:
                 channel_names = channel_names[output_channels]
-
+            channel_names = [
+                name.replace("_", "-").replace(" ", "-") for name in channel_names
+            ]
             ome_metadata["omero"] = _omero_channels(channel_names)
         group.attrs.update(ome_metadata)
 
