@@ -5,6 +5,7 @@ task illumination_correction {
         Array[String] images
         String subset
         String? z_index
+        String? extra_arguments
         String agg_method
         Int? expected_images
         String? image_pattern
@@ -29,6 +30,7 @@ task illumination_correction {
         from subprocess import check_call
 
         force = "~{force}"
+        extra_arguments = "{extra_arguments}"
         expected_images = "~{expected_images}"
         image_pattern = "~{image_pattern}"
         z_index = "~{z_index}"
@@ -51,6 +53,8 @@ task illumination_correction {
         if z_index != "":
             cmd.append("--z-index")
             cmd.append(z_index)
+        if extra_arguments != "":
+            extra_arguments += extra_arguments.split(" ")
         print(' '.join(cmd))
         check_call(cmd)
         CODE
@@ -113,6 +117,7 @@ task stitch {
         python <<CODE
         import subprocess
 
+        extra_arguments = "{extra_arguments}"
         z_index = "~{z_index}"
         image_output = "~{output_directory}" + "/stitch.zarr"
         report_output = "~{output_directory}" + "/stitch-report"
@@ -181,6 +186,8 @@ task stitch {
                 cmd.append(z_index_url)
             else:
                 cmd.append(z_index)
+        if extra_arguments != "":
+            extra_arguments += extra_arguments.split(" ")
         print(' '.join(cmd))
         subprocess.check_call(cmd)
 
