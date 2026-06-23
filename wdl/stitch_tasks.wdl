@@ -91,6 +91,7 @@ task stitch {
         Array[String]? channel_names
         String? image_pattern
         String output_directory
+        String? extra_arguments
 
         String? radial_correction_k
         String? stage_positions
