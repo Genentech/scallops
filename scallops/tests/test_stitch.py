@@ -182,9 +182,7 @@ def test_stitch_channel_names_from_tiles(tmp_path):
         img[...] = i + 1
         _write_image_with_position(
             input_path / f"test-{i}.zarr",
-            xr.DataArray(
-                img, dims=["c", "y", "x"], coords={"c": ["DAPI", "GFP"]}
-            ),
+            xr.DataArray(img, dims=["c", "y", "x"], coords={"c": ["DAPI", "GFP"]}),
             c[0],
             c[1],
         )
