@@ -54,7 +54,7 @@ task illumination_correction {
             cmd.append("--z-index")
             cmd.append(z_index)
         if extra_arguments != "":
-            extra_arguments += extra_arguments.split(" ")
+            cmd += extra_arguments.split(" ")
         print(' '.join(cmd))
         check_call(cmd)
         CODE
@@ -188,7 +188,7 @@ task stitch {
             else:
                 cmd.append(z_index)
         if extra_arguments != "":
-            extra_arguments += extra_arguments.split(" ")
+            cmd += extra_arguments.split(" ")
         print(' '.join(cmd))
         subprocess.check_call(cmd)
 
