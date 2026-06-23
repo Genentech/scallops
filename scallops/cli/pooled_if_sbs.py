@@ -187,8 +187,8 @@ def spot_detection_pipeline(
     save_keys: tuple[str] | list[str] = ("max", "log", "std", "peaks"),
     output_image_format: str = "zarr",
     cycles: None | list[int] = None,
-    qmin: float | None = None,
-    qmax: float | None = None,
+    percentile_min: float | None = None,
+    percentile_max: float | None = None,
     eps: float = 1e-20,
     force: bool = False,
     peak_neighborhood_size: int = 5,
@@ -213,8 +213,8 @@ def spot_detection_pipeline(
     :param save_keys: List of keys specifying which results to save.
     :param output_image_format: Output format for saved images.
     :param cycles: Optional list of cycle indices to process.
-    :param qmin: Minimum quantile for normalization
-    :param qmax: Maximum quantile for normalization
+    :param percentile_min: Minimum percentile for normalization
+    :param percentile_max: Maximum percentile for normalization
     :param eps: Small value added to the denominator for normalization
     :param force: Whether to overwrite existing output
     :param chunks: Tuple specifying chunking size for ISS image.
@@ -255,9 +255,9 @@ def spot_detection_pipeline(
         else image.chunk({"t": "auto", "c": "auto"})
     )
     logger.info(f"Running spot detection for {image_key}.")
-    if qmin is not None or qmax is not None:
+    if percentile_min is not None or percentile_max is not None:
         image.data = normalize_base_intensities(
-            image.data, qmin=qmin, qmax=qmax, eps=eps
+            image.data, pmin=percentile_min, pmax=percentile_max, eps=eps
         )
 
     loged = None
@@ -832,9 +832,9 @@ def spot_detect_main(arguments: argparse.Namespace):
     cycles = arguments.cycles
     spot_detection_method = arguments.spot_detection_method
     spot_detection_n_cycles = arguments.spot_detection_n_cycles
-    eps = None
-    qmin = None
-    qmax = None
+    eps = 1e-20
+    percentile_min = arguments.percentile_min
+    percentile_max = arguments.percentile_max
     optional_save = arguments.save
     force = arguments.force
     subset = arguments.subset
@@ -848,17 +848,6 @@ def spot_detect_main(arguments: argparse.Namespace):
         save_keys += list(optional_save)
     chunks = arguments.chunks
     no_version = arguments.no_version
-    if qmin is not None:
-        if qmin < 0 or qmin > 1:
-            if qmin != -1:
-                logger.info("Disabling qmin as it is out of range.")
-            qmin = None
-    if qmax is not None:
-        if qmax < 0 or qmax > 1:
-            if qmax != -1:
-                logger.info("Disabling qmax as it is out of range.")
-            qmax = None
-
     if chunks is not None:
         chunks = (chunks, chunks)
 
@@ -883,8 +872,8 @@ def spot_detect_main(arguments: argparse.Namespace):
                 save_keys=save_keys,
                 cycles=cycles,
                 eps=eps,
-                qmin=qmin,
-                qmax=qmax,
+                percentile_min=percentile_min,
+                percentile_max=percentile_max,
                 chunks=chunks,
                 peak_neighborhood_size=peak_neighborhood_size,
                 force=force,

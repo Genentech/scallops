@@ -363,6 +363,16 @@ def _create_spot_detect_parser(subparsers, default_help):
         "image chunk size is used",
         type=int,
     )
+    parser.add_argument(
+        "--percentile-min",
+        type=float,
+        help="Percentile min for normalization",
+    )
+    parser.add_argument(
+        "--percentile-max",
+        help="Percentile max for normalization",
+        type=float,
+    )
     z_index_arg(parser)
     groupby_arg(parser)
     subset_arg(parser)

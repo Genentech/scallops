@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 import skimage
 import xarray as xr
+from array_api_compat import get_namespace
 from dask import delayed
 from dask.array.core import slices_from_chunks
 from dask_image import ndfilters as dask_ndi
@@ -679,49 +680,59 @@ def transform_log(
     )
 
 
+def _normalize_mi_ma(
+    x: np.ndarray | da.Array,
+    mi: np.ndarray | da.Array,
+    ma: np.ndarray | da.Array,
+    clip: bool = False,
+    eps: float = 1e-20,
+    dtype: np.dtype = np.float32,
+) -> np.ndarray | da.Array:
+    if dtype is not None:
+        x = x.astype(dtype, copy=False)
+        mi = mi.astype(dtype, copy=False)
+        ma = ma.astype(dtype, copy=False)
+        eps = dtype(eps)
+
+    x = (x - mi) / (ma - mi + eps)
+
+    if clip:
+        x = x.clip(0, 1)
+    return x
+
+
 def normalize_base_intensities(
     image: np.ndarray | da.Array,
-    qmin: float | None = 0.01,
-    qmax: float | None = 0.98,
+    pmin: float | None = 1,
+    pmax: float | None = 99.8,
     eps: float = 1e-20,
+    clip: bool = False,
     dtype: np.dtype = np.float32,
 ) -> da.Array | np.ndarray:
     """Normalize base intensities for every time and channel separately.
 
     :param image: Array with dimensions (t,c,y,x)
-    :param qmin: Minimum quantile for normalization.
-    :param qmax: Maximum quantile for normalization.
+    :param pmin: Minimum percentile for normalization.
+    :param pmax: Maximum percentile for normalization.
     :param eps: Small value added to the denominator for normalization.
+    :param clip: Whether to clip to (0, 1)
     :param dtype: Data type of the output image.
     :return: Normalized base intensities
     """
-
-    if qmax is None:
-        qmax = 1
-    if qmin is None:
-        qmin = 0
+    if pmin is None:
+        pmin = 0
+    if pmax is None:
+        pmax = 100
 
     assert image.ndim == 4
-
-    def _normalize(x, qmin, qmax, eps, result_type):
-        # normalize every t+c separately
-        mi, ma = np.quantile(x, q=[qmin, qmax], axis=[2, 3], keepdims=True)
-        x = (x - mi) / (ma - mi + eps)
-        return x.astype(result_type)
-
-    eps = dtype(eps)
-    if isinstance(image, da.Array):
-        tmp = np.array([1, 2, 3], dtype=image.dtype) / np.array([0.5], dtype=dtype)
-
-        return da.map_overlap(
-            _normalize,
-            image,
-            qmin=qmin,
-            qmax=qmax,
-            eps=eps,
-            result_type=dtype,
-            dtype=tmp.dtype,
-            meta=np.array((), dtype=tmp.dtype),
-            depth=(0, 0, 30, 30),
-        )
-    return _normalize(image, qmin=qmin, qmax=qmax, eps=eps, result_type=dtype)
+    mi, ma = get_namespace(image).percentile(
+        image, [pmin, pmax], axis=[2, 3], keepdims=True
+    )
+    return _normalize_mi_ma(
+        x=image,
+        mi=mi,
+        ma=ma,
+        clip=clip,
+        eps=eps,
+        dtype=dtype,
+    )
