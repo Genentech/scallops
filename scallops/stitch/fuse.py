@@ -139,6 +139,8 @@ def _fuse(
     :param channel_cross_correlation_upsample: Perform subpixel alignment for registration across channels if greater than one
     :param channel_filter_percentiles: Replace data outside of percentile range [q1, q2] with uniform noise over the range
         [q1,q2] for registration across channels.
+    :return: Channel names read from the source tiles (e.g. from nd2 metadata), or
+        None when the tiles carry no named channel coordinate.
     """
     assert blend in ["none", "linear"]
     if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
@@ -162,6 +164,14 @@ def _fuse(
     n_channels = img.sizes["c"]
     size_z = img.sizes["z"] if "z" in img.dims else 1
     img = img.isel(t=0, z=0, missing_dims="ignore")
+    # Capture channel names from the tiles (e.g. from nd2 metadata via bioio) so
+    # they can be written to the output OMERO metadata. Skip integer/positional
+    # coordinates since those carry no channel name information.
+    tile_channel_names = (
+        img.coords["c"].values
+        if "c" in img.coords and img.coords["c"].dtype.kind not in "iuf"
+        else None
+    )
     if output_channels is None:
         output_channels = list(range(n_channels))
     img = img.values
@@ -391,6 +401,8 @@ def _fuse(
                 regions=(slice(channel_batch, channel_batch + channels_per_batch),),
                 compute=True,
             )
+
+    return tile_channel_names
 
 
 def _register_across_channels(

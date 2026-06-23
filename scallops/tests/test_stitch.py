@@ -171,6 +171,45 @@ def test_stitch_channels(tmp_path):
 
 
 @pytest.mark.io
+def test_stitch_channel_names_from_tiles(tmp_path):
+    # Channel names present on the input tiles (e.g. from nd2 metadata) should be
+    # written to the stitched output even without an explicit --channel-name flag.
+    input_path = tmp_path / "input"
+    coords = [(0, 0), (0.5, 1024 - 50.5), (1000, 0.5), (999, 1024 - 49.5)]
+    for i in range(len(coords)):
+        c = coords[i]
+        img = np.ones((2, 1024, 1024), dtype=np.uint16)
+        img[...] = i + 1
+        _write_image_with_position(
+            input_path / f"test-{i}.zarr",
+            xr.DataArray(img, dims=["c", "y", "x"], coords={"c": ["DAPI", "GFP"]}),
+            c[0],
+            c[1],
+        )
+
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-{skip}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "stitch.zarr"),
+        "--report-output",
+        str(tmp_path / "stitch"),
+        "--no-evaluate",
+        "--radial-correction-k",
+        "none",
+    ]
+    subprocess.check_call(cmd)
+    result = read_image(str(tmp_path / "stitch.zarr"))
+    np.testing.assert_array_equal(result.coords["c"], ["DAPI", "GFP"])
+
+
+@pytest.mark.io
 def test_stitch_cli(tmp_path):
     input_path = tmp_path / "input"
 
