@@ -536,7 +536,7 @@ def _write_arrays(
 
             dfp = dfp.values
 
-        _fuse(
+        tile_channel_names = _fuse(
             df=stitch_positions_df_local,
             group=group,
             z_index=z_index,
@@ -558,10 +558,16 @@ def _write_arrays(
             stitch_coords=stitch_positions_df,
             **metadata,
         )
+        # Fall back to the channel names read from the source tiles when the user
+        # did not explicitly pass --channel-name.
+        if channel_names is None:
+            channel_names = tile_channel_names
         if channel_names is not None:
             if output_channels is not None:
                 channel_names = channel_names[output_channels]
-
+            channel_names = [
+                name.replace("_", "-").replace(" ", "-") for name in channel_names
+            ]
             ome_metadata["omero"] = _omero_channels(channel_names)
         group.attrs.update(ome_metadata)
 
