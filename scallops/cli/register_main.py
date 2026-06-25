@@ -248,6 +248,16 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
         help="Paths to files containing ITK parameters or predefined parameter maps "
         "for registering across channels",
     )
+    parser.add_argument(
+        "--flip-moving-y",
+        action="store_true",
+        help="Flip moving image along y axis",
+    )
+    parser.add_argument(
+        "--flip-moving-x",
+        action="store_true",
+        help="Flip moving image along x axis",
+    )
 
     z_index_arg(parser)
     groupby_arg(parser)

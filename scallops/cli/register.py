@@ -12,6 +12,7 @@ import itk
 import numpy as np
 import xarray as xr
 import zarr
+from array_api_compat import get_namespace
 from dask.bag import from_sequence
 from zarr import Group
 
@@ -54,6 +55,28 @@ from scallops.zarr_io import (
 logger = _get_cli_logger()
 
 
+def _flip(image: xr.DataArray, flip_y: bool, flip_x: bool) -> xr.DataArray:
+    if flip_x or flip_y:
+        if image.data.ndim not in (2, 3):
+            raise ValueError(
+                "Flip operation only implemented for 2 or 3 dimensional images."
+            )
+        xp = get_namespace(image.data)
+        if flip_x:
+            if image.data.ndim == 2:
+                image.data = xp.fliplr(image.data)
+            elif image.data.ndim == 3:
+                for i in range(image.data.shape[0]):
+                    image.data[i] = xp.fliplr(image.data[i])
+        if flip_y:
+            if image.data.ndim == 2:
+                image.data = xp.flipud(image.data)
+            else:
+                for i in range(image.data.shape[0]):
+                    image.data[i] = xp.flipud(image.data[i])
+    return image
+
+
 def single_registration(
     fixed_tuple: tuple[tuple[str, ...], list[str | Group], dict] | None,
     moving_tuple: tuple[tuple[str, ...], list[str | Group], dict],
@@ -83,6 +106,8 @@ def single_registration(
     landmark_min_count: int = 100,
     output_aligned_channels_only: bool = False,
     itk_channel_parameters: list[str] | None = None,
+    flip_moving_y: bool = False,
+    flip_moving_x: bool = False,
     no_version: bool = False,
 ) -> str:
     """Perform single registration between fixed and moving images.
@@ -120,6 +145,8 @@ def single_registration(
     :param landmark_min_count: Ensure minimum number of landmarks
     :param initial_transform: Path to initial transformation file.
     :param output_aligned_channels_only: Whether to output aligned channels only
+    :param flip_moving_y: Flip moving y axis
+    :param flip_moving_x: Flip moving x axis
     :param no_version: Whether to skip version/CLI information in output.
     :return: Key of the registered image.
     """
@@ -192,6 +219,7 @@ def single_registration(
         fixed_image = _z_projection(fixed_image, z_index).isel(
             t=0, c=fixed_channel, missing_dims="ignore"
         )
+
     moving_image = _images2fov(
         moving_file_list,
         moving_metadata,
@@ -259,10 +287,17 @@ def single_registration(
         if transform_fs.isdir(transform_dest):
             transform_fs.rm(transform_dest, recursive=True)
         transform_fs.makedirs(transform_dest)
+        moving_image_align = moving_image_align.compute()
+        moving_image_align = _flip(moving_image_align, flip_moving_y, flip_moving_x)
+
         if landmarks_initialize:
             template_labels = None
             if len(moving_label_keys) > 0:
-                template_labels = read_ome_zarr_array(moving_label_keys[-1], dask=True)
+                template_labels = read_ome_zarr_array(
+                    moving_label_keys[-1], dask=True
+                ).compute()
+                template_labels = _flip(template_labels, flip_moving_y, flip_moving_x)
+
             landmarks_found = False
             grid_results = None
             for landmark_translation_attempt in range(len(landmark_initializations)):
@@ -330,7 +365,7 @@ def single_registration(
             del moving_image_align
         if image_output_root is not None:  # save moving image
             _itk_transform_image_zarr(
-                image=moving_image
+                image=_flip(moving_image, flip_moving_y, flip_moving_x)
                 if not output_aligned_channels_only
                 else moving_image_align.expand_dims({"c": 1}, axis=0),
                 transform_parameter_object=elastix_object.GetTransformParameterObject(),
@@ -350,6 +385,8 @@ def single_registration(
                 output_names=None,
                 moving_image_spacing=moving_image_spacing,
                 output_root=label_output_root,
+                flip_y=flip_moving_y,
+                flip_x=flip_moving_x,
             )
 
     else:  # align to t=reference_timepoint
@@ -545,6 +582,8 @@ def _transform_labels(
     output_root: zarr.Group,
     moving_image_spacing: None | tuple[float, float],
     attrs: None | dict,
+    flip_y: bool = False,
+    flip_x: bool = False,
 ):
     """Transform and save labels.
 
@@ -557,6 +596,8 @@ def _transform_labels(
     :param output_root: Root for output storage.
     :param moving_image_spacing: Spacing of the moving image.
     :param attrs: Additional attributes for the transformed array.
+    :param flip_y: Flip y axis.
+    :param flip_x: Flip x axis.
     """
     if output_names is None:
         output_names = [os.path.basename(key) for key in matching_keys]
@@ -572,7 +613,7 @@ def _transform_labels(
             to = f" to {output_names[i]}"
         logger.info(f"Running transformation for {name}{to}.")
         transformed_array = itk_transform_labels(
-            image=array,
+            image=_flip(array, flip_y, flip_x),
             transform_parameter_object=transform_parameter_object,
             image_spacing=moving_image_spacing,
         )
@@ -754,6 +795,13 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     sort_order = arguments.sort
     moving_image_path = arguments.moving
     fixed_image_path = arguments.fixed
+    flip_moving_y = arguments.flip_moving_y
+    flip_moving_x = arguments.flip_moving_x
+
+    if fixed_image_path is None and flip_moving_y or flip_moving_x:
+        raise ValueError(
+            "Flipping moving image only supported when fixed image is provided."
+        )
     moving_image_pattern = arguments.moving_image_pattern
     fixed_image_pattern = arguments.fixed_image_pattern
     group_by = arguments.groupby
@@ -763,6 +811,7 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
             reference_timepoint = int(reference_timepoint)
         except ValueError:
             pass
+
     unroll_channels = arguments.unroll_channels
     transform_output_dir = arguments.transform_output_dir
     subset = arguments.subset
@@ -883,6 +932,8 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
             output_aligned_channels_only=output_aligned_channels_only,
             force=force,
             no_version=no_version,
+            flip_moving_y=flip_moving_y,
+            flip_moving_x=flip_moving_x,
             itk_channel_parameters=itk_channel_parameters,
         )
         bag.compute()
