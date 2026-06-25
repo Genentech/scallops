@@ -175,7 +175,7 @@ workflow ops_workflow {
         String register_pheno_to_pheno_suffix = "pheno-registered.zarr"
         String register_pheno_to_pheno_transform_suffix = "pheno-to-pheno-transforms"
         String register_pheno_to_iss_qc_suffix = "pheno-to-iss-qc"
-        String register_iss_to_iss_qc_directory = "iss-to-iss-qc"
+        String register_iss_to_iss_qc_suffix = "iss-to-iss-qc"
         String spot_detect_suffix = "spot-detect.zarr"
         String reads_suffix = "reads"
         String merge_meta_suffix = "merge-sbs-metadata"
@@ -201,6 +201,7 @@ workflow ops_workflow {
     String merge_features_directory = output_stripped + merge_features_suffix
     String register_pheno_to_iss_qc_directory = output_stripped + register_pheno_to_iss_qc_suffix
     String intersects_boundary_directory = output_stripped + intersects_boundary_suffix
+    String register_iss_to_iss_qc_directory = output_stripped + register_iss_to_iss_qc_suffix
 
     Boolean iss_url_supplied = defined(iss_url)
     Boolean pheno_url_supplied = defined(phenotype_url)
@@ -582,7 +583,7 @@ workflow ops_workflow {
                 call tasks.merge as merge_sbs_metadata {
                     input:
                         iss_reads=select_first([reads.output_url]) + '/labels',
-                        objects_nuclei=if(run_cell_segmentation) then find_objects_nuclei.output_url else find_objects_cell.output_url,
+                        objects=if(run_cell_segmentation) then find_objects_nuclei.output_url else find_objects_cell.output_url,
                         cell_intersects_boundary=intersects_boundary.output_url,
                         register_pheno_to_iss_qc=register_pheno_to_iss_qc.output_url,
                         register_iss_to_iss_qc=register_iss_to_iss_qc.output_url,

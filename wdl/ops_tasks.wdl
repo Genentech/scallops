@@ -657,16 +657,17 @@ task reads {
 task merge {
     input {
         String? iss_reads
+
+        String? objects
+        String? cell_intersects_boundary
+        String? register_pheno_to_iss_qc
+        String? register_iss_to_iss_qc
+        String? register_pheno_to_pheno_qc
+
+
         Array[String]? phenotypes_nuclei
         Array[String]? phenotypes_cell
         Array[String]? phenotypes_cytosol
-        String? objects_nuclei
-        String? objects_cell
-        String? register_pheno_to_iss_qc
-        String? register_iss_to_iss_qc
-        String? objects_cytosol
-        String? cell_intersects_boundary
-        String? cell_intersects_boundary_t
 
         String output_directory
         String? barcodes
@@ -686,7 +687,7 @@ task merge {
     }
 
     command <<<
-        set -e
+        set -ex
 
 
         scallops pooled-sbs merge \
@@ -694,16 +695,14 @@ task merge {
          ~{"--barcodes " + barcodes} \
         --output "~{output_directory}" \
         --phenotype \
+        ~{objects} \
+        ~{cell_intersects_boundary} \
+        ~{register_pheno_to_iss_qc} \
+        ~{register_iss_to_iss_qc} \
+        ~{register_pheno_to_pheno_qc} \
         ~{sep=" " phenotypes_nuclei} \
         ~{sep=" " phenotypes_cell} \
         ~{sep=" " phenotypes_cytosol} \
-        ~{objects_nuclei} \
-        ~{objects_cell} \
-        ~{objects_cytosol} \
-        ~{cell_intersects_boundary} \
-        ~{cell_intersects_boundary_t} \
-        ~{register_pheno_to_iss_qc} \
-        ~{register_iss_to_iss_qc} \
         --subset ~{subset} \
         ~{"--barcode-col " + barcode_column} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \
