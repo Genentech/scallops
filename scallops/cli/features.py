@@ -63,6 +63,7 @@ def _read_merged_or_objects(
     image_key: str,
     image_key_without_t: str | None,
     label_filter: str | None,
+    add_timepoint_suffix: bool,
 ):
     found_paths = []  # tuple of (path, time)
 
@@ -122,7 +123,7 @@ def _read_merged_or_objects(
             merged_df = pd.read_parquet(path)
         if "label" in merged_df.columns:
             merged_df = merged_df.set_index("label")
-        if t is not None:
+        if add_timepoint_suffix and t is not None:
             merged_df.columns = merged_df.columns + f"_{t}"
         merged_dfs.append(merged_df)
     return (
@@ -347,6 +348,7 @@ def single_feature(
                     image_key=image_key,
                     image_key_without_t=image_key_without_t,
                     label_filter=label_filter,
+                    add_timepoint_suffix=False,
                 )
                 if merged_df is None:
                     raise ValueError(f"Metadata not found for {image_key}")
@@ -428,6 +430,13 @@ def single_feature(
                 merged_df = merged_df.query(label_filter)
             min_max_area = label_name_to_min_max_area.get(label_name)
             area_column = f"{label_prefix}_AreaShape_Area"
+            bounding_box_columns = [
+                f"{label_prefix}_AreaShape_BoundingBoxMinimum_Y",
+                f"{label_prefix}_AreaShape_BoundingBoxMinimum_X",
+                f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
+                f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
+            ]
+
             n_labels = len(merged_df)
             prefix = ""
             if min_max_area[0] is not None or min_max_area[1] is not None:
@@ -450,12 +459,7 @@ def single_feature(
                 intensity_image=intensity_image,
                 features=features,
                 normalize=normalize,
-                bounding_box_columns=[
-                    f"{label_prefix}_AreaShape_BoundingBoxMinimum_Y",
-                    f"{label_prefix}_AreaShape_BoundingBoxMinimum_X",
-                    f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
-                    f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
-                ],
+                bounding_box_columns=bounding_box_columns,
                 channel_names=channel_names,
             )
             # df will be None if only area and coordinates requested
@@ -466,7 +470,6 @@ def single_feature(
                     fs.rm(features_path, recursive=True)
                 df.index.name = "label"
                 df.columns = f"{label_prefix}_" + df.columns
-
                 if isinstance(df, pd.DataFrame):
                     table = pa.Table.from_pandas(df, preserve_index=True)
                     if not no_version:
@@ -500,6 +503,10 @@ def single_feature(
                 features_plot_label = [
                     label_prefix + "_" + feature for feature in features_plot_label
                 ]
+                if timepoint is not None:
+                    features_plot_label = [
+                        f"{c}_{timepoint}" for c in features_plot_label
+                    ]
                 df_features = pd.read_parquet(
                     features_path, columns=features_plot_label
                 )
