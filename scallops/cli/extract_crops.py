@@ -112,6 +112,7 @@ def single_crop(
             image_key=image_key,
             image_key_without_t=image_key_without_t,
             label_filter=label_filter,
+            add_timepoint_suffix=False,
         )
         if merged_df is None:
             raise ValueError(f"Unable to read metadata for {image_key}.")
@@ -120,6 +121,16 @@ def single_crop(
             merged_df = merged_df.query(label_filter)
         label_prefix = _label_name_to_prefix[label_name]
         area_column = f"{label_prefix}_AreaShape_Area"
+        centroid_cols = [
+            f"{label_prefix}_AreaShape_Center_Y",
+            f"{label_prefix}_AreaShape_Center_X",
+        ]
+        if timepoint is not None:
+            if area_column not in merged_df.columns:
+                area_column = f"{area_column}_{timepoint}"
+            if centroid_cols[0] not in merged_df.columns:
+                centroid_cols = [f"{c}_{timepoint}" for c in centroid_cols]
+
         merged_df = merged_df.query(f"{area_column}>=2")
         n_labels_filtered = n_labels_before_filtering - len(merged_df)
         logger.info(
@@ -173,10 +184,7 @@ def single_crop(
             output_dir=output_dir,
             crop_size=crop_size,
             output_format=output_format,
-            centroid_cols=[
-                f"{label_prefix}_AreaShape_Center_Y",
-                f"{label_prefix}_AreaShape_Center_X",
-            ],
+            centroid_cols=centroid_cols,
             gaussian_sigma=gaussian_sigma,
         )
 

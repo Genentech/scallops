@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict
 from typing import Literal
 
 import anndata
@@ -401,7 +402,7 @@ def _fix_cycles(sbs_cycles):
             for i in range(len(sbs_cycles)):
                 sbs_cycles[i] = sbs_cycles[i] + 1
     logger.info(
-        f"Timepoint indices (0-based): {', '.join([str(t - 1) for t in sbs_cycles])}"
+        f"ISS timepoint indices (0-based): {', '.join([str(t - 1) for t in sbs_cycles])}"
     )
     return sbs_cycles
 
@@ -501,7 +502,7 @@ def merge_sbs_phenotype_pipeline(
     image_key: str,
     sbs_path: str | None,
     phenotype_paths: list[str],
-    phenotype_suffix: list[str],
+    phenotype_suffixes: list[str],
     df_barcode: pd.DataFrame | None,
     output_dir: str,
     join_sbs: Literal["left", "right", "inner", "outer", "cross"] = "inner",
@@ -515,7 +516,7 @@ def merge_sbs_phenotype_pipeline(
     :param image_key: Image identifier.
     :param sbs_path: SBS label assignments path in Parquet format.
     :param phenotype_paths: List of parquet paths containing phenotype data.
-    :param phenotype_suffix: List of suffixes for phenotype columns.
+    :param phenotype_suffixes: List of suffixes.
     :param df_barcode: DataFrame containing barcode information.
     :param output_dir: Directory to save the merged results.
     :param join_sbs: Type of join to perform for SBS data.
@@ -532,18 +533,14 @@ def merge_sbs_phenotype_pipeline(
     ):
         logger.info(f"Skipping merge for {image_key}")
         return []
-    paths_and_suffixes = []
-    for i in range(len(phenotype_paths)):
-        path = phenotype_paths[i]
-        if phenotype_suffix is not None:
-            path += f" ({phenotype_suffix[i]})"
-        paths_and_suffixes.append(path)
-    logger.info(f"Running merge for {image_key} with {', '.join(paths_and_suffixes)}.")
+
+    logger.info(f"Running merge for {image_key} with {', '.join(phenotype_paths)}.")
     image_metadata = None
     sbs_cycles = None
     unique_columns = set()
     if df_barcode is not None:
         unique_columns.update(df_barcode.columns.tolist())
+    df_labels = None
     if sbs_path is not None:
         fs, sbs_path_ = fsspec.core.url_to_fs(sbs_path)
         iss_dataset = pq.ParquetDataset(sbs_path_, filesystem=fs)
@@ -573,6 +570,7 @@ def merge_sbs_phenotype_pipeline(
     prefixes = []
 
     for i in range(len(phenotype_paths)):
+        path = phenotype_paths[i]
         df = dd.read_parquet(path)
         _metadata_cols = df.columns[
             df.columns.str.contains(_metadata_columns_whitelist_str)
@@ -582,8 +580,8 @@ def merge_sbs_phenotype_pipeline(
         ].tolist()
         metadata_columns.append(_metadata_cols)
         feature_columns.append(_feature_cols)
-        if phenotype_suffix is not None:
-            df.columns = df.columns + phenotype_suffix[i]
+        if phenotype_suffixes[i] is not None:
+            df.columns = df.columns + "_" + phenotype_suffixes[i]
 
         prefixes.append(path.split("/")[-3])
 
@@ -676,38 +674,32 @@ def merge_sbs_phenotype_pipeline(
         )
 
 
-def _find_phenotype_paths(paths: list[str], image_key: str, image_metadata: dict):
+def _find_phenotype_paths_and_suffixes(
+    paths: list[str], image_key: str
+) -> tuple[list[str], list[str]]:
     found_paths = []
+    found_suffixes = []
     for path in paths:
-        path_ = path
-        path = path.format(**image_metadata["file_metadata"][0])
         fs, path = fsspec.url_to_fs(path)
-        if path_ == path and "*" not in path:  # directory
-            # match */A1-*.parquet and */A1.parquet
-            sep = fs.sep
-            matches = fs.glob(f"{path}{sep}*{sep}{image_key}-*.parquet") + fs.glob(
-                f"{path}{sep}*{sep}{image_key}.parquet"
-            )
+        prefix = f"{path}{fs.sep}**{fs.sep}{image_key}"
+        maxdepth = 3
+        matches = fs.glob(f"{prefix}.parquet", maxdepth=maxdepth) + fs.glob(
+            f"{prefix}-objects.parquet", maxdepth=maxdepth
+        )
 
-            if len(matches) == 0:
-                # match A1-*.parquet and A1.parquet
-                matches = fs.glob(f"{path}{sep}{image_key}-*.parquet") + fs.glob(
-                    f"{path}{sep}{image_key}.parquet"
-                )
+        if len(matches) == 0:
+            raise ValueError(f"No matches found in {path}")
 
-            for x in matches:
-                path.append(fs.unstrip_protocol(x))
-                # if phenotype_suffix is not None:
-                #     _phenotype_suffix.append(phenotype_suffix[i])
+        for x in matches:
+            x = fs.unstrip_protocol(x)
+            # if parent starts with t=xxx, add xxx suffix
+            tokens = x.split("/")
+            suffix = tokens[-2]
+            suffix = suffix[2:] if suffix.startswith("t=") else tokens[-3]
+            found_suffixes.append(suffix)
+            found_paths.append(x)
 
-        else:
-            if "*" in path:
-                matches = fs.glob(path)
-                for match in matches:
-                    found_paths.append(fs.unstrip_protocol(match))
-            elif fs.exists(path):
-                found_paths.append(fs.unstrip_protocol(path))
-    return found_paths
+    return found_paths, found_suffixes
 
 
 def merge_main(arguments: argparse.Namespace):
@@ -728,11 +720,7 @@ def merge_main(arguments: argparse.Namespace):
     output_dir = arguments.output
     output_format = arguments.format
     join_phenotype = arguments.join_phenotype
-    phenotype_suffix = arguments.phenotype_suffix
-    if phenotype_suffix is not None:
-        assert len(phenotype_paths) == len(phenotype_suffix), (
-            "Length of phenotype and suffix must match"
-        )
+
     join_sbs = arguments.join_sbs
     subset = arguments.subset
     force = arguments.force
@@ -750,64 +738,58 @@ def merge_main(arguments: argparse.Namespace):
         assert "barcode" in df_barcode.columns, (
             f"`barcode` column not found in {arguments.barcodes}"
         )
-    phenotype_filesystems = []
+
     if len(set(phenotype_paths)) != len(phenotype_paths):
         raise ValueError("Duplicate phenotype paths")
-    for i in range(len(phenotype_paths)):
-        path = phenotype_paths[i]
-        phenotype_fs, _ = fsspec.core.url_to_fs(path)
-        path = path.rstrip(phenotype_fs.sep)
-        phenotype_filesystems.append(phenotype_fs)
-    paths = []
 
     if subset is not None:
         subset = _create_subset_function(subset)
+    values = []
+    search_paths = []
     if sbs is not None:
-        sbs_fs, _ = fsspec.core.url_to_fs(sbs)
-        sbs = sbs.rstrip(sbs_fs.sep)
-        sbs_matches = sbs_fs.glob(sbs + sbs_fs.sep + "*.parquet")
-        sbs_matches = [sbs_fs.unstrip_protocol(m) for m in sbs_matches]
-        print("sbs_matches", sbs_matches)
-        for sbs_path in sbs_matches:
-            name = os.path.splitext(os.path.basename(sbs_path))[0]
-            if not name.startswith("."):  # ignore hidden files
-                image_key, _ = os.path.splitext(name)
-                if subset is None or subset(image_key):
-                    _phenotype_paths, _phenotype_suffix = _find_phenotype_paths(
-                        phenotype_paths,
-                        phenotype_filesystems,
-                        phenotype_suffix,
-                        image_key,
-                    )
-                    if len(_phenotype_paths) > 0:
-                        paths.append(
-                            (
-                                image_key,
-                                sbs_path,
-                                _phenotype_paths,
-                                _phenotype_suffix
-                                if phenotype_suffix is not None
-                                else None,
-                            )
-                        )
+        search_paths.append(sbs)
+    else:
+        search_paths = phenotype_paths
+    matches = []
+    for search_path in search_paths:
+        fs, search_path = fsspec.core.url_to_fs(search_path)
+        search_path = search_path.rstrip(fs.sep)
+        matches += fs.glob(search_path + fs.sep + "*.parquet")
+    image_key_to_matches = defaultdict(list)
+    for path in matches:
+        fs, path = fsspec.core.url_to_fs(path)
+        path = fs.unstrip_protocol(path)
+        name = os.path.splitext(os.path.basename(path))[0]
+        if not name.startswith("."):  # ignore hidden files
+            image_key, _ = os.path.splitext(name)
+            if subset is None or subset(image_key):
+                image_key_to_matches[image_key].append(path)
+
+    for image_key in image_key_to_matches:
+        phenotype_paths_, phenotype_suffixes_ = _find_phenotype_paths_and_suffixes(
+            phenotype_paths, image_key
+        )
+
+        if len(phenotype_paths_) > 0:
+            sbs_path = image_key_to_matches[image_key][0] if sbs is not None else None
+            values.append((image_key, sbs_path, phenotype_paths_, phenotype_suffixes_))
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
     output_fs.makedirs(output_dir, exist_ok=True)
-    if len(paths) == 0:
+    if len(values) == 0:
         logger.warning("No files found to merge")
     else:
         with (
             _create_default_dask_config(),
             _create_dask_client(dask_scheduler_url, **dask_cluster_parameters),
         ):
-            for path in paths:
-                image_key, sbs_path, phenotype_paths, phenotype_suffix = path
+            for image_key, sbs_path, phenotype_paths, phenotype_suffixes in values:
                 merge_sbs_phenotype_pipeline(
                     image_key=image_key,
                     sbs_path=sbs_path,
                     phenotype_paths=phenotype_paths,
-                    phenotype_suffix=phenotype_suffix,
+                    phenotype_suffixes=phenotype_suffixes,
                     df_barcode=df_barcode,
                     output_dir=output_dir + output_fs.sep,
                     join_sbs=join_sbs,

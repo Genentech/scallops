@@ -89,10 +89,11 @@ def _read_merged_or_objects(
                 timepoint if image_key_without_t is not None else None,
             ),
         ]
+        if image_key_without_t is not None:
+            test_paths.append((f"{path}{path_sep}{image_key_without_t}.parquet", None))
 
         for test_path, t in test_paths:
             if fsspec.core.url_to_fs(path)[0].exists(test_path):
-                logger.info(f"Reading {test_path}")
                 found_paths.append((test_path, t))
 
     if len(found_paths) == 0:
@@ -100,7 +101,7 @@ def _read_merged_or_objects(
 
     area_column = f"{_label_name_to_prefix[label_name]}_AreaShape_Area"
     merged_dfs = []
-    # add suffix for time specific paths
+
     for path, t in found_paths:
         if path.lower().endswith(".zarr"):
             data = read_anndata_zarr(path, dask=True)
@@ -331,8 +332,14 @@ def single_feature(
             )
 
             features_path = get_path(
-                output_dir, output_sep, label_name, image_key, timepoint, ".parquet"
+                output_dir,
+                output_sep,
+                label_name,
+                image_key_without_t if image_key_without_t is not None else image_key,
+                timepoint,
+                ".parquet",
             )
+
             if not force and is_parquet_file(features_path):
                 logger.info(
                     f"Skipping features for {image_key} {label_name}{' at t=' + timepoint if timepoint is not None else ''}."
@@ -340,6 +347,7 @@ def single_feature(
                 continue
 
             merged_df = None
+            print(image_key, image_key_without_t)
             if merge_paths is not None and len(merge_paths) > 0:
                 merged_df = _read_merged_or_objects(
                     paths=merge_paths,
@@ -436,7 +444,14 @@ def single_feature(
                 f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
                 f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
             ]
+            if timepoint is not None:
+                if area_column not in merged_df.columns:
+                    area_column = f"{area_column}_{timepoint}"
 
+                if bounding_box_columns[0] not in merged_df.columns:
+                    bounding_box_columns = [
+                        f"{c}_{timepoint}" for c in bounding_box_columns
+                    ]
             n_labels = len(merged_df)
             prefix = ""
             if min_max_area[0] is not None or min_max_area[1] is not None:
