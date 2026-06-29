@@ -117,9 +117,7 @@ def _create_merge_parser(subparsers, default_help):
         default="outer",
         help="Phenotype join type.",
     )
-    parser.add_argument(
-        "--phenotype-suffix", nargs="*", help="Suffix for phenotype columns."
-    )
+
     parser.add_argument(
         "--format",
         help="Output file format.",

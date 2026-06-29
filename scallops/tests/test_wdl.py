@@ -288,7 +288,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
     assert (
         len(
             merge_features_df.columns[
-                merge_sbs_metadata_df.columns.str.contains("iss_to_iss_qc")
+                merge_features_df.columns.str.contains("iss_to_iss_qc")
             ]
         )
         > 0
@@ -296,13 +296,13 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
     assert (
         len(
             merge_features_df.columns[
-                merge_sbs_metadata_df.columns.str.contains("Intensity")
+                merge_features_df.columns.str.contains("Intensity")
             ]
         )
         > 0
     )
     intensity_column = merge_features_df.columns[
-        merge_sbs_metadata_df.columns.str.contains("Intensity")
+        merge_features_df.columns.str.contains("Intensity")
     ][0]
     assert len(merge_features_df.query(f"~{intensity_column}.isna()")) == len(
         merge_sbs_metadata_df.query("~barcode_count_0.isna()")

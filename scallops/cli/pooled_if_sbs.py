@@ -693,9 +693,16 @@ def _find_phenotype_paths_and_suffixes(
         for x in matches:
             x = fs.unstrip_protocol(x)
             # if parent starts with t=xxx, add xxx suffix
+            # otherwise suffix will only be added for duplicate columns
             tokens = x.split("/")
-            suffix = tokens[-2]
-            suffix = suffix[2:] if suffix.startswith("t=") else tokens[-3]
+            suffix_ = tokens[-2]
+            suffix = None
+            if suffix_.startswith("t="):
+                suffix = suffix_[2:]
+            else:
+                suffix_ = tokens[-3]
+                if "qc" in suffix_:
+                    suffix = suffix_
             found_suffixes.append(suffix)
             found_paths.append(x)
 
