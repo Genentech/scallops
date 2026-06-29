@@ -584,11 +584,10 @@ def _list_images_wdl(
     for index in range(len(results)):
         result = results[index]
         url_val = index + 1
-        subset_df = result["subset_df"]
 
         with open(
             f"groupby_array_with_time_{url_val}.txt", "wt"
-        ) as f:  # ['plate', 'well', 't']
+        ) as f:  # ['plate', 'well', 't'] if t found in image-pattern
             for g in result["groupby_with_time"]:
                 f.write(g)
                 f.write("\n")
@@ -605,32 +604,6 @@ def _list_images_wdl(
                 for val in result["times"]:
                     f.write(str(val))
                     f.write("\n")
-
-        with open(
-            f"subsets_with_reference_time_{url_val}.txt", "wt"
-        ) as f:  # ["plate1-A1-IF", "plate1-A2-IF", ...]
-            subset_ids_with_reference_times = (
-                subset_df["subset_ids_with_reference_times"].values
-                if subset_df is not None
-                else []
-            )
-            for i in range(0, len(subset_ids_with_reference_times), batch_size):
-                selected = subset_ids_with_reference_times[i : i + batch_size]
-                f.write(" ".join(selected))
-                f.write("\n")
-
-        with open(
-            f"image_pattern_with_reference_time_{url_val}.txt", "wt"
-        ) as f:  # "{plate}-{well}-IF"
-            first = True
-            for g in groupby:
-                if not first:
-                    f.write("-")
-                first = False
-                f.write("{")
-                f.write(g)
-                f.write("}")
-            f.write(f"-{result['reference_time']}")
 
 
 def _list_images(
@@ -660,7 +633,6 @@ def _list_images(
     groupby_t = "t" in groupby
     times = None
     subset_ids = []
-    subset_ids_with_reference_times = []
     first = True
 
     for g, file_list, metadata in exp_gen:
@@ -673,17 +645,11 @@ def _list_images(
             times = [md["t"] for md in metadata["file_metadata"]]
             if n_cycles is not None:
                 assert len(times) == n_cycles
-        t_suffix = ""
-        if times is not None and len(times) > 0:
-            t_suffix = (
-                f"-{times[0]}" if reference_time is None else f"-{reference_time}"
-            )
 
         subset_ids.append('"' + metadata["id"] + '"')
-        subset_ids_with_reference_times.append('"' + metadata["id"] + t_suffix + '"')
+
     subset_df = pd.DataFrame(
         index=subset_ids,
-        data=dict(subset_ids_with_reference_times=subset_ids_with_reference_times),
     )
 
     groupby_with_time = list(groupby)

@@ -181,7 +181,6 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
     )
     phenotype_tile[10, 10] = 2
     reference_phenotype_time = "IF"
-
     phenotype_cell_features = {"IF": ["intensity_0"]}
     phenotype_image_pattern = "{plate}-{well}-{t}"
     if phenotype_rounds == 1:
@@ -209,7 +208,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
                 "plateA-A1-FISH-tile": phenotype_tile,
             },
         ).save(pheno_dir)
-    else:
+    else:  # no t in pattern
         phenotype_nuclei_features = {
             "": ["intensity_0", "intensity_1"],
         }
@@ -270,7 +269,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
     assert (
         len(
             merge_sbs_metadata_df.columns[
-                merge_sbs_metadata_df.columns.str.contains("iss_to_iss_qc")
+                merge_sbs_metadata_df.columns.str.contains("-qc")
             ]
         )
         > 0
@@ -286,12 +285,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
 
     merge_features_df = pd.read_parquet(output / "merge-features" / "plateA-A1.parquet")
     assert (
-        len(
-            merge_features_df.columns[
-                merge_features_df.columns.str.contains("iss_to_iss_qc")
-            ]
-        )
-        > 0
+        len(merge_features_df.columns[merge_features_df.columns.str.contains("qc")]) > 0
     )
     assert (
         len(

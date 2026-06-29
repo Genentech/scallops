@@ -66,8 +66,6 @@ task list_images {
 
         Int group_size_1 = read_int('group_size_1.txt')
         Int group_size_2 = read_int('group_size_2.txt')
-        Array[String] subsets_with_reference_times_1 = read_lines('subsets_with_reference_time_1.txt')
-        Array[String] subsets_with_reference_times_2 = read_lines('subsets_with_reference_time_2.txt')
 
         Array[String] times_1 = read_lines('times_1.txt')
         Array[String] times_2 = read_lines('times_2.txt')
@@ -75,8 +73,7 @@ task list_images {
         String reference_time_1 = read_lines('reference_time_1.txt')[0]
         String reference_time_2 = read_lines('reference_time_2.txt')[0]
 
-        String image_pattern_with_reference_time_1 = read_lines('image_pattern_with_reference_time_1.txt')[0] # e.g. {plate}-{well}-IF
-        String image_pattern_with_reference_time_2 = read_lines('image_pattern_with_reference_time_2.txt')[0] # e.g. {plate}-{well}-IF
+
 
     }
 

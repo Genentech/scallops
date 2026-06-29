@@ -477,20 +477,19 @@ def _merged_to_matrix(
         return anndata.AnnData(obs=obs, var=pd.DataFrame(index=feature_names), X=data)
 
 
-def _rename_unique(columns, unique_values, prefix):
+def _rename_unique(columns, unique_values, suffix):
     rename = dict()
-    replace_chars = " |-"
+
     for value in columns:
         new_value = value
-        new_value = re.sub(replace_chars, "_", new_value)
         if value in unique_values:
-            new_value = f"{value}_{prefix}"
+            new_value = f"{value}_{suffix}"
             if new_value in unique_values:
                 counter = 0
-                new_value = f"{value}_{prefix}_{counter}"
+                new_value = f"{value}_{suffix}_{counter}"
                 while new_value in unique_values:
                     counter += 1
-                    new_value = f"{value}_{prefix}_{counter}"
+                    new_value = f"{value}_{suffix}_{counter}"
 
         if value != new_value:
             rename[value] = new_value
@@ -560,18 +559,16 @@ def merge_sbs_phenotype_pipeline(
             sbs_cycles = np.arange(1, sbs_cycles + 1)
         unique_columns.update(df_labels.columns.tolist())
     df_phenotypes = []
-    # can have duplicate columns if features is called in multiple batches
+    # can have duplicate columns if same feature called in multiple batches
 
     feature_names = []
     metadata_columns = []
     feature_columns = []  # used to read in subset of columns when merging to zarr
     # df_labels has 'mismatch', 'barcode_Q_mean', 'barcode_Q_min', 'barcode_peak', 'barcode_count', 'barcode_0', ...
 
-    prefixes = []
-
     for i in range(len(phenotype_paths)):
         path = phenotype_paths[i]
-        df = dd.read_parquet(path)
+        df = dd.read_parquet(path, dataset={"partitioning": None})
         _metadata_cols = df.columns[
             df.columns.str.contains(_metadata_columns_whitelist_str)
         ].tolist()
@@ -583,22 +580,25 @@ def merge_sbs_phenotype_pipeline(
         if phenotype_suffixes[i] is not None:
             df.columns = df.columns + "_" + phenotype_suffixes[i]
 
-        prefixes.append(path.split("/")[-3])
+        duplicate_suffix = path.split("/")[-3]
 
         if output_format == "zarr":  # read index and metadata
             if len(_metadata_cols) > 0:
                 df = df.drop(_metadata_cols, axis=1)
             feature_names_i = df.columns.tolist()
             rename_features = _rename_unique(
-                feature_names_i, unique_columns, prefixes[i]
+                feature_names_i, unique_columns, duplicate_suffix
             )
             for key in rename_features:
                 feature_names_i[feature_names_i.index(key)] = rename_features[key]
-            df = dd.read_parquet(path, columns=_metadata_cols)
+            df = dd.read_parquet(
+                path, columns=_metadata_cols, dataset={"partitioning": None}
+            )
             feature_names += feature_names_i
             unique_columns.update(feature_names_i)
 
-        rename_cols = _rename_unique(df.columns, unique_columns, prefixes[i])
+        rename_cols = _rename_unique(df.columns, unique_columns, duplicate_suffix)
+
         if len(rename_cols) > 0:
             df = df.rename(columns=rename_cols)
         df_phenotypes.append(df)

@@ -396,7 +396,7 @@ workflow ops_workflow {
                             label_type=intersects_stitch_boundary_label,
                             objects=if(intersects_stitch_boundary_label=="cell") then find_objects_cell.output_url else find_objects_nuclei.output_url,
                             groupby=phenotype_group_by_with_time,
-                            subset = if(sub(phenotype_group_by_with_time, "{t}", "xxx")!=phenotype_group_by_with_time) then subset_ + "-*" else subset_,
+                            subset = if(sub(phenotype_image_pattern, "{t}", "")!=phenotype_image_pattern) then subset_ + "-*" else subset_,
                             force = if(intersects_stitch_boundary_label=="cell") then force_segment_cell else force_segment_nuclei,
                             docker=docker,
                             zones = zones,
