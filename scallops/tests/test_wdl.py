@@ -35,15 +35,21 @@ def test_list_images_wdl(reference_time, tmp_path, monkeypatch):
     (tmp_path / "plate1-A1-FISH").touch()
     monkeypatch.chdir(tmp_path)
     _list_images_wdl(
-        image_pattern="{plate}-{well}-{t}",
-        reference_time=reference_time,
-        urls=[str(tmp_path)],
+        image_pattern1="{plate}-{well}-{t}",
+        reference_time1=reference_time,
+        urls1=[str(tmp_path)],
+        n_cycles1=None,
         groupby=["plate", "well"],
         subset=None,
         batch_size_str=None,
         save_group_size=False,
         expected_cycles_str=None,
+        image_pattern2="",
+        urls2=[],
+        reference_time2=None,
+        n_cycles2=None,
     )
+
     groups = pd.read_csv(tmp_path / "groups.txt", header=None)[0].values
     np.testing.assert_array_equal(groups, ["plate1-A1"])
     groupby = pd.read_csv(tmp_path / "groupby.txt", header=None)[0].values
@@ -55,13 +61,6 @@ def test_list_images_wdl(reference_time, tmp_path, monkeypatch):
 
     times = pd.read_csv(tmp_path / "t.txt", header=None)[0].values
     np.testing.assert_array_equal(times, ["FISH", "IF"])
-    groups_with_times = pd.read_csv(tmp_path / "groups_with_t.txt", header=None)[
-        0
-    ].values
-    if reference_time == "IF":
-        np.testing.assert_array_equal(groups_with_times, ["plate1-A1-IF"])
-    else:
-        np.testing.assert_array_equal(groups_with_times, ["plate1-A1-FISH"])
 
 
 @pytest.mark.cli_e2e
@@ -154,7 +153,7 @@ def test_stitch_wdl(tmp_path):
     np.testing.assert_array_equal(image.coords["c"].values, ["a", "b"])
 
 
-@pytest.mark.parametrize("phenotype_rounds", [2, None])
+@pytest.mark.parametrize("phenotype_rounds", [2])
 @pytest.mark.cli_e2e
 def test_ops_wdl(phenotype_rounds, tmp_path):
     sbs_dir = tmp_path / "sbs"

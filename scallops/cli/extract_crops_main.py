@@ -121,6 +121,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
         "--labels",
         dest="labels",
         required=True,
+        nargs="+",
         help="Path to zarr directory containing labels",
     )
 
@@ -129,6 +130,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     required.add_argument(
         "--merge",
         required=False,
+        nargs="*",
         help="Path to directory containing output from `merge`",
     )
     parser.add_argument(
