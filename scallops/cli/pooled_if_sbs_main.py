@@ -98,9 +98,7 @@ def _create_merge_parser(subparsers, default_help):
         ),
     )
     required = parser.add_argument_group("required arguments")
-    required.add_argument(
-        "--sbs", required=True, help="Directory containing SBS parquet files."
-    )
+
     required.add_argument(
         "--phenotype",
         nargs="+",
@@ -108,7 +106,7 @@ def _create_merge_parser(subparsers, default_help):
         help="Directories with phenotype parquet files.",
     )
     output_dir_arg(required)
-
+    parser.add_argument("--sbs", help="Directory containing SBS parquet files.")
     barcodes_arg(parser, False)
     parser.add_argument(
         "--join-sbs", choices=["inner", "outer"], default="outer", help="SBS join type."

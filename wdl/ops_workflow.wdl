@@ -670,7 +670,7 @@ workflow ops_workflow {
 
                             model_dir=model_dir,
 
-                            output_directory=cell_features_directory + '-' + phenotype_time + '-' + feature_index,
+                            output_directory=cell_features_directory + '-' + phenotype_time + '-batch' + feature_index,
                             subset = subset_ + '-' + phenotype_time,
                             force = force_features,
                             docker=docker,
@@ -726,28 +726,28 @@ workflow ops_workflow {
                 }
             }
         }
-        if (defined(barcodes)) {
 
-            call tasks.merge as merge_features {
-                input:
-                    phenotypes_nuclei=features_nuclei.output_url,
-                    phenotypes_cell=features_cell.output_url,
-                    phenotypes_cytosol=features_cytosol.output_url,
-                    iss_reads=merge_sbs_metadata.output_url,
-                    output_directory=merge_features_directory,
-                    subset = subset_,
-                    extra_arguments=merge_extra_arguments,
-                    force = force_merge,
-                    docker=docker,
-                    zones = zones,
-                    preemptible = preemptible,
-                    aws_queue_arn = aws_queue_arn,
-                    disks = merge_disks,
-                    memory = merge_memory,
-                    cpu = merge_cpu,
-                    max_retries = max_retries
-            }
+
+        call tasks.merge as merge_features {
+            input:
+                phenotypes_nuclei=features_nuclei.output_url,
+                phenotypes_cell=features_cell.output_url,
+                phenotypes_cytosol=features_cytosol.output_url,
+                merge_metadata=merge_sbs_metadata.output_url,
+                output_directory=merge_features_directory,
+                subset = subset_,
+                extra_arguments=merge_extra_arguments,
+                force = force_merge,
+                docker=docker,
+                zones = zones,
+                preemptible = preemptible,
+                aws_queue_arn = aws_queue_arn,
+                disks = merge_disks,
+                memory = merge_memory,
+                cpu = merge_cpu,
+                max_retries = max_retries
         }
+
 
     }
     output {

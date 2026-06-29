@@ -664,10 +664,10 @@ task merge {
         String? register_iss_to_iss_qc
         String? register_pheno_to_pheno_qc
 
-
-        Array[String]? phenotypes_nuclei
-        Array[String]? phenotypes_cell
-        Array[String]? phenotypes_cytosol
+        Array[Array[String]]? phenotypes_nuclei
+        Array[Array[String]]? phenotypes_cell
+        Array[Array[String]]? phenotypes_cytosol
+        String? merge_metadata
 
         String output_directory
         String? barcodes
@@ -685,10 +685,12 @@ task merge {
         String memory
         Int max_retries
     }
+    Array[String] phenotypes_nuclei_ = if defined(phenotypes_nuclei) then flatten(select_first([phenotypes_nuclei])) else []
+    Array[String] phenotypes_cell_ = if defined(phenotypes_cell) then flatten(select_first([phenotypes_cell])) else []
+    Array[String] phenotypes_cytosol_ = if defined(phenotypes_cytosol) then flatten(select_first([phenotypes_cytosol])) else []
 
     command <<<
         set -ex
-
 
         scallops pooled-sbs merge \
          ~{"--sbs " + iss_reads} \
@@ -700,9 +702,10 @@ task merge {
         ~{register_pheno_to_iss_qc} \
         ~{register_iss_to_iss_qc} \
         ~{register_pheno_to_pheno_qc} \
-        ~{sep=" " phenotypes_nuclei} \
-        ~{sep=" " phenotypes_cell} \
-        ~{sep=" " phenotypes_cytosol} \
+        ~{merge_metadata} \
+        ~{sep=" " phenotypes_nuclei_} \
+        ~{sep=" " phenotypes_cell_} \
+        ~{sep=" " phenotypes_cytosol_} \
         --subset ~{subset} \
         ~{"--barcode-col " + barcode_column} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \
@@ -711,7 +714,6 @@ task merge {
 
     output {
         String output_url = "~{output_directory}"
-
     }
 
     runtime {

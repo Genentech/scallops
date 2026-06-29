@@ -93,7 +93,7 @@ task stitch {
     }
 
     command <<<
-        set -e
+        set -ex
 
         python <<CODE
         import subprocess

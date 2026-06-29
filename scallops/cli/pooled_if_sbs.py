@@ -745,11 +745,7 @@ def merge_main(arguments: argparse.Namespace):
     if subset is not None:
         subset = _create_subset_function(subset)
     values = []
-    search_paths = []
-    if sbs is not None:
-        search_paths.append(sbs)
-    else:
-        search_paths = phenotype_paths
+    search_paths = [sbs] if sbs is not None else phenotype_paths
     matches = []
     for search_path in search_paths:
         fs, search_path = fsspec.core.url_to_fs(search_path)

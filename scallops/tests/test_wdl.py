@@ -154,8 +154,9 @@ def test_stitch_wdl(tmp_path):
     np.testing.assert_array_equal(image.coords["c"].values, ["a", "b"])
 
 
+@pytest.mark.parametrize("phenotype_rounds", [1, 2, None])
 @pytest.mark.cli_e2e
-def test_ops_wdl(tmp_path):
+def test_ops_wdl(phenotype_rounds, tmp_path):
     sbs_dir = tmp_path / "sbs"
     output = tmp_path / "out"
     pheno_dir = tmp_path / "pheno.zarr"
@@ -179,34 +180,65 @@ def test_ops_wdl(tmp_path):
         (pheno_img.sizes["y"], pheno_img.sizes["x"]), dtype=np.uint16
     )
     phenotype_tile[10, 10] = 2
-    Experiment(
-        images={"plateA-A1-IF": pheno_img, "plateA-A1-FISH": pheno_img},
-        labels={
-            "plateA-A1-IF-mask": phenotype_mask,
-            "plateA-A1-IF-tile": phenotype_tile,
-            "plateA-A1-FISH-mask": phenotype_mask,
-            "plateA-A1-FISH-tile": phenotype_tile,
-        },
-    ).save(pheno_dir)
+    reference_phenotype_time = "IF"
+
+    phenotype_cell_features = {"IF": ["intensity_0"]}
+    phenotype_image_pattern = "{plate}-{well}-{t}"
+    if phenotype_rounds == 1:
+        phenotype_nuclei_features = {
+            "IF": ["intensity_0", "intensity_1"],
+        }
+        Experiment(
+            images={"plateA-A1-IF": pheno_img},
+            labels={
+                "plateA-A1-IF-mask": phenotype_mask,
+                "plateA-A1-IF-tile": phenotype_tile,
+            },
+        ).save(pheno_dir)
+    elif phenotype_rounds == 2:
+        phenotype_nuclei_features = {
+            "IF": ["intensity_0", "intensity_1"],
+            "FISH": ["intensity_0", "intensity_1"],
+        }
+        Experiment(
+            images={"plateA-A1-IF": pheno_img, "plateA-A1-FISH": pheno_img},
+            labels={
+                "plateA-A1-IF-mask": phenotype_mask,
+                "plateA-A1-IF-tile": phenotype_tile,
+                "plateA-A1-FISH-mask": phenotype_mask,
+                "plateA-A1-FISH-tile": phenotype_tile,
+            },
+        ).save(pheno_dir)
+    else:
+        phenotype_nuclei_features = {
+            "": ["intensity_0", "intensity_1"],
+        }
+        reference_phenotype_time = None
+        phenotype_image_pattern = "{plate}-{well}"
+        phenotype_cell_features = {"": ["intensity_0"]}
+        Experiment(
+            images={"plateA-A1": pheno_img},
+            labels={
+                "plateA-A1-mask": phenotype_mask,
+                "plateA-A1-tile": phenotype_tile,
+            },
+        ).save(pheno_dir)
 
     input_json = {
         "model_dir": "",
         "iss_url": str(sbs_dir.absolute()),
         "iss_image_pattern": "{plate}-{well}-{t}.tif",
+        "phenotype_image_pattern": phenotype_image_pattern,
         "output_directory": str(output.absolute()),
         "iss_registration_extra_arguments": "--no-landmarks",
         "pheno_to_iss_registration_extra_arguments": "--no-landmarks",
         "pheno_registration_extra_arguments": "--no-landmarks",
         "phenotype_cyto_channel": [1],
-        "reference_phenotype_time": "IF",
+        "reference_phenotype_time": reference_phenotype_time,
         "phenotype_url": str(pheno_dir.absolute()),
-        "phenotype_nuclei_features": {
-            "IF": ["intensity_0", "intensity_1"],
-            "FISH": ["intensity_0", "intensity_1"],
-        },
+        "phenotype_nuclei_features": phenotype_nuclei_features,
         # 2 batches
-        "phenotype_cell_features": {"IF": ["intensity_0"]},
-        # "phenotype_cytosol_features": ["mean_0 area"], # no cytosol features
+        "phenotype_cell_features": phenotype_cell_features,
         "reads_threshold_peaks": "0",
         "reads_threshold_peaks_crosstalk": "20",
         "barcodes": os.path.abspath("scallops/tests/data/experimentC/barcodes.csv"),
@@ -230,32 +262,48 @@ def test_ops_wdl(tmp_path):
     check_call(cmd, env=env)
 
     merge_sbs_metadata_df = pd.read_parquet(
-        output / "merge-sbs-metadata" / "A1-102.parquet"
+        output / "merge-sbs-metadata" / "plateA-A1.parquet"
     )
     assert len(merge_sbs_metadata_df) > len(
         merge_sbs_metadata_df.query("~barcode_count_0.isna()")
     )
+    assert (
+        len(
+            merge_sbs_metadata_df.columns[
+                merge_sbs_metadata_df.columns.str.contains("iss_to_iss_qc")
+            ]
+        )
+        > 0
+    )
+    assert (
+        len(
+            merge_sbs_metadata_df.columns[
+                merge_sbs_metadata_df.columns.str.contains("Intensity")
+            ]
+        )
+        == 0
+    )
 
-    for col in [
-        "Nuclei_AreaShape_Area",
-        "Cells_AreaShape_Area",
-    ]:
-        assert col in merge_sbs_metadata_df.columns
-    for col in [
-        "Nuclei_Intensity_MeanIntensity_Channel0",
-        "Nuclei_Intensity_MeanIntensity_Channel1",
-        "Cells_Intensity_MeanIntensity_Channel0",
-    ]:
-        assert col not in merge_sbs_metadata_df.columns
-    merge_features_df = pd.read_parquet(output / "merge-features" / "A1-102.parquet")
-    for col in [
-        "Nuclei_AreaShape_Area",
-        "Cells_AreaShape_Area",
-        "Nuclei_Intensity_MeanIntensity_Channel0",
-        "Nuclei_Intensity_MeanIntensity_Channel1",
-        "Cells_Intensity_MeanIntensity_Channel0",
-    ]:
-        assert col in merge_features_df.columns
-    assert len(
-        merge_features_df.query("~Nuclei_Intensity_MeanIntensity_Channel0.isna()")
-    ) == len(merge_sbs_metadata_df.query("~barcode_count_0.isna()"))
+    merge_features_df = pd.read_parquet(output / "merge-features" / "plateA-A1.parquet")
+    assert (
+        len(
+            merge_features_df.columns[
+                merge_sbs_metadata_df.columns.str.contains("iss_to_iss_qc")
+            ]
+        )
+        > 0
+    )
+    assert (
+        len(
+            merge_features_df.columns[
+                merge_sbs_metadata_df.columns.str.contains("Intensity")
+            ]
+        )
+        > 0
+    )
+    intensity_column = merge_features_df.columns[
+        merge_sbs_metadata_df.columns.str.contains("Intensity")
+    ][0]
+    assert len(merge_features_df.query(f"~{intensity_column}.isna()")) == len(
+        merge_sbs_metadata_df.query("~barcode_count_0.isna()")
+    )
