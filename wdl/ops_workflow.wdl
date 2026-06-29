@@ -228,22 +228,15 @@ workflow ops_workflow {
     String groupby_pattern = list_images.groupby_pattern # e.g. {plate}-{well}
     Array[String] groupby_array = list_images.groupby_array # e.g. ["plate", "well"]
 
-
-   # Array[String] subsets_with_reference_times_pheno = list_images.subsets_with_reference_times_1
-   # Array[String] subsets_with_reference_times_iss = list_images.subsets_with_reference_times_2
-
     Array[String] times_pheno = list_images.times_1
     Array[String] times_iss = list_images.times_2
 
     String reference_time_pheno = list_images.reference_time_1
     String reference_time_iss = list_images.reference_time_2
-    Array[String] phenotype_group_by_with_time = list_images.groupby_array_with_time_2
-    #String image_pattern_with_reference_time_pheno = list_images.image_pattern_with_reference_time_1 # e.g. {plate}-{well}-IF
-   # String image_pattern_with_reference_time_iss = list_images.image_pattern_with_reference_time_2 # e.g. {plate}-{well}-1
+    Array[String] phenotype_group_by_with_time = list_images.groupby_array_with_time_2 # e.g. ["plate", "well", "t"]
     scatter (subset_index in range(length(subsets))) {
         String subset_ = subsets[subset_index] # e.g. plate1-A1
-       # String subset_with_reference_times_pheno = subsets_with_reference_times_pheno[subset_index]
-       # String subset_with_reference_times_iss = subsets_with_reference_times_iss[subset_index]
+
         if(pheno_url_supplied) {
             if(run_nuclei_segmentation) {
                 call tasks.segment_nuclei {
