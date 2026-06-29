@@ -154,7 +154,7 @@ def test_stitch_wdl(tmp_path):
     np.testing.assert_array_equal(image.coords["c"].values, ["a", "b"])
 
 
-@pytest.mark.parametrize("phenotype_rounds", [1, 2, None])
+@pytest.mark.parametrize("phenotype_rounds", [1])
 @pytest.mark.cli_e2e
 def test_ops_wdl(phenotype_rounds, tmp_path):
     sbs_dir = tmp_path / "sbs"

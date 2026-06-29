@@ -390,14 +390,14 @@ workflow ops_workflow {
 
                         input:
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
-                            images=phenotype_url_stripped + '/labels/',
-                            image_pattern=phenotype_image_pattern + '-mask',
+                            images=phenotype_url_stripped + "/labels/",
+                            image_pattern=phenotype_image_pattern + "-mask",
                             output_directory=intersects_boundary_directory,
                             label_type=intersects_stitch_boundary_label,
-                            objects=if(intersects_stitch_boundary_label=='cell') then find_objects_cell.output_url else find_objects_nuclei.output_url,
+                            objects=if(intersects_stitch_boundary_label=="cell") then find_objects_cell.output_url else find_objects_nuclei.output_url,
                             groupby=phenotype_group_by_with_time,
-                            subset = subset_ + '-*',
-                            force = if(intersects_stitch_boundary_label=='cell') then force_segment_cell else force_segment_nuclei,
+                            subset = if(sub(phenotype_group_by_with_time, "{t}", "xxx")!=phenotype_group_by_with_time) then subset_ + "-*" else subset_,
+                            force = if(intersects_stitch_boundary_label=="cell") then force_segment_cell else force_segment_nuclei,
                             docker=docker,
                             zones = zones,
                             preemptible = preemptible,
@@ -477,7 +477,7 @@ workflow ops_workflow {
                         stacked_image_pattern=groupby_pattern,
                         image_channel=iss_dapi_channel,
                         stacked_image_channel=0,
-                        label_type='nuclei',
+                        label_type="nuclei",
                         output_directory=register_pheno_to_iss_qc_directory,
                         labels=register_pheno_to_iss.label_output_url,
                         subset = subset_,
@@ -499,7 +499,7 @@ workflow ops_workflow {
                         image_pattern=groupby_pattern,
                         dapi_channel=select_first([iss_dapi_channel, 0]),
                         n_timepoints=length(times_iss),
-                        label_type='nuclei',
+                        label_type="nuclei",
 
                         output_directory=register_iss_to_iss_qc_directory,
                         labels=register_pheno_to_iss.label_output_url,
@@ -575,7 +575,7 @@ workflow ops_workflow {
 
                 call tasks.merge as merge_sbs_metadata {
                     input:
-                        iss_reads=select_first([reads.output_url]) + '/labels',
+                        iss_reads=select_first([reads.output_url]) + "/labels",
                         objects=if(run_cell_segmentation) then find_objects_nuclei.output_url else find_objects_cell.output_url,
                         cell_intersects_boundary=intersects_boundary.output_url,
                         register_pheno_to_iss_qc=register_pheno_to_iss_qc.output_url,
@@ -619,11 +619,9 @@ workflow ops_workflow {
                             nuclei_min_area = features_nuclei_min_area_,
                             nuclei_max_area = features_nuclei_max_area_,
                             features_extra_arguments=features_extra_arguments,
-
                             model_dir=model_dir,
-
-                            output_directory=nuclei_features_directory + '-' + phenotype_time + '-batch' + feature_index,
-                            subset = subset_ + '-' + phenotype_time,
+                            output_directory=nuclei_features_directory + "-" + phenotype_time + "-batch" + feature_index,
+                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
                             force = force_features,
                             docker=docker,
                             zones = zones,
@@ -663,8 +661,8 @@ workflow ops_workflow {
 
                             model_dir=model_dir,
 
-                            output_directory=cell_features_directory + '-' + phenotype_time + '-batch' + feature_index,
-                            subset = subset_ + '-' + phenotype_time,
+                            output_directory=cell_features_directory + "-" + phenotype_time + "-batch" + feature_index,
+                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
                             force = force_features,
                             docker=docker,
                             zones = zones,
@@ -697,7 +695,7 @@ workflow ops_workflow {
                             labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
                             label_filter=features_label_filter,
                             groupby=phenotype_group_by_with_time,
-                            output_directory=cytosol_features_directory + '-' + phenotype_time + '-' + feature_index,
+                            output_directory=cytosol_features_directory + "-" + phenotype_time + "-" + feature_index,
                             cytosol_features = cytosol_features[feature_index],
                             cytosol_min_area = features_cytosol_min_area_,
                             cytosol_max_area = features_cytosol_max_area_,
@@ -705,7 +703,7 @@ workflow ops_workflow {
 
                             model_dir=model_dir,
 
-                            subset = subset_ + '-' + phenotype_time,
+                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
                             force = force_features,
                             docker=docker,
                             zones = zones,
