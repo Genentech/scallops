@@ -233,7 +233,7 @@ workflow ops_workflow {
 
     String reference_time_pheno = list_images.reference_time_1
     String reference_time_iss = list_images.reference_time_2
-    Array[String] phenotype_group_by_with_time = list_images.groupby_array_with_time_2 # e.g. ["plate", "well", "t"]
+    Array[String] phenotype_group_by_with_time = list_images.groupby_array_with_time_1 # e.g. ["plate", "well", "t"]
     scatter (subset_index in range(length(subsets))) {
         String subset_ = subsets[subset_index] # e.g. plate1-A1
 
