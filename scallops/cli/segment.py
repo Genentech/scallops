@@ -143,7 +143,9 @@ def segment_nuclei(
         group_metadata = {
             "image-label": {"source": {"image": f"../../images/{image_key}"}}
         }
-        additional_metadata = label_metadata.get(key) if label_metadata else dict()
+        additional_metadata = label_metadata.get(key)
+        if additional_metadata is None:
+            additional_metadata = dict()
         storage_options = None
         if isinstance(label_data, np.ndarray):
             storage_options = {"chunks": image.data.chunksize[-2:]}
