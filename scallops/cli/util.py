@@ -588,16 +588,17 @@ def _list_images_wdl(
         with open(
             f"groupby_array_with_time_{url_val}.txt", "wt"
         ) as f:  # ['plate', 'well', 't'] if t found in image-pattern
-            for g in result["groupby_with_time"]:
-                f.write(g)
-                f.write("\n")
+            if result["groupby_with_time"] is not None:
+                for g in result["groupby_with_time"]:
+                    f.write(g)
+                    f.write("\n")
 
         with open(f"group_size_{url_val}.txt", "wt") as f:
             f.write(f"{result['group_size']}")
             f.write("\n")
 
         with open(f"reference_time_{url_val}.txt", "wt") as f:  # IF
-            f.write(result["reference_time"])
+            f.write(str(result["reference_time"]))
             f.write("\n")
         with open(f"times_{url_val}.txt", "wt") as f:  # ["FISH", "IF"]
             if result["times"] is not None:
@@ -615,14 +616,15 @@ def _list_images(
     reference_time: str | None,
     n_cycles: int | None,
 ):
-    reference_time_suffix = ""
     group_size = 0
     if len(urls) == 0:
         return dict(
             group_size=group_size,
             subset_df=None,
+            groupby=groupby,
+            groupby_with_time=None,
             times=None,
-            reference_time_suffix=reference_time_suffix,
+            reference_time=reference_time,
         )
     from scallops.io import _set_up_experiment
 
@@ -646,7 +648,7 @@ def _list_images(
             if n_cycles is not None:
                 assert len(times) == n_cycles
 
-        subset_ids.append('"' + metadata["id"] + '"')
+        subset_ids.append(metadata["id"])
 
     subset_df = pd.DataFrame(
         index=subset_ids,
