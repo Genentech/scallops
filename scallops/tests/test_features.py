@@ -468,7 +468,7 @@ def test_features_cli_multi_images(tmp_path, array_A1_102_cells, array_A1_102_al
         output_path,
         "--features-cell",
         "colocalization_0_2",
-        "merge",
+        "--merge",
         objects_path,
         "--channel-rename",
         '{"0":"A", "2":"B"}',
@@ -530,7 +530,7 @@ def test_features_cli(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
         "intensity_*",
         "sizeshape",
         "colocalization_*_*",
-        "merge",
+        "--merge",
         objects_output_path,
     ]
 
