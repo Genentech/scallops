@@ -132,8 +132,6 @@ def single_registration(
 
     if moving_labels is not None:
         matching_label_prefix = image_key
-        if register_self:
-            matching_label_prefix = f"{matching_label_prefix}-{reference_timepoint}"
         for moving_label in moving_labels:
             moving_label_keys.extend(
                 get_matching_names(
@@ -423,7 +421,6 @@ def _transform_labels_t(
 ):
     # transform_dest structure is image_key/t=1
     # assume labels are named image_key-t-suffix
-    print("moving_label_keys", moving_label_keys)
     for transform_file in transform_fs.ls(transform_dest, detail=True, refresh=True):
         if transform_file["type"] == "directory":
             transform_name = transform_file["name"]
