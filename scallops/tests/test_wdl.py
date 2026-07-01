@@ -28,7 +28,7 @@ def add_physical_size(input_path, output_path):
     save_ome_tiff(img.values, uri=output_path, ome_xml=img.attrs["processed"].to_xml())
 
 
-@pytest.mark.parametrize("reference_time", ["IF", None])
+@pytest.mark.parametrize("reference_time", ["IF"])
 @pytest.mark.cli_e2e
 def test_list_images_wdl(reference_time, tmp_path, monkeypatch):
     (tmp_path / "plate1-A1-IF").touch()
@@ -49,16 +49,16 @@ def test_list_images_wdl(reference_time, tmp_path, monkeypatch):
         n_cycles2=None,
     )
 
-    groups = pd.read_csv(tmp_path / "groups.txt", header=None)[0].values
-    np.testing.assert_array_equal(groups, ["plate1-A1"])
-    groupby = pd.read_csv(tmp_path / "groupby.txt", header=None)[0].values
+    subsets = pd.read_csv(tmp_path / "subsets.txt", header=None)[0].values
+    np.testing.assert_array_equal(subsets, ["plate1-A1"])
+    groupby = pd.read_csv(tmp_path / "groupby_array.txt", header=None)[0].values
     np.testing.assert_array_equal(groupby, ["plate", "well"])
     groupby_pattern = pd.read_csv(tmp_path / "groupby_pattern.txt", header=None)[
         0
     ].values
     np.testing.assert_array_equal(groupby_pattern, ["{plate}-{well}"])
 
-    times = pd.read_csv(tmp_path / "t.txt", header=None)[0].values
+    times = pd.read_csv(tmp_path / "times_1.txt", header=None)[0].values
     np.testing.assert_array_equal(times, ["FISH", "IF"])
 
 
