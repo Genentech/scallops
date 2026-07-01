@@ -289,7 +289,9 @@ def test_segment_cells_cmd(experiment_c_dask, tmp_path):
     subprocess.check_call(seg_args)
     experiment = read_experiment(tmp_path)
     assert len(experiment.labels.keys()) == 3
-    np.testing.assert_equal(cell_labels, experiment.labels["A1-102-cell"].values)
+    np.testing.assert_equal(
+        cell_labels.squeeze(), experiment.labels["A1-102-cell"].values.squeeze()
+    )
 
 
 @pytest.mark.segmentation_watershed
