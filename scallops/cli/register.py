@@ -533,7 +533,7 @@ def get_matching_names(
     image_key: str,
     image_dir: str | Group,
     labels: bool = True,
-    label_suffixes: Sequence[str] = {"cell", "nuclei", "cytosol"},
+    label_suffixes: Sequence[str] = {"cell", "nuclei", "cytosol", "mask", "tile"},
 ) -> list[str]:
     """Get matching keys for the given image key and directory.
 
