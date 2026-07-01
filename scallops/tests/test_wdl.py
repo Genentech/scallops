@@ -8,6 +8,7 @@ import ome_types
 import pandas as pd
 import pytest
 import xarray as xr
+from scipy.ndimage import shift
 
 from scallops import Experiment
 from scallops.cli.util import _list_images_wdl
@@ -28,15 +29,15 @@ def add_physical_size(input_path, output_path):
     save_ome_tiff(img.values, uri=output_path, ome_xml=img.attrs["processed"].to_xml())
 
 
-@pytest.mark.parametrize("reference_time", ["IF"])
 @pytest.mark.cli_e2e
-def test_list_images_wdl(reference_time, tmp_path, monkeypatch):
-    (tmp_path / "plate1-A1-IF").touch()
-    (tmp_path / "plate1-A1-FISH").touch()
+def test_list_images_wdl(tmp_path, monkeypatch):
+    (tmp_path / "input").mkdir()
+    (tmp_path / "input" / "plate1-A1-IF").touch()
+    (tmp_path / "input" / "plate1-A1-FISH").touch()
     monkeypatch.chdir(tmp_path)
     _list_images_wdl(
-        image_pattern1="{plate}-{well}-{t}",
-        reference_time1=reference_time,
+        image_pattern1="input/{plate}-{well}-{t}",
+        reference_time1="IF",
         urls1=[str(tmp_path)],
         n_cycles1=None,
         groupby=["plate", "well"],
@@ -49,17 +50,14 @@ def test_list_images_wdl(reference_time, tmp_path, monkeypatch):
         n_cycles2=None,
     )
 
-    subsets = pd.read_csv(tmp_path / "subsets.txt", header=None)[0].values
-    np.testing.assert_array_equal(subsets, ["plate1-A1"])
-    groupby = pd.read_csv(tmp_path / "groupby_array.txt", header=None)[0].values
-    np.testing.assert_array_equal(groupby, ["plate", "well"])
-    groupby_pattern = pd.read_csv(tmp_path / "groupby_pattern.txt", header=None)[
-        0
-    ].values
-    np.testing.assert_array_equal(groupby_pattern, ["{plate}-{well}"])
-
-    times = pd.read_csv(tmp_path / "times_1.txt", header=None)[0].values
-    np.testing.assert_array_equal(times, ["FISH", "IF"])
+    subsets = pd.read_csv("subsets.txt", header=None)[0].values.tolist()
+    assert subsets == ["plate1-A1"], subsets
+    groupby = pd.read_csv("groupby_array.txt", header=None)[0].values.tolist()
+    assert groupby == ["plate", "well"], groupby
+    groupby_pattern = pd.read_csv("groupby_pattern.txt", header=None)[0].values.tolist()
+    assert groupby_pattern == ["{plate}-{well}"], groupby_pattern
+    times = pd.read_csv("times_1.txt", header=None)[0].values.tolist()
+    assert times == ["FISH", "IF"], times
 
 
 @pytest.mark.cli_e2e
@@ -168,7 +166,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
 
     pheno_img = read_image(
         "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
-    )
+    ).squeeze()
     pheno_img.attrs["physical_pixel_sizes"] = (1, 1)
     phenotype_mask = np.ones(
         (pheno_img.sizes["y"], pheno_img.sizes["x"]), dtype=np.uint8
@@ -197,8 +195,14 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
             "IF": ["intensity_0", "intensity_1"],
             "FISH": ["intensity_0", "intensity_1"],
         }
+        fish_image = xr.DataArray(
+            shift(pheno_img.data, (0, 20, 30)),
+            dims=("c", "y", "x"),
+            attrs={"physical_pixel_sizes": (1, 1)},
+        )
+
         Experiment(
-            images={"plateA-A1-IF": pheno_img, "plateA-A1-FISH": pheno_img},
+            images={"plateA-A1-IF": pheno_img, "plateA-A1-FISH": fish_image},
             labels={
                 "plateA-A1-IF-mask": phenotype_mask,
                 "plateA-A1-IF-tile": phenotype_tile,
