@@ -132,38 +132,18 @@ def segment_nuclei(
     labels_dict = dict(nuclei=nuclei)
     if all_nuclei is not nuclei:
         labels_dict["nuclei.all"] = all_nuclei
-    spacing = get_image_spacing(image.attrs)
+
     label_metadata = dict()
-    if spacing is not None:
-        for key in labels_dict.keys():
-            label_metadata[key] = dict(physical_pixel_sizes=spacing)
-    if not no_version:
-        label_metadata.update(cli_metadata())
-    for key, label_data in labels_dict.items():
-        group_metadata = {
-            "image-label": {"source": {"image": f"../../images/{image_key}"}}
-        }
-        additional_metadata = label_metadata.get(key)
-        if additional_metadata is None:
-            additional_metadata = dict()
-        storage_options = None
-        if isinstance(label_data, np.ndarray):
-            storage_options = {"chunks": image.data.chunksize[-2:]}
-        if timepoint_value is not None:
-            label_data = xr.DataArray(
-                get_namespace(label_data).expand_dims(label_data, 0),
-                dims=["t", "y", "x"],
-                coords={"t": [timepoint_value]},
-            )
-            additional_metadata.update(label_data.attrs)
-        _write_zarr_labels(
-            name=f"{image_key}-{key}",
-            root=root,
-            metadata=additional_metadata,
-            group_metadata=group_metadata,
-            labels=label_data,
-            storage_options=storage_options,
-        )
+
+    _write_labels(
+        root=root,
+        timepoint_value=timepoint_value,
+        labels_dict=labels_dict,
+        label_metadata=label_metadata,
+        image=image,
+        image_key=image_key,
+        no_version=no_version,
+    )
 
     return root
 
@@ -300,12 +280,32 @@ def segment_cells(
     if cell_threshold is not None:
         label_metadata = dict(cell=dict(threshold=cell_threshold))
 
+    _write_labels(
+        root=root,
+        timepoint_value=timepoint_value,
+        labels_dict=labels_dict,
+        label_metadata=label_metadata,
+        image=image,
+        image_key=image_key,
+        no_version=no_version,
+    )
+
+    return root
+
+
+def _write_labels(
+    root: zarr.Group,
+    timepoint_value: str | None,
+    labels_dict: dict,
+    label_metadata: dict,
+    image: xr.DataArray,
+    image_key: str,
+    no_version: bool = False,
+):
     if not no_version:
         label_metadata.update(cli_metadata())
     spacing = get_image_spacing(image.attrs)
     if spacing is not None:
-        if label_metadata is None:
-            label_metadata = dict()
         for key in labels_dict.keys():
             label_metadata[key] = dict(physical_pixel_sizes=spacing)
 
@@ -313,10 +313,15 @@ def segment_cells(
         group_metadata = {
             "image-label": {"source": {"image": f"../../images/{image_key}"}}
         }
-        additional_metadata = label_metadata.get(key) if label_metadata else dict()
+        additional_metadata = label_metadata.get(key)
+        if additional_metadata is None:
+            additional_metadata = dict()
         storage_options = None
         if isinstance(label_data, np.ndarray):
-            storage_options = {"chunks": image.data.chunksize[-2:]}
+            chunks = image.data.chunksize[-2:]
+            if timepoint_value is not None:
+                chunks = (1,) + chunks
+            storage_options = {"chunks": chunks}
         if timepoint_value is not None:
             label_data = xr.DataArray(
                 get_namespace(label_data).expand_dims(label_data, 0),
@@ -332,8 +337,6 @@ def segment_cells(
             labels=label_data,
             storage_options=storage_options,
         )
-
-    return root
 
 
 def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
@@ -438,7 +441,6 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
         kwargs["clip"] = arguments.stardist_clip
         kwargs["pmin"] = arguments.stardist_pmin
         kwargs["pmax"] = arguments.stardist_pmax
-
     method = getattr(
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",
