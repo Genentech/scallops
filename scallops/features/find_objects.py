@@ -254,7 +254,7 @@ def _agg_objects(grouped):
     return objects_df
 
 
-def find_objects(label_image: da.Array) -> dd.DataFrame:
+def find_objects(label_image: da.Array | zarr.Array) -> dd.DataFrame:
     """Find objects in a labeled array.
 
     :param label_image: Image labels noted by integers.

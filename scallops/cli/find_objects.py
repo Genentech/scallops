@@ -8,6 +8,7 @@ Authors:
 import argparse
 import json
 
+import dask.array as da
 import fsspec
 import zarr
 from zarr import Group
@@ -27,30 +28,62 @@ from scallops.io import _create_file_regex, _set_up_experiment, _to_parquet
 logger = _get_cli_logger()
 
 
-def _execute(
-    label_tuple: tuple[tuple[str, ...], list[str | Group], dict],
+def get_path(
     output_dir: str,
     output_sep: str,
-    force: bool = False,
-    no_version: bool = False,
+    label_name: str,
+    image_key: str,
+    timepoint: str | None = None,
+    suffix="",
+):
+    return (
+        (f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}{suffix}")
+        if timepoint is None
+        else f"{output_dir}{output_sep}{label_name}{output_sep}t={timepoint}{output_sep}{image_key}{suffix}"
+    )
+
+
+def _execute(
+    label_tuple: tuple[tuple[str, ...], list[str | Group], dict],
+    timepoint: str | None,
+    output_dir: str,
+    output_sep: str,
+    force: bool,
+    no_version: bool,
 ):
     group, file_list, metadata = label_tuple
     assert len(file_list) == 1
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
-    path = (
-        f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
+    path = get_path(
+        output_dir,
+        output_sep,
+        label_name,
+        image_key,
+        timepoint,
+        suffix="-objects.parquet",
     )
     fs = fsspec.url_to_fs(path)[0]
     if fs.exists(path):
         if force:
             fs.rm(path, recursive=True)
         else:
-            logger.info(f"Skipping finding objects for {metadata['id']}.")
+            logger.info(
+                f"Skipping find objects for {metadata['id']}{' at t=' + timepoint if timepoint is not None else ''}."
+            )
             return
-    logger.info(f"Finding objects for {metadata['id']}.")
-    array = file_list[0][list(file_list[0].keys())[0]]
+    logger.info(
+        f"Find objects for {metadata['id']}{' at t=' + timepoint if timepoint is not None else ''}."
+    )
+    g = file_list[0]
+    array = da.from_zarr(g[list(g.keys())[0]])
+
+    if timepoint is not None:
+        timepoint_index = g.attrs["multiscales"][0]["metadata"]["t"].index(timepoint)
+        array = array[timepoint_index]
+
     df = find_objects(array)
+
     df.index.name = "label"
     prefix = _label_name_to_prefix.get(label_name)
     if prefix is not None:
@@ -64,7 +97,9 @@ def _execute(
         if not no_version
         else None,
     )
-    logger.info(f"Saved objects for {metadata['id']} to {path}.")
+    logger.info(
+        f"Saved objects for {metadata['id']}{' at t=' + timepoint if timepoint is not None else ''} to {path}."
+    )
 
 
 def run_pipeline_find_objects(arguments: argparse.Namespace) -> None:
@@ -91,33 +126,50 @@ def run_pipeline_find_objects(arguments: argparse.Namespace) -> None:
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
-    paths = []
+    _, _, keys = _create_file_regex(label_pattern)
+    keys = list(keys)
+    label_tuples = []
+    timepoints = []
+
     for path in labels_paths:
         label_root = zarr.open(path, mode="r")
         labels_group = label_root.get("labels")
-        if labels_group is None:
-            raise ValueError(f"Labels group not found for {path}")
-        paths.append(labels_group)
-    _, _, keys = _create_file_regex(label_pattern)
-    gen = _set_up_experiment(
-        image_path=paths,
-        files_pattern=label_pattern,
-        group_by=list(keys),
-        subset=subset,
-    )
+        if labels_group is not None:
+            gen = _set_up_experiment(
+                image_path=labels_group,
+                files_pattern=label_pattern,
+                group_by=keys,
+                subset=subset,
+            )
+            for label_tuple in gen:
+                label_key, file_list, metadata = label_tuple
+
+                if (
+                    label_suffix is None
+                    or label_key[len(label_key) - 1] in label_suffix
+                ):
+                    assert len(file_list) == 1
+                    g = file_list[0]
+                    zarr_metadata = g.attrs["multiscales"][0]["metadata"]
+
+                    if "t" not in zarr_metadata:
+                        label_tuples.append(label_tuple)
+                        timepoints.append(None)
+                    else:
+                        for timepoint_ in zarr_metadata["t"]:
+                            label_tuples.append(label_tuple)
+                            timepoints.append(timepoint_)
 
     with (
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        [
+        for i in range(len(label_tuples)):
             _execute(
-                label_tuple=g,
+                label_tuple=label_tuples[i],
+                timepoint=timepoints[i],
                 output_dir=output_dir,
                 output_sep=output_fs.sep,
                 force=force,
                 no_version=no_version,
             )
-            for g in gen
-            if label_suffix is None or g[0][len(g[0]) - 1] in label_suffix
-        ]

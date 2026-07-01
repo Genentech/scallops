@@ -61,11 +61,13 @@ workflow stitch_workflow {
 
     call utils.list_images {
         input:
-            urls = urls,
-            image_pattern = image_pattern,
+            urls1 = urls,
+            image_pattern1 = image_pattern,
+            n_cycles1=expected_cycles,
+
             subset=subset,
             save_group_size=true,
-            expected_cycles=expected_cycles,
+
             groupby=groupby,
             docker=docker,
             zones = zones,
@@ -73,9 +75,10 @@ workflow stitch_workflow {
             aws_queue_arn = aws_queue_arn,
             max_retries = max_retries
     }
-    Array[String] groups = list_images.groups
+    Array[String] subsets = list_images.subsets
 
-    Int group_size = list_images.group_size # assume <= 500 is 10x
+    Array[String] groupby_array = list_images.groupby_array # e.g. ["plate", "well"]
+    Int group_size = list_images.group_size_1 # assume <= 500 is 10x
 
     String illumination_correction_memory_default = if(group_size<=500) then "16 GiB" else "32 GiB"
     Int illumination_correction_cpu_default = if(group_size<=500) then 8 else 16
@@ -83,7 +86,7 @@ workflow stitch_workflow {
     String stitch_memory_default = if(group_size<=500) then "16 GiB" else "96 GiB"
     Int stitch_cpu_default = if(group_size<=500) then 8 else 48
 
-    scatter (group in groups) {
+    scatter (subset_ in subsets) {
         if(run_illumination_correction) {
             call tasks.illumination_correction {
                 input:
@@ -93,8 +96,8 @@ workflow stitch_workflow {
                     z_index=z_index,
                     expected_images=expected_images,
                     extra_arguments=illumination_correction_extra_arguments,
-                    subset = group,
-                    groupby=list_images.filtered_groupby,
+                    subset = subset_,
+                    groupby=groupby_array,
                     force=force_illumination_correction,
                     output_directory=illumination_correction_output_directory,
                     docker=docker,
@@ -113,8 +116,8 @@ workflow stitch_workflow {
                 images=urls,
                 image_pattern=image_pattern,
                 z_index=z_index,
-                subset = group,
-                groupby=list_images.filtered_groupby,
+                subset = subset_,
+                groupby=groupby_array,
                 expected_images=expected_images,
                 output_directory=stitch_output_directory,
                 force=force_stitch,

@@ -16,6 +16,7 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import skimage.util
+import xarray as xr
 import zarr
 from dask import delayed
 
@@ -123,8 +124,8 @@ def _create_dd_metadata(
 
 def label_features(
     objects_df: pd.DataFrame,
-    label_image: da.Array | zarr.Array,
-    intensity_image: da.Array | zarr.Array | Sequence[zarr.Array] | None,
+    label_image: da.Array | xr.DataArray | zarr.Array,
+    intensity_image: da.Array | zarr.Array | xr.DataArray | Sequence[zarr.Array] | None,
     features: Iterable[str],
     channel_names: dict[int | str, str] | None = None,
     normalize: bool = True,
@@ -133,7 +134,7 @@ def label_features(
 ) -> dd.DataFrame | pd.DataFrame:
     """Extract features from labeled regions in the image.
 
-    :param objects_df: Data frame containing labeled regions from `find_objects`.
+    :param objects_df: Data frame containing labeled regions from `find_objects` with frame index set to label id.
     :param label_image: Labeled regions.
     :param intensity_image: Intensity image with dimensions (y, x, c) or zarr array(s)
         with dimensions with leading dimensions unrolled to channel dimension
@@ -146,6 +147,10 @@ def label_features(
     :return: DataFrame with extracted features.
     """
     is_numpy = False
+    if isinstance(label_image, xr.DataArray):
+        label_image = label_image.data
+    if isinstance(intensity_image, xr.DataArray):
+        intensity_image = intensity_image.data
     if isinstance(label_image, np.ndarray):
         is_numpy = True
         label_image = da.from_array(label_image)

@@ -1277,8 +1277,10 @@ def _images2fov(
         if image is None:
             raise ValueError(f"{file_list[i]} could not be read.")
         if file_metadata is not None:
-            if "t" in file_metadata[i] and isinstance(
-                file_metadata[i]["t"], str
+            if (
+                "t" in file_metadata[i]
+                and isinstance(file_metadata[i]["t"], str)
+                and file_metadata[i]["t"].isdigit()
             ):  # convert to int
                 try:
                     # note we replace "_" with "-" so we don't convert "1_2" to 12 e.g.

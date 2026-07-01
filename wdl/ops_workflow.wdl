@@ -1,4 +1,4 @@
-version 1.0
+version 1.1
 
 import "utils.wdl" as utils
 import "ops_tasks.wdl" as tasks
@@ -15,14 +15,14 @@ workflow ops_workflow {
 
         String output_directory
 
-        # t to align phenotyping rounds to e.g. "IF"
+        # t to align phenotyping rounds to e.g. "IF". If not specified then first round in natural sorted order is used
         String? reference_phenotype_time
 
         # features
         String? features_label_filter = "~barcode_count_0.isna()" # valid barcodes
-        Array[String]? phenotype_cell_features
-        Array[String]? phenotype_nuclei_features
-        Array[String]? phenotype_cytosol_features
+        Map[String, Array[String]]? phenotype_cell_features
+        Map[String, Array[String]]? phenotype_nuclei_features
+        Map[String, Array[String]]? phenotype_cytosol_features
         String? features_extra_arguments # Single string with extra arguments to scallops features cli
 
         Int? features_cell_min_area
@@ -32,16 +32,15 @@ workflow ops_workflow {
         Int? features_nuclei_max_area
         Int? features_cytosol_max_area
 
-        Array[Int] phenotype_cyto_channel # indices after registration for cell segmentation
-        Int phenotype_dapi_channel # index after registration for segmentation and pheno to iss registration
-        Int? phenotype_dapi_channel_before_registration # for pheno to pheno registration
+        Array[Int] phenotype_cyto_channel # indices within referent time for cell segmentation
+        Int? phenotype_dapi_channel # index within t for nuclei segmentation and pheno to iss registration
 
         Int? iss_dapi_channel # ISS to ISS and pheno to ISS registration
 
         String? iss_registration_extra_arguments # Extra arguments in scallops registration elastix cli for ISS
         String? pheno_to_iss_registration_extra_arguments
         String? pheno_registration_extra_arguments
-        Boolean? register_across_channels
+
 
         # spot detect
         Int? iss_expected_cycles
@@ -68,7 +67,7 @@ workflow ops_workflow {
         String model_dir = ""
 
         # nuclei segment
-        String? nuclei_segmentation
+        String? nuclei_segmentation_method
         String? nuclei_segmentation_extra_arguments
 
         # cell segment
@@ -78,6 +77,7 @@ workflow ops_workflow {
         String? cell_segmentation_extra_arguments
 
         Boolean mark_stitch_boundary_cells = true
+        String intersects_stitch_boundary_label = "cell" # nuclei
 
         # merge
         String? merge_extra_arguments
@@ -152,10 +152,9 @@ workflow ops_workflow {
         String merge_memory = "256 GiB"
         String merge_disks = "local-disk 20 HDD"
 
-        Int cell_intersects_boundary_cpu = 16
-        String cell_intersects_boundary_memory = "32 GiB"
-        String cell_intersects_boundary_disks = "local-disk 200 HDD"
-
+        Int intersects_boundary_cpu = 16
+        String intersects_boundary_memory = "32 GiB"
+        String intersects_boundary_disks = "local-disk 200 HDD"
 
         String docker
 
@@ -169,24 +168,20 @@ workflow ops_workflow {
         String register_iss_transforms_suffix = "iss-transforms-t0"
         String register_pheno_to_iss_suffix = "pheno-to-iss-registered.zarr"
         String register_pheno_to_iss_transforms_suffix = "pheno-to-iss-transforms"
-        String nuclei_objects_suffix = "objects-nuclei"
-        String cell_objects_suffix = "objects-cell"
-        String cytosol_objects_suffix = "objects-cytosol"
+        String objects_suffix = "objects"
         String nuclei_features_suffix = "features-nuclei"
         String cell_features_suffix = "features-cell"
         String cytosol_features_suffix = "features-cytosol"
         String register_pheno_to_pheno_suffix = "pheno-registered.zarr"
         String register_pheno_to_pheno_transform_suffix = "pheno-to-pheno-transforms"
         String register_pheno_to_iss_qc_suffix = "pheno-to-iss-qc"
-        String register_iss_to_iss_qc_directory = "iss-to-iss-qc"
+        String register_iss_to_iss_qc_suffix = "iss-to-iss-qc"
         String spot_detect_suffix = "spot-detect.zarr"
         String reads_suffix = "reads"
         String merge_meta_suffix = "merge-sbs-metadata"
         String merge_features_suffix = "merge-features"
-        String cell_intersects_boundary_suffix = "intersects-boundary"
-        String cell_intersects_boundary_non_reference_t_suffix = "intersects-boundary-t"
+        String intersects_boundary_suffix = "intersects-boundary"
     }
-
 
     String output_stripped = sub(output_directory, "/+$", "") + "/"
     String segment_directory = output_stripped + segment_suffix
@@ -197,9 +192,7 @@ workflow ops_workflow {
     String nuclei_features_directory = output_stripped + nuclei_features_suffix
     String cell_features_directory = output_stripped + cell_features_suffix
     String cytosol_features_directory = output_stripped + cytosol_features_suffix
-    String nuclei_objects_directory =  output_stripped + nuclei_objects_suffix
-    String cell_objects_directory =  output_stripped + cell_objects_suffix
-    String cytosol_objects_directory =  output_stripped + cytosol_objects_suffix
+    String objects_directory =  output_stripped + objects_suffix
     String register_pheno_to_pheno_directory = output_stripped + register_pheno_to_pheno_suffix
     String register_pheno_to_pheno_transform_directory = output_stripped + register_pheno_to_pheno_transform_suffix
     String spot_detect_directory = output_stripped + spot_detect_suffix
@@ -207,71 +200,57 @@ workflow ops_workflow {
     String merge_meta_directory = output_stripped + merge_meta_suffix
     String merge_features_directory = output_stripped + merge_features_suffix
     String register_pheno_to_iss_qc_directory = output_stripped + register_pheno_to_iss_qc_suffix
-    String cell_intersects_boundary_directory = output_stripped + cell_intersects_boundary_suffix
-    String cell_intersects_boundary_directory_non_reference_t = output_stripped + cell_intersects_boundary_non_reference_t_suffix
+    String intersects_boundary_directory = output_stripped + intersects_boundary_suffix
+    String register_iss_to_iss_qc_directory = output_stripped + register_iss_to_iss_qc_suffix
 
     Boolean iss_url_supplied = defined(iss_url)
     Boolean pheno_url_supplied = defined(phenotype_url)
 
     call utils.list_images {
         input:
-            urls = [select_first([phenotype_url, iss_url])],
-            image_pattern = if pheno_url_supplied then phenotype_image_pattern else iss_image_pattern,
+            urls1 = select_all([phenotype_url]),
+            image_pattern1 = phenotype_image_pattern,
+            reference_time1=reference_phenotype_time,
+
+            urls2 = select_all([iss_url]),
+            image_pattern2 = iss_image_pattern,
             batch_size=batch_size,
+
             groupby=groupby,
-            subset=subset,
+            subset = subset,
             docker=docker,
             zones = zones,
             preemptible = preemptible,
             aws_queue_arn = aws_queue_arn,
             max_retries = max_retries
     }
-    String image_pattern_after_registration = list_images.groupby_pattern
-    Array[String] groups = list_images.groups
-    Array[String] times = list_images.t
-    scatter (group in groups) {
-        if(pheno_url_supplied) {
-            if(length(times)>1) {
-                call tasks.register_elastix as register_pheno_to_pheno {
-                    input:
-                        moving=select_all([phenotype_url]),
-                        moving_label=phenotype_url, # transform stitch masks
-                        moving_channel=phenotype_dapi_channel_before_registration, # DAPI index in each round
-                        moving_image_pattern=phenotype_image_pattern,
-                        reference_time=reference_phenotype_time,
-                        extra_arguments=pheno_registration_extra_arguments,
-                        unroll_channels=true,
-                        register_across_channels=register_across_channels,
-                        groupby=groupby,
-                        moving_output_directory=register_pheno_to_pheno_directory,
-                        label_output_directory=register_pheno_to_pheno_directory,
-                        transform_output_directory=register_pheno_to_pheno_transform_directory,
-                        subset = group,
-                        force = force_register_pheno_to_pheno,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = register_pheno_to_pheno_disks,
-                        memory = register_pheno_to_pheno_memory,
-                        cpu = register_pheno_to_pheno_cpu,
-                        max_retries = max_retries
-                }
-            }
-            String register_pheno_to_pheno_output_url = select_first([register_pheno_to_pheno.moving_output_url, phenotype_url])
-            String register_pheno_to_pheno_image_pattern = if(length(times)>1) then image_pattern_after_registration else phenotype_image_pattern
+    Array[String] subsets = list_images.subsets
+    String groupby_pattern = list_images.groupby_pattern # e.g. {plate}-{well}
+    Array[String] groupby_array = list_images.groupby_array # e.g. ["plate", "well"]
 
+    Array[String] times_pheno = list_images.times_1
+    Array[String] times_iss = list_images.times_2
+
+    String reference_time_pheno = list_images.reference_time_1
+    String reference_time_iss = list_images.reference_time_2
+    Array[String] phenotype_group_by_with_time = list_images.groupby_array_with_time_1 # e.g. ["plate", "well", "t"]
+    scatter (subset_index in range(length(subsets))) {
+        String subset_ = subsets[subset_index] # e.g. plate1-A1
+
+        if(pheno_url_supplied) {
             if(run_nuclei_segmentation) {
                 call tasks.segment_nuclei {
                     input:
-                        images = register_pheno_to_pheno_output_url,
-                        image_pattern = register_pheno_to_pheno_image_pattern,
-                        method = nuclei_segmentation,
+                        images = select_first([phenotype_url]),
+                        image_pattern = phenotype_image_pattern,
+                        time=reference_time_pheno,
+                        subset = subset_,
+                        method = nuclei_segmentation_method,
                         groupby=groupby,
                         dapi_channel = phenotype_dapi_channel,
                         output_directory=segment_directory,
                         model_dir=model_dir,
-                        subset = group,
+
                         extra_arguments=nuclei_segmentation_extra_arguments,
                         force = force_segment_nuclei,
                         docker=docker,
@@ -283,14 +262,17 @@ workflow ops_workflow {
                         cpu = segment_nuclei_cpu,
                         max_retries = max_retries
                 }
+
             }
             if(run_cell_segmentation) {
                 call tasks.segment_cell {
                     input:
-                        images = register_pheno_to_pheno_output_url,
-                        image_pattern = register_pheno_to_pheno_image_pattern,
+                        images = select_first([phenotype_url]),
+                        image_pattern = phenotype_image_pattern,
+                        time=reference_time_pheno,
                         method = cell_segmentation_method,
-                        groupby=groupby,
+                        groupby = groupby,
+                        subset = subset_,
                         dapi_channel = phenotype_dapi_channel,
                         cyto_channel=phenotype_cyto_channel,
                         nuclei_label=select_first([segment_nuclei.output_url]),
@@ -298,7 +280,7 @@ workflow ops_workflow {
                         threshold_correction_factor = segment_cell_threshold_correction_factor,
                         output_directory=segment_directory,
                         model_dir=model_dir,
-                        subset = group,
+
                         extra_arguments=cell_segmentation_extra_arguments,
                         force = force_segment_cell,
                         docker=docker,
@@ -310,101 +292,129 @@ workflow ops_workflow {
                         cpu = segment_cell_cpu,
                         max_retries = max_retries
                 }
-                call tasks.find_objects as find_objects_cell {
-                    input:
-                        labels= segment_cell.output_url,
-                        label_pattern=image_pattern_after_registration,
-                        suffix="cell",
-                        output_directory=cell_objects_directory,
-                        subset = group,
-                        force = force_find_objects,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = find_objects_disks,
-                        memory = find_objects_memory,
-                        cpu = find_objects_cpu,
-                        max_retries = max_retries
-                }
 
-                call tasks.find_objects as find_objects_cytosol {
-                    input:
-                        labels=segment_cell.output_url,
-                        label_pattern=image_pattern_after_registration,
-                        suffix="cytosol",
-                        output_directory=cytosol_objects_directory,
-                        subset = group,
-                        force = force_find_objects,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = find_objects_disks,
-                        memory = find_objects_memory,
-                        cpu = find_objects_cpu,
-                        max_retries = max_retries
-                }
+                if(length(times_pheno)>1) {
 
-
-                # determine whether cells intersect stitch boundary
-                # using stitch mask as image
-                if(mark_stitch_boundary_cells) {
-                    String t0 = if (length(times)>0) then times[0] else ""
-                    String reference_phenotype_time_ = select_first([reference_phenotype_time, t0])
-                    String output_prefix = if (reference_phenotype_time_!="") then "-" else ""
-                    String phenotype_url_stripped = if (pheno_url_supplied) then sub(select_first([phenotype_url]), "/+$", "")  else ""
-                    call tasks.intersects_boundary as cell_intersects_boundary {
-                        # reference time mask is not transformed
-                        # use mask from stitch output
+                    call tasks.register_elastix as register_pheno_to_pheno {
                         input:
-                            labels=segment_cell.output_url,
-                            images=phenotype_url_stripped + '/labels/',
-                            image_pattern=image_pattern_after_registration + output_prefix + reference_phenotype_time_ + '-mask',
-                            output_directory=cell_intersects_boundary_directory,
-                            label_type='cell',
-                            objects=find_objects_cell.output_url,
+                            moving=select_all([phenotype_url]),
+                            moving_label=segment_cell.output_url,
+                            moving_channel=phenotype_dapi_channel,
+                            moving_image_pattern=phenotype_image_pattern,
+                            moving_time=reference_time_pheno,
+
+                            extra_arguments=pheno_registration_extra_arguments,
+                            output_aligned_channels_only=true,
                             groupby=groupby,
-                            subset = group,
-                            force = force_segment_cell,
+                            subset = subset_,
+                            moving_output_directory=register_pheno_to_pheno_directory,
+                            label_output_directory=register_pheno_to_pheno_directory,
+                            transform_output_directory=register_pheno_to_pheno_transform_directory,
+
+                            force = force_register_pheno_to_pheno,
                             docker=docker,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
-                            disks = cell_intersects_boundary_disks,
-                            memory = cell_intersects_boundary_memory,
-                            cpu = cell_intersects_boundary_cpu,
+                            disks = register_pheno_to_pheno_disks,
+                            memory = register_pheno_to_pheno_memory,
+                            cpu = register_pheno_to_pheno_cpu,
                             max_retries = max_retries
                     }
-                    if (length(times)>1) {
-                        call tasks.intersects_boundary as cell_intersects_boundary_t {
-                            # non-reference time masks are transformed
-                            # use masks from registration output
-                            input:
-                                labels= segment_cell.output_url,
-                                images=register_pheno_to_pheno.moving_output_url + '/labels/',
-                                image_pattern=phenotype_image_pattern + '-mask',
-                                output_directory=cell_intersects_boundary_directory_non_reference_t,
-                                label_type='cell',
-                                objects=find_objects_cell.output_url,
-                                subset = group,
-                                groupby=groupby,
-                                force = force_segment_cell,
-                                docker=docker,
-                                zones = zones,
-                                preemptible = preemptible,
-                                aws_queue_arn = aws_queue_arn,
-                                disks = cell_intersects_boundary_disks,
-                                memory = cell_intersects_boundary_memory,
-                                cpu = cell_intersects_boundary_cpu,
-                                max_retries = max_retries
-                        }
+                }
+
+                if(run_nuclei_segmentation) {
+                    call tasks.find_objects as find_objects_nuclei {
+                        input:
+                            labels=select_all([segment_nuclei.output_url, register_pheno_to_pheno.label_output_url]),
+                            label_pattern=groupby_pattern,
+                            suffix="nuclei",
+                            output_directory=objects_directory,
+                            subset = subset_,
+                            force = force_find_objects,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = find_objects_disks,
+                            memory = find_objects_memory,
+                            cpu = find_objects_cpu,
+                            max_retries = max_retries
                     }
                 }
+                if(run_cell_segmentation) {
+                    call tasks.find_objects as find_objects_cell {
+                        input:
+                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            label_pattern=groupby_pattern,
+                            suffix="cell",
+                            output_directory=objects_directory,
+                            subset = subset_,
+                            force = force_find_objects,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = find_objects_disks,
+                            memory = find_objects_memory,
+                            cpu = find_objects_cpu,
+                            max_retries = max_retries
+                    }
+                }
+                if (run_nuclei_segmentation && run_cell_segmentation) {
+                    call tasks.find_objects as find_objects_cytosol {
+                        input:
+                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            label_pattern=groupby_pattern,
+                            suffix="cytosol",
+                            output_directory=objects_directory,
+                            subset = subset_,
+                            force = force_find_objects,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = find_objects_disks,
+                            memory = find_objects_memory,
+                            cpu = find_objects_cpu,
+                            max_retries = max_retries
+                    }
+                }
+
+                # determine whether cells intersect stitch boundary
+                # use stitch mask as image and segment output for reference phenotype or transformed phenotype for others
+
+                if(mark_stitch_boundary_cells) {
+                    String phenotype_url_stripped = sub(select_first([phenotype_url]), "/+$", "")
+                    call tasks.intersects_boundary as intersects_boundary {
+
+                        input:
+                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            images=phenotype_url_stripped + "/labels/",
+                            image_pattern=phenotype_image_pattern + "-mask",
+                            output_directory=intersects_boundary_directory,
+                            label_type=intersects_stitch_boundary_label,
+                            objects=if(intersects_stitch_boundary_label=="cell") then find_objects_cell.output_url else find_objects_nuclei.output_url,
+                            groupby=phenotype_group_by_with_time,
+                            subset = if(sub(phenotype_image_pattern, "{t}", "")!=phenotype_image_pattern) then subset_ + "-*" else subset_,
+                            force = if(intersects_stitch_boundary_label=="cell") then force_segment_cell else force_segment_nuclei,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = intersects_boundary_disks,
+                            memory = intersects_boundary_memory,
+                            cpu = intersects_boundary_cpu,
+                            max_retries = max_retries
+                    }
+
+                }
             }
+
         }
 
         if(iss_url_supplied) {
+
             call tasks.register_elastix as register_iss_t0 {
                 input:
                     moving=[select_first([iss_url])],
@@ -413,9 +423,8 @@ workflow ops_workflow {
                     groupby=groupby,
                     moving_output_directory=register_iss_t0_directory,
                     transform_output_directory=register_iss_t0_transforms_directory,
-                    register_across_channels=register_across_channels,
                     extra_arguments=iss_registration_extra_arguments,
-                    subset = group,
+                    subset = subset_,
                     force = force_register_iss,
                     docker=docker,
                     zones = zones,
@@ -429,21 +438,23 @@ workflow ops_workflow {
         }
 
         if(iss_url_supplied && pheno_url_supplied) {
+            # transfer phenotype segmentation and DAPI channel to ISS
             call tasks.register_elastix as register_pheno_to_iss {
                 input:
                     fixed=select_first([iss_url]),
                     fixed_channel=iss_dapi_channel,
                     moving_label=segment_cell.output_url,
-                    moving=select_all([register_pheno_to_pheno_output_url]),
-                    moving_image_pattern=register_pheno_to_pheno_image_pattern,
+                    moving=select_all([phenotype_url]),
+                    moving_image_pattern=phenotype_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
                     moving_channel=phenotype_dapi_channel,
+                    moving_time=reference_time_pheno,
+                    fixed_time=reference_time_iss,
                     output_aligned_channels_only=true,
-                    register_across_channels=register_across_channels,
                     moving_output_directory=register_pheno_to_iss_directory,
                     label_output_directory=register_pheno_to_iss_directory,
                     transform_output_directory=register_pheno_to_iss_transforms_directory,
-                    subset = group,
+                    subset = subset_,
                     groupby=groupby,
                     extra_arguments=pheno_to_iss_registration_extra_arguments,
                     force = force_register_pheno_to_iss,
@@ -457,36 +468,19 @@ workflow ops_workflow {
                     max_retries = max_retries
             }
             if(run_nuclei_segmentation) {
-                call tasks.find_objects as find_objects_nuclei {
-                    input:
-                        labels=segment_nuclei.output_url,
-                        label_pattern=image_pattern_after_registration,
-                        suffix="nuclei",
-                        output_directory=nuclei_objects_directory,
-                        subset = group,
-                        force = force_find_objects,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = find_objects_disks,
-                        memory = find_objects_memory,
-                        cpu = find_objects_cpu,
-                        max_retries = max_retries
-                }
-
+                # ISS t0 to phenotype reference time
                 call tasks.register_pheno_to_iss_qc as register_pheno_to_iss_qc {
                     input:
-                        images=select_first([register_iss_t0.moving_output_url]),
-                        image_pattern=image_pattern_after_registration,
-                        stacked_images=register_pheno_to_iss.moving_output_url,
-                        stacked_image_pattern=image_pattern_after_registration,
+                        images=register_pheno_to_iss.moving_output_url,
+                        image_pattern=groupby_pattern,
+                        stacked_images=select_first([register_pheno_to_iss.moving_output_url]),
+                        stacked_image_pattern=groupby_pattern,
                         image_channel=iss_dapi_channel,
                         stacked_image_channel=0,
-                        label_type='nuclei',
+                        label_type="nuclei",
                         output_directory=register_pheno_to_iss_qc_directory,
                         labels=register_pheno_to_iss.label_output_url,
-                        subset = group,
+                        subset = subset_,
                         groupby=groupby,
                         force = force_register_pheno_to_iss_qc,
                         docker=docker,
@@ -498,16 +492,18 @@ workflow ops_workflow {
                         cpu = register_pheno_to_iss_qc_cpu,
                         max_retries = max_retries
                 }
-                 call tasks.register_qc as register_iss_to_iss_qc {
+                # ISS t0 to other times
+                call tasks.register_iss_iss_qc as register_iss_to_iss_qc {
                     input:
                         images=select_first([register_iss_t0.moving_output_url]),
-                        image_pattern=image_pattern_after_registration,
-                        channel=select_first([iss_dapi_channel, 0]),
-                        label_type='nuclei',
-                        channel_prefix="ISS",
+                        image_pattern=groupby_pattern,
+                        dapi_channel=select_first([iss_dapi_channel, 0]),
+                        n_timepoints=length(times_iss),
+                        label_type="nuclei",
+
                         output_directory=register_iss_to_iss_qc_directory,
                         labels=register_pheno_to_iss.label_output_url,
-                        subset = group,
+                        subset = subset_,
                         groupby=groupby,
                         force = force_register_iss_to_iss_qc,
                         docker=docker,
@@ -526,14 +522,14 @@ workflow ops_workflow {
             call tasks.spot_detect {
                 input:
                     images=select_first([register_iss_t0.moving_output_url]),
-                    image_pattern=image_pattern_after_registration,
+                    image_pattern=groupby_pattern,
                     iss_channels=iss_channels,
                     sigma_log=spot_detection_sigma_log,
                     max_filter_width=spot_detection_max_filter_width,
                     peak_neighborhood_size=spot_detection_peak_neighborhood_size,
                     expected_cycles=iss_expected_cycles,
                     output_directory=spot_detect_directory,
-                    subset = group,
+                    subset = subset_,
                     groupby=groupby,
                     extra_arguments=spot_detection_extra_arguments,
                     force = force_spot_detect,
@@ -562,7 +558,7 @@ workflow ops_workflow {
                         label_name=reads_labels,
                         mismatches=reads_mismatches,
                         threshold_peaks_crosstalk=reads_threshold_peaks_crosstalk,
-                        subset = group,
+                        subset = subset_,
                         extra_arguments=reads_extra_arguments,
                         force = force_reads,
                         docker=docker,
@@ -579,21 +575,15 @@ workflow ops_workflow {
 
                 call tasks.merge as merge_sbs_metadata {
                     input:
-                        iss_reads=select_first([reads.output_url]) + '/labels',
-#                        phenotypes_nuclei=features_nuclei.output_url,
-#                        phenotypes_cell=features_cell.output_url,
-#                        phenotypes_cytosol=features_cytosol.output_url,
-                        objects_nuclei=find_objects_nuclei.output_url,
-                        objects_cell=find_objects_cell.output_url,
-                        objects_cytosol=find_objects_cytosol.output_url,
-                        cell_intersects_boundary=cell_intersects_boundary.output_url,
-                        cell_intersects_boundary_t=cell_intersects_boundary_t.output_url,
+                        iss_reads=select_first([reads.output_url]) + "/labels",
+                        objects=if(run_cell_segmentation) then find_objects_nuclei.output_url else find_objects_cell.output_url,
+                        cell_intersects_boundary=intersects_boundary.output_url,
                         register_pheno_to_iss_qc=register_pheno_to_iss_qc.output_url,
                         register_iss_to_iss_qc=register_iss_to_iss_qc.output_url,
                         barcodes=select_first([barcodes]),
                         barcode_column=barcode_column,
                         output_directory=merge_meta_directory,
-                        subset = group,
+                        subset = subset_,
                         extra_arguments=merge_extra_arguments,
                         force = force_merge,
                         docker=docker,
@@ -609,131 +599,145 @@ workflow ops_workflow {
         }
         if (defined(phenotype_nuclei_features)) {
 
-            Array[String] phenotype_nuclei_features_ = select_first([phenotype_nuclei_features])
-            # cromwell hack
+            Map[String,Array[String]] phenotype_nuclei_features_ = select_first([phenotype_nuclei_features])
             Int features_nuclei_min_area_ = select_first([features_nuclei_min_area, -1])
             Int features_nuclei_max_area_ = select_first([features_nuclei_max_area, -1])
-            scatter (index in range(length(phenotype_nuclei_features_))) {
+            Array[String] phenotype_nuclei_times = keys(phenotype_nuclei_features_)
 
-                call tasks.features as features_nuclei {
-                    input:
-                        images = select_first([register_pheno_to_pheno_output_url]),
-                        image_pattern=register_pheno_to_pheno_image_pattern,
-                        objects=merge_sbs_metadata.output_url,
-                        label_filter=features_label_filter,
-                        nuclei_features = phenotype_nuclei_features_[index],
-                        nuclei_min_area = features_nuclei_min_area_,
-                        nuclei_max_area = features_nuclei_max_area_,
-                        features_extra_arguments=features_extra_arguments,
-                        labels= segment_cell.output_url,
-                        model_dir=model_dir,
-                        groupby=groupby,
-                        output_directory=nuclei_features_directory + '-' + index,
-                        subset = group,
-                        force = force_features,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = features_disks,
-                        memory = features_memory,
-                        cpu = features_cpu,
-                        max_retries = max_retries
+            scatter (phenotype_time in phenotype_nuclei_times) {
+                Array[String] nuclei_features = phenotype_nuclei_features_[phenotype_time]
+                scatter (feature_index in range(length(nuclei_features))) {
+                    call tasks.features as features_nuclei {
+                        input:
+                            images = select_first([phenotype_url]),
+                            image_pattern=phenotype_image_pattern,
+                            merge=merge_sbs_metadata.output_url,
+                            labels=select_all([segment_nuclei.output_url, register_pheno_to_pheno.label_output_url]),
+                            label_filter=features_label_filter,
+                            groupby=phenotype_group_by_with_time,
+                            nuclei_features = nuclei_features[feature_index],
+                            nuclei_min_area = features_nuclei_min_area_,
+                            nuclei_max_area = features_nuclei_max_area_,
+                            features_extra_arguments=features_extra_arguments,
+                            model_dir=model_dir,
+                            output_directory=nuclei_features_directory + "-" + phenotype_time + "-batch" + feature_index,
+                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
+                            force = force_features,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = features_disks,
+                            memory = features_memory,
+                            cpu = features_cpu,
+                            max_retries = max_retries
+                    }
                 }
             }
         }
 
         if (defined(phenotype_cell_features)) {
 
-            Array[String] phenotype_cell_features_ = select_first([phenotype_cell_features])
-            # cromwell hack
+            Map[String,Array[String]] phenotype_cell_features_ = select_first([phenotype_cell_features])
             Int features_cell_min_area_ = select_first([features_cell_min_area, -1])
             Int features_cell_max_area_ = select_first([features_cell_max_area, -1])
-            scatter (index in range(length(phenotype_cell_features_))) {
-                call tasks.features as features_cell {
-                    input:
-                        images = select_first([register_pheno_to_pheno_output_url]),
-                        image_pattern=register_pheno_to_pheno_image_pattern,
-                        objects=merge_sbs_metadata.output_url,
-                        label_filter=features_label_filter,
-                        cell_features = phenotype_cell_features_[index],
-                        cell_min_area = features_cell_min_area_,
-                        cell_max_area = features_cell_max_area_,
-                        features_extra_arguments=features_extra_arguments,
-                        labels= segment_cell.output_url,
-                        model_dir=model_dir,
-                        groupby=groupby,
-                        output_directory=cell_features_directory + '-' + index,
-                        subset = group,
-                        force = force_features,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = features_disks,
-                        memory = features_memory,
-                        cpu = features_cpu,
-                        max_retries = max_retries
+            Array[String] phenotype_cell_times = keys(phenotype_cell_features_)
+
+            scatter (phenotype_time in phenotype_cell_times) {
+                Array[String] cell_features = phenotype_cell_features_[phenotype_time]
+                scatter (feature_index in range(length(cell_features))) {
+                    call tasks.features as features_cell {
+                        input:
+                            images = select_first([phenotype_url]),
+                            image_pattern=phenotype_image_pattern,
+                            merge=merge_sbs_metadata.output_url,
+                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            label_filter=features_label_filter,
+                            groupby=phenotype_group_by_with_time,
+                            cell_features = cell_features[feature_index],
+                            cell_min_area = features_cell_min_area_,
+                            cell_max_area = features_cell_max_area_,
+                            features_extra_arguments=features_extra_arguments,
+
+                            model_dir=model_dir,
+
+                            output_directory=cell_features_directory + "-" + phenotype_time + "-batch" + feature_index,
+                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
+                            force = force_features,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = features_disks,
+                            memory = features_memory,
+                            cpu = features_cpu,
+                            max_retries = max_retries
+                    }
                 }
             }
         }
 
         if (defined(phenotype_cytosol_features)) {
 
-            Array[String] phenotype_cytosol_features_ = select_first([phenotype_cytosol_features])
-            # cromwell hack
+            Map[String,Array[String]] phenotype_cytosol_features_ = select_first([phenotype_cytosol_features])
             Int features_cytosol_min_area_ = select_first([features_cytosol_min_area, -1])
             Int features_cytosol_max_area_ = select_first([features_cytosol_max_area, -1])
-            scatter (index in range(length(phenotype_cytosol_features_))) {
-                call tasks.features as features_cytosol {
-                    input:
-                        images = select_first([register_pheno_to_pheno_output_url]),
-                        image_pattern=register_pheno_to_pheno_image_pattern,
-                        objects=merge_sbs_metadata.output_url,
-                        label_filter=features_label_filter,
-                        cytosol_features = phenotype_cytosol_features_[index],
-                        cytosol_min_area = features_cytosol_min_area_,
-                        cytosol_max_area = features_cytosol_max_area_,
-                        labels = segment_cell.output_url,
-                        features_extra_arguments=features_extra_arguments,
-                        model_dir=model_dir,
-                        groupby=groupby,
-                        output_directory=cytosol_features_directory + '-' + index,
-                        subset = group,
-                        force = force_features,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = features_disks,
-                        memory = features_memory,
-                        cpu = features_cpu,
-                        max_retries = max_retries
+            Array[String] phenotype_cytosol_times = keys(phenotype_cytosol_features_)
+
+            scatter (phenotype_time in phenotype_cytosol_times) {
+                Array[String] cytosol_features = phenotype_cytosol_features_[phenotype_time]
+                scatter (feature_index in range(length(cytosol_features))) {
+                    call tasks.features as features_cytosol {
+                        input:
+                            images = select_first([phenotype_url]),
+                            image_pattern=phenotype_image_pattern,
+                            merge=merge_sbs_metadata.output_url,
+                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            label_filter=features_label_filter,
+                            groupby=phenotype_group_by_with_time,
+                            output_directory=cytosol_features_directory + "-" + phenotype_time + "-" + feature_index,
+                            cytosol_features = cytosol_features[feature_index],
+                            cytosol_min_area = features_cytosol_min_area_,
+                            cytosol_max_area = features_cytosol_max_area_,
+                            features_extra_arguments=features_extra_arguments,
+
+                            model_dir=model_dir,
+
+                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
+                            force = force_features,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = features_disks,
+                            memory = features_memory,
+                            cpu = features_cpu,
+                            max_retries = max_retries
+                    }
                 }
             }
         }
-         if (defined(barcodes)) {
 
-                call tasks.merge as merge_features {
-                    input:
-                        phenotypes_nuclei=features_nuclei.output_url,
-                        phenotypes_cell=features_cell.output_url,
-                        phenotypes_cytosol=features_cytosol.output_url,
-                        iss_reads=merge_sbs_metadata.output_url,
-                        output_directory=merge_features_directory,
-                        subset = group,
-                        extra_arguments=merge_extra_arguments,
-                        force = force_merge,
-                        docker=docker,
-                        zones = zones,
-                        preemptible = preemptible,
-                        aws_queue_arn = aws_queue_arn,
-                        disks = merge_disks,
-                        memory = merge_memory,
-                        cpu = merge_cpu,
-                        max_retries = max_retries
-                }
-            }
+
+        call tasks.merge as merge_features {
+            input:
+                phenotypes_nuclei=features_nuclei.output_url,
+                phenotypes_cell=features_cell.output_url,
+                phenotypes_cytosol=features_cytosol.output_url,
+                merge_metadata=merge_sbs_metadata.output_url,
+                output_directory=merge_features_directory,
+                subset = subset_,
+                extra_arguments=merge_extra_arguments,
+                force = force_merge,
+                docker=docker,
+                zones = zones,
+                preemptible = preemptible,
+                aws_queue_arn = aws_queue_arn,
+                disks = merge_disks,
+                memory = merge_memory,
+                cpu = merge_cpu,
+                max_retries = max_retries
+        }
 
 
     }
@@ -754,7 +758,5 @@ workflow ops_workflow {
         Array[Array[String]?] features_cytosol_output_url = features_cytosol.output_url
         Array[String?] merge_sbs_metadata_output_url = merge_sbs_metadata.output_url
         Array[String?] merge_features_output_url = merge_features.output_url
-        Array[String] list_images_groups = list_images.groups
-
     }
 }

@@ -73,7 +73,8 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
         "--labels",
         dest="labels",
         required=True,
-        help="Path to zarr directory containing labels",
+        nargs="+",
+        help="Path(s) to zarr directory containing labels",
     )
 
     generic_features_help = (
@@ -108,11 +109,6 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     )
 
     parser.add_argument(
-        "--objects",
-        required=False,
-        help="Path to directory containing output from `find-objects` or `merge`",
-    )
-    parser.add_argument(
         "--stack-images",
         help="Path to additional images to stack with `images`. Add `s` prefix to refer"
         " to stack image channel index (e.g. corr_0_s0).",
@@ -120,8 +116,8 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     )
     required.add_argument(
         "--merge",
-        required=False,
-        help="Path to directory containing output from `merge`",
+        nargs="*",
+        help="Path(s) to directory containing output from `find-objects`, `merge`, or `features`",
     )
     parser.add_argument(
         "--label-filter",

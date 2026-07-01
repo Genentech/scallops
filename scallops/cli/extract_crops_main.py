@@ -1,7 +1,5 @@
 import argparse
 
-import fsspec
-import zarr
 from dask.bag import from_sequence
 
 from scallops.cli.arg_parser import _sort_groups
@@ -39,12 +37,13 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
 
     image_patterns = arguments.image_pattern
     output_dir = arguments.output
-    merge_dir = arguments.merge
+    merge_dirs = arguments.merge
     subset = arguments.subset
     force = arguments.force
     groupby = arguments.groupby
     crop_size = arguments.crop_size
     crop_size = (crop_size, crop_size)
+    label_paths = arguments.labels
     label_filter = arguments.label_filter
     percentile_min = arguments.percentile_min
 
@@ -67,22 +66,9 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads()
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=4)
 
-    merge_dir_sep = None
-    if merge_dir is not None:
-        merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
-        merge_dir = merge_dir.rstrip(merge_dir_sep)
-
-    output_fs, _ = fsspec.core.url_to_fs(output_dir)
-    output_dir = output_dir.rstrip(output_fs.sep)
-
-    labels_path = arguments.labels
     no_version = arguments.no_version
-    assert labels_path is not None, "No labels provided"
-    label_root = zarr.open(labels_path, mode="r")
-    labels_group = label_root["labels"]
-
     image_seq = from_sequence(
         _set_up_experiment(
             images_paths,
@@ -101,10 +87,8 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         image_seq.starmap(
             single_crop,
             output_dir=output_dir,
-            output_sep=output_fs.sep,
-            merge_dir=merge_dir,
-            merge_dir_sep=merge_dir_sep,
-            labels_group=labels_group,
+            merge_dirs=merge_dirs,
+            label_paths=label_paths,
             label_filter=label_filter,
             label_name=label_name,
             percentile_normalize=percentile_normalize,
@@ -137,6 +121,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
         "--labels",
         dest="labels",
         required=True,
+        nargs="+",
         help="Path to zarr directory containing labels",
     )
 
@@ -145,6 +130,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     required.add_argument(
         "--merge",
         required=False,
+        nargs="*",
         help="Path to directory containing output from `merge`",
     )
     parser.add_argument(

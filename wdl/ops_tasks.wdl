@@ -1,4 +1,4 @@
-version 1.0
+version 1.1
 
 task segment_nuclei {
     input {
@@ -7,6 +7,7 @@ task segment_nuclei {
         String? image_pattern
         Array[String] groupby
         Int? dapi_channel
+        String? time
         String output_directory
         String subset
         Boolean? force
@@ -33,6 +34,7 @@ task segment_nuclei {
         --groupby ~{sep=" " groupby} \
         ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
         ~{'--dapi-channel ' + dapi_channel} \
+        ~{'--time ' + time} \
         --output "~{output_directory}" \
         --subset ~{subset} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \
@@ -64,6 +66,7 @@ task segment_cell {
         Array[String] groupby
         Int? dapi_channel
         Array[Int] cyto_channel
+        String? time
         Int? chunks
         String? nuclei_label
         String? threshold
@@ -94,6 +97,7 @@ task segment_cell {
         --groupby ~{sep=" " groupby} \
         ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
         ~{'--dapi-channel ' + dapi_channel} \
+        ~{'--time ' + time} \
         --cyto-channel ~{sep=" " cyto_channel} \
         ~{"--nuclei-label " + nuclei_label} \
         ~{"--method " + method} \
@@ -134,7 +138,8 @@ task register_elastix {
         Boolean? output_aligned_channels_only
         Boolean? unroll_channels
         String? fixed
-        String? reference_time
+        String? moving_time
+        String? fixed_time
         Int? fixed_channel
         Boolean? register_across_channels
         String transform_output_directory
@@ -174,7 +179,8 @@ task register_elastix {
         --subset ~{subset} \
         ~{if defined(label_output_directory) then '--label-output "' + label_output_directory + '"' else ''} \
         ~{true="--unroll-channels" false="" unroll_channels} \
-        ~{if defined(reference_time) then '--time "' + reference_time + '"' else ''} \
+        ~{if defined(moving_time) then '--moving-time "' + moving_time + '"' else ''} \
+        ~{if defined(fixed_time) then '--fixed-time "' + fixed_time + '"' else ''} \
         ~{true="--force" false="" force} \
         ~{true="--align-across-channels" false="" register_across_channels} \
         ~{true="--output-aligned-channels-only" false="" output_aligned_channels_only} \
@@ -266,16 +272,17 @@ task register_pheno_to_iss_qc {
 }
 
 
-task register_qc {
+task register_iss_iss_qc {
     input {
         String images
         String? image_pattern
         String label_type
         String labels
-        Int channel
+        Int dapi_channel
+        Int n_timepoints
         String subset
         String output_directory
-        String channel_prefix
+
         Array[String] groupby
         Boolean? force
 
@@ -288,6 +295,7 @@ task register_qc {
         String memory
         Int max_retries
     }
+    Int n_channels = n_timepoints*5
 
     command <<<
         set -ex
@@ -296,58 +304,17 @@ task register_qc {
             ulimit -n 100000
         fi
 
-        python <<CODE
-        import json
-        from subprocess import check_call
+         scallops features \
+        --features-~{label_type} "correlationpearsonbox_~{dapi_channel}_5:~{n_channels}:5" \
+        --labels "~{labels}" \
+        --groupby ~{sep=" " groupby} \
+        --subset ~{subset} \
+        --output "~{output_directory}" \
+        --images "~{images}" \
+        ~{'--image-pattern ' + image_pattern} \
+        ~{true="--force" false="" force}
 
-        from scallops.io import read_experiment
 
-        images = "~{images}"
-        image_pattern = "~{image_pattern}"
-        label_type = "~{label_type}"
-        labels = "~{labels}"
-
-        channel = "~{channel}"
-        subset = "~{subset}".split(" ")
-        output_directory = "~{output_directory}"
-        groupby = "~{sep=',' groupby}".split(",")
-        force = "~{force}"
-        channel_prefix = "~{channel_prefix}"
-
-        exp = read_experiment(images, image_pattern, group_by=groupby, subset=subset, dask=True)
-        keys = list(exp.images.keys())
-        if len(keys) == 0:
-            raise ValueError("No images found")
-        image = exp.images[keys[0]]
-        size_t = image.sizes['t']
-        size_c = image.sizes['c']
-        channel_rename = {}
-        t = 0
-        for i in range(int(channel), size_t * size_c, size_c):
-            channel_rename[f"{i}"] = f"{channel_prefix}{t}"
-            t += 1
-
-        cmd = ["scallops", "features"]
-        cmd += [f"--features-{label_type}", f"correlationpearsonbox_{channel}_{channel}:{size_t * size_c}:{size_c}"]
-        cmd += ["--labels", labels]
-
-        if image_pattern != "":
-            cmd += ["--image-pattern", image_pattern]
-        cmd.append("--groupby")
-        cmd += groupby
-        if len(subset) > 0:
-            cmd.append("--subset")
-            cmd += subset
-        cmd += ["--output", output_directory]
-        cmd += ["--images", images]
-        cmd += ["--channel-rename", f"{json.dumps(channel_rename)}"]
-
-        if force == "true":
-            cmd.append("--force")
-        print(" ".join(cmd))
-        check_call(cmd)
-
-        CODE
 
     >>>
 
@@ -373,7 +340,7 @@ task intersects_boundary {
         String images
         String? image_pattern
         String label_type
-        String labels
+        Array[String] labels
         String subset
         String? objects
         String output_directory
@@ -399,12 +366,12 @@ task intersects_boundary {
 
         scallops features \
         --features-~{label_type} "intersects-boundary_0" \
-        --labels "~{labels}" \
+        --labels ~{sep=" " labels} \
         --groupby ~{sep=" " groupby} \
-        --subset ~{subset} \
+        --subset "~{subset}" \
         --output "~{output_directory}" \
         --images "~{images}" \
-        --objects "~{objects}" \
+        --merge "~{objects}" \
         --no-normalize \
         ~{'--image-pattern ' + image_pattern} \
         ~{true="--force" false="" force}
@@ -430,7 +397,7 @@ task intersects_boundary {
 
 task find_objects {
     input {
-        String? labels
+        Array[String] labels
         String subset
         Boolean? force
         String? label_pattern
@@ -454,7 +421,7 @@ task find_objects {
         fi
 
         scallops find-objects \
-        --labels "~{labels}" \
+        --labels ~{sep=" " labels} \
         --subset ~{subset} \
         ~{"--label-pattern " + label_pattern} \
         --label-suffix ~{suffix} \
@@ -493,8 +460,8 @@ task features {
         Int? cytosol_max_area
         String? features_extra_arguments
         String? model_dir
-        String? labels
-        String? objects
+        Array[String] labels
+        String? merge
         String images
         String subset
         Boolean? force
@@ -531,8 +498,8 @@ task features {
         ~{if defined(cell_max_area) && select_first([cell_max_area])>0 then '--cell-max-area ' + cell_max_area else ''} \
         ~{if defined(cytosol_max_area) && select_first([cytosol_max_area])>0 then '--cytosol-max-area ' + cytosol_max_area else ''} \
         ~{if defined(features_extra_arguments) then features_extra_arguments else ''} \
-        --labels "~{labels}" \
-        ~{"--objects " + objects} \
+        --merge ~{merge} \
+        --labels ~{sep=" " labels} \
         ~{"--label-filter " + '"' + label_filter + '"'} \
         --subset ~{subset} \
         ~{"--image-pattern " + image_pattern} \
@@ -690,16 +657,17 @@ task reads {
 task merge {
     input {
         String? iss_reads
-        Array[String]? phenotypes_nuclei
-        Array[String]? phenotypes_cell
-        Array[String]? phenotypes_cytosol
-        String? objects_nuclei
-        String? objects_cell
+
+        String? objects
+        String? cell_intersects_boundary
         String? register_pheno_to_iss_qc
         String? register_iss_to_iss_qc
-        String? objects_cytosol
-        String? cell_intersects_boundary
-        String? cell_intersects_boundary_t
+        String? register_pheno_to_pheno_qc
+
+        Array[Array[String]]? phenotypes_nuclei
+        Array[Array[String]]? phenotypes_cell
+        Array[Array[String]]? phenotypes_cytosol
+        String? merge_metadata
 
         String output_directory
         String? barcodes
@@ -717,26 +685,27 @@ task merge {
         String memory
         Int max_retries
     }
+    Array[String] phenotypes_nuclei_ = if defined(phenotypes_nuclei) then flatten(select_first([phenotypes_nuclei])) else []
+    Array[String] phenotypes_cell_ = if defined(phenotypes_cell) then flatten(select_first([phenotypes_cell])) else []
+    Array[String] phenotypes_cytosol_ = if defined(phenotypes_cytosol) then flatten(select_first([phenotypes_cytosol])) else []
 
     command <<<
-        set -e
-
+        set -ex
 
         scallops pooled-sbs merge \
          ~{"--sbs " + iss_reads} \
          ~{"--barcodes " + barcodes} \
         --output "~{output_directory}" \
         --phenotype \
-        ~{sep=" " phenotypes_nuclei} \
-        ~{sep=" " phenotypes_cell} \
-        ~{sep=" " phenotypes_cytosol} \
-        ~{objects_nuclei} \
-        ~{objects_cell} \
-        ~{objects_cytosol} \
+        ~{objects} \
         ~{cell_intersects_boundary} \
-        ~{cell_intersects_boundary_t} \
         ~{register_pheno_to_iss_qc} \
         ~{register_iss_to_iss_qc} \
+        ~{register_pheno_to_pheno_qc} \
+        ~{merge_metadata} \
+        ~{sep=" " phenotypes_nuclei_} \
+        ~{sep=" " phenotypes_cell_} \
+        ~{sep=" " phenotypes_cytosol_} \
         --subset ~{subset} \
         ~{"--barcode-col " + barcode_column} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \
@@ -745,7 +714,6 @@ task merge {
 
     output {
         String output_url = "~{output_directory}"
-
     }
 
     runtime {
