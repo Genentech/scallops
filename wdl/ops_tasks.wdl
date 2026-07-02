@@ -205,13 +205,89 @@ task register_elastix {
     }
 }
 
+task register_pheno_to_pheno_qc {
+    input {
+        String phenotype_time
+        String images # non-reference time
+        String image_pattern
+        String label_type
+        Array[String?]? stacked_images # reference time transformed
+        String stacked_image_pattern
+
+        Array[String?]? labels # reference labels transformed
+        Int image_channel
+        Int stacked_image_channel
+        String subset
+        String output_directory
+        Array[String] groupby
+        Boolean? force
+
+        String docker
+        String zones
+        Int preemptible
+        String aws_queue_arn
+        Int cpu
+        String disks
+        String memory
+        Int max_retries
+    }
+
+    command <<<
+        set -ex
+
+        if [[ "$SCALLOPS_TEST" != "1" ]]; then
+            ulimit -n 100000
+        fi
+
+        phenotype_time="~{phenotype_time}"
+        pattern="-~{phenotype_time}.zarr"
+        stacked_images=('~{sep="' '" stacked_images}')
+        filtered_images=()
+        for item in "${stacked_images[@]}"; do
+            if [[ "$item" == *$pattern ]]; then
+                filtered_images+=("$item")
+            fi
+        done
+        filtered_images="${filtered_images[*]}"
+
+        scallops features \
+        --features-~{label_type} "correlationpearsonbox_~{image_channel}_s~{stacked_image_channel}" \
+        --labels $filtered_images \
+        --groupby ~{sep=" " groupby} \
+        --subset ~{subset} \
+        --output "~{output_directory}" \
+        --images ~{images} \
+        --stack-images $filtered_images \
+        --image-pattern ~{image_pattern} \
+        --stack-image-pattern ~{stacked_image_pattern} \
+        ~{true="--force" false="" force}
+    >>>
+
+    output {
+        String output_url = "~{output_directory}"
+
+    }
+
+    runtime {
+        docker:docker
+        disks: disks
+        zones: zones
+        memory: memory
+        cpu : cpu
+        preemptible: preemptible
+        queueArn: aws_queue_arn
+        maxRetries : max_retries
+    }
+}
+
+
 task register_pheno_to_iss_qc {
     input {
         String images
         String? image_pattern
         String label_type
         String labels
-        String? stacked_images
+        String stacked_images
         String? stacked_image_pattern
         Int? image_channel
         Int? stacked_image_channel
@@ -235,7 +311,7 @@ task register_pheno_to_iss_qc {
         set -ex
 
         if [[ "$SCALLOPS_TEST" != "1" ]]; then
-        ulimit -n 100000
+            ulimit -n 100000
         fi
 
 
@@ -272,14 +348,14 @@ task register_pheno_to_iss_qc {
 }
 
 
-task register_iss_iss_qc {
+task register_qc {
     input {
         String images
         String? image_pattern
         String label_type
         String labels
-        Int dapi_channel
-        Int n_timepoints
+        Int? dapi_channel
+        Int? n_timepoints
         String subset
         String output_directory
 
@@ -295,7 +371,8 @@ task register_iss_iss_qc {
         String memory
         Int max_retries
     }
-    Int n_channels = n_timepoints*5
+    Int n_channels = select_first([n_timepoints, 0])*5
+    String feature = if(n_channels>0) then "correlationpearsonbox_~{dapi_channel}_5:~{n_channels}:5" else "correlationpearsonbox_0_*"
 
     command <<<
         set -ex
@@ -305,7 +382,7 @@ task register_iss_iss_qc {
         fi
 
          scallops features \
-        --features-~{label_type} "correlationpearsonbox_~{dapi_channel}_5:~{n_channels}:5" \
+        --features-~{label_type} "~{feature}" \
         --labels "~{labels}" \
         --groupby ~{sep=" " groupby} \
         --subset ~{subset} \
@@ -313,9 +390,6 @@ task register_iss_iss_qc {
         --images "~{images}" \
         ~{'--image-pattern ' + image_pattern} \
         ~{true="--force" false="" force}
-
-
-
     >>>
 
     output {
@@ -341,6 +415,7 @@ task intersects_boundary {
         String? image_pattern
         String label_type
         Array[String] labels
+        Array[String?]? additional_labels
         String subset
         String? objects
         String output_directory
@@ -361,12 +436,13 @@ task intersects_boundary {
         set -ex
 
         if [[ "$SCALLOPS_TEST" != "1" ]]; then
-        ulimit -n 100000
+            ulimit -n 100000
         fi
 
         scallops features \
         --features-~{label_type} "intersects-boundary_0" \
         --labels ~{sep=" " labels} \
+        {sep=" " additional_labels} \
         --groupby ~{sep=" " groupby} \
         --subset "~{subset}" \
         --output "~{output_directory}" \
@@ -397,6 +473,7 @@ task intersects_boundary {
 
 task find_objects {
     input {
+        Array[String?]? additional_labels
         Array[String] labels
         String subset
         Boolean? force
@@ -417,11 +494,12 @@ task find_objects {
         set -ex
 
         if [[ "$SCALLOPS_TEST" != "1" ]]; then
-        ulimit -n 100000
+            ulimit -n 100000
         fi
 
         scallops find-objects \
         --labels ~{sep=" " labels} \
+        ~{sep=" " additional_labels} \
         --subset ~{subset} \
         ~{"--label-pattern " + label_pattern} \
         --label-suffix ~{suffix} \
@@ -461,6 +539,7 @@ task features {
         String? features_extra_arguments
         String? model_dir
         Array[String] labels
+        Array[String?]? additional_labels
         String? merge
         String images
         String subset
@@ -500,6 +579,7 @@ task features {
         ~{if defined(features_extra_arguments) then features_extra_arguments else ''} \
         --merge ~{merge} \
         --labels ~{sep=" " labels} \
+        ~{sep=" " additional_labels} \
         ~{"--label-filter " + '"' + label_filter + '"'} \
         --subset ~{subset} \
         ~{"--image-pattern " + image_pattern} \
@@ -662,7 +742,7 @@ task merge {
         String? cell_intersects_boundary
         String? register_pheno_to_iss_qc
         String? register_iss_to_iss_qc
-        String? register_pheno_to_pheno_qc
+        Array[String?]? register_pheno_to_pheno_qc
 
         Array[Array[String]]? phenotypes_nuclei
         Array[Array[String]]? phenotypes_cell
@@ -701,7 +781,7 @@ task merge {
         ~{cell_intersects_boundary} \
         ~{register_pheno_to_iss_qc} \
         ~{register_iss_to_iss_qc} \
-        ~{register_pheno_to_pheno_qc} \
+        ~{sep=" " register_pheno_to_pheno_qc} \
         ~{merge_metadata} \
         ~{sep=" " phenotypes_nuclei_} \
         ~{sep=" " phenotypes_cell_} \

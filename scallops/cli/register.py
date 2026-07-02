@@ -88,26 +88,28 @@ def _get_timepoint_index_and_value(
             for i in range(len(image)):
                 if (
                     "t" in image[i].coords
-                    and image[i].coords["t"].values[0] == timepoint
+                    and str(image[i].coords["t"].values[0]) == timepoint
                 ):
                     timepoint_index = i
                     timepoint_value = image[i].coords["t"].values[0]
                     break
         elif "t" in image.coords:
-            times = list(image.coords["t"].values)
-            if timepoint in times:
-                timepoint_index = times.index(timepoint)
-                timepoint_value = times[timepoint_index]
+            times = image.coords["t"].values
+            for i in range(len(times)):
+                if str(times[i]) == timepoint:
+                    timepoint_index = i
+                    timepoint_value = times[i]
+                    break
 
         if timepoint_index is None:
             raise ValueError(f"Reference timepoint not found: {timepoint}.")
-    elif isinstance(timepoint, int):
+    elif isinstance(timepoint, int):  # index
         timepoint_index = timepoint
         if isinstance(image, Sequence):
             if "t" in image[timepoint_index].coords:
                 timepoint_value = image[timepoint_index].coords["t"].values[0]
         elif "t" in image.coords:
-            times = list(image.coords["t"].values)
+            times = image.coords["t"].values
             timepoint_value = times[timepoint_index]
     else:
         raise ValueError()
@@ -403,6 +405,8 @@ def single_registration(
                 output_names=None,
                 moving_image_spacing=moving_image_spacing,
                 output_root=label_output_root,
+                moving_timepoint=moving_timepoint_value,
+                output_timepoint=fixed_timepoint_value,
             )
 
     else:  # align to t=moving_timepoint
@@ -421,6 +425,7 @@ def single_registration(
             moving_image = new_moving_image
         if not no_version:
             moving_image[moving_timepoint].attrs.update(cli_metadata())
+        # image will be in moving timepoint space
         _itk_align_reference_time_zarr(
             unroll_channels=unroll_channels,
             reference_timepoint=moving_timepoint,
@@ -442,22 +447,23 @@ def single_registration(
             landmark_min_count=landmark_min_count,
             parameter_object_across_channels=parameter_object_across_channels,
         )
-        moving_image_attrs = moving_image[0].attrs.copy()
-        chunksize = moving_image[0].data.chunksize[-2:]
-        del moving_image
-        if moving_image_spacing is None:
-            moving_image_spacing = get_image_spacing(moving_image_attrs)
-        if len(moving_label_keys) > 0:
-            _transform_labels_t(
-                transform_fs=transform_fs,
-                transform_dest=transform_dest,
-                label_output_root=label_output_root,
-                moving_image_attrs=moving_image_attrs,
-                moving_label_keys=moving_label_keys,
-                moving_image_spacing=moving_image_spacing,
-                moving_timepoint_value=moving_timepoint_value,
-                chunksize=chunksize,
-            )
+    # moving_image_attrs = moving_image[0].attrs.copy()
+    # chunksize = moving_image[0].data.chunksize[-2:]
+    # del moving_image
+    # if moving_image_spacing is None:
+    #    moving_image_spacing = get_image_spacing(moving_image_attrs)
+
+    # if len(moving_label_keys) > 0:
+    #     _transform_labels_t(
+    #         transform_fs=transform_fs,
+    #         transform_dest=transform_dest,
+    #         label_output_root=label_output_root,
+    #         moving_image_attrs=moving_image_attrs,
+    #         moving_label_keys=moving_label_keys,
+    #         moving_image_spacing=moving_image_spacing,
+    #         moving_timepoint_value=moving_timepoint_value,
+    #         chunksize=chunksize,
+    #     )
 
     return image_key
 
@@ -622,6 +628,8 @@ def _transform_labels(
     output_root: zarr.Group,
     moving_image_spacing: None | tuple[float, float],
     attrs: None | dict,
+    moving_timepoint: str | None,
+    output_timepoint: str | None,
 ):
     """Transform and save labels.
 
@@ -640,20 +648,36 @@ def _transform_labels(
     for i in range(len(matching_keys)):
         key = matching_keys[i]
         name = os.path.basename(key)
-        array = read_ome_zarr_array(key)
-
+        moving_labels = read_ome_zarr_array(key)
+        if moving_labels.sizes.get("t", 0) > 0 and "t" in moving_labels.coords:
+            moving_times = moving_labels.coords["t"].values
+            time_index = -1
+            for j in range(len(moving_times)):
+                if str(moving_times[i]) == moving_timepoint:
+                    time_index = j
+                    break
+            if time_index == -1:
+                continue
+            moving_labels = moving_labels.isel(t=time_index)
         if attrs is not None:
-            array.attrs = attrs  # e.g. copy physical size
+            moving_labels.attrs = attrs  # e.g. copy physical size
         to = ""
         if name != output_names[i]:
             to = f" to {output_names[i]}"
         logger.info(f"Running transformation for {name}{to}.")
         transformed_array = itk_transform_labels(
-            image=array,
+            image=moving_labels,
             transform_parameter_object=transform_parameter_object,
             image_spacing=moving_image_spacing,
         )
-        del array
+        if output_timepoint is not None:
+            transformed_array = xr.DataArray(
+                np.expand_dims(transformed_array, 0),
+                dims=["t", "y", "x"],
+                coords={"t": [output_timepoint]},
+            )
+
+        del moving_labels
 
         _write_zarr_image(
             name=output_names[i],
@@ -725,6 +749,8 @@ def single_transformix(
             output_root=output_root,
             moving_image_spacing=image_spacing,
             attrs=None,
+            moving_timepoint=None,  # TODO
+            output_timepoint=None,
         )
     else:
         # see if transform dir has subdirectory describing channel transformation
@@ -836,16 +862,7 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     group_by = arguments.groupby
     fixed_timepoint = arguments.fixed_time if arguments.fixed_time is not None else 0
     moving_timepoint = arguments.moving_time if arguments.moving_time is not None else 0
-    if isinstance(fixed_timepoint, str) and fixed_timepoint.isdigit():
-        try:
-            fixed_timepoint = int(fixed_timepoint)
-        except ValueError:
-            pass
-    if isinstance(moving_timepoint, str) and moving_timepoint.isdigit():
-        try:
-            moving_timepoint = int(moving_timepoint)
-        except ValueError:
-            pass
+
     unroll_channels = arguments.unroll_channels
     transform_output_dir = arguments.transform_output_dir
     subset = arguments.subset

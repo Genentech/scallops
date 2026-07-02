@@ -98,7 +98,7 @@ workflow ops_workflow {
         Boolean force_find_objects = false
         Boolean force_register_pheno_to_iss_qc = false
         Boolean force_register_iss_to_iss_qc = false
-
+        Boolean force_register_pheno_to_pheno_qc = false
         # general options
         Array[String]? subset
         Int? batch_size # for processing multiple images in one batch
@@ -144,6 +144,10 @@ workflow ops_workflow {
         Int register_pheno_to_iss_qc_cpu = 48
         String register_pheno_to_iss_qc_disks = "local-disk 200 HDD"
 
+        String register_pheno_to_pheno_qc_memory = "96 GiB"
+        Int register_pheno_to_pheno_qc_cpu = 48
+        String register_pheno_to_pheno_qc_disks = "local-disk 200 HDD"
+
         String register_iss_to_iss_qc_memory = "48 GiB"
         Int register_iss_to_iss_qc_cpu = 24
         String register_iss_to_iss_qc_disks = "local-disk 200 HDD"
@@ -172,10 +176,12 @@ workflow ops_workflow {
         String nuclei_features_suffix = "features-nuclei"
         String cell_features_suffix = "features-cell"
         String cytosol_features_suffix = "features-cytosol"
-        String register_pheno_to_pheno_suffix = "pheno-registered.zarr"
-        String register_pheno_to_pheno_transform_suffix = "pheno-to-pheno-transforms"
+
         String register_pheno_to_iss_qc_suffix = "pheno-to-iss-qc"
         String register_iss_to_iss_qc_suffix = "iss-to-iss-qc"
+        String register_pheno_to_pheno_qc_suffix = "pheno-to-pheno-qc"
+        String register_pheno_to_pheno_suffix = "pheno-registered"
+        String register_pheno_to_pheno_transform_suffix = "pheno-to-pheno-transforms"
         String spot_detect_suffix = "spot-detect.zarr"
         String reads_suffix = "reads"
         String merge_meta_suffix = "merge-sbs-metadata"
@@ -202,6 +208,7 @@ workflow ops_workflow {
     String register_pheno_to_iss_qc_directory = output_stripped + register_pheno_to_iss_qc_suffix
     String intersects_boundary_directory = output_stripped + intersects_boundary_suffix
     String register_iss_to_iss_qc_directory = output_stripped + register_iss_to_iss_qc_suffix
+    String register_pheno_to_pheno_qc_directory = output_stripped + register_pheno_to_pheno_qc_suffix
 
     Boolean iss_url_supplied = defined(iss_url)
     Boolean pheno_url_supplied = defined(phenotype_url)
@@ -294,39 +301,48 @@ workflow ops_workflow {
                 }
 
                 if(length(times_pheno)>1) {
+                    # transfer segmentation labels from reference_time_pheno to other times
+                    scatter(phenotype_time in times_pheno) {
+                        if(phenotype_time != reference_time_pheno) {
+                            call tasks.register_elastix as register_pheno_to_pheno {
+                                input:
+                                    moving=select_all([phenotype_url]),
+                                    moving_label=segment_cell.output_url,
+                                    moving_channel=phenotype_dapi_channel,
+                                    moving_image_pattern=phenotype_image_pattern,
+                                    moving_time=reference_time_pheno,
 
-                    call tasks.register_elastix as register_pheno_to_pheno {
-                        input:
-                            moving=select_all([phenotype_url]),
-                            moving_label=segment_cell.output_url,
-                            moving_channel=phenotype_dapi_channel,
-                            moving_image_pattern=phenotype_image_pattern,
-                            moving_time=reference_time_pheno,
+                                    fixed_channel=phenotype_dapi_channel,
+                                    fixed_image_pattern=phenotype_image_pattern,
+                                    fixed_time=phenotype_time,
 
-                            extra_arguments=pheno_registration_extra_arguments,
-                            output_aligned_channels_only=true,
-                            groupby=groupby,
-                            subset = subset_,
-                            moving_output_directory=register_pheno_to_pheno_directory,
-                            label_output_directory=register_pheno_to_pheno_directory,
-                            transform_output_directory=register_pheno_to_pheno_transform_directory,
+                                    extra_arguments=pheno_registration_extra_arguments,
+                                    output_aligned_channels_only=true,
+                                    groupby=groupby,
+                                    subset = subset_,
+                                    moving_output_directory=register_pheno_to_pheno_directory + "-" + phenotype_time + ".zarr",
+                                    label_output_directory=register_pheno_to_pheno_directory + "-" + phenotype_time + ".zarr",
+                                    transform_output_directory=register_pheno_to_pheno_transform_directory + "-" + phenotype_time,
 
-                            force = force_register_pheno_to_pheno,
-                            docker=docker,
-                            zones = zones,
-                            preemptible = preemptible,
-                            aws_queue_arn = aws_queue_arn,
-                            disks = register_pheno_to_pheno_disks,
-                            memory = register_pheno_to_pheno_memory,
-                            cpu = register_pheno_to_pheno_cpu,
-                            max_retries = max_retries
+                                    force = force_register_pheno_to_pheno,
+                                    docker=docker,
+                                    zones = zones,
+                                    preemptible = preemptible,
+                                    aws_queue_arn = aws_queue_arn,
+                                    disks = register_pheno_to_pheno_disks,
+                                    memory = register_pheno_to_pheno_memory,
+                                    cpu = register_pheno_to_pheno_cpu,
+                                    max_retries = max_retries
+                            }
+                        }
                     }
                 }
 
                 if(run_nuclei_segmentation) {
                     call tasks.find_objects as find_objects_nuclei {
                         input:
-                            labels=select_all([segment_nuclei.output_url, register_pheno_to_pheno.label_output_url]),
+                            labels=select_all([segment_nuclei.output_url]),
+                            additional_labels=register_pheno_to_pheno.label_output_url,
                             label_pattern=groupby_pattern,
                             suffix="nuclei",
                             output_directory=objects_directory,
@@ -345,7 +361,8 @@ workflow ops_workflow {
                 if(run_cell_segmentation) {
                     call tasks.find_objects as find_objects_cell {
                         input:
-                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            labels=select_all([segment_cell.output_url]),
+                            additional_labels=register_pheno_to_pheno.label_output_url,
                             label_pattern=groupby_pattern,
                             suffix="cell",
                             output_directory=objects_directory,
@@ -364,7 +381,8 @@ workflow ops_workflow {
                 if (run_nuclei_segmentation && run_cell_segmentation) {
                     call tasks.find_objects as find_objects_cytosol {
                         input:
-                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            labels=select_all([segment_cell.output_url]),
+                            additional_labels=register_pheno_to_pheno.label_output_url,
                             label_pattern=groupby_pattern,
                             suffix="cytosol",
                             output_directory=objects_directory,
@@ -389,7 +407,8 @@ workflow ops_workflow {
                     call tasks.intersects_boundary as intersects_boundary {
 
                         input:
-                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            labels=select_all([segment_cell.output_url]),
+                            additional_labels=register_pheno_to_pheno.label_output_url,
                             images=phenotype_url_stripped + "/labels/",
                             image_pattern=phenotype_image_pattern + "-mask",
                             output_directory=intersects_boundary_directory,
@@ -443,13 +462,14 @@ workflow ops_workflow {
                 input:
                     fixed=select_first([iss_url]),
                     fixed_channel=iss_dapi_channel,
+
                     moving_label=segment_cell.output_url,
                     moving=select_all([phenotype_url]),
                     moving_image_pattern=phenotype_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
                     moving_channel=phenotype_dapi_channel,
                     moving_time=reference_time_pheno,
-                    fixed_time=reference_time_iss,
+
                     output_aligned_channels_only=true,
                     moving_output_directory=register_pheno_to_iss_directory,
                     label_output_directory=register_pheno_to_iss_directory,
@@ -492,8 +512,39 @@ workflow ops_workflow {
                         cpu = register_pheno_to_iss_qc_cpu,
                         max_retries = max_retries
                 }
+                if(length(times_pheno)>1) {
+                    scatter(phenotype_time in times_pheno) {
+                        if(phenotype_time != reference_time_pheno) {
+                            call tasks.register_pheno_to_pheno_qc as register_pheno_to_pheno_qc {
+                                input:
+                                    phenotype_time=phenotype_time,
+                                    images = select_first([phenotype_url]),
+                                    image_pattern=if(sub(phenotype_image_pattern, "{t}", phenotype_time)!=phenotype_image_pattern) then sub(phenotype_image_pattern, "{t}", phenotype_time) else phenotype_image_pattern,
+
+                                    stacked_images=register_pheno_to_pheno.moving_output_url, # task filter this
+                                    stacked_image_pattern=groupby_pattern,
+                                    groupby=groupby,
+                                    labels=register_pheno_to_pheno.label_output_url, # task filters this
+                                    subset =subset_,
+                                    image_channel=select_first([phenotype_dapi_channel, 0]),
+                                    stacked_image_channel=0,
+                                    label_type="nuclei",
+                                    output_directory=register_pheno_to_pheno_qc_directory + "-" + phenotype_time,
+                                    force = force_register_pheno_to_pheno_qc,
+                                    docker=docker,
+                                    zones = zones,
+                                    preemptible = preemptible,
+                                    aws_queue_arn = aws_queue_arn,
+                                    disks = register_pheno_to_pheno_qc_disks,
+                                    memory = register_pheno_to_pheno_qc_memory,
+                                    cpu = register_pheno_to_pheno_qc_cpu,
+                                    max_retries = max_retries
+                            }
+                        }
+                    }
+                }
                 # ISS t0 to other times
-                call tasks.register_iss_iss_qc as register_iss_to_iss_qc {
+                call tasks.register_qc as register_iss_to_iss_qc {
                     input:
                         images=select_first([register_iss_t0.moving_output_url]),
                         image_pattern=groupby_pattern,
@@ -579,6 +630,7 @@ workflow ops_workflow {
                         objects=if(run_cell_segmentation) then find_objects_nuclei.output_url else find_objects_cell.output_url,
                         cell_intersects_boundary=intersects_boundary.output_url,
                         register_pheno_to_iss_qc=register_pheno_to_iss_qc.output_url,
+                        register_pheno_to_pheno_qc=register_pheno_to_pheno_qc.output_url,
                         register_iss_to_iss_qc=register_iss_to_iss_qc.output_url,
                         barcodes=select_first([barcodes]),
                         barcode_column=barcode_column,
@@ -612,16 +664,18 @@ workflow ops_workflow {
                             images = select_first([phenotype_url]),
                             image_pattern=phenotype_image_pattern,
                             merge=merge_sbs_metadata.output_url,
-                            labels=select_all([segment_nuclei.output_url, register_pheno_to_pheno.label_output_url]),
+                            additional_labels=register_pheno_to_pheno.label_output_url,
+                            labels=select_all([segment_nuclei.output_url]),
                             label_filter=features_label_filter,
                             groupby=phenotype_group_by_with_time,
+                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
                             nuclei_features = nuclei_features[feature_index],
                             nuclei_min_area = features_nuclei_min_area_,
                             nuclei_max_area = features_nuclei_max_area_,
                             features_extra_arguments=features_extra_arguments,
                             model_dir=model_dir,
                             output_directory=nuclei_features_directory + "-" + phenotype_time + "-batch" + feature_index,
-                            subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
+
                             force = force_features,
                             docker=docker,
                             zones = zones,
@@ -651,7 +705,8 @@ workflow ops_workflow {
                             images = select_first([phenotype_url]),
                             image_pattern=phenotype_image_pattern,
                             merge=merge_sbs_metadata.output_url,
-                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            additional_labels=register_pheno_to_pheno.label_output_url,
+                            labels=select_all([segment_cell.output_url]),
                             label_filter=features_label_filter,
                             groupby=phenotype_group_by_with_time,
                             cell_features = cell_features[feature_index],
@@ -692,7 +747,8 @@ workflow ops_workflow {
                             images = select_first([phenotype_url]),
                             image_pattern=phenotype_image_pattern,
                             merge=merge_sbs_metadata.output_url,
-                            labels=select_all([segment_cell.output_url, register_pheno_to_pheno.label_output_url]),
+                            additional_labels=register_pheno_to_pheno.label_output_url,
+                            labels=select_all([segment_cell.output_url]),
                             label_filter=features_label_filter,
                             groupby=phenotype_group_by_with_time,
                             output_directory=cytosol_features_directory + "-" + phenotype_time + "-" + feature_index,
@@ -718,7 +774,6 @@ workflow ops_workflow {
             }
         }
 
-
         call tasks.merge as merge_features {
             input:
                 phenotypes_nuclei=features_nuclei.output_url,
@@ -739,7 +794,6 @@ workflow ops_workflow {
                 max_retries = max_retries
         }
 
-
     }
     output {
         Array[String?] segment_nuclei_output_url = segment_nuclei.output_url
@@ -747,7 +801,7 @@ workflow ops_workflow {
         Array[String?] register_iss_t0_output_url = register_iss_t0.moving_output_url
         Array[String?] register_pheno_to_iss_output_url = register_pheno_to_iss.moving_output_url
         Array[String?] register_pheno_to_iss_qc_output_url = register_pheno_to_iss_qc.output_url
-        Array[String?] register_pheno_to_pheno_moving_output_url = register_pheno_to_pheno.moving_output_url
+        Array[Array[String?]?] register_pheno_to_pheno_moving_output_url = register_pheno_to_pheno.moving_output_url
         Array[String?] spot_detect_output_url = spot_detect.output_url
         Array[String?] reads_output_url = reads.output_url
         Array[String?] find_objects_nuclei_output_url = find_objects_nuclei.output_url
