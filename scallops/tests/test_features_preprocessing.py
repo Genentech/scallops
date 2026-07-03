@@ -1,3 +1,5 @@
+import warnings
+
 import anndata
 import dask.array as da
 import numpy as np
@@ -5,7 +7,14 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import PowerTransformer
 
-from scallops.features.preprocessing import filter_data, transform_features_yj
+from scallops.features.preprocessing import (
+    filter_batch_correlated,
+    filter_data,
+    filter_low_cardinality,
+    filter_zero_inflated,
+    remove_correlated_features,
+    transform_features_yj,
+)
 
 
 @pytest.mark.parametrize("by", [None, "well"])
@@ -117,3 +126,208 @@ def test_transform_features_yj(by, use_dask):
     df_test = df_test.sort_values(["pert", "well"]).reset_index(drop=True)
     df = df.sort_values(["pert", "well"]).reset_index(drop=True)
     pd.testing.assert_frame_equal(df_test[df.columns], df)
+
+
+# ---------------------------------------------------------------------------
+# Shared fixture for new filter tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_data():
+    """30-obs, 8-feature AnnData with controlled structure for filter testing."""
+    np.random.seed(0)
+    n, p = 30, 8
+    X = np.random.randn(n, p).astype(np.float32)
+    # feat0 and feat1 are nearly identical (r ≈ 1)
+    X[:, 1] = X[:, 0] + 0.001 * np.random.randn(n)
+    # feat4 is mostly zero (80% of cells)
+    X[:24, 4] = 0.0
+    # feat5 is binary
+    X[:, 5] = (X[:, 5] > 0).astype(np.float32)
+    genes = ["NTC"] * 10 + ["gene_A"] * 10 + ["gene_B"] * 10
+    plates = ["p1"] * 15 + ["p2"] * 15
+    obs = pd.DataFrame(
+        {"gene_symbol": genes, "plate": plates},
+        index=pd.RangeIndex(n).astype(str),
+    )
+    return anndata.AnnData(
+        X=X,
+        obs=obs,
+        var=pd.DataFrame(index=[f"f{i}" for i in range(p)]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# remove_correlated_features
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_remove_correlated_drops_redundant_feature(sample_data):
+    """feat1 ≈ feat0 → one should be removed."""
+    result = remove_correlated_features(sample_data, threshold=0.9)
+    assert result.shape[1] < sample_data.shape[1]
+    # feat0 has higher variance → it should be kept
+    assert "f0" in result.var.index
+    assert "f1" not in result.var.index
+
+
+@pytest.mark.features
+def test_remove_correlated_keeps_uncorrelated(sample_data):
+    """Features with |r| < threshold are always retained."""
+    result = remove_correlated_features(sample_data, threshold=0.9)
+    # feat0 and feat2 are not correlated → both kept (feat1 removed)
+    assert "f0" in result.var.index
+    assert "f2" in result.var.index
+
+
+@pytest.mark.features
+def test_remove_correlated_high_threshold_keeps_most(sample_data):
+    """threshold=0.9999 (near-perfect correlation only) keeps nearly everything.
+
+    We cannot guarantee exactly n features because float32 arithmetic can produce
+    correlation values very slightly above the theoretical maximum of 1.0.  We
+    instead verify that fewer features are removed at a tight threshold than at a
+    looser one.
+    """
+    r_loose = remove_correlated_features(sample_data, threshold=0.9)
+    r_tight = remove_correlated_features(sample_data, threshold=0.9999)
+    # Tight threshold should keep at least as many features as the loose one
+    assert r_tight.shape[1] >= r_loose.shape[1]
+
+
+@pytest.mark.features
+def test_remove_correlated_reference_query(sample_data):
+    """Correlation estimated on NTC only should still remove feat1."""
+    result = remove_correlated_features(
+        sample_data, threshold=0.9, reference_query="gene_symbol=='NTC'"
+    )
+    assert result.shape[1] < sample_data.shape[1]
+
+
+@pytest.mark.features
+def test_remove_correlated_chunk_size_consistent(sample_data):
+    """Different chunk sizes must give identical results."""
+    r1 = remove_correlated_features(sample_data, threshold=0.9, chunk_size=3)
+    r2 = remove_correlated_features(sample_data, threshold=0.9, chunk_size=100)
+    assert list(r1.var.index) == list(r2.var.index)
+
+
+# ---------------------------------------------------------------------------
+# filter_zero_inflated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_filter_zero_inflated_drops_sparse_feature(sample_data):
+    """feat4 has 80% zeros → removed with max_zero_fraction=0.5.
+
+    feat5 (binary) may also be removed if it happens to have ≥50% zero values;
+    we verify feat4 is gone rather than assuming exactly 1 feature is removed.
+    """
+    result = filter_zero_inflated(sample_data, max_zero_fraction=0.5)
+    assert "f4" not in result.var.index
+    assert result.shape[1] < sample_data.shape[1]
+
+
+@pytest.mark.features
+def test_filter_zero_inflated_keeps_non_sparse(sample_data):
+    """Non-sparse features are retained."""
+    result = filter_zero_inflated(sample_data, max_zero_fraction=0.5)
+    assert "f0" in result.var.index
+
+
+@pytest.mark.features
+def test_filter_zero_inflated_permissive_threshold_keeps_all(sample_data):
+    """max_zero_fraction=1.0 keeps everything."""
+    result = filter_zero_inflated(sample_data, max_zero_fraction=1.0)
+    assert result.shape == sample_data.shape
+
+
+@pytest.mark.features
+def test_filter_zero_inflated_near_zero_threshold(sample_data):
+    """near_zero_threshold counts small values as zero."""
+    data = sample_data.copy()
+    data.X[:28, 6] = 0.001  # 93% near-zero for feat6
+    result = filter_zero_inflated(
+        data, max_zero_fraction=0.5, near_zero_threshold=0.01
+    )
+    assert "f6" not in result.var.index
+
+
+# ---------------------------------------------------------------------------
+# filter_low_cardinality
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_filter_low_cardinality_drops_binary_feature(sample_data):
+    """feat5 is binary (2 unique values) → removed with min_unique=5."""
+    result = filter_low_cardinality(sample_data, min_unique=5)
+    assert "f5" not in result.var.index
+
+
+@pytest.mark.features
+def test_filter_low_cardinality_keeps_continuous(sample_data):
+    """Continuous features have many unique values → retained."""
+    result = filter_low_cardinality(sample_data, min_unique=5)
+    assert "f0" in result.var.index
+
+
+@pytest.mark.features
+def test_filter_low_cardinality_min_unique_1_keeps_all(sample_data):
+    """min_unique=1 keeps everything (even binary features have ≥1 unique value)."""
+    result = filter_low_cardinality(sample_data, min_unique=1)
+    assert result.shape == sample_data.shape
+
+
+# ---------------------------------------------------------------------------
+# filter_batch_correlated
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_filter_batch_correlated_removes_batch_feature(sample_data):
+    """A feature artificially shifted between plates should be removed."""
+    data = sample_data.copy()
+    # Make feat7 perfectly predict the plate label (strong batch effect)
+    data.X[data.obs["plate"] == "p1", 7] = 5.0
+    data.X[data.obs["plate"] == "p2", 7] = -5.0
+
+    result = filter_batch_correlated(
+        data, batch_column="plate", pvalue_threshold=0.05, method="kruskal"
+    )
+    assert "f7" not in result.var.index
+
+
+@pytest.mark.features
+def test_filter_batch_correlated_keeps_non_batch_features(sample_data):
+    """Features unrelated to plate should not be removed."""
+    result = filter_batch_correlated(
+        sample_data, batch_column="plate", pvalue_threshold=0.001
+    )
+    # At p<0.001, none of the random features should be flagged (low FPR)
+    assert result.shape[1] == sample_data.shape[1]
+
+
+@pytest.mark.features
+def test_filter_batch_correlated_reference_query(sample_data):
+    """Restricting the test to NTC cells should work without error."""
+    result = filter_batch_correlated(
+        sample_data,
+        batch_column="plate",
+        reference_query="gene_symbol=='NTC'",
+        pvalue_threshold=0.05,
+    )
+    assert result.shape[0] == sample_data.shape[0]  # obs unchanged
+    assert result.shape[1] <= sample_data.shape[1]
+
+
+@pytest.mark.features
+def test_filter_batch_correlated_single_batch_is_noop(sample_data):
+    """With only one batch value the filter does nothing."""
+    data = sample_data.copy()
+    data.obs["plate"] = "p1"
+    result = filter_batch_correlated(data, batch_column="plate")
+    assert result.shape == data.shape

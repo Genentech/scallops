@@ -61,6 +61,47 @@ Tools to extract and analyze features from regions of interest, such as nuclei .
     scallops.features.agg.agg_features
 
 
+Perturbation Map Building
+=========================
+Functions for building perturbation maps from single-cell feature profiles using
+Typical Variation Normalization (TVN).  See :doc:`map_build` for the full pipeline
+description and WDL workflow guide.
+
+Normalization
+-------------
+
+.. autosummary::
+    :toctree: .
+
+    scallops.features.normalize.typical_variation_normalization
+    scallops.features.preprocessing.filter_data
+    scallops.features.preprocessing.transform_features_yj
+    scallops.features.decomposition.pca
+
+Backprojection
+--------------
+Project TVN-normalized perturbation profiles back to the original z-score feature
+space to identify which features drive the observed clustering.
+
+.. autosummary::
+    :toctree: .
+
+    scallops.features.backprojection.backproject_tvn
+    scallops.features.backprojection.top_features_from_backprojection
+
+Evaluation
+----------
+
+.. autosummary::
+    :toctree: .
+
+    scallops.features.map_eval.pairwise_similarities
+    scallops.features.map_eval.set_benchmark
+    scallops.features.map_eval.recall
+    scallops.features.map_eval.read_corum
+    scallops.features.map_eval.read_gmt
+
+
 
 Registration
 ============

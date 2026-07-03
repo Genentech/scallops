@@ -236,6 +236,133 @@ Key Features:
 .. _skimage: https://scikit-image.org/
 
 
+Perturbation Map Building
+=========================
+
+The ``scallops map-*`` commands implement a step-by-step, WDL-friendly pipeline
+for building perturbation maps from single-cell feature profiles.  Each command
+reads an **AnnData Zarr** (``.zarr``) file, applies one transformation, and
+writes a new **AnnData Zarr**, preserving cell metadata (``obs``), feature
+names (``var``), unstructured metadata (``uns``), and per-feature arrays
+(``varm``) through every step.  Any step can be rerun independently or
+parallelised in a WDL workflow.
+
+**Critical pipeline order — PCA before TVN.**
+``map-pca`` reduces the data from N × p (e.g. 10M × 5 000 features) to N × K
+(e.g. 10M × 128 PCs) before ``map-tvn`` runs.  This means TVN operates on
+the smaller N × K representation, costing only ~5 GB of RAM at 10M cells
+instead of the ~200 GB that would be required if TVN were applied directly to
+raw features.  The actual memory bottleneck is the ``map-pca`` *transform*
+step (projecting N × p → N × K), which scallops performs in chunks controlled
+by ``--batch-size``.
+
+TVN backprojection parameters stored in ``uns`` (``pca``,
+``tvn_pre_scale_mean``, ``tvn_pre_scale_std``, ``covariance_alignment_inv``)
+and ``varm["PCs"]`` are forwarded through every downstream AnnData Zarr, so
+that :func:`~scallops.features.backprojection.top_features_from_backprojection`
+can be called on any step's output to recover which original z-score features
+drive the observed clustering.
+
+See :doc:`map_build` for the full pipeline description, dimensionality and
+memory analysis, backprojection guide, and annotated example commands.  Run
+``python scallops/tests/memory_profile.py`` to profile your specific data
+size.
+
+scallops map-filter
+-------------------
+
+Filter cells with too many non-finite values and features with variance outside
+the requested bounds.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-filter
+
+scallops map-transform-yj
+--------------------------
+
+Apply a Yeo-Johnson power transform to normalise feature distributions.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-transform-yj
+
+scallops map-pca
+----------------
+
+Embed data with PCA, fitting on an optional reference subset and projecting all
+observations.  Alternative to ``map-tvn`` for pipelines without covariance alignment.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-pca
+
+scallops map-tvn
+----------------
+
+Apply Typical Variation Normalization.  Stores all parameters required for
+downstream backprojection to the original z-score feature space.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-tvn
+
+scallops map-agg
+----------------
+
+Aggregate single-cell profiles to perturbation-level profiles, with optional
+minimum-cell filtering and two-step barcode→gene aggregation.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-agg
+
+scallops map-center
+-------------------
+
+Center profiles by subtracting the reference (e.g. NTC) mean before similarity
+computation.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-center
+
+scallops map-similarity
+-----------------------
+
+Compute a pairwise cosine or Pearson similarity matrix between perturbation profiles.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-similarity
+
+scallops map-recall
+-------------------
+
+Evaluate the similarity matrix against CORUM gene-set benchmarks using a
+Kolmogorov-Smirnov test.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map-recall
+
+
 stitch-preview
 ==============
 

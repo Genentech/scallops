@@ -85,6 +85,7 @@ complex biological systems data.
 
    install
    command_line
+   map_build
    example_commands
    workflows
    example_notebooks
