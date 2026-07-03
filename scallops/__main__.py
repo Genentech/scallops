@@ -41,6 +41,7 @@ from scallops.cli import (
     features_main,
     find_objects_main,
     illumination_correction_main,
+    map_build_main,
     norm_features_main,
     pooled_if_sbs_main,
     rank_features_main,
@@ -69,6 +70,30 @@ def create_parsers(default_help: bool = False) -> argparse.ArgumentParser:
     register_main._create_parser(subparsers, default_help)
     stitch_main._create_stitch_parser(subparsers, default_help)
     stitch_main._create_stitch_preview_parser(subparsers, default_help)
+
+    # ── Perturbation map building ─────────────────────────────────────────────
+    map_parser = subparsers.add_parser(
+        "map",
+        help="Perturbation map building pipeline (filter, pca, tvn, agg, …)",
+        description=(
+            "Build perturbation maps from single-cell morphological profiles.  "
+            "Each subcommand runs one pipeline step and writes an AnnData Zarr.  "
+            "Use 'scallops map run' to chain all steps on a single machine."
+        ),
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter
+            if default_help
+            else argparse.HelpFormatter
+        ),
+    )
+    # When the user runs 'scallops map' without a subcommand, print map help.
+    map_parser.set_defaults(func=lambda args: map_parser.print_help())
+    map_subparsers = map_parser.add_subparsers(
+        title="subcommands",
+        help="map pipeline step",
+    )
+    map_build_main.register_map_subcommands(map_subparsers, default_help)
+
     return root_parser
 
 
