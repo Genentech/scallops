@@ -34,14 +34,16 @@ WORKDIR /build
 
 # Each file is its own layer ordered most→least stable for cache efficiency.
 
-# Install CPU-only PyTorch before ufish/cellpose to prevent the multi-GB NVIDIA
-# CUDA stack from being pulled in as a transitive dep.
-# --allow-insecure-host: download-r2.pytorch.org (PyTorch CDN) is intercepted
-# by SSL inspection proxies; proper fix is to inject your proxy CA cert.
-RUN uv pip install torch torchvision \
+# Install PyTorch before ufish/cellpose to prevent them pulling in a second
+# (CUDA-enabled) copy of torch as a transitive dep.
+# pip is used instead of uv here: uv's rustls TLS stack fails with
+# HandshakeFailure on networks that use SSL inspection proxies, while pip's
+# OpenSSL is more permissive. --trusted-host bypasses cert verification for
+# the PyTorch CDN; the proper fix is to inject your proxy CA cert.
+RUN pip install --no-cache-dir torch torchvision \
       --index-url https://download.pytorch.org/whl/${TORCH_COMPUTE} \
-      --allow-insecure-host download.pytorch.org \
-      --allow-insecure-host download-r2.pytorch.org
+      --trusted-host download.pytorch.org \
+      --trusted-host download-r2.pytorch.org
 
 # ufish: git-pinned tag, rarely bumped
 COPY requirements.ufish.txt ./
