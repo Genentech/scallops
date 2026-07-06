@@ -1,2 +1,39 @@
+# Version control
+.git
+.github
+
+# IDE / editor
+.idea
+.vscode
+*.swp
+*.swo
+
+# Python build artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+dist
+build
+.tox
+.nox
+
+# Tests and coverage
 scallops/tests
+.pytest_cache
+.coverage
+.coverage.*
+htmlcov
+
+# Documentation (not needed for install)
 docs
+requirements.doc.txt
+
+# macOS
+.DS_Store
+
+# _version.py is gitignored but must be generated before docker build
+# (run `python -m setuptools_scm` or `pip install -e .` first).
+# The ! forces inclusion even if a future pattern would otherwise exclude it.
+!scallops/_version.py
