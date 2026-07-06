@@ -33,7 +33,6 @@ requirements.doc.txt
 # macOS
 .DS_Store
 
-# _version.py is gitignored but must be generated before docker build
-# (run `python -m setuptools_scm` or `pip install -e .` first).
-# The ! forces inclusion even if a future pattern would otherwise exclude it.
-!scallops/_version.py
+# _version.py is injected via --build-arg SCM_VERSION by the Makefile (make docker)
+# so it does not need to be in the build context
+scallops/_version.py
