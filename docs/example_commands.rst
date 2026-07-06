@@ -443,7 +443,7 @@ Volcano Plot:
 Perturbation Map Building
 =========================
 
-The ``map-*`` commands build a perturbation map from the merged single-cell
+The ``scallops map`` subcommands build a perturbation map from the merged single-cell
 feature table produced by ``scallops pooled-sbs merge``.  Every step reads an
 **AnnData Zarr** (``.zarr``) file as input and writes an **AnnData Zarr** as
 output, so each step can be run independently or chained inside a WDL workflow.
@@ -464,7 +464,7 @@ correlated with batch identity, and highly redundant (correlated) features.
 
 Minimal (variance + finite-value only)::
 
-    scallops map-filter \
+    scallops map filter \
         --input merged.zarr \
         --output filtered.zarr \
         --by plate well \
@@ -474,7 +474,7 @@ Minimal (variance + finite-value only)::
 
 With all optional filters enabled::
 
-    scallops map-filter \
+    scallops map filter \
         --input merged.zarr \
         --output filtered.zarr \
         --by plate well \
@@ -498,7 +498,7 @@ With all optional filters enabled::
 
 Filtering a specific feature subset with a cell-level quality filter::
 
-    scallops map-filter \
+    scallops map filter \
         --input merged.zarr \
         --output filtered.zarr \
         --features Cells_Intensity Nuclei_AreaShape Cytoplasm_Texture \
@@ -514,14 +514,14 @@ Apply a Yeo-Johnson power transform to reduce feature skewness before scaling.
 
 Per-well transform (recommended)::
 
-    scallops map-transform-yj \
+    scallops map transform-yj \
         --input filtered.zarr \
         --output yj.zarr \
         --by plate well
 
 Global transform::
 
-    scallops map-transform-yj \
+    scallops map transform-yj \
         --input filtered.zarr \
         --output yj.zarr
 
@@ -563,11 +563,11 @@ Robust statistics (median / MAD instead of mean / std)::
 Step 4a – PCA embedding (runs BEFORE TVN — critical for memory)
 ----------------------------------------------------------------
 
-``map-pca`` reduces the data from **N × p features** to **N × K PCs**
+``map pca`` reduces the data from **N × p features** to **N × K PCs**
 (e.g. 10M × 5 000 → 10M × 128).  This dimensionality reduction is what makes
-the subsequent ``map-tvn`` step manageable in memory.  Without it, ``map-tvn``
+the subsequent ``map tvn`` step manageable in memory.  Without it, ``map tvn``
 would need to materialise the full N × p matrix (~200 GB for 10M × 5K).
-With it, ``map-tvn`` sees only N × K (~5 GB for 10M × 128).
+With it, ``map tvn`` sees only N × K (~5 GB for 10M × 128).
 
 **Memory cost of this step:**
 
@@ -579,7 +579,7 @@ With it, ``map-tvn`` sees only N × K (~5 GB for 10M × 128).
 
 Fit on NTC reference cells, project all cells (recommended — matches gould pipeline)::
 
-    scallops map-pca \
+    scallops map pca \
         --input scaled.zarr \
         --output pca.zarr \
         --reference-query "gene_symbol=='NTC'" \
@@ -588,7 +588,7 @@ Fit on NTC reference cells, project all cells (recommended — matches gould pip
 
 Fit on all cells (traditional PCA, no reference subset)::
 
-    scallops map-pca \
+    scallops map pca \
         --input scaled.zarr \
         --output pca.zarr \
         --components 128 \
@@ -596,7 +596,7 @@ Fit on all cells (traditional PCA, no reference subset)::
 
 Alternative column / reference value::
 
-    scallops map-pca \
+    scallops map pca \
         --input scaled.zarr \
         --output pca.zarr \
         --reference-query "perturbation_class=='scramble'" \
@@ -604,7 +604,7 @@ Alternative column / reference value::
 
 With PCA whitening::
 
-    scallops map-pca \
+    scallops map pca \
         --input scaled.zarr \
         --output pca.zarr \
         --reference-query "gene_symbol=='NTC'" \
@@ -615,14 +615,14 @@ With PCA whitening::
 Step 4b – Select significant PCA components
 --------------------------------------------
 
-After ``map-pca``, retain only statistically informative components.
+After ``map pca``, retain only statistically informative components.
 The **variance** method is recommended for morphological profiling because
 the Tracy-Widom test assumes uncorrelated features, which is violated by
 correlated CellProfiler compartment features.
 
 Cumulative variance fraction (recommended for morphological data)::
 
-    scallops map-pca-select \
+    scallops map pca-select \
         --input pca.zarr \
         --output pca_selected.zarr \
         --method variance \
@@ -630,7 +630,7 @@ Cumulative variance fraction (recommended for morphological data)::
 
 Non-parametric permutation null (slower, accounts for non-Gaussian marginals)::
 
-    scallops map-pca-select \
+    scallops map pca-select \
         --input pca.zarr \
         --output pca_selected.zarr \
         --method permutation \
@@ -639,7 +639,7 @@ Non-parametric permutation null (slower, accounts for non-Gaussian marginals)::
 
 Tracy-Widom test with hard cap (legacy / reference pipeline compatibility)::
 
-    scallops map-pca-select \
+    scallops map pca-select \
         --input pca.zarr \
         --output pca_selected.zarr \
         --method tracy_widom \
@@ -659,16 +659,16 @@ Step 4c – Sphering / whitening (optional, pre-TVN)
 ----------------------------------------------------
 
 Decorrelate features so the sample covariance approximates the identity.
-Typically used between ``map-pca`` and ``map-tvn``::
+Typically used between ``map pca`` and ``map tvn``::
 
-    scallops map-sphere \
+    scallops map sphere \
         --input pca_selected.zarr \
         --output sphered.zarr \
         --epsilon 1e-5
 
 Per-condition sphering::
 
-    scallops map-sphere \
+    scallops map sphere \
         --input pca_selected.zarr \
         --output sphered.zarr \
         --by condition \
@@ -685,22 +685,22 @@ controls.  Stores all parameters needed for downstream backprojection in
 .. important::
 
    **Input is N × K PCs, not N × p features.**
-   ``map-tvn`` reads the output of ``map-pca`` (or ``map-sphere``), whose shape
+   ``map tvn`` reads the output of ``map pca`` (or ``map sphere``), whose shape
    is already ``N × K`` (e.g. 10M × 128).  This is why TVN is memory-efficient
    at scale (~5 GB for 10M cells at 128 PCs, not ~200 GB for raw features).
-   Do **not** feed ``map-tvn`` directly with the raw or scaled feature data
-   — always run ``map-pca`` first.
+   Do **not** feed ``map tvn`` directly with the raw or scaled feature data
+   — always run ``map pca`` first.
 
 Basic (no per-plate covariance alignment).  Input is the PCA-reduced zarr::
 
-    scallops map-tvn \
+    scallops map tvn \
         --input pca_selected.zarr \
         --output tvn.zarr \
         --reference-query "gene_symbol=='NTC'"
 
 With per-plate covariance alignment (recommended for multi-plate experiments)::
 
-    scallops map-tvn \
+    scallops map tvn \
         --input pca_selected.zarr \
         --output tvn.zarr \
         --reference-query "gene_symbol=='NTC'" \
@@ -708,7 +708,7 @@ With per-plate covariance alignment (recommended for multi-plate experiments)::
 
 Alternative reference selector (custom column and value)::
 
-    scallops map-tvn \
+    scallops map tvn \
         --input pca_selected.zarr \
         --output tvn.zarr \
         --reference-query "perturbation_class=='scramble'" \
@@ -723,7 +723,7 @@ perturbation × plate × well).
 
 Simple gene-level mean::
 
-    scallops map-agg \
+    scallops map agg \
         --input tvn.zarr \
         --output agg.zarr \
         --by gene_symbol \
@@ -731,7 +731,7 @@ Simple gene-level mean::
 
 Per-plate mean profiles (retain plate information for downstream analysis)::
 
-    scallops map-agg \
+    scallops map agg \
         --input tvn.zarr \
         --output agg.zarr \
         --by plate well gene_symbol \
@@ -739,7 +739,7 @@ Per-plate mean profiles (retain plate information for downstream analysis)::
 
 Require at least 10 cells per perturbation::
 
-    scallops map-agg \
+    scallops map agg \
         --input tvn.zarr \
         --output agg.zarr \
         --by gene_symbol \
@@ -749,7 +749,7 @@ Require at least 10 cells per perturbation::
 
 Two-step barcode → gene aggregation (median of means)::
 
-    scallops map-agg \
+    scallops map agg \
         --input tvn.zarr \
         --output agg.zarr \
         --by gene_symbol \
@@ -763,18 +763,18 @@ Step 7 – Center profiles (optional)
 
 Subtract the mean of the NTC controls before computing the similarity matrix.
 After centering the NTC profiles become the zero vector, so they should be
-excluded from ``map-similarity`` using ``--exclude-reference``.
+excluded from ``map similarity`` using ``--exclude-reference``.
 
 Center on NTC mean::
 
-    scallops map-center \
+    scallops map center \
         --input agg.zarr \
         --output centered.zarr \
         --reference "gene_symbol=='NTC'"
 
 Robust centering (subtract NTC median)::
 
-    scallops map-center \
+    scallops map center \
         --input agg.zarr \
         --output centered.zarr \
         --reference "gene_symbol=='NTC' or gene_symbol.str.startswith('OR')" \
@@ -782,7 +782,7 @@ Robust centering (subtract NTC median)::
 
 Per-condition centering::
 
-    scallops map-center \
+    scallops map center \
         --input agg.zarr \
         --output centered.zarr \
         --reference "gene_symbol=='NTC'" \
@@ -798,7 +798,7 @@ similarity matrix.  The output is an **AnnData Zarr** where both ``obs`` and
 
 Cosine similarity, exclude NTC (zero vector after centering)::
 
-    scallops map-similarity \
+    scallops map similarity \
         --input centered.zarr \
         --output similarity.zarr \
         --metric cosine \
@@ -807,7 +807,7 @@ Cosine similarity, exclude NTC (zero vector after centering)::
 
 Pearson correlation, all profiles::
 
-    scallops map-similarity \
+    scallops map similarity \
         --input agg.zarr \
         --output similarity.zarr \
         --metric pearson \
@@ -823,7 +823,7 @@ in the output Parquet with ``source`` and ``method`` columns.
 
 CORUM protein complexes (set-based KS test)::
 
-    scallops map-recall \
+    scallops map recall \
         --input similarity.zarr \
         --output recall.parquet \
         --corum data/corum_humanComplexes.txt \
@@ -832,7 +832,7 @@ CORUM protein complexes (set-based KS test)::
 
 MSigDB / Reactome / KEGG / GO gene sets via GMT (set-based KS test)::
 
-    scallops map-recall \
+    scallops map recall \
         --input similarity.zarr \
         --output recall.parquet \
         --gmt data/h.all.v2023.2.Hs.symbols.gmt \
@@ -842,7 +842,7 @@ MSigDB / Reactome / KEGG / GO gene sets via GMT (set-based KS test)::
 STRING protein–protein interactions (pairwise recall)::
 
     # From a pre-downloaded TSV (preferredName_A, preferredName_B, score columns)
-    scallops map-recall \
+    scallops map recall \
         --input similarity.zarr \
         --output recall.parquet \
         --string data/9606.protein.links.symbols.txt \
@@ -851,7 +851,7 @@ STRING protein–protein interactions (pairwise recall)::
 
 STRING via REST API (queries at run time, requires internet)::
 
-    scallops map-recall \
+    scallops map recall \
         --input similarity.zarr \
         --output recall.parquet \
         --string-fetch \
@@ -861,7 +861,7 @@ STRING via REST API (queries at run time, requires internet)::
 
 Reactome Functional Interactions (pairwise recall)::
 
-    scallops map-recall \
+    scallops map recall \
         --input similarity.zarr \
         --output recall.parquet \
         --reactome data/FIsInGene_020720_with_annotations.txt \
@@ -869,7 +869,7 @@ Reactome Functional Interactions (pairwise recall)::
 
 All sources combined in one run::
 
-    scallops map-recall \
+    scallops map recall \
         --input similarity.zarr \
         --output recall.parquet \
         --corum data/corum_humanComplexes.txt \
@@ -911,7 +911,7 @@ Backprojection
 After TVN, use :func:`~scallops.features.backprojection.top_features_from_backprojection`
 to find which original z-score features best explain a cluster or perturbation
 group.  The function reads the backprojection parameters stored in the
-**AnnData Zarr** output of ``map-tvn`` (propagated by all downstream steps).
+**AnnData Zarr** output of ``map tvn`` (propagated by all downstream steps).
 
 .. code-block:: python
 

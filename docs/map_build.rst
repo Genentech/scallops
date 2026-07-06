@@ -5,7 +5,7 @@ Perturbation Map Building
 SCALLOPS provides a step-by-step pipeline for building perturbation maps from
 single-cell morphological feature profiles.  The pipeline is designed to be run
 one step at a time, making it straightforward to wrap in a WDL workflow where
-each task calls one ``scallops map-*`` command.
+each task calls one ``scallops map <step>`` command.
 
 Every step reads and writes **AnnData Zarr** (``.zarr``) files — specifically
 the `AnnData <https://anndata.readthedocs.io/>`_ format serialised with Zarr
@@ -37,27 +37,27 @@ this is critical for understanding the memory cost of each step (see
     Input (AnnData Zarr / Parquet from pooled-sbs merge)
       │                   shape: N × p_raw   (e.g. 10M × 10 000)
       ▼
-    map-filter          ← remove low-variance, sparse, categorical, and batch-
+    map filter          ← remove low-variance, sparse, categorical, and batch-
       │                   correlated features; filter high-nan cells
       │                   shape: N × p       (e.g. 10M × 5 000)
       ▼
-    map-transform-yj    ← Yeo-Johnson power transform (optional)
+    map transform-yj    ← Yeo-Johnson power transform (optional)
       │                   shape: N × p       (unchanged)
       ▼
     norm-features       ← well-level z-score  (--by plate well)
       │                   shape: N × p       (unchanged)
       ▼
-    map-pca             ← *** DIMENSIONALITY REDUCTION ***
+    map pca             ← *** DIMENSIONALITY REDUCTION ***
       │                   fit on NTC subset, project ALL cells
       │                   shape: N × K       (e.g. 10M × 128 PCs)
       │
-      ├─ map-pca-select ← retain statistically significant PCs
+      ├─ map pca-select ← retain statistically significant PCs
       │                   shape: N × K'      (K' ≤ K)
       │
-      └─ map-sphere     ← ZCA whitening (optional, between PCA and TVN)
+      └─ map sphere     ← ZCA whitening (optional, between PCA and TVN)
                           shape: N × K'      (unchanged)
       ▼
-    map-tvn             ← Typical Variation Normalization
+    map tvn             ← Typical Variation Normalization
       │                   input is already N × K', NOT N × p  ← this is why TVN is cheap
       │                   stores PCA + covariance-alignment parameters for backprojection
       │                   shape: N × K'      (unchanged)
@@ -65,19 +65,19 @@ this is critical for understanding the memory cost of each step (see
     norm-features       ← normalize to NTC reference (optional)
       │                   shape: N × K'      (unchanged)
       ▼
-    map-agg             ← aggregate cells → perturbation profiles
+    map agg             ← aggregate cells → perturbation profiles
       │                   shape: n_pert × K' (e.g. 5 000 × 128)  ← tiny!
       ▼
-    map-center          ← subtract NTC mean (optional, before similarity)
+    map center          ← subtract NTC mean (optional, before similarity)
       │                   shape: n_pert × K'
       ▼
-    map-similarity      ← pairwise cosine / Pearson similarity
+    map similarity      ← pairwise cosine / Pearson similarity
       │                   shape: n_pert × n_pert  (e.g. 5 000 × 5 000)  ← tiny!
       ▼
-    map-cluster         ← cluster perturbations, reorder similarity matrix
+    map cluster         ← cluster perturbations, reorder similarity matrix
       │                   shape: n_pert × n_pert  (reordered)
       ▼
-    map-recall          ← Parquet recall metrics + optional AnnData injection
+    map recall          ← Parquet recall metrics + optional AnnData injection
 
 
 .. _memory-requirements:
@@ -93,8 +93,8 @@ The key insight
 
 **TVN operates on PCA-reduced data, not on raw features.**
 
-``map-pca`` reduces N × p (e.g. 10M × 5 000) to N × K PCs (e.g. 10M × 128).
-Everything from ``map-sphere`` onward — including ``map-tvn`` — sees the smaller
+``map pca`` reduces N × p (e.g. 10M × 5 000) to N × K PCs (e.g. 10M × 128).
+Everything from ``map sphere`` onward — including ``map tvn`` — sees the smaller
 N × K representation.  This makes TVN much cheaper than it looks.
 
 .. list-table:: Analytical RAM estimates at production scale (10M cells)
@@ -105,11 +105,11 @@ N × K representation.  This makes TVN much cheaper than it looks.
      - Shape
      - Peak RAM
      - Mode and formula
-   * - **map-filter**
+   * - **map filter**
      - N × p_raw
      - **8 GB** / worker
      - Dask chunk-bounded.  ``chunk × p_raw × 4 B = 200K × 10K × 4``
-   * - **map-transform-yj**
+   * - **map transform-yj**
      - N × p
      - **8 GB** / worker
      - Dask chunk-bounded.  ``chunk × p × 8 B`` (float64 PowerTransformer)
@@ -117,26 +117,26 @@ N × K representation.  This makes TVN much cheaper than it looks.
      - N × p
      - **4 GB** / worker
      - Dask chunk-bounded.  ``chunk × p × 4 B``
-   * - **map-pca** (fit, incremental)
+   * - **map pca** (fit, incremental)
      - NTC × p
      - **8 GB**
      - One batch in RAM at a time.  ``batch × p × 8 B = 200K × 5K × 8``
-   * - **map-pca** (transform, chunked) ← peak
+   * - **map pca** (transform, chunked) ← peak
      - N × p → N × K
      - **9–10 GB**
      - Chunk input + full output.  ``(batch × p × 4) + (N × K × 4)``
        = ``(200K × 5K × 4) + (10M × 128 × 4)`` = 4 + 5.1 GB
-   * - **map-sphere**
+   * - **map sphere**
      - N × K
      - **10 GB**
      - Materialises all cells for SVD.  ``N × K × 8 B`` (float64)
-   * - **map-tvn** ← surprisingly cheap!
+   * - **map tvn** ← surprisingly cheap!
      - N × K
      - **5.6 GB**
      - Materialises all cells + NTC for internal PCA.
        ``(N × K × 4) + (n_ntc × K × 8)``
        = ``(10M × 128 × 4) + (500K × 128 × 8)`` = 5.1 + 0.5 GB
-   * - **map-agg → map-recall**
+   * - **map agg → map recall**
      - n_pert × K
      - **< 1 GB**
      - All perturbation-scale; independent of N
@@ -144,35 +144,35 @@ N × K representation.  This makes TVN much cheaper than it looks.
 .. note::
 
    These estimates assume a PCA batch size of 200 000, 128 PCs, and a dask chunk
-   size of 200 000 rows.  The ``map-pca`` transform peak (9–10 GB) is the
+   size of 200 000 rows.  The ``map pca`` transform peak (9–10 GB) is the
    practical bottleneck, not TVN.  All dask-bounded steps are per-worker; the
    total cluster RAM is ``n_workers × per_worker_peak``.
 
 Why TVN is not the bottleneck
 ------------------------------
 
-A common misconception is that ``map-tvn`` must materialise the entire N × p
+A common misconception is that ``map tvn`` must materialise the entire N × p
 feature matrix.  This is only true if TVN is run *without* a preceding
-``map-pca`` step.
+``map pca`` step.
 
-When the standard pipeline order is followed (``map-pca`` → ``map-pca-select``
-→ ``map-sphere`` → ``map-tvn``), TVN's input is already the dimensionality-
+When the standard pipeline order is followed (``map pca`` → ``map pca-select``
+→ ``map sphere`` → ``map tvn``), TVN's input is already the dimensionality-
 reduced N × K representation.  For 10M cells and 128 PCs:
 
 .. code-block:: text
 
-   Without map-pca:   map-tvn sees  10M × 5 000 × float32  =  200 GB  ← infeasible
-   With map-pca:      map-tvn sees  10M × 128   × float32  =    5 GB  ← manageable
+   Without map pca:   map tvn sees  10M × 5 000 × float32  =  200 GB  ← infeasible
+   With map pca:      map tvn sees  10M × 128   × float32  =    5 GB  ← manageable
 
 TVN's internal PCA fitting is done on the NTC subset (500K × 128 × float64 = 0.5 GB),
 and the covariance matrices are K × K = 128 × 128 = negligible.  The only step
 that materialises the full N × K array is the matrix multiply that applies the
 PCA transform and covariance alignment.
 
-The real bottleneck: map-pca transform
+The real bottleneck: map pca transform
 ---------------------------------------
 
-``map-pca`` is the step where all N cells must be projected from feature space
+``map pca`` is the step where all N cells must be projected from feature space
 (p columns) into PC space (K columns).  Scallops performs this in chunks
 (controlled by ``--batch-size``) to avoid materialising the full N × p matrix,
 but the *output* N × K must still be written into a contiguous array.
@@ -196,18 +196,18 @@ Practical recommendations
    ``n_workers × chunk × p_raw × 4 bytes`` total cluster RAM.
    For 8 workers, 200K chunk, 10K features: 8 × 8 GB = 64 GB cluster RAM.
 
-2. **Use ``--batch-size`` for map-pca fit.**
+2. **Use ``--batch-size`` for map pca fit.**
    Incremental PCA reads one batch of NTC cells at a time.  Each batch
    costs ``batch × p × 8 bytes`` (float64 for sklearn).
    At 200K batch × 5K features: 8 GB per batch.
 
-3. **Let scallops chunk the map-pca transform.**
+3. **Let scallops chunk the map pca transform.**
    Scallops already performs the projection in batches — the only
    unavoidable memory cost is the N × K output array (≈ 5 GB for 10M × 128).
-   Consider reducing K (via ``--cluster-max-n-clusters`` in ``map-pca-select``)
+   Consider reducing K (via ``--cluster-max-n-clusters`` in ``map pca-select``)
    if contiguous RAM is limited.
 
-4. **map-tvn through map-recall fit in a single moderately sized machine.**
+4. **map tvn through map recall fit in a single moderately sized machine.**
    Once the data is in PC space, no step requires more than ~10 GB of RAM
    regardless of N.  These steps can be run on a workstation.
 
@@ -251,7 +251,7 @@ Accuracy of the analytical estimates
 Provenance tracking
 ===================
 
-Every ``map-*`` command appends its metadata to a JSON list stored in
+Every ``scallops map <step>`` command appends its metadata to a JSON list stored in
 ``uns["scallops"]`` of the output **AnnData Zarr**.  After *N* steps the chain
 has *N* entries.  Read it back with::
 
@@ -262,10 +262,10 @@ has *N* entries.  Read it back with::
 Backprojection parameters
 =========================
 
-``map-tvn`` stores the following keys in ``uns`` and ``varm`` of its output
-**AnnData Zarr** so that any downstream step (including ``map-agg``,
-``map-center``, and ``map-similarity``) can project profiles back to the
-original z-score feature space.  All ``map-*`` steps propagate these keys
+``map tvn`` stores the following keys in ``uns`` and ``varm`` of its output
+**AnnData Zarr** so that any downstream step (including ``map agg``,
+``map center``, and ``map similarity``) can project profiles back to the
+original z-score feature space.  All ``scallops map <step>`` steps propagate these keys
 automatically, so you can call
 :func:`~scallops.features.backprojection.top_features_from_backprojection`
 on any downstream AnnData Zarr in the pipeline.
@@ -291,7 +291,7 @@ on any downstream AnnData Zarr in the pipeline.
    * - ``varm["PCs"]``
      - Transposed PCA components, shape ``(n_features, n_pcs)``
 
-All ``map-*`` steps forward these keys through the pipeline.
+All ``scallops map <step>`` steps forward these keys through the pipeline.
 
 
 Backprojecting to original features
@@ -311,7 +311,7 @@ any downstream **AnnData Zarr** that preserved ``uns`` (``tvn.zarr``,
         top_features_from_backprojection,
     )
 
-    # Any AnnData Zarr that passed through map-tvn preserves the backprojection params
+    # Any AnnData Zarr that passed through map tvn preserves the backprojection params
     data = read_anndata_zarr("agg.zarr")   # or tvn.zarr, centered.zarr, …
 
     # Full backprojection: TVN space → z-score space
@@ -370,8 +370,8 @@ Example WDL workflow
 
 Each pipeline step maps naturally to a WDL task.  The input and output are
 always **AnnData Zarr** directories.  The workflow below follows the
-recommended order, including the dimensionality-reducing ``map-pca`` step
-before ``map-tvn`` so that TVN sees N × K PCs rather than N × p features.
+recommended order, including the dimensionality-reducing ``map pca`` step
+before ``map tvn`` so that TVN sees N × K PCs rather than N × p features.
 
 .. code-block:: wdl
 
@@ -425,7 +425,7 @@ before ``map-tvn`` so that TVN sees N × K PCs rather than N × p features.
             String reference_query = "gene_symbol=='NTC'"
         }
         command <<<
-            scallops map-pca \
+            scallops map pca \
                 --input ~{zarr} \
                 --output pca.zarr \
                 --components ~{n_pcs} \
@@ -445,14 +445,14 @@ before ``map-tvn`` so that TVN sees N × K PCs rather than N × p features.
             String? by
         }
         command <<<
-            scallops map-tvn \
+            scallops map tvn \
                 --input ~{zarr} \
                 --output tvn.zarr \
                 --reference-query "~{reference_query}" \
                 ~{if defined(by) then "--by " + by else ""}
         >>>
         # Peak RAM: N × n_pcs × 4 B  (e.g. 10M × 128 × 4 = 5 GB — not 200 GB!)
-        # TVN is cheap because map-pca already reduced N × p → N × K.
+        # TVN is cheap because map pca already reduced N × p → N × K.
         output { File out = "tvn.zarr" }
     }
 
@@ -465,7 +465,7 @@ before ``map-tvn`` so that TVN sees N × K PCs rather than N × p features.
             String inject_zarr = "similarity_with_recall.zarr"
         }
         command <<<
-            scallops map-recall \
+            scallops map recall \
                 --input ~{zarr} \
                 --output recall.parquet \
                 --corum ~{corum_file} \
