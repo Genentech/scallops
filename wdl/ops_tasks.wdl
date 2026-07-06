@@ -26,19 +26,19 @@ task segment_nuclei {
     command <<<
         set -ex
 
-        export SCALLOPS_MODEL_DIR="~{model_dir}"
-
-        scallops segment nuclei \
-        --images "~{images}" \
-        ~{"--method " + method} \
-        --groupby ~{sep=" " groupby} \
-        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
-        ~{'--dapi-channel ' + dapi_channel} \
-        ~{'--time ' + time} \
-        --output "~{output_directory}" \
-        --subset ~{subset} \
-        ~{if defined(extra_arguments) then extra_arguments else ''} \
-        ~{true="--force" false="" force}
+#        export SCALLOPS_MODEL_DIR="~{model_dir}"
+#
+#        scallops segment nuclei \
+#        --images "~{images}" \
+#        ~{"--method " + method} \
+#        --groupby ~{sep=" " groupby} \
+#        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
+#        ~{'--dapi-channel ' + dapi_channel} \
+#        ~{'--time ' + time} \
+#        --output "~{output_directory}" \
+#        --subset ~{subset} \
+#        ~{if defined(extra_arguments) then extra_arguments else ''} \
+#        ~{true="--force" false="" force}
     >>>
 
     output {
@@ -47,7 +47,7 @@ task segment_nuclei {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -90,24 +90,24 @@ task segment_cell {
     command <<<
         set -ex
 
-        export SCALLOPS_MODEL_DIR="~{model_dir}"
-
-        scallops segment cell \
-        --images "~{images}" \
-        --groupby ~{sep=" " groupby} \
-        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
-        ~{'--dapi-channel ' + dapi_channel} \
-        ~{'--time ' + time} \
-        --cyto-channel ~{sep=" " cyto_channel} \
-        ~{"--nuclei-label " + nuclei_label} \
-        ~{"--method " + method} \
-        --output "~{output_directory}" \
-        --subset ~{subset} \
-        ~{'--threshold ' + threshold} \
-        ~{'--threshold-correction-factor ' + threshold_correction_factor} \
-        ~{'--chunks ' + chunks} \
-        ~{if defined(extra_arguments) then extra_arguments else ''} \
-        ~{true="--force" false="" force}
+#        export SCALLOPS_MODEL_DIR="~{model_dir}"
+#
+#        scallops segment cell \
+#        --images "~{images}" \
+#        --groupby ~{sep=" " groupby} \
+#        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
+#        ~{'--dapi-channel ' + dapi_channel} \
+#        ~{'--time ' + time} \
+#        --cyto-channel ~{sep=" " cyto_channel} \
+#        ~{"--nuclei-label " + nuclei_label} \
+#        ~{"--method " + method} \
+#        --output "~{output_directory}" \
+#        --subset ~{subset} \
+#        ~{'--threshold ' + threshold} \
+#        ~{'--threshold-correction-factor ' + threshold_correction_factor} \
+#        ~{'--chunks ' + chunks} \
+#        ~{if defined(extra_arguments) then extra_arguments else ''} \
+#        ~{true="--force" false="" force}
     >>>
 
     output {
@@ -116,7 +116,7 @@ task segment_cell {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -194,7 +194,7 @@ task register_elastix {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -260,7 +260,7 @@ task register_pheno_to_pheno_qc {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -327,7 +327,7 @@ task register_pheno_to_iss_qc {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -389,7 +389,7 @@ task register_qc {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -451,7 +451,7 @@ task intersects_boundary {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -504,7 +504,7 @@ task find_objects {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -586,7 +586,7 @@ task features {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -647,7 +647,7 @@ task spot_detect {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -714,7 +714,7 @@ task reads {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -788,7 +788,7 @@ task merge {
     }
 
     runtime {
-        #container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory

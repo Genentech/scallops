@@ -88,7 +88,7 @@ def test_stitch_wdl_z_stack(tmp_path):
         "z_index": "focus",
         "stitch_radial_correction_k": "none",
         "output_directory": str(tmp_path / "out"),
-        "docker": "",
+        "container": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:
@@ -129,7 +129,7 @@ def test_stitch_wdl(tmp_path):
         "image_pattern": "{well}-{skip}.zarr",
         "output_directory": str(output_directory),
         "channel_names": ["a", "b"],
-        "docker": "",
+        "container": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:
@@ -244,7 +244,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
         "reads_threshold_peaks_crosstalk": "20",
         "barcodes": os.path.abspath("scallops/tests/data/experimentC/barcodes.csv"),
         "reads_labels": "cell",
-        "docker": "",
+        "container": "",
     }
 
     with open(tmp_path / "inputs.json", "wt") as out:
