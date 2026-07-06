@@ -1325,8 +1325,7 @@ def _images2fov(
             for dim in concat_dims
             if len(set([image.coords[dim].values[0] for image in images])) > 1
         ]
-        if len(concat_dims) > 0:
-            _match_size(images)
+
         if len(concat_dims) == 1:
             image = xr.concat(
                 images,

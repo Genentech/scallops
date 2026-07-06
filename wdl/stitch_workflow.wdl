@@ -1,4 +1,4 @@
-version 1.0
+version 1.1
 
 import "utils.wdl" as utils
 import "stitch_tasks.wdl" as tasks
@@ -46,7 +46,7 @@ workflow stitch_workflow {
         Boolean? force_illumination_correction
         Boolean? force_stitch
 
-        String docker
+        String container
 
         Int preemptible = 0
         String zones = "us-west1-a us-west1-b us-west1-c"
@@ -69,7 +69,7 @@ workflow stitch_workflow {
             save_group_size=true,
 
             groupby=groupby,
-            docker=docker,
+            container=container,
             zones = zones,
             preemptible = preemptible,
             aws_queue_arn = aws_queue_arn,
@@ -100,7 +100,7 @@ workflow stitch_workflow {
                     groupby=groupby_array,
                     force=force_illumination_correction,
                     output_directory=illumination_correction_output_directory,
-                    docker=docker,
+                    container=container,
                     zones = zones,
                     preemptible = preemptible,
                     aws_queue_arn = aws_queue_arn,
@@ -133,7 +133,7 @@ workflow stitch_workflow {
                 min_overlap_fraction=stitch_min_overlap_fraction,
                 max_shift=stitch_max_shift,
                 blend=stitch_blend,
-                docker=docker,
+                container=container,
                 zones = zones,
                 preemptible = preemptible,
                 aws_queue_arn = aws_queue_arn,

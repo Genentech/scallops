@@ -13,7 +13,7 @@ task segment_nuclei {
         Boolean? force
         String model_dir
         String? extra_arguments
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -47,7 +47,7 @@ task segment_nuclei {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -77,7 +77,7 @@ task segment_cell {
         String? extra_arguments
         Boolean? force
 
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -116,7 +116,7 @@ task segment_cell {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -150,7 +150,7 @@ task register_elastix {
         String? moving_label
         String? extra_arguments
 
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -194,7 +194,7 @@ task register_elastix {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -207,14 +207,14 @@ task register_elastix {
 
 task register_pheno_to_pheno_qc {
     input {
-        String phenotype_time
+
         String images # non-reference time
         String image_pattern
         String label_type
-        Array[String?]? stacked_images # reference time transformed
+        String stacked_images # reference time transformed
         String stacked_image_pattern
 
-        Array[String?]? labels # reference labels transformed
+        String labels # reference labels transformed
         Int image_channel
         Int stacked_image_channel
         String subset
@@ -222,7 +222,7 @@ task register_pheno_to_pheno_qc {
         Array[String] groupby
         Boolean? force
 
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -239,25 +239,16 @@ task register_pheno_to_pheno_qc {
             ulimit -n 100000
         fi
 
-        phenotype_time="~{phenotype_time}"
-        pattern="-~{phenotype_time}.zarr"
-        stacked_images=('~{sep="' '" stacked_images}')
-        filtered_images=()
-        for item in "${stacked_images[@]}"; do
-            if [[ "$item" == *$pattern ]]; then
-                filtered_images+=("$item")
-            fi
-        done
-        filtered_images="${filtered_images[*]}"
+
 
         scallops features \
         --features-~{label_type} "correlationpearsonbox_~{image_channel}_s~{stacked_image_channel}" \
-        --labels $filtered_images \
+        --labels ~{labels} \
         --groupby ~{sep=" " groupby} \
         --subset ~{subset} \
         --output "~{output_directory}" \
         --images ~{images} \
-        --stack-images $filtered_images \
+        --stack-images ~{stacked_images} \
         --image-pattern ~{image_pattern} \
         --stack-image-pattern ~{stacked_image_pattern} \
         ~{true="--force" false="" force}
@@ -269,7 +260,7 @@ task register_pheno_to_pheno_qc {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -296,7 +287,7 @@ task register_pheno_to_iss_qc {
         Array[String] groupby
         Boolean? force
 
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -336,7 +327,7 @@ task register_pheno_to_iss_qc {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -362,7 +353,7 @@ task register_qc {
         Array[String] groupby
         Boolean? force
 
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -398,7 +389,7 @@ task register_qc {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -422,7 +413,7 @@ task intersects_boundary {
         Array[String] groupby
         Boolean? force
 
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -460,7 +451,7 @@ task intersects_boundary {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -480,7 +471,7 @@ task find_objects {
         String? label_pattern
         String suffix
         String output_directory
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -513,7 +504,7 @@ task find_objects {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -547,7 +538,7 @@ task features {
         String? image_pattern
         Array[String] groupby
         String output_directory
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -595,7 +586,7 @@ task features {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -621,7 +612,7 @@ task spot_detect {
         Int? chunks
         String output_directory
         String? extra_arguments
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -656,7 +647,7 @@ task spot_detect {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -685,7 +676,7 @@ task reads {
         String? barcode_column
         String label_name
         String? extra_arguments
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -723,7 +714,7 @@ task reads {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory
@@ -756,7 +747,7 @@ task merge {
         String? extra_arguments
         Boolean? force
 
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -797,7 +788,7 @@ task merge {
     }
 
     runtime {
-        docker:docker
+        #container:container
         disks: disks
         zones: zones
         memory: memory

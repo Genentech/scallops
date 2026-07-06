@@ -16,10 +16,7 @@ class LocalRunner(TaskContainer):
         Perform any necessary process-wide initialization of the container backend
         """
         cpu_count = os.environ.get("SCALLOPS_MINIWDL_CPU")
-        if cpu_count is None:
-            cpu_count = psutil.cpu_count()
-        else:
-            cpu_count = int(cpu_count)
+        cpu_count = psutil.cpu_count() if cpu_count is None else int(cpu_count)
         cls._resource_limits = {
             "cpu": cpu_count,
             "mem_bytes": psutil.virtual_memory().total,

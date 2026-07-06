@@ -368,7 +368,7 @@ def single_feature(
 
             if merged_df is None:
                 logger.info(
-                    f"Find {label_name} objects for {image_key}{' at t=' + timepoint if timepoint is not None else ''}."
+                    f"Find {label_name} objects for {image_key}{' at t=' if timepoint is not None else ''}{timepoint if timepoint is not None else ''}."
                 )
                 merged_df = find_objects(label_image)
                 objects_path = get_path(

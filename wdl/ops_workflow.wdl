@@ -160,7 +160,7 @@ workflow ops_workflow {
         String intersects_boundary_memory = "32 GiB"
         String intersects_boundary_disks = "local-disk 200 HDD"
 
-        String docker
+        String container
 
         Int preemptible = 0
         String zones = "us-west1-a us-west1-b us-west1-c"
@@ -225,7 +225,7 @@ workflow ops_workflow {
 
             groupby=groupby,
             subset = subset,
-            docker=docker,
+            container=container,
             zones = zones,
             preemptible = preemptible,
             aws_queue_arn = aws_queue_arn,
@@ -260,7 +260,7 @@ workflow ops_workflow {
 
                         extra_arguments=nuclei_segmentation_extra_arguments,
                         force = force_segment_nuclei,
-                        docker=docker,
+                        container=container,
                         zones = zones,
                         preemptible = preemptible,
                         aws_queue_arn = aws_queue_arn,
@@ -290,7 +290,7 @@ workflow ops_workflow {
 
                         extra_arguments=cell_segmentation_extra_arguments,
                         force = force_segment_cell,
-                        docker=docker,
+                        container=container,
                         zones = zones,
                         preemptible = preemptible,
                         aws_queue_arn = aws_queue_arn,
@@ -325,13 +325,38 @@ workflow ops_workflow {
                                     transform_output_directory=register_pheno_to_pheno_transform_directory + "-" + phenotype_time,
 
                                     force = force_register_pheno_to_pheno,
-                                    docker=docker,
+                                    container=container,
                                     zones = zones,
                                     preemptible = preemptible,
                                     aws_queue_arn = aws_queue_arn,
                                     disks = register_pheno_to_pheno_disks,
                                     memory = register_pheno_to_pheno_memory,
                                     cpu = register_pheno_to_pheno_cpu,
+                                    max_retries = max_retries
+                            }
+                            call tasks.register_pheno_to_pheno_qc as register_pheno_to_pheno_qc {
+                                input:
+
+                                    images = select_first([phenotype_url]),
+                                    image_pattern=if(sub(phenotype_image_pattern, "{t}", phenotype_time)!=phenotype_image_pattern) then sub(phenotype_image_pattern, "{t}", phenotype_time) else phenotype_image_pattern,
+
+                                    stacked_images=register_pheno_to_pheno.moving_output_url,
+                                    stacked_image_pattern=groupby_pattern,
+                                    groupby=groupby,
+                                    labels=register_pheno_to_pheno.label_output_url,
+                                    subset =subset_,
+                                    image_channel=select_first([phenotype_dapi_channel, 0]),
+                                    stacked_image_channel=0,
+                                    label_type="nuclei",
+                                    output_directory=register_pheno_to_pheno_qc_directory + "-" + phenotype_time,
+                                    force = force_register_pheno_to_pheno_qc,
+                                    container=container,
+                                    zones = zones,
+                                    preemptible = preemptible,
+                                    aws_queue_arn = aws_queue_arn,
+                                    disks = register_pheno_to_pheno_qc_disks,
+                                    memory = register_pheno_to_pheno_qc_memory,
+                                    cpu = register_pheno_to_pheno_qc_cpu,
                                     max_retries = max_retries
                             }
                         }
@@ -348,7 +373,7 @@ workflow ops_workflow {
                             output_directory=objects_directory,
                             subset = subset_,
                             force = force_find_objects,
-                            docker=docker,
+                            container=container,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
@@ -368,7 +393,7 @@ workflow ops_workflow {
                             output_directory=objects_directory,
                             subset = subset_,
                             force = force_find_objects,
-                            docker=docker,
+                            container=container,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
@@ -388,7 +413,7 @@ workflow ops_workflow {
                             output_directory=objects_directory,
                             subset = subset_,
                             force = force_find_objects,
-                            docker=docker,
+                            container=container,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
@@ -417,7 +442,7 @@ workflow ops_workflow {
                             groupby=phenotype_group_by_with_time,
                             subset = if(sub(phenotype_image_pattern, "{t}", "")!=phenotype_image_pattern) then subset_ + "-*" else subset_,
                             force = if(intersects_stitch_boundary_label=="cell") then force_segment_cell else force_segment_nuclei,
-                            docker=docker,
+                            container=container,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
@@ -445,7 +470,7 @@ workflow ops_workflow {
                     extra_arguments=iss_registration_extra_arguments,
                     subset = subset_,
                     force = force_register_iss,
-                    docker=docker,
+                    container=container,
                     zones = zones,
                     preemptible = preemptible,
                     aws_queue_arn = aws_queue_arn,
@@ -478,7 +503,7 @@ workflow ops_workflow {
                     groupby=groupby,
                     extra_arguments=pheno_to_iss_registration_extra_arguments,
                     force = force_register_pheno_to_iss,
-                    docker=docker,
+                    container=container,
                     zones = zones,
                     preemptible = preemptible,
                     aws_queue_arn = aws_queue_arn,
@@ -503,7 +528,7 @@ workflow ops_workflow {
                         subset = subset_,
                         groupby=groupby,
                         force = force_register_pheno_to_iss_qc,
-                        docker=docker,
+                        container=container,
                         zones = zones,
                         preemptible = preemptible,
                         aws_queue_arn = aws_queue_arn,
@@ -512,37 +537,7 @@ workflow ops_workflow {
                         cpu = register_pheno_to_iss_qc_cpu,
                         max_retries = max_retries
                 }
-                if(length(times_pheno)>1) {
-                    scatter(phenotype_time in times_pheno) {
-                        if(phenotype_time != reference_time_pheno) {
-                            call tasks.register_pheno_to_pheno_qc as register_pheno_to_pheno_qc {
-                                input:
-                                    phenotype_time=phenotype_time,
-                                    images = select_first([phenotype_url]),
-                                    image_pattern=if(sub(phenotype_image_pattern, "{t}", phenotype_time)!=phenotype_image_pattern) then sub(phenotype_image_pattern, "{t}", phenotype_time) else phenotype_image_pattern,
 
-                                    stacked_images=register_pheno_to_pheno.moving_output_url, # task filter this
-                                    stacked_image_pattern=groupby_pattern,
-                                    groupby=groupby,
-                                    labels=register_pheno_to_pheno.label_output_url, # task filters this
-                                    subset =subset_,
-                                    image_channel=select_first([phenotype_dapi_channel, 0]),
-                                    stacked_image_channel=0,
-                                    label_type="nuclei",
-                                    output_directory=register_pheno_to_pheno_qc_directory + "-" + phenotype_time,
-                                    force = force_register_pheno_to_pheno_qc,
-                                    docker=docker,
-                                    zones = zones,
-                                    preemptible = preemptible,
-                                    aws_queue_arn = aws_queue_arn,
-                                    disks = register_pheno_to_pheno_qc_disks,
-                                    memory = register_pheno_to_pheno_qc_memory,
-                                    cpu = register_pheno_to_pheno_qc_cpu,
-                                    max_retries = max_retries
-                            }
-                        }
-                    }
-                }
                 # ISS t0 to other times
                 call tasks.register_qc as register_iss_to_iss_qc {
                     input:
@@ -557,7 +552,7 @@ workflow ops_workflow {
                         subset = subset_,
                         groupby=groupby,
                         force = force_register_iss_to_iss_qc,
-                        docker=docker,
+                        container=container,
                         zones = zones,
                         preemptible = preemptible,
                         aws_queue_arn = aws_queue_arn,
@@ -584,7 +579,7 @@ workflow ops_workflow {
                     groupby=groupby,
                     extra_arguments=spot_detection_extra_arguments,
                     force = force_spot_detect,
-                    docker=docker,
+                    container=container,
                     zones = zones,
                     preemptible = preemptible,
                     aws_queue_arn = aws_queue_arn,
@@ -612,7 +607,7 @@ workflow ops_workflow {
                         subset = subset_,
                         extra_arguments=reads_extra_arguments,
                         force = force_reads,
-                        docker=docker,
+                        container=container,
                         zones = zones,
                         preemptible = preemptible,
                         aws_queue_arn = aws_queue_arn,
@@ -638,7 +633,7 @@ workflow ops_workflow {
                         subset = subset_,
                         extra_arguments=merge_extra_arguments,
                         force = force_merge,
-                        docker=docker,
+                        container=container,
                         zones = zones,
                         preemptible = preemptible,
                         aws_queue_arn = aws_queue_arn,
@@ -677,7 +672,7 @@ workflow ops_workflow {
                             output_directory=nuclei_features_directory + "-" + phenotype_time + "-batch" + feature_index,
 
                             force = force_features,
-                            docker=docker,
+                            container=container,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
@@ -719,7 +714,7 @@ workflow ops_workflow {
                             output_directory=cell_features_directory + "-" + phenotype_time + "-batch" + feature_index,
                             subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
                             force = force_features,
-                            docker=docker,
+                            container=container,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
@@ -761,7 +756,7 @@ workflow ops_workflow {
 
                             subset = if(phenotype_time!="") then subset_ + "-" + phenotype_time else subset_,
                             force = force_features,
-                            docker=docker,
+                            container=container,
                             zones = zones,
                             preemptible = preemptible,
                             aws_queue_arn = aws_queue_arn,
@@ -784,7 +779,7 @@ workflow ops_workflow {
                 subset = subset_,
                 extra_arguments=merge_extra_arguments,
                 force = force_merge,
-                docker=docker,
+                container=container,
                 zones = zones,
                 preemptible = preemptible,
                 aws_queue_arn = aws_queue_arn,
@@ -807,9 +802,9 @@ workflow ops_workflow {
         Array[String?] find_objects_nuclei_output_url = find_objects_nuclei.output_url
         Array[String?] find_objects_cell_output_url = find_objects_cell.output_url
         Array[String?] find_objects_cytosol_output_url = find_objects_cytosol.output_url
-        Array[Array[String]?] features_nuclei_output_url = features_nuclei.output_url
-        Array[Array[String]?] features_cell_output_url = features_cell.output_url
-        Array[Array[String]?] features_cytosol_output_url = features_cytosol.output_url
+        Array[Array[Array[String]]?] features_nuclei_output_url = features_nuclei.output_url
+        Array[Array[Array[String]]?] features_cell_output_url = features_cell.output_url
+        Array[Array[Array[String]]?] features_cytosol_output_url = features_cytosol.output_url
         Array[String?] merge_sbs_metadata_output_url = merge_sbs_metadata.output_url
         Array[String?] merge_features_output_url = merge_features.output_url
     }

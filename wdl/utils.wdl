@@ -1,4 +1,4 @@
-version 1.0
+version 1.1
 
 task list_images {
     input {
@@ -18,7 +18,7 @@ task list_images {
 
         Boolean? save_group_size
         Int? batch_size
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -82,7 +82,7 @@ task list_images {
     }
 
     runtime {
-        docker:docker
+#        container:container
         disks: disks
         zones: zones
         memory: memory

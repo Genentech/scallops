@@ -1,4 +1,4 @@
-version 1.0
+version 1.1
 
 task illumination_correction {
     input {
@@ -46,7 +46,7 @@ task illumination_correction {
     }
 
     runtime {
-        docker:docker
+        container:container
         disks: disks
         zones: zones
         memory: memory
@@ -181,7 +181,7 @@ task stitch {
     }
 
     runtime {
-        docker:docker
+        container:container
         disks: disks
         zones: zones
         memory: memory
