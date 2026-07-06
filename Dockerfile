@@ -67,15 +67,10 @@ COPY . .
 # Python 3.11 cannot parse — that file is never imported on 3.11.
 RUN SETUPTOOLS_SCM_PRETEND_VERSION=${SCM_VERSION} uv pip install --no-build-isolation --no-deps . && \
     DIST_PKGS=/usr/local/lib/python${PYTHON_VERSION}/dist-packages && \
-    python3 -c "
-v = '${SCM_VERSION}'
-txt = open('${DIST_PKGS}/scallops/_version.py').read()
-import re
-txt = re.sub(r\"version = '[^']*'\", f\"version = '{v}'\", txt)
-txt = re.sub(r\"__version__ = version = '[^']*'\", f\"__version__ = version = '{v}'\", txt)
-open('${DIST_PKGS}/scallops/_version.py', 'w').write(txt)
-" && \
-    sed -i "s/^Version: .*/Version: ${SCM_VERSION}/" ${DIST_PKGS}/scallops-*.dist-info/METADATA && \
+    sed -i "s|version = '[^']*'|version = '${SCM_VERSION}'|g" \
+        ${DIST_PKGS}/scallops/_version.py && \
+    sed -i "s/^Version: .*/Version: ${SCM_VERSION}/" \
+        ${DIST_PKGS}/scallops-*.dist-info/METADATA && \
     python -m compileall -q /usr/local/lib/python${PYTHON_VERSION} 2>&1 | \
       grep -v 'py312_intrinsics' || true && \
     rm -rf /build
