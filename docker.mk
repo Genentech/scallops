@@ -11,9 +11,9 @@
 #   - Automatic push to ghcr.io — use `make -f docker.mk docker-push` explicitly
 #
 # Usage:
-#   make -f docker.mk docker            # CPU image (default)
-#   make -f docker.mk docker-gpu TORCH_COMPUTE=cu124   # GPU image
-#   make -f docker.mk docker-push       # build CPU + push to GHCR
+#   make -f docker.mk docker                         # CPU image (default)
+#   make -f docker.mk docker-gpu TORCH_COMPUTE=cu124 # GPU image
+#   make -f docker.mk docker-push                    # build CPU + push to GHCR
 
 # ── configurable knobs ────────────────────────────────────────────────────────
 REGISTRY      ?= ghcr.io/genentech
@@ -21,72 +21,67 @@ IMAGE         ?= scallops
 TF_VERSION    ?= 2.21.0
 TORCH_COMPUTE ?= cpu
 
-# ── derived values (match what docker/metadata-action computes in CI) ─────────
-# NOTE: SCM_VERSION is intentionally left as a lazy variable (=) so that it is
-# evaluated *after* the _check_deps recipe has installed setuptools_scm.
-GIT_SHA       := $(shell git rev-parse HEAD)
-GIT_SHA_SHORT := $(shell git rev-parse --short HEAD)
+# ── uv: prefer PATH, fall back to the default install location ────────────────
+# If uv is not found, _check_prereqs installs it there automatically.
+UV := $(shell which uv 2>/dev/null || echo "$(HOME)/.local/bin/uv")
+
+# ── values computed at parse time (none depend on setuptools_scm) ─────────────
+GIT_SHA       := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_SHA_SHORT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_SOURCE    := $(shell git remote get-url origin 2>/dev/null \
                    | sed 's|git@github.com:|https://github.com/|; s|\.git$$||')
 BUILD_DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 FULL_IMAGE    := $(REGISTRY)/$(IMAGE)
 
-# ── prerequisite check ────────────────────────────────────────────────────────
-# Installs missing Python deps then recomputes SCM_VERSION inside the recipe
-# (top-level $(shell) runs before any target so we cannot rely on it here).
-define check_prereqs
-	@python -m setuptools_scm --version >/dev/null 2>&1 \
-	    || (echo "[docker.mk] setuptools_scm not found — installing..." \
-	        && python -m pip install -q setuptools_scm)
+# ── internal helpers ──────────────────────────────────────────────────────────
+
+# Installs missing prerequisites at shell execution time (not Make parse time).
+# uv is used instead of pip to avoid PEP-668 "externally managed environment"
+# errors on Homebrew/system Python installs.
+define _check_prereqs
+	@"$(UV)" --version >/dev/null 2>&1 \
+	    || (echo "[docker.mk] uv not found — installing via official installer..." \
+	        && curl -LsSf https://astral.sh/uv/install.sh | sh)
 	@docker buildx version >/dev/null 2>&1 \
 	    || (echo "[docker.mk] ERROR: docker buildx required (Docker 20.10+ or the buildx plugin)" \
 	        && exit 1)
-	$(eval SCM_VERSION := $(shell python -m setuptools_scm))
 endef
 
-# OCI labels — mirrors what docker/metadata-action generates in CI
-define oci_labels
-  --label org.opencontainers.image.created=$(BUILD_DATE) \
-  --label org.opencontainers.image.revision=$(GIT_SHA) \
-  --label org.opencontainers.image.source=$(GIT_SOURCE) \
-  --label org.opencontainers.image.version=$(SCM_VERSION) \
-  --label org.opencontainers.image.title=$(IMAGE) \
-  --label org.opencontainers.image.url=$(GIT_SOURCE)
-endef
-
-define build_args
-  --build-arg SCM_VERSION=$(SCM_VERSION) \
-  --build-arg TF_VERSION=$(TF_VERSION) \
-  --build-arg TORCH_COMPUTE=$(TORCH_COMPUTE)
-endef
-
-define image_tags
-  -t $(FULL_IMAGE):$(SCM_VERSION) \
-  -t $(FULL_IMAGE):sha-$(GIT_SHA_SHORT) \
-  -t $(FULL_IMAGE):latest
+# SCM_VERSION is a shell variable ($$) so it is evaluated at shell execution
+# time, after _check_prereqs has ensured uv is present.
+# `uv run --with setuptools_scm` creates a throwaway venv — no system Python
+# pollution, no pip permission issues.
+define _build
+	@SCM_VERSION=$$("$(UV)" run --with setuptools_scm --no-project --quiet \
+	                  python3 -m setuptools_scm) \
+	 && echo "[docker.mk] Building $(FULL_IMAGE):$$SCM_VERSION" \
+	 && docker buildx build \
+	      --build-arg SCM_VERSION=$$SCM_VERSION \
+	      --build-arg TF_VERSION=$(TF_VERSION) \
+	      --build-arg TORCH_COMPUTE=$(TORCH_COMPUTE) \
+	      --label "org.opencontainers.image.created=$(BUILD_DATE)" \
+	      --label "org.opencontainers.image.revision=$(GIT_SHA)" \
+	      --label "org.opencontainers.image.source=$(GIT_SOURCE)" \
+	      --label "org.opencontainers.image.version=$$SCM_VERSION" \
+	      --label "org.opencontainers.image.title=$(IMAGE)" \
+	      --label "org.opencontainers.image.url=$(GIT_SOURCE)" \
+	      -t "$(FULL_IMAGE):$$SCM_VERSION" \
+	      -t "$(FULL_IMAGE):sha-$(GIT_SHA_SHORT)" \
+	      -t "$(FULL_IMAGE):latest"
 endef
 
 .PHONY: docker docker-gpu docker-push
 
 ## Build the CPU image locally (default)
 docker:
-	$(call check_prereqs)
-	docker buildx build \
-	  $(call build_args) \
-	  $(call oci_labels) \
-	  $(call image_tags) \
-	  .
+	$(call _check_prereqs)
+	$(call _build) .
 
-## Build a GPU image locally; override TORCH_COMPUTE if needed (e.g. cu126)
+## Build a GPU image; override TORCH_COMPUTE if needed (e.g. cu126)
 docker-gpu:
 	$(MAKE) -f docker.mk docker TORCH_COMPUTE=$(or $(TORCH_COMPUTE),cu124)
 
-## Build and push the CPU image to GHCR (requires `docker login ghcr.io` first)
+## Build and push to GHCR (requires `docker login ghcr.io` first)
 docker-push:
-	$(call check_prereqs)
-	docker buildx build \
-	  $(call build_args) \
-	  $(call oci_labels) \
-	  $(call image_tags) \
-	  --push \
-	  .
+	$(call _check_prereqs)
+	$(call _build) --push .
