@@ -3,8 +3,6 @@
 # (currently 3.11); changing TF_VERSION may require updating PYTHON_VERSION.
 ARG TF_VERSION=2.21.0
 ARG PYTHON_VERSION=3.11
-# Override at build time for GPU: --build-arg TORCH_COMPUTE=cu124 (or cu126, cu128, etc.)
-ARG TORCH_COMPUTE=cpu
 # SCM_VERSION is passed by:
 #   - CI:      .github/workflows/docker.yml  (resolved via python -m setuptools_scm)
 #   - locally: docker.mk                     (make -f docker.mk docker)
@@ -33,17 +31,6 @@ ENV UV_SYSTEM_PYTHON=1 \
 WORKDIR /build
 
 # Each file is its own layer ordered most→least stable for cache efficiency.
-
-# Install PyTorch before ufish/cellpose to prevent them pulling in a second
-# (CUDA-enabled) copy of torch as a transitive dep.
-# pip is used instead of uv here: uv's rustls TLS stack fails with
-# HandshakeFailure on networks that use SSL inspection proxies, while pip's
-# OpenSSL is more permissive. --trusted-host bypasses cert verification for
-# the PyTorch CDN; the proper fix is to inject your proxy CA cert.
-RUN pip install --no-cache-dir torch torchvision \
-      --index-url https://download.pytorch.org/whl/${TORCH_COMPUTE} \
-      --trusted-host download.pytorch.org \
-      --trusted-host download-r2.pytorch.org
 
 # ufish: git-pinned tag, rarely bumped
 COPY requirements.ufish.txt ./
