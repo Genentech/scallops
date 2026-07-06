@@ -653,7 +653,7 @@ def _transform_labels(
             moving_times = moving_labels.coords["t"].values
             time_index = -1
             for j in range(len(moving_times)):
-                if str(moving_times[i]) == moving_timepoint:
+                if str(moving_times[j]) == moving_timepoint:
                     time_index = j
                     break
             if time_index == -1:
