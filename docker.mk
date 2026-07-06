@@ -54,7 +54,8 @@ endef
 define _build
 	@SCM_VERSION=$$("$(UV)" run --with setuptools_scm --no-project --quiet \
 	                  python3 -m setuptools_scm) \
-	 && echo "[docker.mk] Building $(FULL_IMAGE):$$SCM_VERSION" \
+	 && DOCKER_TAG=$$(echo "$$SCM_VERSION" | tr '+' '-') \
+	 && echo "[docker.mk] Building $(FULL_IMAGE):$$DOCKER_TAG (package version $$SCM_VERSION)" \
 	 && docker buildx build \
 	      --build-arg SCM_VERSION=$$SCM_VERSION \
 	      --build-arg TF_VERSION=$(TF_VERSION) \
@@ -65,7 +66,7 @@ define _build
 	      --label "org.opencontainers.image.version=$$SCM_VERSION" \
 	      --label "org.opencontainers.image.title=$(IMAGE)" \
 	      --label "org.opencontainers.image.url=$(GIT_SOURCE)" \
-	      -t "$(FULL_IMAGE):$$SCM_VERSION" \
+	      -t "$(FULL_IMAGE):$$DOCKER_TAG" \
 	      -t "$(FULL_IMAGE):sha-$(GIT_SHA_SHORT)" \
 	      -t "$(FULL_IMAGE):latest"
 endef
