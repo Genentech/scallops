@@ -55,7 +55,9 @@ COPY . .
 # || true on compileall: torch ships py312_intrinsics.py (PEP 695 syntax) that
 # Python 3.11 cannot parse — that file is never imported on 3.11.
 RUN SETUPTOOLS_SCM_PRETEND_VERSION=${SCM_VERSION} uv pip install --no-build-isolation --no-deps . && \
-    python3 -c "import importlib.metadata as m,re,pathlib; v='${SCM_VERSION}'; d=m.distribution('scallops'); p=pathlib.Path(d._path); md=p/'METADATA'; md.write_text(re.sub(r'^Version:.*','Version: '+v,md.read_text(),flags=re.M)); vf=p.parent/'scallops'/'_version.py'; vf.exists() and vf.write_text(re.sub(r\"version = '[^']*'\",\"version = '\"+v+\"'\",vf.read_text()))" && \
+    DIST_PKGS=/usr/local/lib/python${PYTHON_VERSION}/dist-packages && \
+    sed -i "s|^Version:.*|Version: ${SCM_VERSION}|" ${DIST_PKGS}/scallops-*.dist-info/METADATA && \
+    sed -i "s|version = '[^']*'|version = '${SCM_VERSION}'|g" ${DIST_PKGS}/scallops/_version.py && \
     python -m compileall -q /usr/local/lib/python${PYTHON_VERSION} 2>&1 | \
       grep -v 'py312_intrinsics' || true && \
     rm -rf /build
