@@ -239,20 +239,31 @@ Key Features:
 Perturbation Map Building
 =========================
 
-The ``scallops map-*`` commands implement a step-by-step, WDL-friendly pipeline
-for building perturbation maps from single-cell feature profiles.  Each command
-reads an **AnnData Zarr** (``.zarr``) file, applies one transformation, and
-writes a new **AnnData Zarr**, preserving cell metadata (``obs``), feature
-names (``var``), unstructured metadata (``uns``), and per-feature arrays
-(``varm``) through every step.  Any step can be rerun independently or
-parallelised in a WDL workflow.
+All map-building commands live under the ``scallops map`` parent command::
+
+    scallops map --help           # list all subcommands
+    scallops map filter --help    # help for a specific step
+    scallops map run   --help     # help for the single-machine pipeline runner
+
+The individual ``scallops map <step>`` subcommands form a step-by-step,
+WDL-friendly pipeline.  Each reads an **AnnData Zarr** (``.zarr``) file,
+applies one transformation, and writes a new **AnnData Zarr**, preserving
+``obs``, ``var``, ``uns``, and ``varm`` through every step.  Steps can be
+rerun independently or parallelised in a WDL workflow.
+
+For running the full pipeline on a single machine use ``scallops map run``,
+which chains all steps and writes three semantic output files:
+
+* ``cells.zarr``     — all cell-level transforms (filter → TVN)
+* ``profiles.zarr``  — aggregated perturbation profiles
+* ``similarity.zarr``— pairwise similarity matrix
 
 **Critical pipeline order — PCA before TVN.**
-``map-pca`` reduces the data from N × p (e.g. 10M × 5 000 features) to N × K
-(e.g. 10M × 128 PCs) before ``map-tvn`` runs.  This means TVN operates on
+``map pca`` reduces the data from N × p (e.g. 10M × 5 000 features) to N × K
+(e.g. 10M × 128 PCs) before ``map tvn`` runs.  This means TVN operates on
 the smaller N × K representation, costing only ~5 GB of RAM at 10M cells
 instead of the ~200 GB that would be required if TVN were applied directly to
-raw features.  The actual memory bottleneck is the ``map-pca`` *transform*
+raw features.  The actual memory bottleneck is the ``map pca`` *transform*
 step (projecting N × p → N × K), which scallops performs in chunks controlled
 by ``--batch-size``.
 
@@ -268,7 +279,7 @@ memory analysis, backprojection guide, and annotated example commands.  Run
 ``python scallops/tests/memory_profile.py`` to profile your specific data
 size.
 
-scallops map-filter
+scallops map filter
 -------------------
 
 Filter cells with too many non-finite values and features with variance outside
@@ -278,9 +289,9 @@ the requested bounds.
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-filter
+   :path: map filter
 
-scallops map-transform-yj
+scallops map transform-yj
 --------------------------
 
 Apply a Yeo-Johnson power transform to normalise feature distributions.
@@ -289,21 +300,21 @@ Apply a Yeo-Johnson power transform to normalise feature distributions.
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-transform-yj
+   :path: map transform-yj
 
-scallops map-pca
+scallops map pca
 ----------------
 
 Embed data with PCA, fitting on an optional reference subset and projecting all
-observations.  Alternative to ``map-tvn`` for pipelines without covariance alignment.
+observations.  Alternative to ``map tvn`` for pipelines without covariance alignment.
 
 .. argparse::
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-pca
+   :path: map pca
 
-scallops map-tvn
+scallops map tvn
 ----------------
 
 Apply Typical Variation Normalization.  Stores all parameters required for
@@ -313,9 +324,9 @@ downstream backprojection to the original z-score feature space.
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-tvn
+   :path: map tvn
 
-scallops map-agg
+scallops map agg
 ----------------
 
 Aggregate single-cell profiles to perturbation-level profiles, with optional
@@ -325,9 +336,9 @@ minimum-cell filtering and two-step barcode→gene aggregation.
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-agg
+   :path: map agg
 
-scallops map-center
+scallops map center
 -------------------
 
 Center profiles by subtracting the reference (e.g. NTC) mean before similarity
@@ -337,9 +348,9 @@ computation.
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-center
+   :path: map center
 
-scallops map-similarity
+scallops map similarity
 -----------------------
 
 Compute a pairwise cosine or Pearson similarity matrix between perturbation profiles.
@@ -348,19 +359,71 @@ Compute a pairwise cosine or Pearson similarity matrix between perturbation prof
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-similarity
+   :path: map similarity
 
-scallops map-recall
--------------------
+scallops map pca-select
+-----------------------
 
-Evaluate the similarity matrix against CORUM gene-set benchmarks using a
-Kolmogorov-Smirnov test.
+Retain only statistically significant PCA components after ``map pca``.
+Recommended method for morphological profiling data: ``--method variance``
+(immune to the correlated-feature problem of Tracy-Widom).
 
 .. argparse::
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: map-recall
+   :path: map pca-select
+
+scallops map sphere
+-------------------
+
+Apply ZCA sphering (whitening) between ``map pca`` and ``map tvn``.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map sphere
+
+scallops map recall
+-------------------
+
+Evaluate the similarity matrix against reference databases (CORUM, GMT,
+STRING, Reactome FI) using KS-test (set-based) or pairwise recall.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map recall
+
+scallops map cluster
+--------------------
+
+Cluster perturbation profiles from a similarity AnnData Zarr and reorder the
+matrix so same-cluster entries are adjacent.  Supports hierarchical (default),
+HDBSCAN, and Leiden, each with automatic hyperparameter estimation.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map cluster
+
+scallops map run
+----------------
+
+Run the full pipeline on a single machine.  All cell-level transforms
+accumulate in ``cells.zarr`` (provenance tracked in ``uns["scallops"]``);
+aggregated profiles go to ``profiles.zarr``; the similarity matrix goes to
+``similarity.zarr``.  Interrupted runs resume automatically from the last
+completed step.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map run
 
 
 stitch-preview
