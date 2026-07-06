@@ -56,6 +56,9 @@ def create_parsers(default_help: bool = False) -> argparse.ArgumentParser:
     root_parser = ScallopsArgumentParser(
         prog="scallops", description=f"Version {version('scallops')}"
     )
+    root_parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {version('scallops')}"
+    )
     subparsers = root_parser.add_subparsers(help="Command help")
     pooled_if_sbs_main._create_parser(subparsers, default_help)
     features_main._create_parser(subparsers, default_help)
