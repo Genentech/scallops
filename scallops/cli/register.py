@@ -213,8 +213,7 @@ def single_registration(
             )
         moving_label_keys = natsorted(moving_label_keys)
         if len(moving_label_keys) == 0:
-            logger.warning(f"No labels found for {image_key}.")
-            return image_key
+            raise ValueError(f"No labels found for {image_key}.")
 
     if not force and _output_exists(
         register_self,
@@ -571,7 +570,9 @@ def get_matching_names(
 
         if labels:
             tokens = name.split("-")
-            if tokens[-1] not in label_suffixes and tokens[:-1] == image_key:
+            suffix = tokens[-1]
+            label_key = "-".join(tokens[:-1])
+            if suffix not in label_suffixes or label_key != image_key:
                 continue
         if not name.startswith(".") and is_ome_zarr_array(zarr.open(path, mode="r")):
             results.append(path)
