@@ -12,7 +12,7 @@ task illumination_correction {
         Array[String] groupby
         String output_directory
         Boolean? force
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
@@ -82,7 +82,7 @@ task stitch {
 
         Boolean? force
         String? blend
-        String docker
+        String container
         String zones
         Int preemptible
         String aws_queue_arn
