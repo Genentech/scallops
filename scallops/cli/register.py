@@ -339,7 +339,7 @@ def single_registration(
                             if str(template_label_times[j]) == str(moving_timepoint):
                                 time_index = j
                                 break
-                        template_labels = template_labels.isel(time=time_index)
+                        template_labels = template_labels.isel(t=time_index)
             landmarks_found = False
             grid_results = None
             for landmark_translation_attempt in range(len(landmark_initializations)):
@@ -906,6 +906,13 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     fixed_image_pattern = arguments.fixed_image_pattern
     group_by = arguments.groupby
     fixed_timepoint = arguments.fixed_time if arguments.fixed_time is not None else 0
+    if (
+        arguments.fixed_image_pattern is not None
+        or arguments.fixed_image_spacing is not None
+        or arguments.fixed_time is not None
+    ) and fixed_image_path is None:
+        raise ValueError("Please provide fixed image.")
+
     moving_timepoint = arguments.moving_time if arguments.moving_time is not None else 0
 
     unroll_channels = arguments.unroll_channels
