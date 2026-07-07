@@ -324,9 +324,17 @@ def single_feature(
             image_ = _stack_and_rename(image_)
             if stacked_image is not None:
                 stacked_image_ = _stack_and_rename(stacked_image)
-
+                if "c" in image_.coords:
+                    del image_.coords["c"]
+                if "c" in stacked_image_.coords:
+                    del stacked_image_.coords["c"]
             intensity_image = (
-                xr.concat((image_, stacked_image_), dim="c", join="outer")
+                xr.concat(
+                    (image_, stacked_image_),
+                    dim="c",
+                    join="outer",
+                    create_index_for_new_dim=False,
+                )
                 if stacked_image is not None
                 else image_
             )
