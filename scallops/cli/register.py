@@ -212,6 +212,11 @@ def single_registration(
                 )
             )
         moving_label_keys = natsorted(moving_label_keys)
+        if moving_timepoint_value is not None:
+            moving_label_keys = _filter_label_keys(
+                moving_label_keys, moving_timepoint_value
+            )
+
         if len(moving_label_keys) == 0:
             raise ValueError(f"No labels found for {image_key}.")
 
@@ -620,6 +625,25 @@ def transform_all_images(
             image_root=output_root,
             chunksize=chunksize,
         )
+
+
+def _filter_label_keys(matching_keys, moving_timepoint: str):
+    results = []
+    for i in range(len(matching_keys)):
+        key = matching_keys[i]
+        moving_labels = read_ome_zarr_array(key, dask=True)
+        if moving_labels.sizes.get("t", 0) > 0 and "t" in moving_labels.coords:
+            moving_times = moving_labels.coords["t"].values
+            time_index = -1
+            for j in range(len(moving_times)):
+                if str(moving_times[j]) == str(moving_timepoint):
+                    time_index = j
+                    break
+            if time_index == -1:
+                continue
+
+        results.append(key)
+    return results
 
 
 def _transform_labels(
