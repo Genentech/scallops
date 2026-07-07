@@ -982,6 +982,320 @@ def test_top_features_on_aggregated_profiles(tvn_data):
 
 
 # ---------------------------------------------------------------------------
+# Backprojection mutation-killing tests  (low mutation score survivors fixed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_backproject_tvn_pca_mean_applied(tvn_data):
+    """pca_mean must be ADDED (not subtracted) in the inverse PCA step.
+
+    Verify that (backproject(tvn_X) - pca_mean) @ PCs.T exactly recovers
+    tvn_X (the round-trip identity for full-rank PCA).  If the sign of
+    pca_mean were wrong, the residual would be 2 * pca_mean * PCs.T ≠ 0.
+    """
+    PCs = np.asarray(tvn_data.uns["pca"]["PCs"])        # (n_pcs, n_features)
+    pca_mean = np.asarray(tvn_data.uns["pca"]["mean"])  # (n_features,)
+    X_tvn = np.asarray(tvn_data.X, dtype=np.float64)
+    X_bp = backproject_tvn(tvn_data, to_original_scale=False)
+
+    # Correct inverse: (X_bp - pca_mean) @ PCs.T ≈ X_tvn
+    X_reproj = (X_bp - pca_mean) @ PCs.T
+    np.testing.assert_allclose(X_reproj, X_tvn, atol=1e-4, rtol=1e-4,
+                               err_msg="Round-trip failed: pca_mean sign may be wrong")
+
+    # Explicitly verify the sign used is +pca_mean (not -pca_mean) by checking
+    # that X_bp = X_tvn_pca_space @ PCs + pca_mean, i.e. pca_mean is additive
+    # We reconstruct X_bp by hand with the correct formula and compare
+    X_bp_manual = X_tvn @ PCs + pca_mean   # (TVN X was produced by (X_z - pca_mean) @ PCs.T)
+    np.testing.assert_allclose(X_bp, X_bp_manual, atol=1e-4, rtol=1e-4,
+                               err_msg="backproject_tvn output does not match manual +pca_mean formula")
+
+
+@pytest.mark.features
+def test_backproject_tvn_covariance_alignment_applied(cell_data):
+    """When a single covariance alignment group is present, it must be inverted.
+
+    Uses a single-group TVN (no --by) to ensure the alignment is always
+    applied.  We then manually zero out covariance_alignment_inv and verify
+    the result changes — proving the code path is exercised.
+    """
+    # No --by: the function produces a dummy covariance_alignment_inv with one entry
+    # We simulate this by using by=["plate"] (creates per-plate matrices) and then
+    # testing with a specific group key so the alignment is deterministically applied.
+    tvn_by = typical_variation_normalization(
+        cell_data.copy(), "gene_symbol=='NTC'", by=["plate"]
+    )
+    cov_inv = tvn_by.uns.get("covariance_alignment_inv", {})
+    assert cov_inv, "Expected covariance_alignment_inv to be set"
+
+    # Pick the first available group
+    first_group = next(iter(cov_inv))
+
+    # With alignment: specify the group explicitly so it IS applied
+    X_with_alignment = backproject_tvn(tvn_by, group=first_group,
+                                       to_original_scale=False)
+
+    # Without alignment: remove the key from uns
+    tvn_no_align = anndata.AnnData(
+        X=tvn_by.X.copy(), obs=tvn_by.obs.copy(), var=tvn_by.var.copy(),
+        uns={k: v for k, v in tvn_by.uns.items()
+             if k != "covariance_alignment_inv"},
+        varm=dict(tvn_by.varm),
+    )
+    X_without_alignment = backproject_tvn(tvn_no_align, to_original_scale=False)
+
+    # The two must differ — the alignment matrix is not the identity
+    diff = np.abs(X_with_alignment - X_without_alignment).max()
+    assert diff > 1e-6, (
+        f"Covariance alignment appears to have no effect (max diff={diff:.2e}). "
+        "Either the alignment matrix is identity or the code path is wrong."
+    )
+
+
+@pytest.mark.features
+def test_backproject_tvn_pre_std_zero_guard(cell_data):
+    """Features with pre_std == 0 must not cause division-by-zero.
+
+    The guard replaces zero std with 1.0 so the feature passes through unchanged.
+    """
+    tvn = typical_variation_normalization(
+        cell_data.copy(), "gene_symbol=='NTC'"
+    )
+    # Force one std to zero
+    tvn.uns["tvn_pre_scale_std"] = tvn.uns["tvn_pre_scale_std"].copy()
+    tvn.uns["tvn_pre_scale_std"][0] = 0.0
+
+    # Must not raise and must not produce NaN/Inf
+    X_orig = backproject_tvn(tvn, to_original_scale=True)
+    assert np.all(np.isfinite(X_orig)), "NaN or Inf in backprojection with zero pre_std"
+
+
+# ---------------------------------------------------------------------------
+# map run — integration tests (was at 0% coverage)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_map_run_label_filter_applied(cell_data, tmp_path):
+    """--label-filter must reduce the cell count before any step runs."""
+    from scallops.cli.map_build import run_pipeline_map_run
+
+    inp = _write_zarr(cell_data, tmp_path / "raw")
+    args = argparse.Namespace(
+        input=[inp], output_dir=str(tmp_path / "out"),
+        steps="filter",
+        force=True, no_version=True,
+        label_filter=f"gene_symbol!='gene_B'",   # drop gene_B cells
+        min_variance=None, max_variance=None, max_fraction_not_finite=None,
+        max_correlation=None, batch_column=None,
+        batch_pvalue=0.05, batch_method="kruskal", batch_reference=None,
+        plate_column="plate", well_column="well",
+        condition_column=None, condition_source_column="well", condition_map=None,
+        reference_query="gene_symbol=='NTC'",
+        perturbation="gene_symbol", tvn_by=None,
+        scale_method="global",
+        localz_neighbors=75, localz_max_value=5.0,
+        localz_centroid_y="Nuclei_AreaShape_Center_Y",
+        localz_centroid_x="Nuclei_AreaShape_Center_X",
+        pca_components=N_FEATURES, pca_batch_size=10, pca_select_method="variance",
+        pca_variance_fraction=0.80,
+        agg_by=["gene_symbol"], agg_method="mean", min_cells=None,
+        metric="cosine", cluster_method=None, cluster_auto_params=True,
+        cluster_n_clusters=None, cluster_linkage="ward", cluster_max_n_clusters=10,
+        cluster_min_cluster_size=None, cluster_min_samples=None,
+        cluster_resolution=None, cluster_similarity_threshold=0.3,
+        cluster_elbow_n_range=10, cluster_leiden_res_min=0.05,
+        cluster_leiden_res_max=2.0, cluster_random_state=0,
+        corum=None, gmt=None, string_fetch=False, string_threshold=400,
+        string_species=9606, string_network_type="full",
+        min_genes=1, min_pairs=1,
+    )
+    run_pipeline_map_run(args)
+
+    cells = _read_zarr(str(tmp_path / "out" / "cells.zarr"))
+    n_gene_b = (cells.obs["gene_symbol"] == "gene_B").sum()
+    assert n_gene_b == 0, f"label_filter did not remove gene_B cells, {n_gene_b} remain"
+
+
+@pytest.mark.features
+def test_map_run_condition_map_creates_column(cell_data, tmp_path):
+    """--condition-map must create the obs column before TVN grouping."""
+    from scallops.cli.map_build import run_pipeline_map_run
+
+    inp = _write_zarr(cell_data, tmp_path / "raw")
+    args = argparse.Namespace(
+        input=[inp], output_dir=str(tmp_path / "out"),
+        steps="filter",  # just filter so it's fast
+        force=True, no_version=True,
+        label_filter=None,
+        min_variance=None, max_variance=None, max_fraction_not_finite=None,
+        max_correlation=None, batch_column=None,
+        batch_pvalue=0.05, batch_method="kruskal", batch_reference=None,
+        plate_column="plate", well_column="well",
+        condition_column="cond",
+        condition_source_column="plate",
+        condition_map='{"plate1":"A","plate2":"B"}',
+        reference_query="gene_symbol=='NTC'",
+        perturbation="gene_symbol", tvn_by=["cond"],
+        scale_method="global",
+        localz_neighbors=75, localz_max_value=5.0,
+        localz_centroid_y="Nuclei_AreaShape_Center_Y",
+        localz_centroid_x="Nuclei_AreaShape_Center_X",
+        pca_components=N_FEATURES, pca_batch_size=10, pca_select_method="variance",
+        pca_variance_fraction=0.80,
+        agg_by=["gene_symbol"], agg_method="mean", min_cells=None,
+        metric="cosine", cluster_method=None, cluster_auto_params=True,
+        cluster_n_clusters=None, cluster_linkage="ward", cluster_max_n_clusters=10,
+        cluster_min_cluster_size=None, cluster_min_samples=None,
+        cluster_resolution=None, cluster_similarity_threshold=0.3,
+        cluster_elbow_n_range=10, cluster_leiden_res_min=0.05,
+        cluster_leiden_res_max=2.0, cluster_random_state=0,
+        corum=None, gmt=None, string_fetch=False, string_threshold=400,
+        string_species=9606, string_network_type="full",
+        min_genes=1, min_pairs=1,
+    )
+    run_pipeline_map_run(args)
+    cells = _read_zarr(str(tmp_path / "out" / "cells.zarr"))
+    assert "cond" in cells.obs.columns, "condition_map did not create obs['cond']"
+    assert set(cells.obs["cond"].unique()) == {"A", "B"}
+
+
+@pytest.mark.features
+def test_map_run_missing_condition_column_raises(cell_data, tmp_path):
+    """If --condition-column is given without --condition-map and the column
+    is absent from the data, a clear ValueError must be raised."""
+    from scallops.cli.map_build import run_pipeline_map_run
+
+    inp = _write_zarr(cell_data, tmp_path / "raw")
+    args = argparse.Namespace(
+        input=[inp], output_dir=str(tmp_path / "out"),
+        steps="filter", force=True, no_version=True,
+        label_filter=None,
+        min_variance=None, max_variance=None, max_fraction_not_finite=None,
+        max_correlation=None, batch_column=None,
+        batch_pvalue=0.05, batch_method="kruskal", batch_reference=None,
+        plate_column="plate", well_column="well",
+        condition_column="nonexistent_col",   # doesn't exist, no map provided
+        condition_source_column="well", condition_map=None,
+        reference_query="gene_symbol=='NTC'", perturbation="gene_symbol",
+        tvn_by=None, scale_method="global",
+        localz_neighbors=75, localz_max_value=5.0,
+        localz_centroid_y="Nuclei_AreaShape_Center_Y",
+        localz_centroid_x="Nuclei_AreaShape_Center_X",
+        pca_components=N_FEATURES, pca_batch_size=10, pca_select_method="variance",
+        pca_variance_fraction=0.80,
+        agg_by=["gene_symbol"], agg_method="mean", min_cells=None,
+        metric="cosine", cluster_method=None, cluster_auto_params=True,
+        cluster_n_clusters=None, cluster_linkage="ward", cluster_max_n_clusters=10,
+        cluster_min_cluster_size=None, cluster_min_samples=None,
+        cluster_resolution=None, cluster_similarity_threshold=0.3,
+        cluster_elbow_n_range=10, cluster_leiden_res_min=0.05,
+        cluster_leiden_res_max=2.0, cluster_random_state=0,
+        corum=None, gmt=None, string_fetch=False, string_threshold=400,
+        string_species=9606, string_network_type="full",
+        min_genes=1, min_pairs=1,
+    )
+    with pytest.raises(ValueError, match="nonexistent_col"):
+        run_pipeline_map_run(args)
+
+
+# ---------------------------------------------------------------------------
+# map_cluster coverage (was at 9%)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def square_sim_adata(profile_data) -> anndata.AnnData:
+    """Small square similarity matrix built from profile_data."""
+    sims = np.clip(profile_data.X @ profile_data.X.T, -1, 1).astype(np.float32)
+    np.fill_diagonal(sims, 1.0)
+    labels = list(profile_data.obs.index)
+    return anndata.AnnData(
+        X=sims,
+        obs=pd.DataFrame(index=labels),
+        var=pd.DataFrame(index=labels),
+    )
+
+
+@pytest.mark.features
+def test_cluster_hdbscan_min_samples_elbow(square_sim_adata):
+    """_hdbscan_auto_min_samples must return an int in [1, min_cluster_size]."""
+    pytest.importorskip("hdbscan")
+    from scallops.features.map_cluster import _hdbscan_auto_min_samples, _sim_to_dist
+    dist = _sim_to_dist(np.asarray(square_sim_adata.X, dtype=np.float64))
+    min_cs = 2
+    ms = _hdbscan_auto_min_samples(dist, min_cluster_size=min_cs, n_range=5)
+    assert isinstance(ms, int)
+    assert 1 <= ms <= min_cs
+
+
+@pytest.mark.features
+def test_cluster_hdbscan_auto_both_params(square_sim_adata):
+    """HDBSCAN with auto_params=True must record both params in uns['clustering']."""
+    pytest.importorskip("hdbscan")
+    from scallops.features.map_cluster import cluster_similarity
+    result = cluster_similarity(square_sim_adata, method="hdbscan",
+                                auto_params=True, elbow_n_range=5)
+    info = result.uns["clustering"]
+    assert info["method"] == "hdbscan"
+    assert isinstance(info["min_cluster_size"], int)
+    assert isinstance(info["min_samples"], int)
+    assert "cluster" in result.obs.columns
+    assert result.shape == square_sim_adata.shape
+
+
+@pytest.mark.features
+def test_cluster_hierarchical_different_linkages(square_sim_adata):
+    """Each linkage method must produce a valid, correctly-labelled clustering."""
+    from scallops.features.map_cluster import cluster_similarity
+    n = square_sim_adata.shape[0]
+    for linkage in ("ward", "complete", "average", "single"):
+        result = cluster_similarity(square_sim_adata, method="hierarchical",
+                                    linkage_method=linkage, auto_params=False,
+                                    n_clusters=min(2, n - 1))
+        assert result.uns["clustering"]["linkage"] == linkage
+        assert "cluster" in result.obs.columns
+        # Clusters must be contiguous (same-cluster entries adjacent)
+        clusters = result.obs["cluster"].values
+        for i in range(len(clusters) - 1):
+            if clusters[i] != clusters[i + 1]:
+                assert clusters[i] not in set(clusters[i + 1:])
+
+
+@pytest.mark.features
+def test_find_elbow_monotone_decreasing():
+    """Elbow on a step-function curve should be at the step position."""
+    from scallops.features.map_cluster import _find_elbow
+    x = np.arange(10, dtype=float)
+    y = np.array([10, 10, 10, 1, 1, 1, 1, 1, 1, 1], dtype=float)
+    idx = _find_elbow(x, y)
+    assert 1 <= idx <= 4, f"Elbow at {idx}, expected 1–4"
+
+
+@pytest.mark.features
+def test_cluster_with_anndata_format(profile_data, square_sim_adata):
+    """cluster_similarity must work on both matrix and anndata similarity formats."""
+    from scallops.features.map_cluster import cluster_similarity
+
+    # Matrix format (X = square sim)
+    r_mat = cluster_similarity(square_sim_adata, method="hierarchical",
+                               auto_params=True)
+    assert r_mat.shape == square_sim_adata.shape
+    assert "cluster" in r_mat.obs.columns
+
+    # AnnData format (profiles in X, sim in obsp)
+    sims = square_sim_adata.X.copy()
+    prof = anndata.AnnData(X=profile_data.X.copy(), obs=profile_data.obs.copy(),
+                           var=profile_data.var.copy())
+    prof.obsp["similarity"] = sims
+    r_prof = cluster_similarity(prof, method="hierarchical", auto_params=True)
+    assert r_prof.shape == prof.shape
+    assert "similarity" in r_prof.obsp
+    assert "cluster" in r_prof.obs.columns
+
+
+# ---------------------------------------------------------------------------
 # Accuracy: known signal must rank first
 # ---------------------------------------------------------------------------
 

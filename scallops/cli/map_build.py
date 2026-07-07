@@ -1004,19 +1004,38 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         filter_data, filter_zero_inflated, filter_low_cardinality,
         filter_batch_correlated, remove_correlated_features,
     )
+    # 0. Cell-level quality filter (applied before variance computation)
+    label_filter = getattr(args, "label_filter", None)
+    if label_filter:
+        data = _slice_anndata(data, _query_anndata(data, label_filter).index)
+        logger.info(f"map run [filter]: label_filter kept {data.shape[0]:,} cells")
+
     plate = getattr(args, "plate_column", "plate")
     well  = getattr(args, "well_column",  "well")
     # Only stratify by columns that exist in the data
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
 
+    # 1. Variance + finite-value filter (stratified by plate × well)
     result = filter_data(
         data,
         max_fraction_not_finite=getattr(args, "max_fraction_not_finite", 0.25),
         min_variance=getattr(args, "min_variance", 0.1),
         max_variance=getattr(args, "max_variance", None),
-        by=by_cols,   # median variance across wells — not global
+        by=by_cols,
     )
     _merge_uns(data, result)
+
+    # 2. Batch-correlation filter
+    if getattr(args, "batch_column", None):
+        result = filter_batch_correlated(
+            result,
+            batch_column=args.batch_column,
+            reference_query=getattr(args, "batch_reference", None),
+            pvalue_threshold=getattr(args, "batch_pvalue", 0.05),
+            method=getattr(args, "batch_method", "kruskal"),
+        )
+
+    # 3. Correlated-feature filter
     if getattr(args, "max_correlation", None) is not None:
         result = remove_correlated_features(result, threshold=args.max_correlation)
     return result
@@ -1629,8 +1648,22 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             sim = _apply_similarity_inmem(profiles, arguments)
             cluster_meth = getattr(arguments, "cluster_method", "hierarchical")
             if cluster_meth and cluster_meth != "none":
-                from scallops.features.map_cluster import cluster_similarity
-                sim = cluster_similarity(sim, method=cluster_meth, auto_params=True)
+                sim = cluster_similarity(
+                    sim,
+                    method=cluster_meth,
+                    auto_params=getattr(arguments, "cluster_auto_params", True),
+                    n_clusters=getattr(arguments, "cluster_n_clusters", None),
+                    linkage_method=getattr(arguments, "cluster_linkage", "ward"),
+                    max_n_clusters=int(getattr(arguments, "cluster_max_n_clusters", 50)),
+                    min_cluster_size=getattr(arguments, "cluster_min_cluster_size", None),
+                    min_samples=getattr(arguments, "cluster_min_samples", None),
+                    resolution=getattr(arguments, "cluster_resolution", None),
+                    similarity_threshold=float(getattr(arguments, "cluster_similarity_threshold", 0.3)),
+                    elbow_n_range=int(getattr(arguments, "cluster_elbow_n_range", 20)),
+                    leiden_res_min=float(getattr(arguments, "cluster_leiden_res_min", 0.05)),
+                    leiden_res_max=float(getattr(arguments, "cluster_leiden_res_max", 2.0)),
+                    random_state=int(getattr(arguments, "cluster_random_state", 0)),
+                )
             # Carry provenance from profiles into the similarity AnnData
             for k, v in profiles.uns.items():
                 if k not in sim.uns:
@@ -1663,7 +1696,8 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
                 string=None,
                 string_fetch=getattr(arguments, "string_fetch", False),
                 string_threshold=getattr(arguments, "string_threshold", 400),
-                string_species=9606, string_network_type="full",
+                string_species=getattr(arguments, "string_species", 9606),
+                string_network_type=getattr(arguments, "string_network_type", "full"),
                 reactome=None,
                 min_genes=getattr(arguments, "min_genes", 5),
                 min_pairs=getattr(arguments, "min_pairs", 10),

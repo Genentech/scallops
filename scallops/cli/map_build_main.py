@@ -1257,27 +1257,11 @@ def _create_run_parser(
     pipe.add_argument(
         "--steps",
         help=(
-            "Comma-separated list of steps to execute, or 'all'.  "
+            "Comma-separated list of steps to run, or 'all' (default).  "
             "Available: filter, transform-yj, scale, pca, pca-select, sphere, "
-            "tvn, agg, center, similarity, cluster, recall.  "
-            "Steps not in this list are skipped and their expected output is "
-            "assumed to exist.  Use to resume from a specific step."
-        ),
-        default="all",
-    )
-    pipe.add_argument(
-        "--checkpoints",
-        help=(
-            "Comma-separated list of steps whose result is written to an "
-            "AnnData Zarr in --output-dir.  All other steps run in memory "
-            "and pass their result directly to the next step — no zarr "
-            "write or read for those steps.  This reduces disk I/O and "
-            "disk usage at the cost of not being able to resume from non-"
-            "checkpoint steps.  Use 'all' to save every step (default).  "
-            "Use 'none' to save nothing except the final outputs (similarity "
-            "and recall, which are always saved).  "
-            "Recommended minimal set: 'tvn,similarity' — TVN is the most "
-            "expensive step to re-run and similarity is the primary output."
+            "tvn, agg, center, similarity, recall.  "
+            "Steps not listed are skipped; their expected output must already "
+            "exist in --output-dir (resume after partial failure)."
         ),
         default="all",
     )
@@ -1359,6 +1343,12 @@ def _create_run_parser(
 
     # ── Filtering ─────────────────────────────────────────────────────────────
     filt = parser.add_argument_group("feature / cell filtering (map filter step)")
+    filt.add_argument(
+        "--label-filter",
+        help="Pandas query expression to filter cells before any processing step "
+        "(e.g. \"barcode_count_0 / barcode_count > 0.5\").  Applied at data load time.",
+        default=None, dest="label_filter",
+    )
     filt.add_argument("--min-variance", type=float, default=0.1, dest="min_variance")
     filt.add_argument("--max-variance", type=float, default=None, dest="max_variance")
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
@@ -1366,8 +1356,23 @@ def _create_run_parser(
     filt.add_argument("--max-correlation", type=float, default=None, dest="max_correlation",
                       help="Remove pairs of features with |r| above this threshold "
                            "(disabled by default).")
-    filt.add_argument("--batch-column", default=None, dest="batch_column",
-                      help="obs column for batch-correlation filter (disabled when omitted).")
+    filt.add_argument(
+        "--batch-column", default=None, dest="batch_column",
+        help="obs column for batch-correlation filter (disabled when omitted).",
+    )
+    filt.add_argument(
+        "--batch-pvalue", type=float, default=0.05, dest="batch_pvalue",
+        help="Significance threshold for batch-association test.",
+    )
+    filt.add_argument(
+        "--batch-method", choices=["kruskal", "anova"], default="kruskal",
+        dest="batch_method",
+    )
+    filt.add_argument(
+        "--batch-reference", default=None, dest="batch_reference",
+        help="Query restricting the batch-correlation test to reference cells "
+             "(e.g. \"gene_symbol=='NTC'\").",
+    )
 
     # ── Scale method (global or local z-score, always by plate × well) ────────
     scale = parser.add_argument_group(
@@ -1434,15 +1439,11 @@ def _create_run_parser(
                      help="Exclude perturbations with fewer cells before aggregation.")
 
     # ── Similarity ────────────────────────────────────────────────────────────
-    sim = parser.add_argument_group("similarity + clustering (map similarity / cluster steps)")
+    sim = parser.add_argument_group("similarity (map similarity step)")
     sim.add_argument("--metric", choices=["cosine", "pearson"], default="cosine")
-    sim.add_argument("--cluster-method",
-                     choices=["none", "hierarchical", "hdbscan", "leiden"],
-                     default="hierarchical", dest="cluster_method",
-                     help="Clustering applied to the similarity matrix.  "
-                          "Use 'none' to skip.")
-    sim.add_argument("--output-format", choices=["matrix", "anndata"], default="matrix",
-                     dest="output_format")
+
+    # ── Clustering (all options from map cluster, incl. auto-param tuning) ───
+    _cluster_args(parser)
 
     # ── Recall ────────────────────────────────────────────────────────────────
     rec = parser.add_argument_group("recall benchmarks (map recall step)")
@@ -1454,6 +1455,12 @@ def _create_run_parser(
                      help="Query the STRING REST API for all perturbations.")
     rec.add_argument("--string-threshold", type=int, default=400,
                      dest="string_threshold")
+    rec.add_argument("--string-species", type=int, default=9606,
+                     dest="string_species",
+                     help="NCBI taxonomy ID for STRING queries (default 9606 = human).")
+    rec.add_argument("--string-network-type",
+                     choices=["full", "physical"], default="full",
+                     dest="string_network_type")
     rec.add_argument("--min-genes", type=int, default=5, dest="min_genes")
     rec.add_argument("--min-pairs", type=int, default=10, dest="min_pairs")
 
