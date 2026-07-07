@@ -26,19 +26,19 @@ task segment_nuclei {
     command <<<
         set -ex
 
-#        export SCALLOPS_MODEL_DIR="~{model_dir}"
-#
-#        scallops segment nuclei \
-#        --images "~{images}" \
-#        ~{"--method " + method} \
-#        --groupby ~{sep=" " groupby} \
-#        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
-#        ~{'--dapi-channel ' + dapi_channel} \
-#        ~{'--time ' + time} \
-#        --output "~{output_directory}" \
-#        --subset ~{subset} \
-#        ~{if defined(extra_arguments) then extra_arguments else ''} \
-#        ~{true="--force" false="" force}
+        export SCALLOPS_MODEL_DIR="~{model_dir}"
+
+        scallops segment nuclei \
+        --images "~{images}" \
+        ~{"--method " + method} \
+        --groupby ~{sep=" " groupby} \
+        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
+        ~{'--dapi-channel ' + dapi_channel} \
+        ~{'--time ' + time} \
+        --output "~{output_directory}" \
+        --subset ~{subset} \
+        ~{if defined(extra_arguments) then extra_arguments else ''} \
+        ~{true="--force" false="" force}
     >>>
 
     output {
@@ -90,24 +90,24 @@ task segment_cell {
     command <<<
         set -ex
 
-#        export SCALLOPS_MODEL_DIR="~{model_dir}"
-#
-#        scallops segment cell \
-#        --images "~{images}" \
-#        --groupby ~{sep=" " groupby} \
-#        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
-#        ~{'--dapi-channel ' + dapi_channel} \
-#        ~{'--time ' + time} \
-#        --cyto-channel ~{sep=" " cyto_channel} \
-#        ~{"--nuclei-label " + nuclei_label} \
-#        ~{"--method " + method} \
-#        --output "~{output_directory}" \
-#        --subset ~{subset} \
-#        ~{'--threshold ' + threshold} \
-#        ~{'--threshold-correction-factor ' + threshold_correction_factor} \
-#        ~{'--chunks ' + chunks} \
-#        ~{if defined(extra_arguments) then extra_arguments else ''} \
-#        ~{true="--force" false="" force}
+        export SCALLOPS_MODEL_DIR="~{model_dir}"
+
+        scallops segment cell \
+        --images "~{images}" \
+        --groupby ~{sep=" " groupby} \
+        ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
+        ~{'--dapi-channel ' + dapi_channel} \
+        ~{'--time ' + time} \
+        --cyto-channel ~{sep=" " cyto_channel} \
+        ~{"--nuclei-label " + nuclei_label} \
+        ~{"--method " + method} \
+        --output "~{output_directory}" \
+        --subset ~{subset} \
+        ~{'--threshold ' + threshold} \
+        ~{'--threshold-correction-factor ' + threshold_correction_factor} \
+        ~{'--chunks ' + chunks} \
+        ~{if defined(extra_arguments) then extra_arguments else ''} \
+        ~{true="--force" false="" force}
     >>>
 
     output {
