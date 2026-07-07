@@ -104,7 +104,7 @@ def test_register_itk_cli_known_shift(tmp_path):
     for shift in shifts:
         st = SimilarityTransform(translation=shift[::-1])
         arrays.append(warp(image, st, preserve_range=True).astype(image.dtype))
-    data = xr.DataArray(np.array(arrays), dims=["t", "y", "x"])
+    data = xr.DataArray(np.array(arrays), dims=["t", "y", "x"], coords={"t": [0, 1]})
     data = data.expand_dims("c", 1)
     data.attrs["processed"] = dict(
         images=[dict(pixels=dict(physical_size_x=1, physical_size_y=1))]
