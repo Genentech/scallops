@@ -350,12 +350,12 @@ def single_feature(
 
             if not force and is_parquet_file(features_path):
                 logger.info(
-                    f"Skipping features for {image_key} {label_name}{' at t=' + timepoint if timepoint is not None else ''}."
+                    f"Skipping features for {image_key} {label_name}{' at t=' if timepoint is not None else ''}{timepoint if timepoint is not None else ''}."
                 )
                 continue
 
             merged_df = None
-            print(image_key, image_key_without_t)
+
             if merge_paths is not None and len(merge_paths) > 0:
                 merged_df = _read_merged_or_objects(
                     paths=merge_paths,
