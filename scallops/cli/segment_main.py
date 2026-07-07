@@ -73,7 +73,7 @@ def _add_common_args(parser: ArgumentParser) -> None:
     )
     parser.add_argument(
         "--time",
-        help="Time index (0-based) or value.",
+        help="Time value.",
     )
 
     parser.add_argument(

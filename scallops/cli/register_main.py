@@ -153,11 +153,11 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
 
     parser.add_argument(
         "--moving-time",
-        help="Time index (0-based) or value for moving image",
+        help="Time value for moving image",
     )
     parser.add_argument(
         "--fixed-time",
-        help="Time index (0-based) or value for fixed image",
+        help="Time value for fixed image",
     )
     parser.add_argument(
         "--unroll-channels",
