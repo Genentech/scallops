@@ -314,14 +314,16 @@ def single_feature(
         if g is None:
             logger.info(f"No labels found for {image_key}")
             continue
+        if len(timepoints) != 1:
+            raise ValueError()
         labels_array = da.from_array(g[list(g.keys())[0]])
         for timepoint in timepoints:
-            image_ = (
-                image.sel(t=timepoint)
-                if timepoint is not None and image.sizes.get("t", 0) > 1
-                else image
-            )
-            image_ = _stack_and_rename(image_)
+            # image_ = (
+            #     image.sel(t=timepoint)
+            #     if timepoint is not None and image.sizes.get("t", 0) > 1
+            #     else image
+            # )
+            image_ = _stack_and_rename(image)
             if stacked_image is not None:
                 stacked_image_ = _stack_and_rename(stacked_image)
                 if "c" in image_.coords:
