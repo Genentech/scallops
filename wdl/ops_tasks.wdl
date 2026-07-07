@@ -179,8 +179,8 @@ task register_elastix {
         --subset ~{subset} \
         ~{if defined(label_output_directory) then '--label-output "' + label_output_directory + '"' else ''} \
         ~{true="--unroll-channels" false="" unroll_channels} \
-        ~{if defined(moving_time) then '--moving-time "' + moving_time + '"' else ''} \
-        ~{if defined(fixed_time) then '--fixed-time "' + fixed_time + '"' else ''} \
+        ~{if defined(moving_time) and moving_time !='' then '--moving-time "' + moving_time + '"' else ''} \
+        ~{if defined(fixed_time) and fixed_time !='' then '--fixed-time "' + fixed_time + '"' else ''} \
         ~{true="--force" false="" force} \
         ~{true="--align-across-channels" false="" register_across_channels} \
         ~{true="--output-aligned-channels-only" false="" output_aligned_channels_only} \
