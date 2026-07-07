@@ -964,5 +964,147 @@ group.  The function reads the backprojection parameters stored in the
     # 0  Cells_Intensity_f3  0.412     NaN
 
 
+.. _map-run-examples:
+
+Running the full pipeline with ``map run``
+=========================================
+
+``scallops map run`` chains all steps into one command.  The key arguments
+that differ from the individual step commands are described below.
+
+``--tvn-by`` vs ``--by``
+-------------------------
+
+Individual ``map`` subcommands (``map tvn``, ``map filter``, ``map center``,
+etc.) all expose a ``--by`` argument whose meaning is specific to that command.
+In ``map run``, the consolidated pipeline only has *one* step that needs a
+grouping column for its core computation: TVN covariance alignment.  To make
+this explicit and avoid ambiguity, ``map run`` uses ``--tvn-by`` instead of
+``--by``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Invocation
+     - Effect
+   * - ``scallops map tvn --by plate``
+     - Per-plate covariance alignment inside the individual ``map tvn`` step.
+   * - ``scallops map run --tvn-by plate``
+     - Same alignment, but expressed in the consolidated pipeline runner.
+   * - ``scallops map run --tvn-by condition``
+     - Per-condition alignment (requires a ``condition`` column in obs, either
+       pre-existing or derived with ``--condition-column``/``--condition-map``).
+   * - ``scallops map run`` *(no --tvn-by)*
+     - Global TVN — one alignment matrix for all cells using all NTC cells.
+
+Adding a derived condition column
+----------------------------------
+
+When your experimental condition is not stored as a column in the input data
+(a common situation when conditions are encoded in well numbers), use
+``--condition-column`` together with ``--condition-map``:
+
+.. code-block:: bash
+
+    scallops map run \
+        --input s3://bucket/plate-A-well-1.parquet ... \
+        --output-dir s3://bucket/analysis/ \
+        --condition-column  condition \
+        --condition-source-column  well \
+        --condition-map  '{"1":"GIRED","2":"GIRED","3":"GIRED",
+                           "4":"DMSO","5":"DMSO","6":"DMSO"}' \
+        --tvn-by  condition \
+        ...
+
+If the condition column **already exists** in the input (e.g. the parquet was
+pre-labelled), omit ``--condition-map`` and just name the column:
+
+.. code-block:: bash
+
+    scallops map run \
+        --input s3://bucket/prelabelled.zarr \
+        --output-dir s3://bucket/analysis/ \
+        --condition-column  condition \
+        --tvn-by  condition \
+        ...
+
+Scallops will verify the column is present and raise a clear error if it is
+not.
+
+Scale method: global vs local z-score
+---------------------------------------
+
+Both options normalise *within* each plate × well group.
+
+``--scale-method global`` (default)
+    Subtracts the per-feature well mean and divides by the per-feature well
+    standard deviation, computed across **all cells in that well**.  Corrects
+    well-to-well and plate-to-plate intensity shifts.
+
+``--scale-method local``
+    Spatial k-NN z-score: each cell is normalised relative to its *k* nearest
+    neighbours in image space (same plate × well).  Corrects both the global
+    well bias *and* local spatial gradients (e.g. illumination gradients,
+    cell-density variation).  Requires centroid columns in obs.
+
+.. code-block:: bash
+
+    scallops map run \
+        --input  s3://bucket/data/*.parquet \
+        --output-dir  s3://bucket/analysis/ \
+        --scale-method  local \
+        --localz-neighbors  75 \
+        --localz-centroid-y  Nuclei_AreaShape_Center_Y \
+        --localz-centroid-x  Nuclei_AreaShape_Center_X \
+        ...
+
+Complete example (genome-wide screen, two conditions)
+------------------------------------------------------
+
+.. code-block:: bash
+
+    scallops map run \
+        --input \
+            s3://bucket/A-1.parquet  s3://bucket/A-2.parquet  s3://bucket/A-3.parquet \
+            s3://bucket/A-4.parquet  s3://bucket/A-5.parquet  s3://bucket/A-6.parquet \
+            s3://bucket/B-1.parquet  s3://bucket/B-2.parquet  s3://bucket/B-3.parquet \
+            s3://bucket/B-4.parquet  s3://bucket/B-5.parquet  s3://bucket/B-6.parquet \
+        --output-dir  s3://bucket/analysis/ \
+        \
+        --label-filter  "barcode_count_0 / barcode_count > 0.5" \
+        --min-variance  0.1 \
+        --max-fraction-not-finite  0.25 \
+        \
+        --condition-column  condition \
+        --condition-source-column  well \
+        --condition-map  '{"1":"GIRED","2":"GIRED","3":"GIRED",
+                           "4":"DMSO","5":"DMSO","6":"DMSO"}' \
+        \
+        --reference-query  "gene_symbol=='NTC'" \
+        --perturbation  gene_symbol \
+        --plate-column  plate \
+        --well-column   well \
+        --tvn-by  condition \
+        \
+        --scale-method  local \
+        --localz-neighbors  75 \
+        --localz-centroid-y  Nuclei_AreaShape_Center_Y \
+        --localz-centroid-x  Nuclei_AreaShape_Center_X \
+        \
+        --pca-components  128 \
+        --pca-batch-size  200000 \
+        --pca-select-method  variance \
+        --pca-variance-fraction  0.95 \
+        \
+        --agg-by  gene_symbol \
+        --agg-method  mean \
+        --min-cells  10 \
+        \
+        --metric  cosine \
+        --cluster-method  hdbscan \
+        --cluster-auto-params
+
+
 .. _CorrectIlluminationCalculate: https://cellprofiler-manual.s3.amazonaws.com/CPmanual/CorrectIlluminationCalculate.html
 .. _`(Singh et al. J Microscopy, 2014)`: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4359755/

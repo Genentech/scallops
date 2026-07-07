@@ -992,18 +992,29 @@ def _corum_to_gene_sets(path: str) -> dict[str, list[str]]:
 
 
 def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
+    """Filter cells and features.
+
+    Variance is computed **per plate × well** (stratified), matching gould's
+    ``create_steps`` behaviour.  This uses the median group-variance so that a
+    feature is only removed if it is uninformative *within* wells, not just
+    between wells.  Cell-level filtering (max_fraction_not_finite) is always
+    global.
+    """
     from scallops.features.preprocessing import (
         filter_data, filter_zero_inflated, filter_low_cardinality,
         filter_batch_correlated, remove_correlated_features,
     )
-    if isinstance(data.X, da.Array):
-        pass  # filter_data handles dask
+    plate = getattr(args, "plate_column", "plate")
+    well  = getattr(args, "well_column",  "well")
+    # Only stratify by columns that exist in the data
+    by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
+
     result = filter_data(
         data,
         max_fraction_not_finite=getattr(args, "max_fraction_not_finite", 0.25),
         min_variance=getattr(args, "min_variance", 0.1),
         max_variance=getattr(args, "max_variance", None),
-        by=None,
+        by=by_cols,   # median variance across wells — not global
     )
     _merge_uns(data, result)
     if getattr(args, "max_correlation", None) is not None:
@@ -1011,9 +1022,18 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     return result
 
 
-def _apply_transform_yj_inmem(data: anndata.AnnData) -> anndata.AnnData:
+def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
+    """Apply Yeo-Johnson transform per plate × well.
+
+    Fitting the transform independently per well (as gould's pipeline does)
+    ensures that the power-transform parameters are not skewed by inter-well
+    differences in the marginal distributions.
+    """
     from scallops.features.preprocessing import transform_features_yj
-    result = transform_features_yj(data)
+    plate = getattr(args, "plate_column", "plate")
+    well  = getattr(args, "well_column",  "well")
+    by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
+    result = transform_features_yj(data, by=by_cols)
     _merge_uns(data, result)
     return result
 
@@ -1187,7 +1207,7 @@ def _apply_tvn_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     """
     from scallops.features.normalize import typical_variation_normalization
     ref_q  = getattr(args, "reference_query", "gene_symbol=='NTC'")
-    by_col = getattr(args, "by", None)
+    by_col = getattr(args, "tvn_by", None)   # only TVN uses this in map run
 
     # TVN operates on the PCA embedding, not on the raw scaled features
     tmp = _pca_view(data)
@@ -1385,6 +1405,30 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     force      = arguments.force
     no_version = arguments.no_version
 
+    # ── Expand glob patterns in --input (e.g. "s3://bucket/50p/*.parquet") ───
+    # Scallops itself does not rely on the shell for expansion, so S3 globs and
+    # local globs both work here via fsspec.
+    import fsspec as _fsspec
+
+    raw_inputs = list(arguments.input)
+    expanded_inputs: list[str] = []
+    for pat in raw_inputs:
+        if any(c in pat for c in ("*", "?", "[")):
+            _fs_pat, _ = _fsspec.url_to_fs(pat)
+            matched = _fs_pat.glob(pat) if hasattr(_fs_pat, "glob") else []
+            matched = [_fs_pat.unstrip_protocol(p) for p in matched]
+            if not matched:
+                raise FileNotFoundError(f"--input pattern matched no files: {pat!r}")
+            expanded_inputs.extend(sorted(matched))
+        else:
+            expanded_inputs.append(pat)
+    if len(expanded_inputs) != len(raw_inputs):
+        logger.info(
+            f"map run: --input expanded {len(raw_inputs)} pattern(s) → "
+            f"{len(expanded_inputs)} file(s)"
+        )
+    arguments = argparse.Namespace(**{**vars(arguments), "input": expanded_inputs})
+
     # Create the output directory — works for local paths, S3, GCS, and Azure
     # because anndata/zarr uses fsspec for all I/O.
     import fsspec as _fsspec
@@ -1439,6 +1483,71 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     already_done_cells = _completed(cells_zarr)
     steps_todo = [s for s in cell_steps_wanted if s not in already_done_cells]
 
+    # ── Condition column: create a derived obs column from a well→condition map ──
+    # Needed when the biological condition (e.g. GIRED vs DMSO) is encoded in
+    # the well number and not stored explicitly in the data.
+    condition_column = getattr(arguments, "condition_column", None)
+    condition_map_raw = getattr(arguments, "condition_map", None)
+    condition_source = getattr(arguments, "condition_source_column", "well")
+
+    def _add_condition_column(data: anndata.AnnData) -> anndata.AnnData:
+        """Ensure the requested condition column exists in obs.
+
+        Two modes:
+
+        * ``--condition-map`` **provided**: derive the column from
+          ``--condition-source-column`` using the supplied dict mapping.
+          Raises if any source value is missing from the map.
+
+        * ``--condition-map`` **omitted**: assume the column already exists in
+          the input data and just verify it is present.  This covers cases where
+          the parquet/zarr files were pre-labelled before ingestion.
+        """
+        if not condition_column:
+            return data
+
+        if not condition_map_raw:
+            # Pre-existing column mode: just verify it's there
+            if condition_column not in data.obs.columns:
+                raise ValueError(
+                    f"--condition-column '{condition_column}' was specified without "
+                    f"--condition-map, so the column is expected to already exist in "
+                    f"the input data — but it was not found in obs.  "
+                    f"Either add --condition-map or pre-label your input with this column."
+                )
+            counts = data.obs[condition_column].value_counts().to_dict()
+            logger.info(
+                f"map run: using pre-existing obs['{condition_column}']  ({counts})"
+            )
+            return data
+
+        # Derived column mode: apply the well→condition mapping
+        import json as _j
+        mapping = _j.loads(condition_map_raw) if isinstance(condition_map_raw, str) else condition_map_raw
+        if condition_source not in data.obs.columns:
+            raise ValueError(
+                f"--condition-source-column '{condition_source}' not found in obs.  "
+                f"Available: {list(data.obs.columns)}"
+            )
+        data.obs[condition_column] = (
+            data.obs[condition_source].astype(str).map(mapping)
+        )
+        n_unmapped = int(data.obs[condition_column].isna().sum())
+        if n_unmapped:
+            unique_vals = data.obs[condition_source].astype(str).unique().tolist()
+            raise ValueError(
+                f"{n_unmapped:,} cells have '{condition_source}' values not in "
+                f"--condition-map {mapping}.  "
+                f"Values seen in data: {unique_vals}"
+            )
+        counts = data.obs[condition_column].value_counts().to_dict()
+        logger.info(
+            f"map run: created obs['{condition_column}'] from obs['{condition_source}'] "
+            f"via {mapping}  ({counts})"
+        )
+        return data
+    # ──────────────────────────────────────────────────────────────────────────
+
     if not steps_todo:
         logger.info("map run [cell-level]: all steps already in provenance — loading cells.zarr")
         cells = _read_data([cells_zarr])
@@ -1454,6 +1563,8 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             cells = _read_data(list(arguments.input))
             if isinstance(cells.X, da.Array):
                 cells.X = cells.X.compute()
+            # Inject the condition column before any processing step uses it
+            cells = _add_condition_column(cells)
 
         for step in steps_todo:
             if step not in steps:
@@ -1463,7 +1574,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             if step == "filter":
                 cells = _apply_filter_inmem(cells, arguments)
             elif step == "transform-yj":
-                cells = _apply_transform_yj_inmem(cells)
+                cells = _apply_transform_yj_inmem(cells, arguments)
             elif step == "scale":
                 cells = _apply_scale_inmem(cells, arguments)
             elif step == "pca":

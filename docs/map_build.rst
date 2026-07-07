@@ -285,7 +285,7 @@ on any downstream AnnData Zarr in the pipeline.
    * - ``uns["tvn_pre_scale_std"]``
      - Reference std before z-scoring, shape ``(n_features,)``
    * - ``uns["covariance_alignment_inv"]``
-     - Dict mapping group key → inverse alignment matrix ``(n_pcs, n_pcs)``; only set when ``--by`` is used
+     - Dict mapping group key → inverse alignment matrix ``(n_pcs, n_pcs)``; only set when ``--by`` is used (``map tvn``) or ``--tvn-by`` (``map run``)
    * - ``uns["normalization_arguments"]``
      - ``{"reference_query": ..., "by": ...}`` for audit purposes
    * - ``varm["PCs"]``

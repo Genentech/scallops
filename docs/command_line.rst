@@ -419,6 +419,20 @@ aggregated profiles go to ``profiles.zarr``; the similarity matrix goes to
 ``similarity.zarr``.  Interrupted runs resume automatically from the last
 completed step.
 
+**Note on ``--tvn-by`` vs ``--by``.**
+Individual ``map`` subcommands (``map tvn``, ``map filter``, ``map center``)
+each have their own ``--by`` argument.  In ``map run`` the TVN grouping argument
+is named ``--tvn-by`` to make clear that it applies *only* to the TVN
+covariance-alignment step and not to the scale or center steps.
+
+**Note on ``--condition-column``.**
+When your input data does not contain a condition column you can derive one on
+the fly with ``--condition-column``, ``--condition-source-column``, and
+``--condition-map``.  If ``--condition-map`` is omitted, the column is assumed
+to already exist in the input data.
+
+See :ref:`map-run-examples` for annotated examples.
+
 .. argparse::
    :module: scallops.__main__
    :func: create_parsers
