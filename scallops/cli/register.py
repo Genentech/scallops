@@ -326,7 +326,20 @@ def single_registration(
                     if key.endswith("-nuclei"):
                         template_label_key = key
                         break
-                template_labels = read_ome_zarr_array(template_label_key, dask=True)
+
+                if template_label_key is not None:
+                    template_labels = read_ome_zarr_array(template_label_key, dask=True)
+                    if (
+                        template_labels.sizes.get("t", 0) > 0
+                        and "t" in template_labels.coords
+                    ):
+                        template_label_times = template_labels.coords["t"].values
+                        time_index = -1
+                        for j in range(len(template_label_times)):
+                            if str(template_label_times[j]) == str(moving_timepoint):
+                                time_index = j
+                                break
+                        template_labels = template_labels.isel(time=time_index)
             landmarks_found = False
             grid_results = None
             for landmark_translation_attempt in range(len(landmark_initializations)):
@@ -660,7 +673,7 @@ def _transform_labels(
     attrs: None | dict,
     moving_timepoint: str | None,
     output_timepoint: str | None,
-):
+) -> int:
     """Transform and save labels.
 
     This function applies a specified transformation and saves the results.
@@ -675,6 +688,7 @@ def _transform_labels(
     """
     if output_names is None:
         output_names = [os.path.basename(key) for key in matching_keys]
+    n_found = 0
     for i in range(len(matching_keys)):
         key = matching_keys[i]
         name = os.path.basename(key)
@@ -683,7 +697,7 @@ def _transform_labels(
             moving_times = moving_labels.coords["t"].values
             time_index = -1
             for j in range(len(moving_times)):
-                if str(moving_times[j]) == moving_timepoint:
+                if str(moving_times[j]) == str(moving_timepoint):
                     time_index = j
                     break
             if time_index == -1:
@@ -708,13 +722,14 @@ def _transform_labels(
             )
 
         del moving_labels
-
+        n_found += 1
         _write_zarr_image(
             name=output_names[i],
             root=output_root,
             image=transformed_array,
             group="labels",
         )
+    return n_found
 
 
 def single_transformix(
