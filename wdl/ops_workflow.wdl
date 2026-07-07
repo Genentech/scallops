@@ -307,7 +307,7 @@ workflow ops_workflow {
                             call tasks.register_elastix as register_pheno_to_pheno {
                                 input:
                                     moving=select_all([phenotype_url]),
-                                    fixed=select_all([phenotype_url]),
+                                    fixed=select_first([phenotype_url]),
                                     moving_label=segment_cell.output_url,
                                     moving_channel=phenotype_dapi_channel,
                                     moving_image_pattern=phenotype_image_pattern,
