@@ -34,7 +34,7 @@ task segment_nuclei {
         --groupby ~{sep=" " groupby} \
         ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
         ~{'--dapi-channel ' + dapi_channel} \
-        ~{'--time ' + time} \
+        ~{if defined(time) && time!='' then '--time "' + time + '"' else ''} \
         --output "~{output_directory}" \
         --subset ~{subset} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \
@@ -97,7 +97,7 @@ task segment_cell {
         --groupby ~{sep=" " groupby} \
         ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
         ~{'--dapi-channel ' + dapi_channel} \
-        ~{'--time ' + time} \
+        ~{if defined(time) && time!='' then '--time "' + time + '"' else ''} \
         --cyto-channel ~{sep=" " cyto_channel} \
         ~{"--nuclei-label " + nuclei_label} \
         ~{"--method " + method} \
