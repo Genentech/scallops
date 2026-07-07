@@ -426,7 +426,7 @@ def single_feature(
                         ):
                             c = tokens[token_index]
                             if c[0] == "s":
-                                if c in channel_names:
+                                if channel_names is not None and c in channel_names:
                                     channel_names[str(n_channels1 + int(c[1:]))] = (
                                         channel_names.pop(c)
                                     )
