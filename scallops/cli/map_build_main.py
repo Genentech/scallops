@@ -1286,6 +1286,35 @@ def _create_run_parser(
     pipe.add_argument("--no-version", action="store_true", dest="no_version",
                       help="Do not record scallops version in step provenance.")
 
+    # ── Condition column (derived from a well / obs mapping) ─────────────────
+    cond = parser.add_argument_group(
+        "condition column (create a derived obs column for TVN --by grouping)"
+    )
+    cond.add_argument(
+        "--condition-column",
+        help="Name of the new obs column to create.  "
+        "Must be used together with --condition-map.  "
+        "Example: --condition-column condition",
+        default=None,
+        dest="condition_column",
+    )
+    cond.add_argument(
+        "--condition-source-column",
+        help="Existing obs column whose values are looked up in --condition-map.  "
+        "Default: 'well'.",
+        default="well",
+        dest="condition_source_column",
+    )
+    cond.add_argument(
+        "--condition-map",
+        help="JSON dict mapping source-column values → condition labels.  "
+        "Example: '{\"1\":\"GIRED\",\"2\":\"GIRED\",\"3\":\"GIRED\","
+        "\"4\":\"DMSO\",\"5\":\"DMSO\",\"6\":\"DMSO\"}'.  "
+        "All source values present in the data must appear in the map.",
+        default=None,
+        dest="condition_map",
+    )
+
     # ── Shared / reference ────────────────────────────────────────────────────
     shared = parser.add_argument_group("shared reference and grouping")
     shared.add_argument(
@@ -1301,16 +1330,31 @@ def _create_run_parser(
     )
     shared.add_argument(
         "--plate-column", default="plate", dest="plate_column",
-        help="obs column for plate identity (used in scale and TVN --by).",
+        help="obs column identifying the plate.  Used as part of the experimental-unit "
+             "grouping for filter, transform-yj, and scale (all three stratify by "
+             "plate × well).  Set to the same value as --well-column if you have no "
+             "plate structure.",
     )
     shared.add_argument(
         "--well-column", default="well", dest="well_column",
-        help="obs column for well identity (used in scale).",
+        help="obs column identifying the well.  Together with --plate-column this "
+             "defines the experimental unit used by filter, transform-yj, and scale.",
     )
     shared.add_argument(
-        "--by",
-        help="Column(s) for TVN per-group covariance alignment (e.g. plate).",
+        "--tvn-by",
+        help=(
+            "Column(s) in obs for TVN per-group covariance alignment.  "
+            "This is a SEPARATE question from the plate/well grouping used by "
+            "filter / transform-yj / scale.  Those steps always group by "
+            "plate × well (the experimental unit).  --tvn-by asks which *biological* "
+            "group should receive its own alignment matrix: e.g. 'condition' aligns "
+            "GIRED and DMSO cells separately; 'plate' corrects plate-to-plate "
+            "covariance shifts; omit for a single global alignment.  "
+            "Requires a column that already exists in obs or is created by "
+            "--condition-column / --condition-map."
+        ),
         nargs="*", default=None,
+        dest="tvn_by",
     )
 
     # ── Filtering ─────────────────────────────────────────────────────────────
