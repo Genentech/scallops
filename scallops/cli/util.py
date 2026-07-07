@@ -659,7 +659,7 @@ def _list_images(
         groupby_with_time.append("t")
 
     if reference_time is None:
-        reference_time = times[0] if times is not None and len(times) > 0 else "0"
+        reference_time = times[0] if times is not None and len(times) > 0 else ""
 
     return dict(
         group_size=group_size,
