@@ -82,7 +82,7 @@ task list_images {
     }
 
     runtime {
-#        container:container
+        container:container
         disks: disks
         zones: zones
         memory: memory
