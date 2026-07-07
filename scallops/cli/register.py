@@ -321,7 +321,12 @@ def single_registration(
         if landmarks_initialize:
             template_labels = None
             if len(moving_label_keys) > 0:
-                template_labels = read_ome_zarr_array(moving_label_keys[-1], dask=True)
+                template_label_key = None
+                for key in moving_label_keys:
+                    if key.endswith("-nuclei"):
+                        template_label_key = key
+                        break
+                template_labels = read_ome_zarr_array(template_label_key, dask=True)
             landmarks_found = False
             grid_results = None
             for landmark_translation_attempt in range(len(landmark_initializations)):
