@@ -6,7 +6,7 @@
 ARG TF_VERSION=2.21.0
 ARG SCM_VERSION=0.0.0+unknown
 
-FROM --platform=linux/amd64 tensorflow/tensorflow:${TF_VERSION}
+FROM tensorflow/tensorflow:${TF_VERSION}
 ARG SCM_VERSION
 
 COPY --from=docker.io/astral/uv:latest /uv /uvx /bin/
@@ -60,7 +60,7 @@ RUN grep -v '^tensorflow' requirements.txt | uv pip install -r /dev/stdin
 # || true on compileall: torch ships py312_intrinsics.py (PEP 695 syntax) that
 # Python 3.11 cannot parse — that file is never imported on 3.11.
 COPY . .
-RUN uv pip install --no-build-isolation --no-deps . && \
+RUN uv pip install  --no-deps . && \
     PYVER=$(python3 -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')") && \
     python3 -m compileall -q /usr/local/lib/python${PYVER} 2>&1 | \
       grep -v 'py312_intrinsics' || true && \
