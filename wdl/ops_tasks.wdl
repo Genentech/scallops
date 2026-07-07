@@ -433,7 +433,7 @@ task intersects_boundary {
         scallops features \
         --features-~{label_type} "intersects-boundary_0" \
         --labels ~{sep=" " labels} \
-        {sep=" " additional_labels} \
+        ~{sep=" " additional_labels} \
         --groupby ~{sep=" " groupby} \
         --subset "~{subset}" \
         --output "~{output_directory}" \
