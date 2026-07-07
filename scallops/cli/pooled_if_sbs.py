@@ -501,7 +501,7 @@ def merge_sbs_phenotype_pipeline(
     image_key: str,
     sbs_path: str | None,
     phenotype_paths: list[str],
-    phenotype_suffixes: list[str],
+    phenotype_suffixes: list[str | None],
     df_barcode: pd.DataFrame | None,
     output_dir: str,
     join_sbs: Literal["left", "right", "inner", "outer", "cross"] = "inner",
