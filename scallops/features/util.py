@@ -191,47 +191,88 @@ def _read_data(
     data_arrays = []
     for path in paths:
         if path.lower().endswith(".parquet") or path.lower().endswith(".pq"):
+            import dask
             import fsspec as _fsspec
             import pyarrow as _pa
             import pyarrow.parquet as _pq
 
-            # ── 1. Read schema only (no data) ─────────────────────────────
+            # ── 1. Open the parquet file and read metadata only ────────────
             _fs, _fpath = _fsspec.url_to_fs(path)
             with _fs.open(_fpath, "rb") as _f:
-                _schema = _pq.read_schema(_f)
-            with _fs.open(_fpath, "rb") as _f:
-                _meta = _pq.read_metadata(_f)
-            _lengths = tuple(
-                _meta.row_group(i).num_rows
-                for i in range(_meta.num_row_groups)
-            )
+                _schema   = _pq.read_schema(_f)
+                _pq_meta  = _pq.read_metadata(_f)
 
-            # ── 2. Identify feature vs obs columns ────────────────────────
+            # ── 2. Identify feature vs obs columns ─────────────────────────
+            # schema.names includes all data columns (not the hidden index).
+            # Feature columns follow CellProfiler naming: Compartment_Type_…
+            _all_data_cols = _schema.names
             _feat_cols = list(features) if features else [
-                c for c in _schema.names
+                c for c in _all_data_cols
                 if c.split("_")[0] in {"Cells", "Nuclei", "Cytoplasm"}
             ]
             _feat_set = set(_feat_cols)
 
-            # ── 3. Obs cols: non-feature, skip list/nested types (slow) ──
+            # ── 3. Obs cols: skip expensive nested types ───────────────────
+            # list<double> columns (e.g. barcode_Q_0) can take minutes to
+            # deserialise from S3 even with column pruning — exclude them.
             _obs_cols = [
-                c for c in _schema.names
+                c for c in _all_data_cols
                 if c not in _feat_set
                 and not _pa.types.is_list(_schema.field(c).type)
                 and not _pa.types.is_large_list(_schema.field(c).type)
                 and not _pa.types.is_struct(_schema.field(c).type)
             ]
 
-            # ── 4. Eager obs read (column-pruned, no nested types) ────────
-            _obs_df = dd.read_parquet(path, columns=_obs_cols).compute()
+            # ── 4. Obs: eager read via pyarrow (correct index restoration) ─
+            # pyarrow reads the pandas index metadata stored in the footer
+            # and restores it automatically (RangeIndex by name, non-range
+            # indices as actual columns).  This avoids a dask bug where unnamed
+            # parquet indices cause `[None] not in index` KeyErrors.
+            with _fs.open(_fpath, "rb") as _f:
+                _obs_table = _pq.read_table(_f, columns=_obs_cols)
+            _obs_df = _obs_table.to_pandas()
+
+            # ── 5. Name the obs.index ──────────────────────────────────────
+            # If the parquet stored an unnamed RangeIndex (__index_level_0__
+            # or None), rename it to 'label' — it often represents a cell ID.
+            if _obs_df.index.name in (None, "__index_level_0__"):
+                _obs_df.index.name = (
+                    "label" if "label" not in _obs_df.columns else "__cell_id__"
+                )
+
             _obs_df.index = _obs_df.index.astype(str)
             for _c in _obs_df.columns:
                 if pd.api.types.is_object_dtype(_obs_df[_c]):
                     _obs_df[_c] = _obs_df[_c].astype(str)
 
-            # ── 5. Feature data: lazy dask (one row-group at a time) ──────
-            _feat_arr = dd.read_parquet(path, columns=_feat_cols).to_dask_array(
-                lengths=_lengths
+            # ── 6. Feature data: truly lazy per-row-group dask array ───────
+            # We bypass dd.read_parquet (which also triggers the dask index
+            # bug on compute) and build the dask array from dask.delayed
+            # calls, one per parquet row group.  Each row group is only read
+            # from S3 when its chunk is actually needed.
+
+            def _read_rg(rg_idx: int) -> np.ndarray:
+                """Read one parquet row group, return feature numpy array."""
+                import pyarrow.parquet as _pq2
+                import fsspec as _fs2
+                _rg_fs, _rg_fp = _fs2.url_to_fs(path)
+                with _rg_fs.open(_rg_fp, "rb") as _rg_f:
+                    _pf = _pq2.ParquetFile(_rg_f)
+                    _tbl = _pf.read_row_group(rg_idx, columns=_feat_cols)
+                return _tbl.to_pandas().values.astype(np.float32)
+
+            _rg_arrays = []
+            for _rg_i in range(_pq_meta.num_row_groups):
+                _rg_n = _pq_meta.row_group(_rg_i).num_rows
+                _rg_arrays.append(
+                    da.from_delayed(
+                        dask.delayed(_read_rg)(_rg_i),
+                        shape=(_rg_n, len(_feat_cols)),
+                        dtype=np.float32,
+                    )
+                )
+            _feat_arr = da.concatenate(_rg_arrays, axis=0) if _rg_arrays else da.empty(
+                (0, len(_feat_cols)), dtype=np.float32
             )
 
             d = anndata.AnnData(
