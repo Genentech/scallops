@@ -191,10 +191,54 @@ def _read_data(
     data_arrays = []
     for path in paths:
         if path.lower().endswith(".parquet") or path.lower().endswith(".pq"):
-            # Use dask so large parquet files (e.g. from S3) are read lazily,
-            # one row-group partition at a time rather than all at once.
-            df = dd.read_parquet(path)
-            d = pandas_to_anndata(df, features)
+            import fsspec as _fsspec
+            import pyarrow as _pa
+            import pyarrow.parquet as _pq
+
+            # ── 1. Read schema only (no data) ─────────────────────────────
+            _fs, _fpath = _fsspec.url_to_fs(path)
+            with _fs.open(_fpath, "rb") as _f:
+                _schema = _pq.read_schema(_f)
+            with _fs.open(_fpath, "rb") as _f:
+                _meta = _pq.read_metadata(_f)
+            _lengths = tuple(
+                _meta.row_group(i).num_rows
+                for i in range(_meta.num_row_groups)
+            )
+
+            # ── 2. Identify feature vs obs columns ────────────────────────
+            _feat_cols = list(features) if features else [
+                c for c in _schema.names
+                if c.split("_")[0] in {"Cells", "Nuclei", "Cytoplasm"}
+            ]
+            _feat_set = set(_feat_cols)
+
+            # ── 3. Obs cols: non-feature, skip list/nested types (slow) ──
+            _obs_cols = [
+                c for c in _schema.names
+                if c not in _feat_set
+                and not _pa.types.is_list(_schema.field(c).type)
+                and not _pa.types.is_large_list(_schema.field(c).type)
+                and not _pa.types.is_struct(_schema.field(c).type)
+            ]
+
+            # ── 4. Eager obs read (column-pruned, no nested types) ────────
+            _obs_df = dd.read_parquet(path, columns=_obs_cols).compute()
+            _obs_df.index = _obs_df.index.astype(str)
+            for _c in _obs_df.columns:
+                if pd.api.types.is_object_dtype(_obs_df[_c]):
+                    _obs_df[_c] = _obs_df[_c].astype(str)
+
+            # ── 5. Feature data: lazy dask (one row-group at a time) ──────
+            _feat_arr = dd.read_parquet(path, columns=_feat_cols).to_dask_array(
+                lengths=_lengths
+            )
+
+            d = anndata.AnnData(
+                X=_feat_arr,
+                obs=_obs_df,
+                var=pd.DataFrame(index=_feat_cols),
+            )
         else:
             d = read_anndata_zarr(path, dask=True)
             if features is not None and len(features) > 0:
