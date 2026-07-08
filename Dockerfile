@@ -11,9 +11,16 @@ ARG SCM_VERSION
 
 COPY --from=docker.io/astral/uv:latest /uv /uvx /bin/
 
-# build-essential: needed for mahotas/centrosome (requirements.txt) and the
-# Cython extension; git: needed to clone ufish from its pinned tag
-RUN apt-get update -qq && \
+# Remove NVIDIA and deadsnakes PPA repos shipped by the TF base image before
+# any apt-get update — they fail SSL verification on networks with certificate
+# inspection and are not needed (CUDA comes from PyPI wheels, not apt packages).
+# build-essential: needed for mahotas/centrosome (requirements.txt) and Cython.
+# git: needed to clone ufish from its pinned tag.
+RUN rm -f /etc/apt/sources.list.d/cuda.list \
+          /etc/apt/sources.list.d/nvidia-ml.list \
+          /etc/apt/trusted.gpg.d/cuda-keyring.gpg \
+          /etc/apt/sources.list.d/deadsnakes*.list && \
+    apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive apt-get install -qq --no-install-recommends -y \
       build-essential \
       git && \
