@@ -83,27 +83,27 @@ def _get_timepoint_index_and_value(
 ) -> tuple[int, Any]:
     timepoint_value = None
     timepoint_index = None
+
     if isinstance(timepoint, str):
         if isinstance(image, Sequence):
             for i in range(len(image)):
-                if (
-                    "t" in image[i].coords
-                    and str(image[i].coords["t"].values[0]) == timepoint
-                ):
+                if "t" in image[i].coords and str(
+                    image[i].coords["t"].values[0]
+                ) == str(timepoint):
                     timepoint_index = i
                     timepoint_value = image[i].coords["t"].values[0]
                     break
         elif "t" in image.coords:
             times = image.coords["t"].values
             for i in range(len(times)):
-                if str(times[i]) == timepoint:
+                if str(times[i]) == str(timepoint):
                     timepoint_index = i
                     timepoint_value = times[i]
                     break
+        elif timepoint.isdigit():  # assume index
+            timepoint = int(timepoint)
 
-        if timepoint_index is None:
-            raise ValueError(f"Reference timepoint not found: {timepoint}.")
-    elif isinstance(timepoint, int):  # index
+    if isinstance(timepoint, int):  # index
         timepoint_index = timepoint
         if isinstance(image, Sequence):
             if "t" in image[timepoint_index].coords:
@@ -111,8 +111,8 @@ def _get_timepoint_index_and_value(
         elif "t" in image.coords:
             times = image.coords["t"].values
             timepoint_value = times[timepoint_index]
-    else:
-        raise ValueError()
+    if timepoint_index is None:
+        raise ValueError(f"Reference timepoint not found: {timepoint}.")
     return timepoint_index, timepoint_value
 
 
@@ -216,7 +216,6 @@ def single_registration(
             moving_label_keys = _filter_label_keys(
                 moving_label_keys, moving_timepoint_value
             )
-
         if len(moving_label_keys) == 0:
             raise ValueError(f"No labels found for {image_key}.")
 
@@ -469,23 +468,23 @@ def single_registration(
             landmark_min_count=landmark_min_count,
             parameter_object_across_channels=parameter_object_across_channels,
         )
-    # moving_image_attrs = moving_image[0].attrs.copy()
-    # chunksize = moving_image[0].data.chunksize[-2:]
-    # del moving_image
-    # if moving_image_spacing is None:
-    #    moving_image_spacing = get_image_spacing(moving_image_attrs)
+    moving_image_attrs = moving_image[0].attrs.copy()
+    chunksize = moving_image[0].data.chunksize[-2:]
+    del moving_image
+    if moving_image_spacing is None:
+        moving_image_spacing = get_image_spacing(moving_image_attrs)
 
-    # if len(moving_label_keys) > 0:
-    #     _transform_labels_t(
-    #         transform_fs=transform_fs,
-    #         transform_dest=transform_dest,
-    #         label_output_root=label_output_root,
-    #         moving_image_attrs=moving_image_attrs,
-    #         moving_label_keys=moving_label_keys,
-    #         moving_image_spacing=moving_image_spacing,
-    #         moving_timepoint_value=moving_timepoint_value,
-    #         chunksize=chunksize,
-    #     )
+    if len(moving_label_keys) > 0:
+        _transform_labels_t(
+            transform_fs=transform_fs,
+            transform_dest=transform_dest,
+            label_output_root=label_output_root,
+            moving_image_attrs=moving_image_attrs,
+            moving_label_keys=moving_label_keys,
+            moving_image_spacing=moving_image_spacing,
+            moving_timepoint_value=moving_timepoint_value,
+            chunksize=chunksize,
+        )
 
     return image_key
 
@@ -502,6 +501,7 @@ def _transform_labels_t(
 ):
     # transform_dest structure is image_key/t=1
     if len(moving_label_keys) > 0:
+        storage_options = {"chunks": chunksize}
         times = []
         transform_file_paths = []
         for transform_file in transform_fs.ls(
@@ -518,43 +518,43 @@ def _transform_labels_t(
         index = index_natsorted(times)
         times = [times[val] for val in index]
         transform_file_paths = [transform_file_paths[val] for val in index]
-        storage_options = {"chunks": chunksize}
+
         for moving_label_key in moving_label_keys:
             moving_label_key_basename = os.path.basename(moving_label_key)
-            transformed_labels = []
-            times_ = []
-            for i in range(len(times)):
+            tokens = moving_label_key_basename.split("-")
+            suffix = tokens[-1]
+            label_key = "-".join(tokens[:-1])
+            moving_label = read_ome_zarr_array(moving_label_key).squeeze()
+            if moving_label.sizes.get("t", 0) > 0 and "t" in moving_label.coords:
+                moving_label = moving_label.sel(t=moving_timepoint_value)
+            for time_index in range(len(times)):
                 transform_parameter_object = _load_itk_parameters_from_dir(
-                    transform_file_paths[i]
+                    transform_file_paths[time_index]
                 )
                 if transform_parameter_object.GetNumberOfParameterMaps() > 0:
-                    src = read_ome_zarr_array(moving_label_key).squeeze()
-                    times_.append(times[i])
-                    if src.sizes.get("t", 0) > 0 and "t" in src.coords:
-                        src = src.sel(t=moving_timepoint_value)
-                    transformed_labels.append(
-                        itk_transform_labels(
-                            image=src,
-                            transform_parameter_object=transform_parameter_object,
-                            image_spacing=moving_image_spacing,
-                        )
+                    t = times[time_index]
+                    # note we can't stack the labels b/c we can't be sure non-moving times are same dimensions
+                    transformed_label = itk_transform_labels(
+                        image=moving_label,
+                        transform_parameter_object=transform_parameter_object,
+                        image_spacing=moving_image_spacing,
                     )
 
-            transformed_labels = xr.DataArray(
-                np.stack(transformed_labels),
-                dims=["t", "y", "x"],
-                coords={"t": times_},
-                attrs=moving_image_attrs,
-            )
+                    transformed_label = xr.DataArray(
+                        np.expand_dims(transformed_label, 0),
+                        dims=["t", "y", "x"],
+                        coords={"t": [t]},
+                        attrs=moving_image_attrs,
+                    )
 
-            _write_zarr_labels(
-                name=moving_label_key_basename,
-                root=label_output_root,
-                metadata=None,
-                group_metadata=None,
-                labels=transformed_labels,
-                storage_options=storage_options,
-            )
+                    _write_zarr_labels(
+                        name=f"{label_key}-{t}-{suffix}",
+                        root=label_output_root,
+                        metadata=None,
+                        group_metadata=None,
+                        labels=transformed_label,
+                        storage_options=storage_options,
+                    )
 
 
 def get_matching_names(

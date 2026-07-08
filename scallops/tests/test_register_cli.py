@@ -104,7 +104,8 @@ def test_register_itk_cli_known_shift(tmp_path):
     for shift in shifts:
         st = SimilarityTransform(translation=shift[::-1])
         arrays.append(warp(image, st, preserve_range=True).astype(image.dtype))
-    data = xr.DataArray(np.array(arrays), dims=["t", "y", "x"], coords={"t": [0, 1]})
+
+    data = xr.DataArray(np.array(arrays), dims=["t", "y", "x"], coords={"t": [0, 1, 2]})
     data = data.expand_dims("c", 1)
     data.attrs["processed"] = dict(
         images=[dict(pixels=dict(physical_size_x=1, physical_size_y=1))]
@@ -147,9 +148,8 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         tmp_path, "registration-input.zarr"
     )
     exp = Experiment()
-
-    reference_t_index = 2
-    test_t = 10
+    reference_time = "2"
+    test_time = "10"
     array_A1_102_nuclei = array_A1_102_nuclei.squeeze()
     exp.labels["A1-102-nuclei"] = array_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
@@ -181,7 +181,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         "--label-output",
         elastix_output_dir,
         "--moving-time",
-        str(reference_t_index),
+        str(reference_time),
     ]
     subprocess.check_call(cmd)
     result_exp = read_experiment(elastix_output_dir)
@@ -196,43 +196,36 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         .images["A1-102"]
         .squeeze()
     )
-    times = list(original_image.t.values)
-    del times[reference_t_index]
-    times = [str(t) for t in times]
-    transformed_times = list(result_exp.labels["A1-102-nuclei"].coords["t"].values)
-    transformed_times = [str(t) for t in transformed_times]
-    assert times == transformed_times, (
-        f"{', '.join(times)} != {', '.join(transformed_times)}"
-    )
-    assert len(result_exp.labels.keys()) == 1
+    original_image.coords["t"] = original_image.coords["t"].astype(str)
+    assert len(result_exp.labels.keys()) == 8
     np.testing.assert_array_equal(transformed_image.t.values, original_image.t.values)
     np.testing.assert_array_equal(transformed_image.c.values, original_image.c.values)
     np.testing.assert_array_equal(
-        transformed_image.isel(t=reference_t_index),
-        original_image.isel(t=reference_t_index),
+        transformed_image.sel(t=reference_time),
+        original_image.sel(t=reference_time),
         err_msg="Reference t not equal via CLI",
     )
-    for t in range(original_image.sizes["t"]):
-        if t != reference_t_index:
+    for t in original_image.coords["t"].values:
+        if t != reference_time:
             with np.testing.assert_raises(AssertionError):
                 np.testing.assert_array_equal(
-                    transformed_image.isel(t=t), original_image.isel(t=t)
+                    transformed_image.sel(t=t), original_image.sel(t=t)
                 )
     transform_parameter_object = _load_itk_parameters_from_dir(
-        os.path.join(transform_output_dir, "A1-102", f"t={test_t}")
+        os.path.join(transform_output_dir, "A1-102", f"t={test_time}")
     )
 
     # test load and apply saved transform for image
     warped = itk_transform_image(
-        image=original_image.sel(t=test_t, c=original_image.c.values[0]),
+        image=original_image.sel(t=test_time, c=original_image.c.values[0]),
         transform_parameter_object=transform_parameter_object,
         image_spacing=(1, 1),
     )
 
     np.testing.assert_array_equal(
-        transformed_image.sel(t=test_t, c=transformed_image.c.values[0]).data,
+        transformed_image.sel(t=test_time, c=transformed_image.c.values[0]).data,
         warped.values,
-        err_msg=f"t {test_t} images not equal using itk_transform_image and CLI",
+        err_msg=f"t {test_time} images not equal using itk_transform_image and CLI",
     )
     # test load and apply saved transform for labels
     warped_labels = itk_transform_labels(
@@ -241,11 +234,10 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         image_spacing=(1, 1),
     )
     assert warped_labels.min() == 0
-
     np.testing.assert_array_equal(
-        result_exp.labels["A1-102-nuclei"].sel(t=str(test_t)).values,
+        result_exp.labels[f"A1-102-{test_time}-nuclei"].values,
         warped_labels,
-        err_msg=f"t {test_t} labels not equal using itk_transform_labels and CLI",
+        err_msg=f"t {test_time} labels not equal using itk_transform_labels and CLI",
     )
     # compare results to API usage
     parameter_object = _load_itk_parameters([param_file])
@@ -255,7 +247,9 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         moving_channel=[0],
         parameter_object=parameter_object,
         moving_image_spacing=(1, 1),
-        reference_timepoint=reference_t_index,
+        reference_timepoint=original_image.coords["t"]
+        .values.tolist()
+        .index(reference_time),
     )
 
     xr.testing.assert_equal(result_np, transformed_image)
@@ -368,8 +362,8 @@ def test_register_transform_labels_moving_only(tmp_path):
         create_itk_param_file(tmp_path),
     ]
     subprocess.check_call(cmd)
-    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-cell")
-    assert list(transformed_labels.coords["t"].values) == ["FISH"]
+    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-IF-cell")
+    assert list(transformed_labels.coords["t"].values) == ["IF"]
     assert transformed_labels.max() > 0
     transformed_image = read_image(output_zarr / "images" / "plateA-A1")
     assert transformed_image.shape[0] == 2
