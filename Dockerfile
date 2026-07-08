@@ -71,7 +71,7 @@ RUN [ "${SCM_VERSION}" = "0.0.0+unknown" ] && \
       echo "WARNING: SCM_VERSION not set — version will be 0.0.0+unknown. Use 'make -f docker.mk docker' to stamp the correct version." || true && \
     uv pip install --no-deps . && \
     PYVER=$(python3 -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')") && \
-    python3 -m compileall -q /usr/local/lib/python${PYVER} 2>/dev/null || true && \
+    python3 -m compileall -q /usr/local/lib/python${PYVER} >/dev/null 2>&1 || true && \
     rm -rf /build
 
 ENV AWS_RETRY_MODE=adaptive \
