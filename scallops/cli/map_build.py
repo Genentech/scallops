@@ -1078,6 +1078,10 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
     method = getattr(args, "scale_method", "global")
 
     if method == "local":
+        # batch_size caps the intermediate (n_cells, k_neighbors, n_features) array.
+        # Without it, one well × 75 neighbors × n_features × 4 bytes can exceed RAM.
+        # Default: 50,000 cells/batch → 50K × 75 × 5K × 4 = 75 GB (safe on ≥128 GB).
+        localz_batch = int(getattr(args, "localz_batch_size", 50_000))
         result = normalize_features(
             data,
             normalize="local-zscore",
@@ -1088,6 +1092,7 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
                 getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y"),
                 getattr(args, "localz_centroid_x", "Nuclei_AreaShape_Center_X"),
             ),
+            batch_size=localz_batch,
         )
     else:
         result = normalize_features(data, normalize="zscore", by=[plate, well])
@@ -1580,8 +1585,19 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
                 cells.X = cells.X.compute()
         else:
             cells = _read_data(list(arguments.input))
-            if isinstance(cells.X, da.Array):
-                cells.X = cells.X.compute()
+            # ── DO NOT call cells.X.compute() here. ─────────────────────────────
+            # Raw parquet files contain ~9,000 columns × float64. Materialising
+            # all of them at once requires (n_cells × n_cols × 8) bytes — easily
+            # exceeding RAM on large datasets.  Instead we keep the dask array and
+            # let filter_data (which is dask-aware) reduce the column count first.
+            # The materialisation happens automatically inside _apply_pca_inmem
+            # which needs a numpy array for sklearn, by which time feature count
+            # has dropped from ~9,000 to ~5,000, cutting memory by ~45 %.
+            # ─────────────────────────────────────────────────────────────────────
+            logger.info(
+                f"map run: raw input loaded lazily ({cells.shape[0]:,} cells × "
+                f"{cells.shape[1]:,} features).  Will materialise after filter step."
+            )
             # Inject the condition column before any processing step uses it
             cells = _add_condition_column(cells)
 
@@ -1592,6 +1608,17 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             logger.info(f"map run [{step}]: running in memory → accumulates in cells.zarr")
             if step == "filter":
                 cells = _apply_filter_inmem(cells, arguments)
+                # ── Now safe to materialise: column count has been reduced ────
+                if isinstance(cells.X, da.Array):
+                    logger.info(
+                        f"map run [filter]: materialising {cells.shape[0]:,} × "
+                        f"{cells.shape[1]:,} (post-filter) into RAM …"
+                    )
+                    cells.X = cells.X.compute()
+                logger.info(
+                    f"map run [filter]: materialised — "
+                    f"{cells.X.nbytes / 1e9:.1f} GB in RAM"
+                )
             elif step == "transform-yj":
                 cells = _apply_transform_yj_inmem(cells, arguments)
             elif step == "scale":
