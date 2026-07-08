@@ -70,7 +70,9 @@ GPU support
 The default image uses ``tensorflow/tensorflow:2.21.0`` (CPU variant) as its
 base.  **PyTorch** (used by cellpose and U-FISH) is installed from PyPI and
 ships CUDA-capable wheels — it will automatically use an NVIDIA GPU at runtime
-if one is available.  **TensorFlow** runs on CPU only in the default image.
+if one is available.  **TensorFlow** runs on CPU only in the default image;
+this affects the ``segment`` command when using the StarDist backend, which
+relies on TensorFlow for model inference.
 
 To enable GPU acceleration for TensorFlow as well, build with the GPU base
 image::
