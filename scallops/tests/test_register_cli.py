@@ -148,8 +148,8 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         tmp_path, "registration-input.zarr"
     )
     exp = Experiment()
-    reference_time = "2"
-    test_time = "10"
+    reference_time = 2
+    test_time = 10
     array_A1_102_nuclei = array_A1_102_nuclei.squeeze()
     exp.labels["A1-102-nuclei"] = array_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
@@ -196,7 +196,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         .images["A1-102"]
         .squeeze()
     )
-    original_image.coords["t"] = original_image.coords["t"].astype(str)
+
     assert len(result_exp.labels.keys()) == 8
     np.testing.assert_array_equal(transformed_image.t.values, original_image.t.values)
     np.testing.assert_array_equal(transformed_image.c.values, original_image.c.values)
@@ -235,7 +235,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
     )
     assert warped_labels.min() == 0
     np.testing.assert_array_equal(
-        result_exp.labels[f"A1-102-{test_time}-nuclei"].values,
+        result_exp.labels[f"A1-102-{test_time}-nuclei"].values.squeeze(),
         warped_labels,
         err_msg=f"t {test_time} labels not equal using itk_transform_labels and CLI",
     )
