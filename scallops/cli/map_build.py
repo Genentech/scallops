@@ -1007,7 +1007,12 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     # 0. Cell-level quality filter (applied before variance computation)
     label_filter = getattr(args, "label_filter", None)
     if label_filter:
-        data = _slice_anndata(data, _query_anndata(data, label_filter).index)
+        keep_idx = _query_anndata(data, label_filter).index
+        # Use a boolean mask rather than integer fancy-indexing: with a dask X,
+        # integer fancy-indexing forces a full materialisation of the parent array
+        # before selecting rows.  A boolean mask avoids that.
+        bool_mask = data.obs.index.isin(keep_idx)
+        data = _slice_anndata(data, bool_mask)
         logger.info(f"map run [filter]: label_filter kept {data.shape[0]:,} cells")
 
     plate = getattr(args, "plate_column", "plate")
@@ -1015,14 +1020,38 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     # Only stratify by columns that exist in the data
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
 
-    # 1. Variance + finite-value filter (stratified by plate × well)
-    result = filter_data(
-        data,
-        max_fraction_not_finite=getattr(args, "max_fraction_not_finite", 0.25),
-        min_variance=getattr(args, "min_variance", 0.1),
-        max_variance=getattr(args, "max_variance", None),
-        by=by_cols,
-    )
+    # 1. Variance + finite-value filter ────────────────────────────────────
+    # For large dask arrays (parquet from S3), the default threaded dask
+    # scheduler tries to execute all row-group tasks in parallel.  With 24
+    # row groups of ~27 GB each the peak reaches 24 × 49 GB ≈ 1.2 TB → OOM.
+    # Two mitigations applied together:
+    #   a) synchronous scheduler: one row group in memory at a time (49 GB peak)
+    #   b) global variance (by=None): stratified xarray groupby creates per-group
+    #      copies of the whole array; global variance avoids those copies.
+    is_large_dask = isinstance(data.X, da.Array)
+    if is_large_dask:
+        logger.info(
+            f"map run [filter]: large dask array ({data.shape[0]:,} × {data.shape[1]:,}) "
+            f"— using synchronous scheduler + global variance to avoid OOM. "
+            f"This step takes ~45–90 min (serial S3 reads)."
+        )
+        import dask as _dask_mod
+        with _dask_mod.config.set(scheduler="synchronous"):
+            result = filter_data(
+                data,
+                max_fraction_not_finite=getattr(args, "max_fraction_not_finite", 0.25),
+                min_variance=getattr(args, "min_variance", 0.1),
+                max_variance=getattr(args, "max_variance", None),
+                by=None,  # global variance — avoids per-well xarray copies
+            )
+    else:
+        result = filter_data(
+            data,
+            max_fraction_not_finite=getattr(args, "max_fraction_not_finite", 0.25),
+            min_variance=getattr(args, "min_variance", 0.1),
+            max_variance=getattr(args, "max_variance", None),
+            by=by_cols,   # stratified when data is already in memory
+        )
     _merge_uns(data, result)
 
     # 2. Batch-correlation filter
@@ -1628,14 +1657,26 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             t0 = _time.perf_counter()
             logger.info(f"map run [{step}]: running in memory → accumulates in cells.zarr")
             if step == "filter":
-                cells = _apply_filter_inmem(cells, arguments)
-                # ── Now safe to materialise: column count has been reduced ────
-                if isinstance(cells.X, da.Array):
-                    logger.info(
-                        f"map run [filter]: materialising {cells.shape[0]:,} × "
-                        f"{cells.shape[1]:,} (post-filter) into RAM …"
-                    )
-                    cells.X = cells.X.compute()
+                # For large dask arrays (S3 parquet), the default threaded
+                # scheduler loads all row-group chunks in parallel and OOMs.
+                # Use synchronous mode for both filtering and materialisation so
+                # only one chunk is in memory at a time (peak ≈ 50 GB).
+                import contextlib as _ctxlib
+                import dask as _dask_mod
+                _sync_ctx = (
+                    _dask_mod.config.set(scheduler="synchronous")
+                    if isinstance(cells.X, da.Array)
+                    else _ctxlib.nullcontext()
+                )
+                with _sync_ctx:
+                    cells = _apply_filter_inmem(cells, arguments)
+                    # ── Now safe to materialise: column count has been reduced ──
+                    if isinstance(cells.X, da.Array):
+                        logger.info(
+                            f"map run [filter]: materialising {cells.shape[0]:,} × "
+                            f"{cells.shape[1]:,} (post-filter) into RAM …"
+                        )
+                        cells.X = cells.X.compute()
                 logger.info(
                     f"map run [filter]: materialised — "
                     f"{cells.X.nbytes / 1e9:.1f} GB in RAM"
