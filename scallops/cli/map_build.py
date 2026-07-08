@@ -1078,9 +1078,33 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
     method = getattr(args, "scale_method", "global")
 
     if method == "local":
-        # batch_size caps the intermediate (n_cells, k_neighbors, n_features) array.
-        # Without it, one well × 75 neighbors × n_features × 4 bytes can exceed RAM.
-        # Default: 50,000 cells/batch → 50K × 75 × 5K × 4 = 75 GB (safe on ≥128 GB).
+        cy = getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y")
+        cx = getattr(args, "localz_centroid_x", "Nuclei_AreaShape_Center_X")
+
+        # CellProfiler names centroid columns Nuclei_AreaShape_Center_Y which
+        # looks like a morphological feature, so they land in data.X (feature
+        # matrix), not in data.obs.  normalize_features local-zscore reads
+        # centroids from obs.coords, so we must copy them there.
+        for centroid_col in [cy, cx]:
+            if centroid_col not in data.obs.columns:
+                if centroid_col in data.var.index:
+                    idx = data.var.index.get_loc(centroid_col)
+                    X_vals = data.X[:, idx]
+                    if isinstance(X_vals, da.Array):
+                        X_vals = X_vals.compute()
+                    data.obs[centroid_col] = np.asarray(X_vals, dtype=np.float64)
+                    logger.info(
+                        f"scale [local]: copied '{centroid_col}' from X to obs "
+                        f"for spatial k-NN lookup"
+                    )
+                else:
+                    raise ValueError(
+                        f"--localz-centroid column '{centroid_col}' not found in "
+                        f"obs or var.  Check --localz-centroid-y / --localz-centroid-x."
+                    )
+
+        # batch_size caps the intermediate (batch × neighbors × features) array.
+        # 100K × 75 × 5K × 4 bytes = 150 GB — acceptable on ≥256 GB machines.
         localz_batch = int(getattr(args, "localz_batch_size", 50_000))
         result = normalize_features(
             data,
@@ -1088,10 +1112,7 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
             n_neighbors=int(getattr(args, "localz_neighbors", 75)),
             by=[plate, well],
             max_value=getattr(args, "localz_max_value", 5.0),
-            centroid_column_names=(
-                getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y"),
-                getattr(args, "localz_centroid_x", "Nuclei_AreaShape_Center_X"),
-            ),
+            centroid_column_names=(cy, cx),
             batch_size=localz_batch,
         )
     else:
