@@ -67,10 +67,11 @@ RUN grep -v '^tensorflow' requirements.txt | uv pip install -r /dev/stdin
 # || true on compileall: torch ships py312_intrinsics.py (PEP 695 syntax) that
 # Python 3.11 cannot parse — that file is never imported on 3.11.
 COPY . .
-RUN uv pip install  --no-deps . && \
+RUN [ "${SCM_VERSION}" = "0.0.0+unknown" ] && \
+      echo "WARNING: SCM_VERSION not set — version will be 0.0.0+unknown. Use 'make -f docker.mk docker' to stamp the correct version." || true && \
+    uv pip install --no-deps . && \
     PYVER=$(python3 -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')") && \
-    python3 -m compileall -q /usr/local/lib/python${PYVER} 2>&1 | \
-      grep -v 'py312_intrinsics' || true && \
+    python3 -m compileall -q /usr/local/lib/python${PYVER} 2>/dev/null || true && \
     rm -rf /build
 
 ENV AWS_RETRY_MODE=adaptive \
