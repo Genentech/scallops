@@ -1413,6 +1413,14 @@ def _create_run_parser(
         help="obs column for cell centroid X coordinate.",
         default="Nuclei_AreaShape_Center_X", dest="localz_centroid_x",
     )
+    scale.add_argument(
+        "--localz-batch-size",
+        help="Number of cells processed per batch in local z-score.  Controls "
+             "the size of the intermediate (batch × k_neighbors × features) array.  "
+             "Lower values use less RAM; higher values run faster.  "
+             "Default 50 000 → ~75 GB peak on 5 000 features / 75 neighbours.",
+        type=int, default=50_000, dest="localz_batch_size",
+    )
 
     # ── PCA ───────────────────────────────────────────────────────────────────
     pca = parser.add_argument_group("PCA (map pca + pca-select steps)")
