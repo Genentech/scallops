@@ -151,27 +151,51 @@ def filter_data(
 def _streaming_cell_filter(
     X_dask: "da.Array",
     max_fraction_not_finite: float,
+    n_prefetch: int = 3,
 ) -> "np.ndarray":
-    """Boolean cell-keep mask computed one dask chunk at a time.
+    """Boolean cell-keep mask with bounded parallel chunk prefetching.
 
-    Peak memory ≈ one chunk.  Processes each block of X_dask independently so
-    that the kernel's OOM killer never sees more than one chunk plus a tiny
-    running bool array.
+    Reads ``n_prefetch`` chunks concurrently so S3 I/O overlaps with
+    computation.  Peak memory ≈ ``n_prefetch`` × one chunk.
 
     :param X_dask: Dask array of shape (n_obs, n_feat).
     :param max_fraction_not_finite: Fraction threshold; cells above this are
         dropped.
+    :param n_prefetch: Max concurrent chunk reads (higher = faster but more RAM).
     :return: Boolean numpy array of length n_obs.
     """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
     n_feat = X_dask.shape[1]
     max_bad = int(n_feat * max_fraction_not_finite)
     n_chunks = X_dask.numblocks[0]
-    keeps = []
-    for ci in range(n_chunks):
-        chunk = X_dask.blocks[ci].compute()
-        bad = (~np.isfinite(chunk)).sum(axis=1)
-        keeps.append(bad <= max_bad)
-        del chunk
+    chunk_gb = [X_dask.chunks[0][ci] * n_feat * 4 / 1e9 for ci in range(n_chunks)]
+
+    logger.info(
+        "  [cell filter] %d chunks, %d concurrent reads (peak ≈ %.0f GB)",
+        n_chunks, n_prefetch, n_prefetch * (chunk_gb[0] if chunk_gb else 0),
+    )
+
+    keeps = [None] * n_chunks
+    t0 = time.monotonic()
+
+    with ThreadPoolExecutor(max_workers=n_prefetch) as pool:
+        # Submit all chunks up-front; executor limits to n_prefetch concurrent.
+        futures = [pool.submit(X_dask.blocks[ci].compute) for ci in range(n_chunks)]
+        # Consume IN ORDER so row offsets align with obs_df later.
+        for ci, fut in enumerate(futures):
+            chunk = fut.result()
+            bad = (~np.isfinite(chunk)).sum(axis=1)
+            keeps[ci] = bad <= max_bad
+            del chunk
+            done = ci + 1
+            eta  = (time.monotonic() - t0) / done * (n_chunks - done) / 60
+            logger.info(
+                "  [cell filter] %d/%d done — %s bad cells — ETA: %.0f min",
+                done, n_chunks, f"{int((~keeps[ci]).sum()):,}", eta,
+            )
+
     return np.concatenate(keeps)
 
 
@@ -205,47 +229,67 @@ def _streaming_feature_variance_by_group(
     """
     import pandas as pd
 
-    n_feat = X_dask.shape[1]
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    n_feat   = X_dask.shape[1]
+    n_chunks = X_dask.numblocks[0]
+    n_prefetch = 3  # same default as cell filter
     # group_key -> {'n': int, 'mean': ndarray(n_feat), 'M2': ndarray(n_feat)}
     group_stats: dict = {}
     row_offset = 0
+    t0 = time.monotonic()
 
-    for ci in range(X_dask.numblocks[0]):
-        chunk_rows = X_dask.chunks[0][ci]
-        cell_mask = cell_keep[row_offset : row_offset + chunk_rows]
-        obs_ci = obs_df.iloc[row_offset : row_offset + chunk_rows]
-        row_offset += chunk_rows
+    logger.info(
+        "  [variance] %d chunks, %d concurrent reads", n_chunks, n_prefetch,
+    )
 
-        if not cell_mask.any():
-            continue
+    with ThreadPoolExecutor(max_workers=n_prefetch) as pool:
+        futures = [pool.submit(X_dask.blocks[ci].compute) for ci in range(n_chunks)]
+        for ci, fut in enumerate(futures):
+            chunk_rows = X_dask.chunks[0][ci]
+            cell_mask  = cell_keep[row_offset : row_offset + chunk_rows]
+            obs_ci     = obs_df.iloc[row_offset : row_offset + chunk_rows]
+            row_offset += chunk_rows
 
-        chunk = X_dask.blocks[ci].compute()[cell_mask].astype(np.float64)
-        obs_filt = obs_ci.iloc[cell_mask] if isinstance(cell_mask, np.ndarray) else obs_ci[cell_mask]
+            raw_chunk = fut.result()
 
-        for group_key, idx in obs_filt.groupby(by, observed=True).indices.items():
-            X_g = chunk[idx]
-            if len(X_g) == 0:
+            if not cell_mask.any():
+                del raw_chunk
                 continue
-            n_g = len(X_g)
-            mean_g = np.nanmean(X_g, axis=0)
-            # Population variance of this batch (ddof=0); Welford handles ddof=1 at end
-            var_g = np.nanvar(X_g, axis=0, ddof=0)
 
-            if group_key not in group_stats:
-                group_stats[group_key] = {
-                    "n": n_g,
-                    "mean": mean_g.copy(),
-                    "M2": var_g * n_g,
-                }
-            else:
-                s = group_stats[group_key]
-                n_total = s["n"] + n_g
-                delta = mean_g - s["mean"]
-                s["mean"] = s["mean"] + delta * n_g / n_total
-                s["M2"] = s["M2"] + var_g * n_g + delta ** 2 * s["n"] * n_g / n_total
-                s["n"] = n_total
+            chunk    = raw_chunk[cell_mask].astype(np.float64)
+            del raw_chunk
+            obs_filt = obs_ci.iloc[cell_mask]
 
-        del chunk
+            for group_key, idx in obs_filt.groupby(by, observed=True).indices.items():
+                X_g = chunk[idx]
+                if len(X_g) == 0:
+                    continue
+                n_g    = len(X_g)
+                mean_g = np.nanmean(X_g, axis=0)
+                var_g  = np.nanvar(X_g, axis=0, ddof=0)
+
+                if group_key not in group_stats:
+                    group_stats[group_key] = {
+                        "n":    n_g,
+                        "mean": mean_g.copy(),
+                        "M2":   var_g * n_g,
+                    }
+                else:
+                    s      = group_stats[group_key]
+                    n_total = s["n"] + n_g
+                    delta   = mean_g - s["mean"]
+                    s["mean"] = s["mean"] + delta * n_g / n_total
+                    s["M2"]   = s["M2"] + var_g * n_g + delta ** 2 * s["n"] * n_g / n_total
+                    s["n"]    = n_total
+
+            del chunk
+            done = ci + 1
+            eta  = (time.monotonic() - t0) / done * (n_chunks - done) / 60
+            logger.info(
+                "  [variance] %d/%d done — ETA: %.0f min", done, n_chunks, eta,
+            )
 
     if not group_stats:
         return np.zeros(n_feat)
@@ -275,26 +319,34 @@ def _streaming_materialise(
     :param feat_keep: Boolean mask (n_feat,) of features to keep.
     :return: Float32 numpy array of shape (n_keep_obs, n_keep_feat).
     """
-    n_out_obs = int(cell_keep.sum())
+    from concurrent.futures import ThreadPoolExecutor
+
+    n_out_obs  = int(cell_keep.sum())
     n_out_feat = int(feat_keep.sum())
-    result = np.empty((n_out_obs, n_out_feat), dtype=np.float32)
-    out_row = 0
+    n_chunks   = X_dask.numblocks[0]
+    n_prefetch = 3
+    result     = np.empty((n_out_obs, n_out_feat), dtype=np.float32)
+    out_row    = 0
     row_offset = 0
 
-    for ci in range(X_dask.numblocks[0]):
-        chunk_rows = X_dask.chunks[0][ci]
-        cell_mask = cell_keep[row_offset : row_offset + chunk_rows]
-        row_offset += chunk_rows
+    with ThreadPoolExecutor(max_workers=n_prefetch) as pool:
+        futures = [pool.submit(X_dask.blocks[ci].compute) for ci in range(n_chunks)]
+        for ci, fut in enumerate(futures):
+            chunk_rows = X_dask.chunks[0][ci]
+            cell_mask  = cell_keep[row_offset : row_offset + chunk_rows]
+            row_offset += chunk_rows
 
-        if not cell_mask.any():
-            continue
+            raw_chunk = fut.result()
+            if not cell_mask.any():
+                del raw_chunk
+                continue
 
-        chunk = X_dask.blocks[ci].compute()
-        filtered = chunk[cell_mask][:, feat_keep]
-        n_rows = filtered.shape[0]
-        result[out_row : out_row + n_rows] = filtered
-        out_row += n_rows
-        del chunk, filtered
+            filtered = raw_chunk[cell_mask][:, feat_keep]
+            del raw_chunk
+            n_rows = filtered.shape[0]
+            result[out_row : out_row + n_rows] = filtered
+            out_row += n_rows
+            del filtered
 
     return result
 
