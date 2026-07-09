@@ -580,7 +580,10 @@ def merge_sbs_phenotype_pipeline(
         if phenotype_suffixes[i] is not None:
             df.columns = df.columns + "_" + phenotype_suffixes[i]
 
-        duplicate_suffix = path.rstrip("/").split("/")[-4]
+        path_tokens = path.rstrip("/").split("/")
+        duplicate_suffix = (
+            path_tokens[-4] if path_tokens[-2].startswith("t=") else path_tokens[-3]
+        )
 
         if output_format == "zarr":  # read index and metadata
             if len(_metadata_cols) > 0:
@@ -697,11 +700,13 @@ def _find_phenotype_paths_and_suffixes(
             # otherwise suffix will only be added for duplicate columns
             tokens = x.rstrip(fs.sep).split(fs.sep)
             suffix1 = tokens[-2]  # e.g. t=FISH or nuclei/cell/
-            suffix2 = tokens[-4]  # e.g. features, iss-to-iss-qc, objects
+            # e.g. features, iss-to-iss-qc, objects
             suffix = None
-
             if suffix1.startswith("t="):
                 suffix = suffix1[2:]
+                suffix2 = tokens[-4]
+            else:
+                suffix2 = tokens[-3]
             if "qc" in suffix2:
                 suffix = suffix2 if suffix is None else suffix + "-" + suffix2
             found_suffixes.append(suffix)
