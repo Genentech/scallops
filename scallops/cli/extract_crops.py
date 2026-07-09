@@ -8,9 +8,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from array_api_compat import get_namespace
 from skimage.util import img_as_ubyte
-from zarr import Group
 
-from scallops.cli.features import _read_merged_or_objects, get_labels
+from scallops.cli.features import (
+    _find_labels,
+    _image_key_without_time_and_selected_time,
+    _read_merged_or_objects,
+)
+from scallops.cli.find_objects import get_path
 from scallops.cli.util import (
     _get_cli_logger,
     cli_metadata,
@@ -39,7 +43,7 @@ def single_crop(
     group: str,  # NOT USED
     file_list: list[str],
     metadata: dict,
-    labels_group: Group | None,
+    label_paths: list[str] | None,
     output_dir: str,
     output_sep: str,
     merge_dir: str,
@@ -57,10 +61,18 @@ def single_crop(
     force: bool,
 ):
     image_key = metadata["id"]
-
     output_dir = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}"
-
-    output_parquet_path = f"{output_dir}.parquet"
+    image_key_without_t, selected_timepoint = _image_key_without_time_and_selected_time(
+        metadata
+    )
+    output_parquet_path = get_path(
+        output_dir,
+        output_sep,
+        label_name,
+        image_key_without_t if image_key_without_t is not None else image_key,
+        selected_timepoint,
+        ".parquet",
+    )
     if not force and is_parquet_file(output_parquet_path):
         logger.info(f"Skipping features for {image_key} {label_name}")
         return
@@ -70,16 +82,29 @@ def single_crop(
     image = _images2fov(file_list, metadata, dask=True).squeeze().data
     logger.info(f"{image_key} image shape {image.shape}")
     label_image = None
-    if labels_group is not None:
-        zarr_labels = get_labels(
-            labels_group=labels_group,
-            name=image_key,
-            suffix=label_name,  # e.g. nuclei
+    if label_paths is not None:
+        g, timepoints = _find_labels(
+            label_paths=label_paths,
+            image_key=image_key,
+            label_name=label_name,
+            image_key_without_t=image_key_without_t,
+            selected_timepoint=selected_timepoint,
         )
+        if g is None:
+            raise ValueError(f"No labels found for {image_key}")
 
-        if zarr_labels is None:
-            raise ValueError(f"Unable to read {label_name} labels for {image_key}.")
-        label_image = da.from_zarr(zarr_labels)
+        if len(timepoints) != 1:
+            raise ValueError(f"More than one timepoint found for {image_key}")
+        label_image = da.from_array(g[list(g.keys())[0]])
+        timepoint = timepoints[0]
+        if timepoint is not None and label_image.ndim == 3:
+            index = -1
+            for i in range(len(timepoints)):
+                if str(timepoints[i]) == str(timepoint):
+                    index = i
+                    break
+            label_image = label_image[index]
+
     merged_df = _read_merged_or_objects(
         merge_dir=merge_dir,
         merge_dir_sep=merge_dir_sep,

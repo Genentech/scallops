@@ -271,11 +271,11 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
     assert (
         len(
             merge_sbs_metadata_df.columns[
-                merge_sbs_metadata_df.columns.str.contains("-qc")
+                merge_sbs_metadata_df.columns.str.contains("qc")
             ]
         )
         > 0
-    )
+    ), "No QC columns found"
     assert (
         len(
             merge_sbs_metadata_df.columns[
@@ -283,12 +283,12 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
             ]
         )
         == 0
-    )
+    ), "Intensity columns found in merge_sbs_metadata_df"
 
     merge_features_df = pd.read_parquet(output / "merge-features" / "plateA-A1.parquet")
     assert (
         len(merge_features_df.columns[merge_features_df.columns.str.contains("qc")]) > 0
-    )
+    ), "No QC columns found"
     assert (
         len(
             merge_features_df.columns[
@@ -296,10 +296,10 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
             ]
         )
         > 0
-    )
+    ), "No intensity columns found in merge_features_df"
     intensity_column = merge_features_df.columns[
         merge_features_df.columns.str.contains("Intensity")
     ][0]
     assert len(merge_features_df.query(f"~{intensity_column}.isna()")) == len(
         merge_sbs_metadata_df.query("~barcode_count_0.isna()")
-    )
+    ), "Incorrect number of recovered cells"

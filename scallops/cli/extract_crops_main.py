@@ -1,7 +1,6 @@
 import argparse
 
 import fsspec
-import zarr
 from dask.bag import from_sequence
 
 from scallops.cli.arg_parser import _sort_groups
@@ -79,16 +78,13 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
 
-    labels_path = arguments.labels
+    label_paths = arguments.labels
     no_version = arguments.no_version
-    labels_group = None
+
     if not mask:
-        labels_path = None
-    if labels_path is None and mask:
+        label_paths = None
+    if label_paths is None and mask:
         raise ValueError("Labels must be provided when `mask` is true.")
-    if labels_path is not None:
-        label_root = zarr.open(labels_path, mode="r")
-        labels_group = label_root["labels"]
 
     image_seq = from_sequence(
         _set_up_experiment(
@@ -111,7 +107,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
             output_sep=output_fs.sep,
             merge_dir=merge_dir,
             merge_dir_sep=merge_dir_sep,
-            labels_group=labels_group,
+            label_paths=label_paths,
             label_filter=label_filter,
             label_name=label_name,
             percentile_normalize=percentile_normalize,
@@ -150,12 +146,13 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     parser.add_argument(
         "--labels",
         dest="labels",
+        nargs="*",
         help="Path to zarr directory containing labels. Required when `mask` is true",
     )
     parser.add_argument(
         "--mask",
         action="store_true",
-        help="Set pixels not belonging to target label to zero",
+        help="Set crop pixels not belonging to target label to zero",
     )
     parser.add_argument(
         "--label-name",
