@@ -362,8 +362,8 @@ def test_register_transform_labels_moving_only(tmp_path):
         create_itk_param_file(tmp_path),
     ]
     subprocess.check_call(cmd)
-    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-IF-cell")
-    assert list(transformed_labels.coords["t"].values) == ["IF"]
+    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-FISH-cell")
+    assert list(transformed_labels.coords["t"].values) == ["FISH"]
     assert transformed_labels.max() > 0
     transformed_image = read_image(output_zarr / "images" / "plateA-A1")
     assert transformed_image.shape[0] == 2
