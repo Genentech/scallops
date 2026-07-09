@@ -82,7 +82,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     labels_path = arguments.labels
     no_version = arguments.no_version
     labels_group = None
-    if mask:
+    if not mask:
         labels_path = None
     if labels_path is None and mask:
         raise ValueError("Labels must be provided when `mask` is true.")
