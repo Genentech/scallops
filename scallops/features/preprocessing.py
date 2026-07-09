@@ -144,6 +144,162 @@ def filter_data(
 
 
 # ---------------------------------------------------------------------------
+# Streaming filter helpers (used when data.X is a large dask array)
+# ---------------------------------------------------------------------------
+
+
+def _streaming_cell_filter(
+    X_dask: "da.Array",
+    max_fraction_not_finite: float,
+) -> "np.ndarray":
+    """Boolean cell-keep mask computed one dask chunk at a time.
+
+    Peak memory ≈ one chunk.  Processes each block of X_dask independently so
+    that the kernel's OOM killer never sees more than one chunk plus a tiny
+    running bool array.
+
+    :param X_dask: Dask array of shape (n_obs, n_feat).
+    :param max_fraction_not_finite: Fraction threshold; cells above this are
+        dropped.
+    :return: Boolean numpy array of length n_obs.
+    """
+    n_feat = X_dask.shape[1]
+    max_bad = int(n_feat * max_fraction_not_finite)
+    n_chunks = X_dask.numblocks[0]
+    keeps = []
+    for ci in range(n_chunks):
+        chunk = X_dask.blocks[ci].compute()
+        bad = (~np.isfinite(chunk)).sum(axis=1)
+        keeps.append(bad <= max_bad)
+        del chunk
+    return np.concatenate(keeps)
+
+
+def _streaming_feature_variance_by_group(
+    X_dask: "da.Array",
+    obs_df: "pd.DataFrame",
+    cell_keep: "np.ndarray",
+    by: list,
+) -> "np.ndarray":
+    """Median per-group feature variance via Welford's parallel online algorithm.
+
+    Reads one dask chunk at a time — peak memory ≈ one chunk (no xarray copies,
+    no materialisation of the full array).  Preserves the stratified variance
+    semantics (median across plate × well groups).
+
+    The Welford parallel update formula is used to combine statistics from
+    different chunk slices of the same group:
+
+    .. code-block:: text
+
+        n_new   = n_a + n_b
+        mean_c  = (n_a * mean_a + n_b * mean_b) / n_new
+        M2_c    = M2_a + M2_b + delta^2 * n_a * n_b / n_new
+        (where delta = mean_b - mean_a)
+
+    :param X_dask: Dask array of shape (n_obs, n_feat).
+    :param obs_df: DataFrame with obs metadata (same row order as X_dask).
+    :param cell_keep: Boolean mask (n_obs,) of cells to include.
+    :param by: List of obs columns to stratify by (e.g. ['plate', 'well']).
+    :return: Float numpy array of length n_feat (median variance across groups).
+    """
+    import pandas as pd
+
+    n_feat = X_dask.shape[1]
+    # group_key -> {'n': int, 'mean': ndarray(n_feat), 'M2': ndarray(n_feat)}
+    group_stats: dict = {}
+    row_offset = 0
+
+    for ci in range(X_dask.numblocks[0]):
+        chunk_rows = X_dask.chunks[0][ci]
+        cell_mask = cell_keep[row_offset : row_offset + chunk_rows]
+        obs_ci = obs_df.iloc[row_offset : row_offset + chunk_rows]
+        row_offset += chunk_rows
+
+        if not cell_mask.any():
+            continue
+
+        chunk = X_dask.blocks[ci].compute()[cell_mask].astype(np.float64)
+        obs_filt = obs_ci.iloc[cell_mask] if isinstance(cell_mask, np.ndarray) else obs_ci[cell_mask]
+
+        for group_key, idx in obs_filt.groupby(by, observed=True).indices.items():
+            X_g = chunk[idx]
+            if len(X_g) == 0:
+                continue
+            n_g = len(X_g)
+            mean_g = np.nanmean(X_g, axis=0)
+            # Population variance of this batch (ddof=0); Welford handles ddof=1 at end
+            var_g = np.nanvar(X_g, axis=0, ddof=0)
+
+            if group_key not in group_stats:
+                group_stats[group_key] = {
+                    "n": n_g,
+                    "mean": mean_g.copy(),
+                    "M2": var_g * n_g,
+                }
+            else:
+                s = group_stats[group_key]
+                n_total = s["n"] + n_g
+                delta = mean_g - s["mean"]
+                s["mean"] = s["mean"] + delta * n_g / n_total
+                s["M2"] = s["M2"] + var_g * n_g + delta ** 2 * s["n"] * n_g / n_total
+                s["n"] = n_total
+
+        del chunk
+
+    if not group_stats:
+        return np.zeros(n_feat)
+
+    group_variances = []
+    for s in group_stats.values():
+        if s["n"] > 1:
+            group_variances.append(s["M2"] / (s["n"] - 1))  # unbiased
+        else:
+            group_variances.append(np.zeros(n_feat))
+
+    return np.median(np.stack(group_variances, axis=0), axis=0)
+
+
+def _streaming_materialise(
+    X_dask: "da.Array",
+    cell_keep: "np.ndarray",
+    feat_keep: "np.ndarray",
+) -> "np.ndarray":
+    """Pre-allocate the filtered output and fill it one chunk at a time.
+
+    Pre-allocation avoids the peak-memory spike from ``np.concatenate`` at the
+    end (which would momentarily hold two copies of the filtered array).
+
+    :param X_dask: Dask array of shape (n_obs, n_feat).
+    :param cell_keep: Boolean mask (n_obs,) of cells to keep.
+    :param feat_keep: Boolean mask (n_feat,) of features to keep.
+    :return: Float32 numpy array of shape (n_keep_obs, n_keep_feat).
+    """
+    n_out_obs = int(cell_keep.sum())
+    n_out_feat = int(feat_keep.sum())
+    result = np.empty((n_out_obs, n_out_feat), dtype=np.float32)
+    out_row = 0
+    row_offset = 0
+
+    for ci in range(X_dask.numblocks[0]):
+        chunk_rows = X_dask.chunks[0][ci]
+        cell_mask = cell_keep[row_offset : row_offset + chunk_rows]
+        row_offset += chunk_rows
+
+        if not cell_mask.any():
+            continue
+
+        chunk = X_dask.blocks[ci].compute()
+        filtered = chunk[cell_mask][:, feat_keep]
+        n_rows = filtered.shape[0]
+        result[out_row : out_row + n_rows] = filtered
+        out_row += n_rows
+        del chunk, filtered
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Additional feature filters
 # ---------------------------------------------------------------------------
 

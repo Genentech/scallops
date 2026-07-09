@@ -991,6 +991,46 @@ def _corum_to_gene_sets(path: str) -> dict[str, list[str]]:
     return {k: list(v) for k, v in result.items()}
 
 
+def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0, interval_sec: int = 20):
+    """Start a daemon thread that logs loud warnings as RAM fills up.
+
+    Returns a stop-event; call ``stop_event.set()`` to shut it down.
+    """
+    import threading
+    try:
+        import psutil
+    except ImportError:
+        logger.debug("psutil not available — memory monitoring disabled")
+        return None
+
+    stop = threading.Event()
+
+    def _watch():
+        while not stop.is_set():
+            mem = psutil.virtual_memory()
+            used_gb  = mem.used   / 1e9
+            total_gb = mem.total  / 1e9
+            avail_gb = mem.available / 1e9
+            pct = mem.percent
+            if pct >= critical_pct:
+                logger.critical(
+                    "!!! CRITICAL MEMORY: %.0f / %.0f GB used (%.0f%%) — "
+                    "%.0f GB remaining — OOM KILL IMMINENT !!!",
+                    used_gb, total_gb, pct, avail_gb,
+                )
+            elif pct >= warn_pct:
+                logger.warning(
+                    "Memory pressure: %.0f / %.0f GB used (%.0f%%) — "
+                    "%.0f GB remaining",
+                    used_gb, total_gb, pct, avail_gb,
+                )
+            stop.wait(timeout=interval_sec)
+
+    t = threading.Thread(target=_watch, daemon=True, name="scallops-mem-monitor")
+    t.start()
+    return stop
+
+
 def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
     """Filter cells and features.
 
@@ -999,62 +1039,189 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     feature is only removed if it is uninformative *within* wells, not just
     between wells.  Cell-level filtering (max_fraction_not_finite) is always
     global.
+
+    When ``data.X`` is a large dask array (parquet from S3) we use a
+    **3-pass streaming** approach that never loads more than one row group into
+    RAM at a time:
+
+    * Pass 1 — cell quality filter (finite-value check)
+    * Pass 2 — per-well feature variance (Welford's online algorithm)
+    * Pass 3 — materialise the filtered cell × feature matrix
+
+    This preserves ``by=[plate, well]`` stratification and avoids the OOM that
+    occurs when dask's threaded scheduler loads all 24 row groups in parallel.
     """
     from scallops.features.preprocessing import (
         filter_data, filter_zero_inflated, filter_low_cardinality,
         filter_batch_correlated, remove_correlated_features,
+        _streaming_cell_filter, _streaming_feature_variance_by_group,
+        _streaming_materialise,
     )
-    # 0. Cell-level quality filter (applied before variance computation)
-    label_filter = getattr(args, "label_filter", None)
-    if label_filter:
-        keep_idx = _query_anndata(data, label_filter).index
-        # Use a boolean mask rather than integer fancy-indexing: with a dask X,
-        # integer fancy-indexing forces a full materialisation of the parent array
-        # before selecting rows.  A boolean mask avoids that.
-        bool_mask = data.obs.index.isin(keep_idx)
-        data = _slice_anndata(data, bool_mask)
-        logger.info(f"map run [filter]: label_filter kept {data.shape[0]:,} cells")
 
     plate = getattr(args, "plate_column", "plate")
     well  = getattr(args, "well_column",  "well")
-    # Only stratify by columns that exist in the data
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
 
-    # 1. Variance + finite-value filter ────────────────────────────────────
-    # For large dask arrays (parquet from S3), the default threaded dask
-    # scheduler tries to execute all row-group tasks in parallel.  With 24
-    # row groups of ~27 GB each the peak reaches 24 × 49 GB ≈ 1.2 TB → OOM.
-    # Two mitigations applied together:
-    #   a) synchronous scheduler: one row group in memory at a time (49 GB peak)
-    #   b) global variance (by=None): stratified xarray groupby creates per-group
-    #      copies of the whole array; global variance avoids those copies.
-    is_large_dask = isinstance(data.X, da.Array)
-    if is_large_dask:
+    max_fnf  = getattr(args, "max_fraction_not_finite", 0.25)
+    min_var  = getattr(args, "min_variance", 0.1)
+    max_var  = getattr(args, "max_variance", None)
+
+    # ── Streaming path for large dask arrays ──────────────────────────────
+    # The default threaded dask scheduler loads all row-group tasks in parallel.
+    # With 24 row groups of ~27 GB each, peak RAM = 24 × 49 GB ≈ 1.2 TB → OOM.
+    # The streaming path reads one chunk at a time (peak ≈ 50 GB per pass).
+    if isinstance(data.X, da.Array):
+        X_orig  = data.X    # keep ORIGINAL clean block structure
+        obs_all = data.obs  # aligned row-for-row with X_orig
+
+        n_chunks = X_orig.numblocks[0]
+        try:
+            chunk_gb = X_orig.chunks[0][0] * X_orig.shape[1] * 4 / 1e9
+        except Exception:
+            chunk_gb = float("nan")
+
         logger.info(
-            f"map run [filter]: large dask array ({data.shape[0]:,} × {data.shape[1]:,}) "
-            f"— using synchronous scheduler + global variance to avoid OOM. "
-            f"This step takes ~45–90 min (serial S3 reads)."
+            "map run [filter]: streaming mode — %d chunks × %.1f GB each"
+            " (peak ≈ %.0f GB per pass, %.0f GB total after materialise).",
+            n_chunks, chunk_gb, chunk_gb * 2,
+            X_orig.shape[0] * X_orig.shape[1] * 4 / 1e9,
         )
-        import dask as _dask_mod
-        with _dask_mod.config.set(scheduler="synchronous"):
-            result = filter_data(
-                data,
-                max_fraction_not_finite=getattr(args, "max_fraction_not_finite", 0.25),
-                min_variance=getattr(args, "min_variance", 0.1),
-                max_variance=getattr(args, "max_variance", None),
-                by=None,  # global variance — avoids per-well xarray copies
+
+        # Start memory monitor so OOM events are loud in the log
+        _mem_stop = _memory_monitor_start()
+
+        try:
+            # ── Pass 0: label_filter mask (obs-only, no I/O) ───────────────
+            label_filter = getattr(args, "label_filter", None)
+            if label_filter:
+                keep_idx   = _query_anndata(data, label_filter).index
+                label_mask = obs_all.index.isin(keep_idx)
+            else:
+                label_mask = np.ones(len(obs_all), dtype=bool)
+            logger.info(
+                "map run [filter]: label_filter → %s / %s cells",
+                f"{label_mask.sum():,}", f"{len(label_mask):,}",
             )
+
+            # ── Pass 1: per-cell finite-value filter ───────────────────────
+            if max_fnf is not None:
+                logger.info(
+                    "map run [filter]: pass 1/3 — finite-value filter"
+                    " (one chunk at a time) …"
+                )
+                finite_mask = _streaming_cell_filter(X_orig, max_fnf)
+                cell_keep   = label_mask & finite_mask
+            else:
+                cell_keep = label_mask
+            logger.info(
+                "map run [filter]: %s / %s cells pass cell-quality filter",
+                f"{cell_keep.sum():,}", f"{len(cell_keep):,}",
+            )
+
+            # ── Pass 2: per-well feature variance (Welford streaming) ──────
+            if min_var is not None or max_var is not None:
+                logger.info(
+                    "map run [filter]: pass 2/3 — per-%s variance"
+                    " (Welford streaming) …",
+                    "+".join(by_cols) if by_cols else "global",
+                )
+                if by_cols:
+                    feat_var = _streaming_feature_variance_by_group(
+                        X_orig, obs_all, cell_keep, by_cols
+                    )
+                else:
+                    # Fallback: global variance (streaming, no xarray copies)
+                    feat_var = _streaming_feature_variance_by_group(
+                        X_orig, obs_all, cell_keep, ["_dummy_"]
+                    ) if False else _streaming_cell_filter.__class__  # unreachable
+
+                    # simple global: read each chunk, accumulate n/mean/M2
+                    _n, _mean, _M2 = 0, np.zeros(X_orig.shape[1]), np.zeros(X_orig.shape[1])
+                    row_off = 0
+                    for _ci in range(n_chunks):
+                        _cr = X_orig.chunks[0][_ci]
+                        _cm = cell_keep[row_off : row_off + _cr]
+                        row_off += _cr
+                        if not _cm.any():
+                            continue
+                        _ch = X_orig.blocks[_ci].compute()[_cm].astype(np.float64)
+                        _ng = len(_ch)
+                        _mg = np.nanmean(_ch, axis=0)
+                        _vg = np.nanvar(_ch, axis=0, ddof=0)
+                        _nt = _n + _ng
+                        _d  = _mg - _mean
+                        _mean = _mean + _d * _ng / _nt
+                        _M2   = _M2 + _vg * _ng + _d ** 2 * _n * _ng / _nt
+                        _n    = _nt
+                        del _ch
+                    feat_var = _M2 / (_n - 1) if _n > 1 else np.zeros(X_orig.shape[1])
+
+                feat_keep = np.isfinite(feat_var)
+                if min_var is not None:
+                    feat_keep &= feat_var >= min_var
+                if max_var is not None:
+                    feat_keep &= feat_var <= max_var
+                logger.info(
+                    "map run [filter]: %s / %s features pass variance filter",
+                    f"{feat_keep.sum():,}", f"{len(feat_keep):,}",
+                )
+            else:
+                feat_keep = np.ones(X_orig.shape[1], dtype=bool)
+
+            # ── Pass 3: materialise filtered matrix ────────────────────────
+            out_gb = cell_keep.sum() * feat_keep.sum() * 4 / 1e9
+            logger.info(
+                "map run [filter]: pass 3/3 — materialising %s × %s"
+                " (%.1f GB) one chunk at a time …",
+                f"{cell_keep.sum():,}", f"{feat_keep.sum():,}", out_gb,
+            )
+            X_filtered = _streaming_materialise(X_orig, cell_keep, feat_keep)
+            logger.info(
+                "map run [filter]: materialised %.1f GB", X_filtered.nbytes / 1e9
+            )
+
+        except MemoryError as exc:
+            logger.critical(
+                "!!! OUT OF MEMORY during streaming filter — killed at pass %s !!!\n"
+                "  %s\n"
+                "Reduce --localz-batch-size, increase RAM, or pre-filter on a "
+                "smaller machine.",
+                "unknown", exc,
+            )
+            raise
+        finally:
+            if _mem_stop is not None:
+                _mem_stop.set()
+
+        # Assemble result AnnData
+        new_obs = obs_all.iloc[cell_keep].copy()
+        new_var = data.var.iloc[feat_keep].copy()
+        result  = anndata.AnnData(
+            X=X_filtered, obs=new_obs, var=new_var, uns=dict(data.uns),
+        )
+        _merge_uns(data, result)
+
     else:
+        # ── In-memory path ─────────────────────────────────────────────────
+        label_filter = getattr(args, "label_filter", None)
+        if label_filter:
+            keep_idx   = _query_anndata(data, label_filter).index
+            bool_mask  = data.obs.index.isin(keep_idx)
+            data       = _slice_anndata(data, bool_mask)
+            logger.info(
+                "map run [filter]: label_filter kept %s cells",
+                f"{data.shape[0]:,}",
+            )
         result = filter_data(
             data,
-            max_fraction_not_finite=getattr(args, "max_fraction_not_finite", 0.25),
-            min_variance=getattr(args, "min_variance", 0.1),
-            max_variance=getattr(args, "max_variance", None),
-            by=by_cols,   # stratified when data is already in memory
+            max_fraction_not_finite=max_fnf,
+            min_variance=min_var,
+            max_variance=max_var,
+            by=by_cols,
         )
-    _merge_uns(data, result)
+        _merge_uns(data, result)
 
-    # 2. Batch-correlation filter
+    # ── Post-filter steps (run on already-materialised numpy array) ────────
     if getattr(args, "batch_column", None):
         result = filter_batch_correlated(
             result,
@@ -1064,9 +1231,9 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             method=getattr(args, "batch_method", "kruskal"),
         )
 
-    # 3. Correlated-feature filter
     if getattr(args, "max_correlation", None) is not None:
         result = remove_correlated_features(result, threshold=args.max_correlation)
+
     return result
 
 
@@ -1657,26 +1824,14 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             t0 = _time.perf_counter()
             logger.info(f"map run [{step}]: running in memory → accumulates in cells.zarr")
             if step == "filter":
-                # For large dask arrays (S3 parquet), the default threaded
-                # scheduler loads all row-group chunks in parallel and OOMs.
-                # Use synchronous mode for both filtering and materialisation so
-                # only one chunk is in memory at a time (peak ≈ 50 GB).
-                import contextlib as _ctxlib
-                import dask as _dask_mod
-                _sync_ctx = (
-                    _dask_mod.config.set(scheduler="synchronous")
-                    if isinstance(cells.X, da.Array)
-                    else _ctxlib.nullcontext()
-                )
-                with _sync_ctx:
-                    cells = _apply_filter_inmem(cells, arguments)
-                    # ── Now safe to materialise: column count has been reduced ──
-                    if isinstance(cells.X, da.Array):
-                        logger.info(
-                            f"map run [filter]: materialising {cells.shape[0]:,} × "
-                            f"{cells.shape[1]:,} (post-filter) into RAM …"
-                        )
-                        cells.X = cells.X.compute()
+                cells = _apply_filter_inmem(cells, arguments)
+                # Streaming path already returns numpy; dask path may not.
+                if isinstance(cells.X, da.Array):
+                    logger.info(
+                        f"map run [filter]: materialising {cells.shape[0]:,} × "
+                        f"{cells.shape[1]:,} (post-filter) into RAM …"
+                    )
+                    cells.X = cells.X.compute()
                 logger.info(
                     f"map run [filter]: materialised — "
                     f"{cells.X.nbytes / 1e9:.1f} GB in RAM"
