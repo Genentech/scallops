@@ -39,7 +39,7 @@ def single_crop(
     group: str,  # NOT USED
     file_list: list[str],
     metadata: dict,
-    labels_group: Group,
+    labels_group: Group | None,
     output_dir: str,
     output_sep: str,
     merge_dir: str,
@@ -69,14 +69,17 @@ def single_crop(
     output_fs.makedirs(output_dir, exist_ok=True)
     image = _images2fov(file_list, metadata, dask=True).squeeze().data
     logger.info(f"{image_key} image shape {image.shape}")
-    zarr_labels = get_labels(
-        labels_group=labels_group,
-        name=image_key,
-        suffix=label_name,  # e.g. nuclei
-    )
+    label_image = None
+    if labels_group is not None:
+        zarr_labels = get_labels(
+            labels_group=labels_group,
+            name=image_key,
+            suffix=label_name,  # e.g. nuclei
+        )
 
-    if zarr_labels is None:
-        raise ValueError(f"Unable to read {label_name} labels for {image_key}.")
+        if zarr_labels is None:
+            raise ValueError(f"Unable to read {label_name} labels for {image_key}.")
+        label_image = da.from_zarr(zarr_labels)
     merged_df = _read_merged_or_objects(
         merge_dir=merge_dir,
         merge_dir_sep=merge_dir_sep,
@@ -98,7 +101,6 @@ def single_crop(
     )
     if len(merged_df) == 0:
         raise ValueError(f"No labels found for {image_key}.")
-    # e.g. CHAMMI-75
 
     if percentile_normalize is not None:
         if local_percentile_normalize:
@@ -135,7 +137,7 @@ def single_crop(
     image = da.map_blocks(img_as_ubyte, image)
     label_col = "label" if "label" in merged_df.columns else None
     merged_df = to_label_crops(
-        label_image=da.from_zarr(zarr_labels),
+        label_image=label_image,
         intensity_image=image,
         df=merged_df,
         label_col=label_col,
