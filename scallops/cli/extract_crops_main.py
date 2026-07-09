@@ -1,5 +1,7 @@
 import argparse
 
+import fsspec
+import zarr
 from dask.bag import from_sequence
 
 from scallops.cli.arg_parser import _sort_groups
@@ -37,16 +39,15 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
 
     image_patterns = arguments.image_pattern
     output_dir = arguments.output
-    merge_dirs = arguments.merge
+    merge_dir = arguments.merge
     subset = arguments.subset
     force = arguments.force
     groupby = arguments.groupby
     crop_size = arguments.crop_size
     crop_size = (crop_size, crop_size)
-    label_paths = arguments.labels
     label_filter = arguments.label_filter
+    mask = arguments.mask
     percentile_min = arguments.percentile_min
-
     percentile_max = arguments.percentile_max
     output_format = arguments.output_format
     local_percentile_normalize = arguments.local_percentile_normalize
@@ -63,12 +64,32 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
             percentile_max = 100
         percentile_normalize = (percentile_min, percentile_max)
     gaussian_sigma = arguments.gaussian_sigma
+    if gaussian_sigma is not None and not mask:
+        raise ValueError("Please specify `mask` flag when providing `gaussian sigma`")
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=4)
+        dask_cluster_parameters = _dask_workers_threads()
 
+    merge_dir_sep = None
+    if merge_dir is not None:
+        merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
+        merge_dir = merge_dir.rstrip(merge_dir_sep)
+
+    output_fs, _ = fsspec.core.url_to_fs(output_dir)
+    output_dir = output_dir.rstrip(output_fs.sep)
+
+    labels_path = arguments.labels
     no_version = arguments.no_version
+    labels_group = None
+    if not mask:
+        labels_path = None
+    if labels_path is None and mask:
+        raise ValueError("Labels must be provided when `mask` is true.")
+    if labels_path is not None:
+        label_root = zarr.open(labels_path, mode="r")
+        labels_group = label_root["labels"]
+
     image_seq = from_sequence(
         _set_up_experiment(
             images_paths,
@@ -87,8 +108,10 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         image_seq.starmap(
             single_crop,
             output_dir=output_dir,
-            merge_dirs=merge_dirs,
-            label_paths=label_paths,
+            output_sep=output_fs.sep,
+            merge_dir=merge_dir,
+            merge_dir_sep=merge_dir_sep,
+            labels_group=labels_group,
             label_filter=label_filter,
             label_name=label_name,
             percentile_normalize=percentile_normalize,
@@ -117,21 +140,22 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     required = parser.add_argument_group("required arguments")
     images_arg(required)
     output_dir_arg(required)
-    required.add_argument(
-        "--labels",
-        dest="labels",
-        required=True,
-        nargs="+",
-        help="Path to zarr directory containing labels",
-    )
 
     image_pattern_arg(parser)
 
     required.add_argument(
         "--merge",
-        required=False,
-        nargs="*",
         help="Path to directory containing output from `merge`",
+    )
+    parser.add_argument(
+        "--labels",
+        dest="labels",
+        help="Path to zarr directory containing labels. Required when `mask` is true",
+    )
+    parser.add_argument(
+        "--mask",
+        action="store_true",
+        help="Set pixels not belonging to target label to zero",
     )
     parser.add_argument(
         "--label-name",

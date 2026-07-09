@@ -954,7 +954,7 @@ def _extract_crops(
 
 def to_label_crops(
     intensity_image: zarr.Array | da.Array,
-    label_image: zarr.Array | da.Array,
+    label_image: zarr.Array | da.Array | None,
     df: pd.DataFrame,
     output_dir: str,
     crop_size: tuple[int, int] = (224, 224),
@@ -980,13 +980,14 @@ def to_label_crops(
     output_dir = output_dir.rstrip("/")
     is_dask_array = isinstance(intensity_image, da.Array)
     image_shape = intensity_image.shape[-2:]
-    label_shape = label_image.shape
-    assert label_shape == image_shape, "Label shape does not match image shape."
-    assert isinstance(label_image, da.Array) == is_dask_array, (
-        "Label image type does not match intensity image type."
-    )
-    if is_dask_array and intensity_image.chunksize[-2:] != label_image.chunks:
-        label_image = label_image.rechunk(intensity_image.chunksize[-2:])
+    if label_image is not None:
+        label_shape = label_image.shape
+        assert label_shape == image_shape, "Label shape does not match image shape."
+        assert isinstance(label_image, da.Array) == is_dask_array, (
+            "Label image type does not match intensity image type."
+        )
+        if is_dask_array and intensity_image.chunksize[-2:] != label_image.chunks:
+            label_image = label_image.rechunk(intensity_image.chunksize[-2:])
 
     if centroid_cols is None:
         centroid_cols = df.columns[
@@ -1038,7 +1039,8 @@ def to_label_crops(
 
     if not is_dask_array:
         intensity_image = delayed(intensity_image)
-        label_image = delayed(label_image)
+        if label_image is not None:
+            label_image = delayed(label_image)
 
     padding = 0 if gaussian_sigma is None else int(math.ceil(gaussian_sigma * 4))
 
@@ -1058,14 +1060,14 @@ def to_label_crops(
                 slice(
                     max(0, df_slice["crop-bbox-0"].min() - padding),
                     min(
-                        label_shape[0],
+                        image_shape[0],
                         df_slice["crop-bbox-2"].max() + padding,
                     ),
                 ),
                 slice(
                     max(0, df_slice["crop-bbox-1"].min() - padding),
                     min(
-                        label_shape[1],
+                        image_shape[1],
                         df_slice["crop-bbox-3"].max() + padding,
                     ),
                 ),
@@ -1073,12 +1075,14 @@ def to_label_crops(
             label_block = None
             if is_dask_array:
                 image_block = intensity_image[..., sl[0], sl[1]]
-                label_block = label_image[sl[0], sl[1]]
-
+                if label_image is not None:
+                    label_block = label_image[sl[0], sl[1]]
+            elif label_image is not None:
+                label_block = label_image
             results.append(
                 _extract_crops_delayed(
                     intensity_image=image_block if is_dask_array else intensity_image,
-                    label_image=label_block if is_dask_array else label_image,
+                    label_image=label_block,
                     output_dir=output_dir,
                     sl=sl,
                     label_col=label_col,
