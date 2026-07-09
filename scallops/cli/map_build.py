@@ -1040,21 +1040,22 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     between wells.  Cell-level filtering (max_fraction_not_finite) is always
     global.
 
-    When ``data.X`` is a large dask array (parquet from S3) we use a
-    **3-pass streaming** approach that never loads more than one row group into
-    RAM at a time:
+    Three execution paths are selected automatically:
 
-    * Pass 1 — cell quality filter (finite-value check)
-    * Pass 2 — per-well feature variance (Welford's online algorithm)
-    * Pass 3 — materialise the filtered cell × feature matrix
+    * **Parquet column-batch** — when ``data.uns["_parquet_sources"]`` exists
+      (set by ``_read_data`` for parquet inputs).  Reads all row groups in
+      parallel for N features at a time.  ~3 min for 14.3 M × 9 K on S3.
 
-    This preserves ``by=[plate, well]`` stratification and avoids the OOM that
-    occurs when dask's threaded scheduler loads all 24 row groups in parallel.
+    * **Zarr row-batch** — when ``data.X`` is a dask array without parquet
+      sources (local or S3 zarr).  Reads one row-chunk at a time with bounded
+      concurrency (16 local / 50 remote).
+
+    * **In-memory** — h5ad or any numpy-backed AnnData.
     """
     from scallops.features.preprocessing import (
-        filter_data, filter_zero_inflated, filter_low_cardinality,
-        filter_batch_correlated, remove_correlated_features,
-        _streaming_cell_filter, _streaming_feature_variance_by_group,
+        filter_data, filter_batch_correlated, remove_correlated_features,
+        _col_batch_filter_parquet,
+        _streaming_cell_and_variance_filter,
         _streaming_materialise,
     )
 
@@ -1066,13 +1067,81 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     min_var  = getattr(args, "min_variance", 0.1)
     max_var  = getattr(args, "max_variance", None)
 
-    # ── Streaming path for large dask arrays ──────────────────────────────
-    # The default threaded dask scheduler loads all row-group tasks in parallel.
-    # With 24 row groups of ~27 GB each, peak RAM = 24 × 49 GB ≈ 1.2 TB → OOM.
-    # The streaming path reads one chunk at a time (peak ≈ 50 GB per pass).
-    if isinstance(data.X, da.Array):
-        X_orig  = data.X    # keep ORIGINAL clean block structure
-        obs_all = data.obs  # aligned row-for-row with X_orig
+    obs_all = data.obs
+
+    # ── Pass 0: obs-only masks (no feature reads) ─────────────────────────
+    # Compute label_mask from obs metadata before any I/O.
+    label_filter = getattr(args, "label_filter", None)
+    null_mask = np.ones(len(obs_all), dtype=bool)
+    if label_filter:
+        for _col in obs_all.columns:
+            if _col in label_filter and obs_all[_col].isna().any():
+                _null = obs_all[_col].isna().to_numpy()
+                null_mask &= ~_null
+                logger.info(
+                    "map run [filter]: null guard — dropping %s cells"
+                    " where '%s' is null",
+                    f"{int(_null.sum()):,}", _col,
+                )
+
+    if label_filter:
+        keep_idx   = _query_anndata(
+            _slice_anndata(data, null_mask) if not null_mask.all() else data,
+            label_filter,
+        ).index
+        label_mask = null_mask & obs_all.index.isin(keep_idx)
+    else:
+        label_mask = null_mask
+
+    n_total = len(label_mask)
+    logger.info(
+        "map run [filter]: obs masks → %s / %s cells kept"
+        " (%s dropped by null guard, %s by label_filter)",
+        f"{label_mask.sum():,}", f"{n_total:,}",
+        f"{int((~null_mask).sum()):,}",
+        f"{int((null_mask & ~label_mask).sum()):,}",
+    )
+
+    parquet_sources = data.uns.get("_parquet_sources")
+
+    if parquet_sources:
+        # ── Parquet column-batch path ──────────────────────────────────────
+        logger.info(
+            "map run [filter]: parquet column-batch mode (%d sources)",
+            len(parquet_sources),
+        )
+        _mem_stop = _memory_monitor_start()
+        try:
+            X_filtered, cell_keep, feat_keep = _col_batch_filter_parquet(
+                parquet_sources, obs_all, label_mask, by_cols,
+                max_fnf, min_var, max_var,
+            )
+        except MemoryError as exc:
+            logger.critical(
+                "!!! OUT OF MEMORY during parquet column-batch filter !!!\n  %s", exc,
+            )
+            raise
+        finally:
+            if _mem_stop is not None:
+                _mem_stop.set()
+
+        logger.info(
+            "map run [filter]: done — %s cells × %s features",
+            f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
+        )
+        result = anndata.AnnData(
+            X=X_filtered,
+            obs=obs_all.iloc[cell_keep].copy(),
+            var=data.var.iloc[feat_keep].copy(),
+            uns=dict(data.uns),
+        )
+        _merge_uns(data, result)
+
+    elif isinstance(data.X, da.Array):
+        # ── Zarr row-batch path ────────────────────────────────────────────
+        zarr_is_remote = data.uns.get("_zarr_is_remote", False)
+        n_prefetch = 50 if zarr_is_remote else 16
+        X_orig = data.X
 
         n_chunks = X_orig.numblocks[0]
         try:
@@ -1081,143 +1150,88 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             chunk_gb = float("nan")
 
         logger.info(
-            "map run [filter]: streaming mode — %d chunks × %.1f GB each"
-            " (peak ≈ %.0f GB per pass, %.0f GB total after materialise).",
-            n_chunks, chunk_gb, chunk_gb * 2,
-            X_orig.shape[0] * X_orig.shape[1] * 4 / 1e9,
+            "map run [filter]: zarr row-batch mode (n_prefetch=%d, remote=%s) — "
+            "%d chunks × %.1f GB each",
+            n_prefetch, zarr_is_remote, n_chunks, chunk_gb,
         )
 
-        # Start memory monitor so OOM events are loud in the log
         _mem_stop = _memory_monitor_start()
-
         try:
-            # ── Pass 0: label_filter mask (obs-only, no I/O) ───────────────
-            label_filter = getattr(args, "label_filter", None)
-            if label_filter:
-                keep_idx   = _query_anndata(data, label_filter).index
-                label_mask = obs_all.index.isin(keep_idx)
-            else:
-                label_mask = np.ones(len(obs_all), dtype=bool)
+            cell_keep, feat_var = _streaming_cell_and_variance_filter(
+                X_orig, obs_all, label_mask, by_cols, max_fnf,
+                n_prefetch=n_prefetch,
+            )
             logger.info(
-                "map run [filter]: label_filter → %s / %s cells",
-                f"{label_mask.sum():,}", f"{len(label_mask):,}",
+                "map run [filter]: pass 1/2 done — %s cells, %s features examined",
+                f"{cell_keep.sum():,}", f"{X_orig.shape[1]:,}",
             )
 
-            # ── Pass 1: per-cell finite-value filter ───────────────────────
-            if max_fnf is not None:
-                logger.info(
-                    "map run [filter]: pass 1/3 — finite-value filter"
-                    " (one chunk at a time) …"
-                )
-                finite_mask = _streaming_cell_filter(X_orig, max_fnf)
-                cell_keep   = label_mask & finite_mask
-            else:
-                cell_keep = label_mask
+            feat_keep = np.isfinite(feat_var)
+            if min_var is not None:
+                feat_keep &= feat_var >= min_var
+            if max_var is not None:
+                feat_keep &= feat_var <= max_var
             logger.info(
-                "map run [filter]: %s / %s cells pass cell-quality filter",
-                f"{cell_keep.sum():,}", f"{len(cell_keep):,}",
+                "map run [filter]: %s / %s features pass variance filter",
+                f"{feat_keep.sum():,}", f"{X_orig.shape[1]:,}",
             )
 
-            # ── Pass 2: per-well feature variance (Welford streaming) ──────
-            if min_var is not None or max_var is not None:
-                logger.info(
-                    "map run [filter]: pass 2/3 — per-%s variance"
-                    " (Welford streaming) …",
-                    "+".join(by_cols) if by_cols else "global",
-                )
-                if by_cols:
-                    feat_var = _streaming_feature_variance_by_group(
-                        X_orig, obs_all, cell_keep, by_cols
-                    )
-                else:
-                    # Fallback: global variance (streaming, no xarray copies)
-                    feat_var = _streaming_feature_variance_by_group(
-                        X_orig, obs_all, cell_keep, ["_dummy_"]
-                    ) if False else _streaming_cell_filter.__class__  # unreachable
-
-                    # simple global: read each chunk, accumulate n/mean/M2
-                    _n, _mean, _M2 = 0, np.zeros(X_orig.shape[1]), np.zeros(X_orig.shape[1])
-                    row_off = 0
-                    for _ci in range(n_chunks):
-                        _cr = X_orig.chunks[0][_ci]
-                        _cm = cell_keep[row_off : row_off + _cr]
-                        row_off += _cr
-                        if not _cm.any():
-                            continue
-                        _ch = X_orig.blocks[_ci].compute()[_cm].astype(np.float64)
-                        _ng = len(_ch)
-                        _mg = np.nanmean(_ch, axis=0)
-                        _vg = np.nanvar(_ch, axis=0, ddof=0)
-                        _nt = _n + _ng
-                        _d  = _mg - _mean
-                        _mean = _mean + _d * _ng / _nt
-                        _M2   = _M2 + _vg * _ng + _d ** 2 * _n * _ng / _nt
-                        _n    = _nt
-                        del _ch
-                    feat_var = _M2 / (_n - 1) if _n > 1 else np.zeros(X_orig.shape[1])
-
-                feat_keep = np.isfinite(feat_var)
-                if min_var is not None:
-                    feat_keep &= feat_var >= min_var
-                if max_var is not None:
-                    feat_keep &= feat_var <= max_var
-                logger.info(
-                    "map run [filter]: %s / %s features pass variance filter",
-                    f"{feat_keep.sum():,}", f"{len(feat_keep):,}",
-                )
-            else:
-                feat_keep = np.ones(X_orig.shape[1], dtype=bool)
-
-            # ── Pass 3: materialise filtered matrix ────────────────────────
             out_gb = cell_keep.sum() * feat_keep.sum() * 4 / 1e9
             logger.info(
-                "map run [filter]: pass 3/3 — materialising %s × %s"
-                " (%.1f GB) one chunk at a time …",
+                "map run [filter]: pass 2/2 — materialising %s × %s (%.1f GB) …",
                 f"{cell_keep.sum():,}", f"{feat_keep.sum():,}", out_gb,
             )
-            X_filtered = _streaming_materialise(X_orig, cell_keep, feat_keep)
+            X_filtered = _streaming_materialise(X_orig, cell_keep, feat_keep,
+                                                n_prefetch=n_prefetch)
             logger.info(
                 "map run [filter]: materialised %.1f GB", X_filtered.nbytes / 1e9
             )
 
         except MemoryError as exc:
             logger.critical(
-                "!!! OUT OF MEMORY during streaming filter — killed at pass %s !!!\n"
-                "  %s\n"
-                "Reduce --localz-batch-size, increase RAM, or pre-filter on a "
-                "smaller machine.",
-                "unknown", exc,
+                "!!! OUT OF MEMORY during zarr streaming filter !!!\n  %s", exc,
             )
             raise
         finally:
             if _mem_stop is not None:
                 _mem_stop.set()
 
-        # Assemble result AnnData
-        new_obs = obs_all.iloc[cell_keep].copy()
-        new_var = data.var.iloc[feat_keep].copy()
-        result  = anndata.AnnData(
-            X=X_filtered, obs=new_obs, var=new_var, uns=dict(data.uns),
+        result = anndata.AnnData(
+            X=X_filtered,
+            obs=obs_all.iloc[cell_keep].copy(),
+            var=data.var.iloc[feat_keep].copy(),
+            uns=dict(data.uns),
         )
         _merge_uns(data, result)
 
     else:
-        # ── In-memory path ─────────────────────────────────────────────────
-        label_filter = getattr(args, "label_filter", None)
-        if label_filter:
-            keep_idx   = _query_anndata(data, label_filter).index
-            bool_mask  = data.obs.index.isin(keep_idx)
-            data       = _slice_anndata(data, bool_mask)
-            logger.info(
-                "map run [filter]: label_filter kept %s cells",
-                f"{data.shape[0]:,}",
-            )
-        result = filter_data(
-            data,
+        # ── In-memory path (h5ad or small numpy-backed data) ──────────────
+        data_for_filter = (
+            _slice_anndata(data, label_mask) if not label_mask.all() else data
+        )
+        result_tmp = filter_data(
+            data_for_filter,
             max_fraction_not_finite=max_fnf,
             min_variance=min_var,
             max_variance=max_var,
             by=by_cols,
+        )
+        X_filtered = (
+            result_tmp.X if isinstance(result_tmp.X, np.ndarray)
+            else result_tmp.X.compute()
+        )
+        cell_keep = obs_all.index.isin(result_tmp.obs.index)
+        feat_keep = data.var.index.isin(result_tmp.var.index)
+
+        logger.info(
+            "map run [filter]: in-memory — %s cells × %s features",
+            f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
+        )
+        result = anndata.AnnData(
+            X=X_filtered,
+            obs=obs_all.iloc[cell_keep].copy(),
+            var=data.var.iloc[feat_keep].copy(),
+            uns=dict(data.uns),
         )
         _merge_uns(data, result)
 

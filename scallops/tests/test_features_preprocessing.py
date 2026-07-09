@@ -14,6 +14,9 @@ from scallops.features.preprocessing import (
     filter_zero_inflated,
     remove_correlated_features,
     transform_features_yj,
+    _col_batch_filter_parquet,
+    _streaming_cell_and_variance_filter,
+    _streaming_materialise,
 )
 
 
@@ -331,3 +334,104 @@ def test_filter_batch_correlated_single_batch_is_noop(sample_data):
     data.obs["plate"] = "p1"
     result = filter_batch_correlated(data, batch_column="plate")
     assert result.shape == data.shape
+
+
+# ---------------------------------------------------------------------------
+# _col_batch_filter_parquet vs _streaming_cell_and_variance_filter parity
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_col_batch_matches_row_batch(tmp_path):
+    """Column-batch (parquet) and row-batch (zarr) filter paths must agree.
+
+    We write a small synthetic AnnData to parquet, read it back with
+    ``_read_data`` (which populates ``uns["_parquet_sources"]`` and keeps the
+    feature data as a dask array), then run both filter paths and compare the
+    results.
+    """
+    import pyarrow as _pa
+    import pyarrow.parquet as _pq
+    from scallops.features.util import _read_data
+
+    # ── Create a synthetic dataset ────────────────────────────────────────
+    np.random.seed(7)
+    n_obs, n_feat = 60, 12
+    X = np.random.randn(n_obs, n_feat).astype(np.float32)
+    # Make feature 0 low-variance (should be filtered by min_variance)
+    X[:, 0] = 0.001 * np.random.randn(n_obs).astype(np.float32)
+    # Insert a few NaN values into row 5 so it triggers the finite filter
+    X[5, :4] = np.nan
+
+    plates = ["p1"] * 30 + ["p2"] * 30
+    wells  = [str(i % 3) for i in range(n_obs)]
+    obs = pd.DataFrame(
+        {"plate": plates, "well": wells},
+        index=pd.RangeIndex(n_obs).astype(str),
+    )
+    obs.index.name = "cell_id"
+
+    feat_names = [f"Cells_Intensity_feat{i}" for i in range(n_feat)]
+    var = pd.DataFrame(index=feat_names)
+
+    # ── Write to parquet (2 row groups) ──────────────────────────────────
+    pq_path = str(tmp_path / "test_filter.parquet")
+    df_obs  = obs.copy()
+    df_obs.index.name = "cell_id"
+    df_feat = pd.DataFrame(X, columns=feat_names, index=obs.index)
+    df_all  = pd.concat([df_feat, df_obs], axis=1)
+
+    table = _pa.Table.from_pandas(df_all)
+    _pq.write_table(table, pq_path, row_group_size=30)
+
+    # ── Read back via _read_data ──────────────────────────────────────────
+    data = _read_data([pq_path])
+    assert "_parquet_sources" in data.uns, "parquet_sources must be set on read"
+
+    parquet_sources = data.uns["_parquet_sources"]
+    obs_df          = data.obs
+    label_mask      = np.ones(len(obs_df), dtype=bool)
+
+    min_var = 0.05
+    max_fnf = 0.25   # drop cells where > 25% of features are NaN
+    by_cols = ["plate", "well"]
+
+    # ── Path A: column-batch (parquet) ────────────────────────────────────
+    X_col, cell_keep_col, feat_keep_col = _col_batch_filter_parquet(
+        parquet_sources, obs_df, label_mask,
+        by=by_cols,
+        max_fraction_not_finite=max_fnf,
+        min_variance=min_var,
+        max_variance=None,
+        n_workers=2,
+    )
+
+    # ── Path B: row-batch (dask array) ────────────────────────────────────
+    cell_keep_row, feat_var_row = _streaming_cell_and_variance_filter(
+        data.X, obs_df, label_mask,
+        by=by_cols,
+        max_fraction_not_finite=max_fnf,
+        n_prefetch=2,
+    )
+    feat_keep_row = np.isfinite(feat_var_row) & (feat_var_row >= min_var)
+    X_row = _streaming_materialise(data.X, cell_keep_row, feat_keep_row, n_prefetch=2)
+
+    # ── Align feature order: both paths use the same feat_cols from uns ───
+    # cell_keep masks should be identical
+    np.testing.assert_array_equal(
+        cell_keep_col, cell_keep_row,
+        err_msg="cell_keep masks differ between col-batch and row-batch paths",
+    )
+    np.testing.assert_array_equal(
+        feat_keep_col, feat_keep_row,
+        err_msg="feat_keep masks differ between col-batch and row-batch paths",
+    )
+
+    # X_filtered arrays should be numerically close
+    assert X_col.shape == X_row.shape, (
+        f"Filtered shapes differ: col={X_col.shape}, row={X_row.shape}"
+    )
+    np.testing.assert_allclose(
+        X_col, X_row, rtol=1e-4, atol=1e-5,
+        err_msg="X_filtered values differ between col-batch and row-batch paths",
+    )

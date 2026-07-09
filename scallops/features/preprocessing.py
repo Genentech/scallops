@@ -148,6 +148,111 @@ def filter_data(
 # ---------------------------------------------------------------------------
 
 
+def _streaming_cell_and_variance_filter(
+    X_dask: "da.Array",
+    obs_df: "pd.DataFrame",
+    label_mask: "np.ndarray",
+    by: list | None,
+    max_fraction_not_finite: float | None,
+    *,
+    n_prefetch: int = 3,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Single S3 pass: cell-keep mask + per-group Welford variance.
+
+    Merges what were previously two separate passes (``_streaming_cell_filter``
+    and ``_streaming_feature_variance_by_group``) into one read.  Each chunk is
+    fetched once; the cell filter and variance update happen on the same copy.
+
+    :param X_dask: Dask array of shape (n_obs, n_feat).
+    :param obs_df: DataFrame with obs metadata, same row order as X_dask.
+    :param label_mask: Boolean mask (n_obs,) from the label-filter expression
+        (obs-only, no I/O required to compute).
+    :param by: Obs columns to stratify variance by, or None for global.
+    :param max_fraction_not_finite: Cell-level infinite/NaN fraction threshold.
+    :param n_prefetch: Max concurrent S3 chunk reads.
+    :return: ``(cell_keep, feat_var)`` — boolean mask (n_obs,) and float array
+        (n_feat,) of median group variance.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    n_feat   = X_dask.shape[1]
+    n_chunks = X_dask.numblocks[0]
+    max_bad  = int(n_feat * max_fraction_not_finite) if max_fraction_not_finite is not None else n_feat
+
+    group_stats: dict = {}
+    cell_keep_parts: list = []
+    row_offset = 0
+    t0 = time.monotonic()
+
+    logger.info(
+        "  [filter pass 1/2] %d chunks, %d concurrent reads"
+        " — cell filter + %s variance in one S3 pass",
+        n_chunks, n_prefetch,
+        f"per-{'×'.join(by)}" if by else "global",
+    )
+
+    with ThreadPoolExecutor(max_workers=n_prefetch) as pool:
+        futures = [pool.submit(X_dask.blocks[ci].compute) for ci in range(n_chunks)]
+
+        for ci, fut in enumerate(futures):
+            chunk_rows  = X_dask.chunks[0][ci]
+            label_ci    = label_mask[row_offset : row_offset + chunk_rows]
+            obs_ci      = obs_df.iloc[row_offset : row_offset + chunk_rows]
+            row_offset += chunk_rows
+
+            chunk = fut.result()
+
+            # ── Cell filter: label mask ∩ finite-value mask ────────────────
+            bad      = (~np.isfinite(chunk)).sum(axis=1)
+            cell_mask = label_ci & (bad <= max_bad)
+            cell_keep_parts.append(cell_mask)
+
+            # ── Welford variance update (only kept cells) ──────────────────
+            if cell_mask.any():
+                kept     = chunk[cell_mask].astype(np.float64)
+                obs_filt = obs_ci.iloc[cell_mask]
+
+                groups = obs_filt.groupby(by, observed=True).indices if by else {"_all_": np.arange(len(kept))}
+                for gk, idx in groups.items():
+                    X_g = kept[idx]
+                    if len(X_g) == 0:
+                        continue
+                    n_g    = len(X_g)
+                    mean_g = np.nanmean(X_g, axis=0)
+                    var_g  = np.nanvar(X_g, axis=0, ddof=0)
+                    if gk not in group_stats:
+                        group_stats[gk] = {"n": n_g, "mean": mean_g.copy(), "M2": var_g * n_g}
+                    else:
+                        s = group_stats[gk]
+                        nt    = s["n"] + n_g
+                        delta = mean_g - s["mean"]
+                        s["mean"] += delta * n_g / nt
+                        s["M2"]   += var_g * n_g + delta ** 2 * s["n"] * n_g / nt
+                        s["n"]     = nt
+                del kept
+
+            del chunk
+            done = ci + 1
+            eta  = (time.monotonic() - t0) / done * (n_chunks - done) / 60
+            logger.info(
+                "  [filter pass 1/2] %d/%d done — %s cells kept — ETA: %.0f min",
+                done, n_chunks, f"{int(cell_mask.sum()):,}", eta,
+            )
+
+    cell_keep = np.concatenate(cell_keep_parts)
+
+    if not group_stats:
+        return cell_keep, np.zeros(n_feat)
+
+    vars_per_group = [
+        s["M2"] / (s["n"] - 1) if s["n"] > 1 else np.zeros(n_feat)
+        for s in group_stats.values()
+    ]
+    feat_var = np.median(np.stack(vars_per_group, axis=0), axis=0)
+    return cell_keep, feat_var
+
+
 def _streaming_cell_filter(
     X_dask: "da.Array",
     max_fraction_not_finite: float,
@@ -308,6 +413,8 @@ def _streaming_materialise(
     X_dask: "da.Array",
     cell_keep: "np.ndarray",
     feat_keep: "np.ndarray",
+    *,
+    n_prefetch: int = 3,
 ) -> "np.ndarray":
     """Pre-allocate the filtered output and fill it one chunk at a time.
 
@@ -317,6 +424,7 @@ def _streaming_materialise(
     :param X_dask: Dask array of shape (n_obs, n_feat).
     :param cell_keep: Boolean mask (n_obs,) of cells to keep.
     :param feat_keep: Boolean mask (n_feat,) of features to keep.
+    :param n_prefetch: Max concurrent chunk reads (higher = faster but more RAM).
     :return: Float32 numpy array of shape (n_keep_obs, n_keep_feat).
     """
     from concurrent.futures import ThreadPoolExecutor
@@ -324,7 +432,6 @@ def _streaming_materialise(
     n_out_obs  = int(cell_keep.sum())
     n_out_feat = int(feat_keep.sum())
     n_chunks   = X_dask.numblocks[0]
-    n_prefetch = 3
     result     = np.empty((n_out_obs, n_out_feat), dtype=np.float32)
     out_row    = 0
     row_offset = 0
@@ -349,6 +456,216 @@ def _streaming_materialise(
             del filtered
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Column-batch filter for parquet (all row groups parallel per feature batch)
+# ---------------------------------------------------------------------------
+
+
+def _col_batch_filter_parquet(
+    sources: list,
+    obs_df: "pd.DataFrame",
+    label_mask: "np.ndarray",
+    by: list | None,
+    max_fraction_not_finite: float | None,
+    min_variance: float | None,
+    max_variance: float | None,
+    n_workers: int = 24,
+) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+    """Column-batch filter for parquet-on-S3.  Returns (X_filtered, cell_keep, feat_keep).
+
+    Reads all row groups in parallel for one feature batch at a time.
+    Peak memory ≈ batch_size × n_cells × 4 bytes + accumulated result.
+
+    Two passes:
+      Pass 1: accumulate per-cell non-finite counts + per-group Welford variance.
+      Pass 2: materialise filtered result (cell_keep × feat_keep) written
+              column-batch by column-batch.
+
+    :param sources: List of dicts with keys ``path``, ``feat_cols``,
+        ``n_row_groups``, ``row_group_sizes`` — as produced by ``_read_data``.
+    :param obs_df: DataFrame with obs metadata, row-aligned with the
+        concatenated sources.
+    :param label_mask: Boolean mask (n_obs,) from an obs-only label filter.
+    :param by: Obs columns to stratify variance by, or None for global.
+    :param max_fraction_not_finite: Cell-level infinite/NaN fraction threshold.
+    :param min_variance: Minimum variance threshold (None = disabled).
+    :param max_variance: Maximum variance threshold (None = disabled).
+    :param n_workers: Number of concurrent parquet row-group reads.
+    :return: ``(X_filtered, cell_keep, feat_keep)`` — float32 array and two
+        boolean masks.
+    """
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    import pandas as _pd
+
+    # ── Build a flat list of (path, rg_idx) pieces in row order ─────────────
+    # Each source contributes n_row_groups pieces.  The pieces, read in this
+    # order, reproduce the same row ordering as obs_df.
+    pieces: list[tuple[str, int]] = []
+    feat_cols: list[str] = []  # feature column names (same for all sources)
+    for src in sources:
+        for rg_i in range(src["n_row_groups"]):
+            pieces.append((src["path"], rg_i))
+        if not feat_cols:
+            feat_cols = list(src["feat_cols"])
+        # For multi-file inputs every source must have the same features
+        # (guaranteed upstream by _read_data which uses a shared feature set)
+
+    n_cells = len(obs_df)
+    n_feat  = len(feat_cols)
+    max_bad = int(n_feat * max_fraction_not_finite) if max_fraction_not_finite is not None else n_feat
+
+    # ── Estimate batch_size from available RAM ────────────────────────────────
+    try:
+        import psutil as _psutil
+        avail = _psutil.virtual_memory().available
+        batch_size = int(avail * 0.20 / max(n_cells * 4, 1))
+    except Exception:
+        batch_size = 500
+    batch_size = max(50, min(5000, batch_size))
+
+    # Split features into batches
+    feat_batches = [feat_cols[i : i + batch_size] for i in range(0, n_feat, batch_size)]
+    n_batches = len(feat_batches)
+
+    logger.info(
+        "  [col-batch filter] %d features, batch_size=%d → %d batches, "
+        "%d pieces, %d workers",
+        n_feat, batch_size, n_batches, len(pieces), n_workers,
+    )
+
+    # ── Helper: read one row-group for a given feature batch ─────────────────
+    def _read_piece(path: str, rg_i: int, feat_batch: list[str]) -> np.ndarray:
+        import pyarrow.parquet as _pq
+        import fsspec as _fsspec
+        _rg_fs, _rg_fp = _fsspec.url_to_fs(path)
+        with _rg_fs.open(_rg_fp, "rb") as _f:
+            _pf = _pq.ParquetFile(_f)
+            tbl = _pf.read_row_group(rg_i, columns=feat_batch)
+        return tbl.to_pandas().values.astype(np.float32)
+
+    # ── Pass 1: cell quality mask + Welford variance ─────────────────────────
+    bad_counts   = np.zeros(n_cells, dtype=np.int32)   # per-cell non-finite count
+    feat_var_parts: list[np.ndarray] = []              # one entry per batch
+    t0 = time.monotonic()
+
+    for bi, feat_batch in enumerate(feat_batches):
+        bsz = len(feat_batch)
+
+        # Read all pieces (row groups across all source files) in parallel
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futs = [pool.submit(_read_piece, path, rg_i, feat_batch)
+                    for path, rg_i in pieces]
+            chunks = [f.result() for f in futs]
+
+        # Concatenate pieces in row order → shape (n_cells, bsz)
+        X_batch = np.concatenate(chunks, axis=0)
+        assert X_batch.shape == (n_cells, bsz), (
+            f"Shape mismatch: expected ({n_cells}, {bsz}), got {X_batch.shape}"
+        )
+
+        # Accumulate per-cell non-finite counts
+        bad_counts += (~np.isfinite(X_batch)).sum(axis=1).astype(np.int32)
+
+        # Welford variance for this batch's features (only label-masked cells)
+        batch_group_stats: dict = {}
+        X_kept   = X_batch[label_mask].astype(np.float64)
+        obs_kept = obs_df.iloc[label_mask]
+
+        groups = (
+            obs_kept.groupby(by, observed=True).indices
+            if by
+            else {"_all_": np.arange(len(X_kept))}
+        )
+        for gk, idx in groups.items():
+            X_g = X_kept[idx]
+            if len(X_g) == 0:
+                continue
+            n_g    = len(X_g)
+            mean_g = np.nanmean(X_g, axis=0)
+            var_g  = np.nanvar(X_g, axis=0, ddof=0)
+            if gk not in batch_group_stats:
+                batch_group_stats[gk] = {"n": n_g, "mean": mean_g.copy(), "M2": var_g * n_g}
+            else:
+                s  = batch_group_stats[gk]
+                nt = s["n"] + n_g
+                delta   = mean_g - s["mean"]
+                s["mean"] += delta * n_g / nt
+                s["M2"]   += var_g * n_g + delta ** 2 * s["n"] * n_g / nt
+                s["n"]     = nt
+
+        # Compute median variance for this batch
+        if batch_group_stats:
+            vars_per_group = [
+                s["M2"] / (s["n"] - 1) if s["n"] > 1 else np.zeros(bsz)
+                for s in batch_group_stats.values()
+            ]
+            feat_var_parts.append(np.median(np.stack(vars_per_group, axis=0), axis=0))
+        else:
+            feat_var_parts.append(np.zeros(bsz))
+
+        del X_batch, chunks
+        done = bi + 1
+        eta  = (time.monotonic() - t0) / done * (n_batches - done) / 60
+        logger.info(
+            "  [col-batch filter pass 1] batch %d/%d — ETA: %.0f min",
+            done, n_batches, eta,
+        )
+
+    # ── Compute keep masks after pass 1 ──────────────────────────────────────
+    cell_keep = label_mask & (bad_counts <= max_bad)
+    feat_var  = np.concatenate(feat_var_parts)
+
+    feat_keep = np.isfinite(feat_var)
+    if min_variance is not None:
+        feat_keep &= feat_var >= min_variance
+    if max_variance is not None:
+        feat_keep &= feat_var <= max_variance
+
+    n_cells_out = int(cell_keep.sum())
+    n_feat_out  = int(feat_keep.sum())
+    logger.info(
+        "  [col-batch filter] pass 1 done — %d / %d cells, %d / %d features kept",
+        n_cells_out, n_cells, n_feat_out, n_feat,
+    )
+
+    # ── Pass 2: materialise filtered result ───────────────────────────────────
+    result = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
+    out_col = 0
+    # Build a per-batch boolean sub-mask into feat_keep
+    feat_keep_offsets = np.cumsum([0] + [len(b) for b in feat_batches])
+    t0 = time.monotonic()
+
+    for bi, feat_batch in enumerate(feat_batches):
+        start  = feat_keep_offsets[bi]
+        end    = feat_keep_offsets[bi + 1]
+        local_keep = feat_keep[start:end]
+        n_local = int(local_keep.sum())
+        if n_local == 0:
+            continue
+
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            futs = [pool.submit(_read_piece, path, rg_i, feat_batch)
+                    for path, rg_i in pieces]
+            chunks = [f.result() for f in futs]
+
+        X_batch  = np.concatenate(chunks, axis=0)   # (n_cells, bsz)
+        filtered = X_batch[cell_keep][:, local_keep]  # (n_cells_out, n_local)
+        result[:, out_col : out_col + n_local] = filtered
+        out_col += n_local
+        del X_batch, chunks, filtered
+
+        done = bi + 1
+        eta  = (time.monotonic() - t0) / done * (n_batches - done) / 60
+        logger.info(
+            "  [col-batch filter pass 2] batch %d/%d — ETA: %.0f min",
+            done, n_batches, eta,
+        )
+
+    return result, cell_keep, feat_keep
 
 
 # ---------------------------------------------------------------------------
