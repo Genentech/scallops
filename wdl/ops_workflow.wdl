@@ -349,7 +349,7 @@ workflow ops_workflow {
                                     image_channel=select_first([phenotype_dapi_channel, 0]),
                                     stacked_image_channel=0,
                                     label_type="nuclei",
-                                    output_directory=register_pheno_to_pheno_qc_directory + "-" + phenotype_time,
+                                    output_directory=register_pheno_to_pheno_qc_directory,
                                     force = force_register_pheno_to_pheno_qc,
                                     container=container,
                                     zones = zones,

@@ -261,13 +261,18 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
     env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
     env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
-
+    assert (output / "merge-sbs-metadata" / "plateA-A1.parquet").exists(), (
+        "Merged metadata parquet not found"
+    )
+    assert (output / "merge-features" / "plateA-A1.parquet").exists(), (
+        "Merged features not found"
+    )
     merge_sbs_metadata_df = pd.read_parquet(
         output / "merge-sbs-metadata" / "plateA-A1.parquet"
     )
     assert len(merge_sbs_metadata_df) > len(
         merge_sbs_metadata_df.query("~barcode_count_0.isna()")
-    )
+    ), "Metadata should include all cells"
     assert (
         len(
             merge_sbs_metadata_df.columns[
@@ -275,7 +280,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
             ]
         )
         > 0
-    ), "No QC columns found"
+    ), f"No QC columns found in {', '.join(merge_sbs_metadata_df.columns.tolist())}"
     assert (
         len(
             merge_sbs_metadata_df.columns[
@@ -283,12 +288,12 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
             ]
         )
         == 0
-    ), "Intensity columns found in merge_sbs_metadata_df"
+    ), f"Intensity columns found in {', '.join(merge_sbs_metadata_df.columns.tolist())}"
 
     merge_features_df = pd.read_parquet(output / "merge-features" / "plateA-A1.parquet")
     assert (
         len(merge_features_df.columns[merge_features_df.columns.str.contains("qc")]) > 0
-    ), "No QC columns found"
+    ), f"No QC columns found in {', '.join(merge_features_df.columns.tolist())}"
     assert (
         len(
             merge_features_df.columns[
@@ -296,7 +301,7 @@ def test_ops_wdl(phenotype_rounds, tmp_path):
             ]
         )
         > 0
-    ), "No intensity columns found in merge_features_df"
+    ), f"No intensity columns found in {', '.join(merge_features_df.columns.tolist())}"
     intensity_column = merge_features_df.columns[
         merge_features_df.columns.str.contains("Intensity")
     ][0]
