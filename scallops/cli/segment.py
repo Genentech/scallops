@@ -389,11 +389,6 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
 
     kwargs = dict()
     timepoint = arguments.time if arguments.time is not None else 0
-    if isinstance(timepoint, str) and timepoint.isdigit():
-        try:
-            timepoint = int(timepoint)
-        except ValueError:
-            pass
     if not nuclei:
         kwargs["nuclei_min_area"] = arguments.nuclei_min_area
         kwargs["nuclei_max_area"] = arguments.nuclei_max_area
