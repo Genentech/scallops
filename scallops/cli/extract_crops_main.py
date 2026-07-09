@@ -64,6 +64,8 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
             percentile_max = 100
         percentile_normalize = (percentile_min, percentile_max)
     gaussian_sigma = arguments.gaussian_sigma
+    if gaussian_sigma is not None and not mask:
+        raise ValueError("Please specify `mask` flag when providing `gaussian sigma`")
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
     if dask_server_url is None and arguments.dask_cluster is None:
