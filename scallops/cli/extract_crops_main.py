@@ -46,8 +46,8 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     crop_size = arguments.crop_size
     crop_size = (crop_size, crop_size)
     label_filter = arguments.label_filter
+    mask = arguments.mask
     percentile_min = arguments.percentile_min
-
     percentile_max = arguments.percentile_max
     output_format = arguments.output_format
     local_percentile_normalize = arguments.local_percentile_normalize
@@ -79,9 +79,14 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
 
     labels_path = arguments.labels
     no_version = arguments.no_version
-    assert labels_path is not None, "No labels provided"
-    label_root = zarr.open(labels_path, mode="r")
-    labels_group = label_root["labels"]
+    labels_group = None
+    if mask:
+        labels_path = None
+    if labels_path is None and mask:
+        raise ValueError("Labels must be provided when `mask` is true.")
+    if labels_path is not None:
+        label_root = zarr.open(labels_path, mode="r")
+        labels_group = label_root["labels"]
 
     image_seq = from_sequence(
         _set_up_experiment(
@@ -133,19 +138,22 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     required = parser.add_argument_group("required arguments")
     images_arg(required)
     output_dir_arg(required)
-    required.add_argument(
-        "--labels",
-        dest="labels",
-        required=True,
-        help="Path to zarr directory containing labels",
-    )
 
     image_pattern_arg(parser)
 
     required.add_argument(
         "--merge",
-        required=False,
         help="Path to directory containing output from `merge`",
+    )
+    parser.add_argument(
+        "--labels",
+        dest="labels",
+        help="Path to zarr directory containing labels. Required when `mask` is true",
+    )
+    parser.add_argument(
+        "--mask",
+        action="store_true",
+        help="Set pixels not belonging to target label to zero",
     )
     parser.add_argument(
         "--label-name",

@@ -33,8 +33,9 @@ __tests__ = __this__.parent
 __data__ = __tests__.joinpath("data")
 
 
+@pytest.mark.parametrize("mask", [True, False])
 @pytest.mark.features
-def test_extract_crops_cmd(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
+def test_extract_crops_cmd(tmp_path, array_A1_102_cells, array_A1_102_alnpheno, mask):
     image = (
         array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x")).rename(
             {"z": "t", "t": "z"}
@@ -76,6 +77,8 @@ def test_extract_crops_cmd(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
         "--output",
         crops_output_path,
     ]
+    if mask:
+        cmd.append("--mask")
 
     check_call(cmd)
     img = read_image(crops_output_path + "/cell/test/1523.tiff")
@@ -90,8 +93,9 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
         .rename({"z": "t", "t": "z"})
         .isel(t=0, z=0)
     ).data  # ops swaps z and t in saved tif
-    output_dir_dask = str(tmp_path / "crops-dask")
-    output_dir_zarr = str(tmp_path / "crops-zarr")
+    output_dir_dask = str(tmp_path / "crops-mask-dask")
+    output_dir_zarr = str(tmp_path / "crops-mask-zarr")
+    output_dir_no_mask = str(tmp_path / "crops-dask")
 
     intensity_image = da.from_array(intensity_image).rechunk((-1, -1, 50, 50))
     objects_df = find_objects(label_image).compute()
@@ -127,15 +131,29 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     img_zarr = read_image(os.path.join(output_dir_zarr, "2603.tiff")).values.squeeze()
     np.testing.assert_array_equal(img_dask, img_zarr)
     # centroid: 1007.136364  579.090909
-    slice_2603 = intensity_image[
+    slice_2603_img = intensity_image[
         ..., slice(1007 - 15, 1007 + 15), slice(579 - 15, 579 + 15)
     ].compute()
     slice_2603_labels = label_image[
         ..., slice(1007 - 15, 1007 + 15), slice(579 - 15, 579 + 15)
     ].compute()
-    slice_2603 = slice_2603 * (slice_2603_labels == 2603)
+    slice_2603 = slice_2603_img * (slice_2603_labels == 2603)
     assert slice_2603.shape == (2, 30, 30)
     np.testing.assert_array_equal(img_dask, slice_2603, strict=True)
+
+    result_df_no_mask = to_label_crops(
+        intensity_image=intensity_image,
+        label_image=None,
+        df=objects_df.query("index==2603|index==17"),
+        crop_size=crop_size,
+        output_dir=output_dir_no_mask,
+    )
+    # 17 should be filtered b/c on tile edge
+    assert len(result_df_no_mask) == 1 and result_df_no_mask.index.values[0] == 2603
+    img_no_mask = read_image(
+        os.path.join(output_dir_no_mask, "2603.tiff")
+    ).values.squeeze()
+    np.testing.assert_array_equal(img_no_mask, slice_2603_img)
 
 
 def _label_features(
