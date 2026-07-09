@@ -189,6 +189,8 @@ def _read_data(
         paths = [paths]
     assert len(paths) == len(set(paths)), "Duplicate path"
     data_arrays = []
+    parquet_sources: list = []   # collected outside the loop — survives concat
+    zarr_is_remote: bool | None = None
     for path in paths:
         if path.lower().endswith(".parquet") or path.lower().endswith(".pq"):
             import dask
@@ -280,7 +282,23 @@ def _read_data(
                 obs=_obs_df,
                 var=pd.DataFrame(index=_feat_cols),
             )
+            # Collect source info outside the loop so anndata.concat does not
+            # lose it — only the first file's uns survives concat.
+            parquet_sources.append({
+                "path":           path,
+                "feat_cols":      _feat_cols,
+                "n_row_groups":   _pq_meta.num_row_groups,
+                "row_group_sizes": [
+                    _pq_meta.row_group(i).num_rows
+                    for i in range(_pq_meta.num_row_groups)
+                ],
+            })
+        elif path.lower().endswith(".h5ad"):
+            d = anndata.read_h5ad(path)   # h5py-backed; X is numpy → in-memory path
+            if features is not None and len(features) > 0:
+                d = d[:, features]
         else:
+            zarr_is_remote = path.lower().startswith(("s3://", "gs://", "az://", "abfs://"))
             d = read_anndata_zarr(path, dask=True)
             if features is not None and len(features) > 0:
                 d = d[:, features]
@@ -293,6 +311,15 @@ def _read_data(
         if len(data_arrays) == 1
         else anndata.concat(data_arrays, index_unique="-")
     )
+
+    # Set source metadata on the final (possibly concatenated) object so that
+    # _apply_filter_inmem always sees the full list regardless of how many
+    # input files were passed.
+    if parquet_sources:
+        data.uns["_parquet_sources"] = parquet_sources
+    if zarr_is_remote is not None:
+        data.uns["_zarr_is_remote"] = zarr_is_remote
+
     return data
 
 
