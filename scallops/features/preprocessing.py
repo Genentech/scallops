@@ -570,47 +570,38 @@ def _col_batch_filter_parquet(
             f"Shape mismatch: expected ({n_cells}, {bsz}), got {X_batch.shape}"
         )
 
-        # Accumulate per-cell non-finite counts
+        # Accumulate per-cell non-finite counts (in-place on X_batch, no copy)
         bad_counts += (~np.isfinite(X_batch)).sum(axis=1).astype(np.int32)
 
-        # Welford variance for this batch's features (only label-masked cells)
-        batch_group_stats: dict = {}
-        X_kept   = X_batch[label_mask].astype(np.float64)
-        obs_kept = obs_df.iloc[label_mask]
+        # Free the 24 raw piece arrays as soon as they're concatenated.
+        del chunks
 
+        # Direct per-group variance — no Welford needed.
+        # The column-batch approach already has ALL cells in X_batch, so we can
+        # call np.nanvar directly per group.  Welford is only necessary when
+        # accumulating across row-chunks of the SAME features (the zarr path).
+        obs_label     = obs_df.iloc[label_mask]
+        label_pos     = np.where(label_mask)[0]
         groups = (
-            obs_kept.groupby(by, observed=True).indices
+            obs_label.groupby(by, observed=True).indices
             if by
-            else {"_all_": np.arange(len(X_kept))}
+            else {"_all_": np.arange(label_pos.size)}
         )
-        for gk, idx in groups.items():
-            X_g = X_kept[idx]
+
+        group_vars: list = []
+        for gk, grp_idx in groups.items():
+            X_g = X_batch[label_pos[grp_idx]]   # small per-group slice
             if len(X_g) == 0:
                 continue
-            n_g    = len(X_g)
-            mean_g = np.nanmean(X_g, axis=0)
-            var_g  = np.nanvar(X_g, axis=0, ddof=0)
-            if gk not in batch_group_stats:
-                batch_group_stats[gk] = {"n": n_g, "mean": mean_g.copy(), "M2": var_g * n_g}
-            else:
-                s  = batch_group_stats[gk]
-                nt = s["n"] + n_g
-                delta   = mean_g - s["mean"]
-                s["mean"] += delta * n_g / nt
-                s["M2"]   += var_g * n_g + delta ** 2 * s["n"] * n_g / nt
-                s["n"]     = nt
+            group_vars.append(np.nanvar(X_g, axis=0, ddof=1))
+            del X_g
 
-        # Compute median variance for this batch
-        if batch_group_stats:
-            vars_per_group = [
-                s["M2"] / (s["n"] - 1) if s["n"] > 1 else np.zeros(bsz)
-                for s in batch_group_stats.values()
-            ]
-            feat_var_parts.append(np.median(np.stack(vars_per_group, axis=0), axis=0))
-        else:
-            feat_var_parts.append(np.zeros(bsz))
+        feat_var_parts.append(
+            np.median(np.stack(group_vars, axis=0), axis=0)
+            if group_vars else np.zeros(bsz)
+        )
 
-        del X_batch, chunks
+        del X_batch
         done = bi + 1
         eta  = (time.monotonic() - t0) / done * (n_batches - done) / 60
         logger.info(
