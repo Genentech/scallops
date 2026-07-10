@@ -533,13 +533,23 @@ def _col_batch_filter_parquet(
     group_stats: dict = {}
     row_offset  = 0
 
-    scanner1 = dataset.scanner(columns=feat_cols, batch_size=500_000, use_threads=True)
+    # batch_readahead / fragment_readahead control PyArrow's internal prefetch.
+    # The defaults (16 / 4) pre-buffer up to 16 × 37 GB = 592 GB before a
+    # single batch is consumed — OOM on a 1 TB machine.  Limit to 2 / 1.
+    scanner1 = dataset.scanner(
+        columns=feat_cols,
+        batch_size=500_000,
+        use_threads=True,
+        batch_readahead=2,
+        fragment_readahead=1,
+    )
     t0 = time.monotonic()
     n_done = 0
 
     for batch in scanner1.to_batches():
-        n_b     = len(batch)
-        X_b     = batch.to_pandas().values.astype(np.float32)
+        n_b = len(batch)
+        X_b = batch.to_pandas().to_numpy(np.float32)
+        del batch
         label_b = label_mask[row_offset : row_offset + n_b]
         row_offset += n_b
 
@@ -613,7 +623,11 @@ def _col_batch_filter_parquet(
     row_offset  = 0
 
     scanner2 = dataset.scanner(
-        columns=kept_feat_cols, batch_size=500_000, use_threads=True,
+        columns=kept_feat_cols,
+        batch_size=500_000,
+        use_threads=True,
+        batch_readahead=2,
+        fragment_readahead=1,
     )
     t0 = time.monotonic()
     n_done = 0
