@@ -1353,6 +1353,12 @@ def _create_run_parser(
     filt.add_argument("--max-variance", type=float, default=5.0, dest="max_variance")
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
+    filt.add_argument(
+        "--filter-batch-size", type=int, default=500_000, dest="filter_batch_size",
+        help="Rows per streaming batch during parquet filter (default 500 000). "
+             "Larger = more RAM used but fewer batches; auto-scales readahead "
+             "to stay within available memory.",
+    )
     filt.add_argument("--max-correlation", type=float, default=None, dest="max_correlation",
                       help="Remove pairs of features with |r| above this threshold "
                            "(disabled by default).")

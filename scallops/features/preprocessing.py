@@ -472,6 +472,7 @@ def _col_batch_filter_parquet(
     min_variance: float | None,
     max_variance: float | None,
     feat_cols: "list[str] | None" = None,
+    batch_size: int = 500_000,
 ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
     """Two-pass sequential streaming filter for parquet files (local or S3).
 
@@ -533,15 +534,30 @@ def _col_batch_filter_parquet(
     group_stats: dict = {}
     row_offset  = 0
 
-    # batch_readahead / fragment_readahead control PyArrow's internal prefetch.
-    # The defaults (16 / 4) pre-buffer up to 16 × 37 GB = 592 GB before a
-    # single batch is consumed — OOM on a 1 TB machine.  Limit to 2 / 1.
+    # Compute batch_readahead / fragment_readahead from available RAM so the
+    # scanner doesn't buffer more than 40% of available memory in read-ahead.
+    # float64 parquet → worst-case 8 bytes/element per batch.
+    try:
+        import psutil as _psutil
+        _avail_gb = _psutil.virtual_memory().available / 1e9
+    except Exception:
+        _avail_gb = 64.0   # conservative fallback
+    _batch_gb  = batch_size * n_feat * 8 / 1e9          # float64 worst case
+    _budget_batches = max(2, int(_avail_gb * 0.40 / max(_batch_gb, 0.1)))
+    _frag_ra   = max(1, min(len(sources), _budget_batches // 3))
+    _batch_ra  = max(2, min(8, _budget_batches // max(1, _frag_ra)))
+    logger.info(
+        "  [scanner] available=%.0f GB → fragment_readahead=%d, batch_readahead=%d"
+        " (budget ≈%.0f GB)",
+        _avail_gb, _frag_ra, _batch_ra, _frag_ra * _batch_ra * _batch_gb,
+    )
+
     scanner1 = dataset.scanner(
         columns=feat_cols,
-        batch_size=500_000,
+        batch_size=batch_size,
         use_threads=True,
-        batch_readahead=2,
-        fragment_readahead=1,
+        batch_readahead=_batch_ra,
+        fragment_readahead=_frag_ra,
     )
     t0 = time.monotonic()
     n_done = 0
@@ -572,9 +588,12 @@ def _col_batch_filter_parquet(
                 X_g = X_kept[idx]
                 if len(X_g) == 0:
                     continue
-                n_g    = len(X_g)
-                mean_g = np.nanmean(X_g, axis=0)
-                var_g  = np.nanvar(X_g, axis=0, ddof=0)
+                n_g = len(X_g)
+                import warnings as _w
+                with _w.catch_warnings():
+                    _w.simplefilter("ignore", RuntimeWarning)
+                    mean_g = np.nanmean(X_g, axis=0)
+                    var_g  = np.nanvar(X_g, axis=0, ddof=0)
                 if gk not in group_stats:
                     group_stats[gk] = {"n": n_g, "mean": mean_g.copy(), "M2": var_g * n_g}
                 else:
@@ -622,12 +641,18 @@ def _col_batch_filter_parquet(
     out_row     = 0
     row_offset  = 0
 
+    # Pass 2 reads only surviving columns — re-derive readahead with smaller batch
+    _batch_gb2 = batch_size * n_feat_out * 8 / 1e9
+    _budget2   = max(2, int(_avail_gb * 0.40 / max(_batch_gb2, 0.1)))
+    _frag_ra2  = max(1, min(len(sources), _budget2 // 3))
+    _batch_ra2 = max(2, min(8, _budget2 // max(1, _frag_ra2)))
+
     scanner2 = dataset.scanner(
         columns=kept_feat_cols,
-        batch_size=500_000,
+        batch_size=batch_size,
         use_threads=True,
-        batch_readahead=2,
-        fragment_readahead=1,
+        batch_readahead=_batch_ra2,
+        fragment_readahead=_frag_ra2,
     )
     t0 = time.monotonic()
     n_done = 0
