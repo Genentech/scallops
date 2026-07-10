@@ -280,7 +280,7 @@ def test_segment_cells_cmd(experiment_c_dask, tmp_path):
         "--image-pattern",
         "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
         "--time",
-        "0",
+        "1",
         "--output=" + tmp_path,
         "--subset=A1-102",
         "--method",
