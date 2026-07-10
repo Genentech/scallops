@@ -471,150 +471,128 @@ def _col_batch_filter_parquet(
     max_fraction_not_finite: float | None,
     min_variance: float | None,
     max_variance: float | None,
-    n_workers: int = 24,
+    feat_cols: "list[str] | None" = None,
 ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
-    """Column-batch filter for parquet-on-S3.  Returns (X_filtered, cell_keep, feat_keep).
+    """Two-pass sequential streaming filter for parquet files (local or S3).
 
-    Reads all row groups in parallel for one feature batch at a time.
-    Peak memory ≈ batch_size × n_cells × 4 bytes + accumulated result.
+    Works for both parquet AND any format accepted by the PyArrow dataset API.
+    Uses sequential HTTP GETs (one per S3 object) rather than per-column range
+    requests, and handles files with mismatched schemas automatically.
 
-    Two passes:
-      Pass 1: accumulate per-cell non-finite counts + per-group Welford variance.
-      Pass 2: materialise filtered result (cell_keep × feat_keep) written
-              column-batch by column-batch.
+    Uses sequential S3 reads (one HTTP GET per file rather than one range
+    request per column chunk) and handles files with different schemas by
+    letting the dataset scanner align them automatically.
 
-    :param sources: List of dicts with keys ``path``, ``feat_cols``,
-        ``n_row_groups``, ``row_group_sizes`` — as produced by ``_read_data``.
-    :param obs_df: DataFrame with obs metadata, row-aligned with the
-        concatenated sources.
+    Pass 1 — stream all batches once: accumulate per-cell finite-value counts
+    and per-group Welford variance.
+    Pass 2 — stream again with only surviving columns: materialise the filtered
+    (cell_keep × feat_keep) matrix.
+
+    :param sources: List of dicts with ``path`` and ``feat_cols`` keys, as
+        produced by ``_read_parquet_for_map``.
+    :param obs_df: DataFrame with obs metadata, row-aligned with the concatenated
+        sources.
     :param label_mask: Boolean mask (n_obs,) from an obs-only label filter.
     :param by: Obs columns to stratify variance by, or None for global.
     :param max_fraction_not_finite: Cell-level infinite/NaN fraction threshold.
     :param min_variance: Minimum variance threshold (None = disabled).
     :param max_variance: Maximum variance threshold (None = disabled).
-    :param n_workers: Number of concurrent parquet row-group reads.
-    :return: ``(X_filtered, cell_keep, feat_keep)`` — float32 array and two
-        boolean masks.
+    :param feat_cols: Authoritative feature column list (intersection across all
+        files after ``anndata.concat``). Defaults to ``sources[0]['feat_cols']``.
+    :return: ``(X_filtered, cell_keep, feat_keep)`` — float32 array and two bool
+        masks.
     """
     import time
-    from concurrent.futures import ThreadPoolExecutor
+    import pyarrow.dataset as _ds
+    import pyarrow.fs    as _pafs
 
-    import pandas as _pd
-
-    # ── Build a flat list of (path, rg_idx) pieces in row order ─────────────
-    # Each source contributes n_row_groups pieces.  The pieces, read in this
-    # order, reproduce the same row ordering as obs_df.
-    pieces: list[tuple[str, int]] = []
-    feat_cols: list[str] = []  # feature column names (same for all sources)
-    for src in sources:
-        for rg_i in range(src["n_row_groups"]):
-            pieces.append((src["path"], rg_i))
-        if not feat_cols:
-            feat_cols = list(src["feat_cols"])
-        # For multi-file inputs every source must have the same features
-        # (guaranteed upstream by _read_data which uses a shared feature set)
-
-    n_cells = len(obs_df)
+    if feat_cols is None:
+        feat_cols = list(sources[0]["feat_cols"])
     n_feat  = len(feat_cols)
+    n_cells = len(obs_df)
     max_bad = int(n_feat * max_fraction_not_finite) if max_fraction_not_finite is not None else n_feat
 
-    # ── Estimate batch_size from available RAM ────────────────────────────────
-    try:
-        import psutil as _psutil
-        avail = _psutil.virtual_memory().available
-        batch_size = int(avail * 0.20 / max(n_cells * 4, 1))
-    except Exception:
-        batch_size = 500
-    batch_size = max(50, min(5000, batch_size))
-
-    # Split features into batches
-    feat_batches = [feat_cols[i : i + batch_size] for i in range(0, n_feat, batch_size)]
-    n_batches = len(feat_batches)
+    # ── Build a single multi-file dataset ────────────────────────────────────
+    # The dataset scanner reads files sequentially (one HTTP GET per S3 object,
+    # not one range request per column chunk), handles schema differences across
+    # files automatically, and uses internal threading for decompression.
+    _pa_fs, _ = _pafs.FileSystem.from_uri(sources[0]["path"])
+    _pa_paths  = [_pafs.FileSystem.from_uri(src["path"])[1] for src in sources]
+    dataset    = _ds.dataset(_pa_paths, filesystem=_pa_fs, format="parquet")
 
     logger.info(
-        "  [col-batch filter] %d features, batch_size=%d → %d batches, "
-        "%d pieces, %d workers",
-        n_feat, batch_size, n_batches, len(pieces), n_workers,
+        "  [dataset filter] %d files, %d features, sequential streaming …",
+        len(sources), n_feat,
     )
 
-    # ── Helper: read one row-group for a given feature batch ─────────────────
-    # pre_buffer=True tells PyArrow to determine all required byte ranges
-    # upfront and fetch them in parallel before decoding — replacing thousands
-    # of sequential HTTP range requests (one per column chunk) with a small
-    # number of coalesced parallel fetches.  On S3 this is the difference
-    # between O(n_cols × 50 ms) and O(1 × 50 ms) latency per piece.
-    def _read_piece(path: str, rg_i: int, feat_batch: list[str]) -> np.ndarray:
-        import pyarrow.parquet as _pq
-        import pyarrow.fs as _pafs
-        _pa_fs, _pa_path = _pafs.FileSystem.from_uri(path)
-        with _pa_fs.open_input_file(_pa_path) as _f:
-            _pf = _pq.ParquetFile(_f, pre_buffer=True)
-            tbl = _pf.read_row_group(rg_i, columns=feat_batch)
-        return tbl.to_pandas().values.astype(np.float32)
+    # Precompute label-filtered obs once (in RAM, no I/O)
+    obs_label  = obs_df.iloc[label_mask]
 
-    # ── Pass 1: cell quality mask + Welford variance ─────────────────────────
-    bad_counts   = np.zeros(n_cells, dtype=np.int32)   # per-cell non-finite count
-    feat_var_parts: list[np.ndarray] = []              # one entry per batch
+    # ── Pass 1: finite-value counts + Welford variance ────────────────────────
+    bad_counts  = np.zeros(n_cells, dtype=np.int32)
+    group_stats: dict = {}
+    row_offset  = 0
+
+    scanner1 = dataset.scanner(columns=feat_cols, batch_size=500_000, use_threads=True)
     t0 = time.monotonic()
+    n_done = 0
 
-    for bi, feat_batch in enumerate(feat_batches):
-        bsz = len(feat_batch)
+    for batch in scanner1.to_batches():
+        n_b     = len(batch)
+        X_b     = batch.to_pandas().values.astype(np.float32)
+        label_b = label_mask[row_offset : row_offset + n_b]
+        row_offset += n_b
 
-        # Read all pieces (row groups across all source files) in parallel
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            futs = [pool.submit(_read_piece, path, rg_i, feat_batch)
-                    for path, rg_i in pieces]
-            chunks = [f.result() for f in futs]
-
-        # Concatenate pieces in row order → shape (n_cells, bsz)
-        X_batch = np.concatenate(chunks, axis=0)
-        assert X_batch.shape == (n_cells, bsz), (
-            f"Shape mismatch: expected ({n_cells}, {bsz}), got {X_batch.shape}"
+        bad_counts[row_offset - n_b : row_offset] = (
+            (~np.isfinite(X_b)).sum(axis=1).astype(np.int32)
         )
 
-        # Accumulate per-cell non-finite counts (in-place on X_batch, no copy)
-        bad_counts += (~np.isfinite(X_batch)).sum(axis=1).astype(np.int32)
+        if label_b.any():
+            X_kept   = X_b[label_b]
+            # obs rows for this batch's kept cells — use row position in obs_label
+            n_kept_so_far = int(label_mask[: row_offset - n_b].sum())
+            n_kept_batch  = int(label_b.sum())
+            obs_b_kept    = obs_label.iloc[n_kept_so_far : n_kept_so_far + n_kept_batch]
 
-        # Free the 24 raw piece arrays as soon as they're concatenated.
-        del chunks
+            grp_iter = (
+                obs_b_kept.groupby(by, observed=True).indices.items()
+                if by else [("_all_", np.arange(n_kept_batch))]
+            )
+            for gk, idx in grp_iter:
+                X_g = X_kept[idx]
+                if len(X_g) == 0:
+                    continue
+                n_g    = len(X_g)
+                mean_g = np.nanmean(X_g, axis=0)
+                var_g  = np.nanvar(X_g, axis=0, ddof=0)
+                if gk not in group_stats:
+                    group_stats[gk] = {"n": n_g, "mean": mean_g.copy(), "M2": var_g * n_g}
+                else:
+                    s  = group_stats[gk]
+                    nt = s["n"] + n_g
+                    d  = mean_g - s["mean"]
+                    s["mean"] += d * n_g / nt
+                    s["M2"]   += var_g * n_g + d ** 2 * s["n"] * n_g / nt
+                    s["n"]     = nt
+            del X_kept
 
-        # Direct per-group variance — no Welford needed.
-        # The column-batch approach already has ALL cells in X_batch, so we can
-        # call np.nanvar directly per group.  Welford is only necessary when
-        # accumulating across row-chunks of the SAME features (the zarr path).
-        obs_label     = obs_df.iloc[label_mask]
-        label_pos     = np.where(label_mask)[0]
-        groups = (
-            obs_label.groupby(by, observed=True).indices
-            if by
-            else {"_all_": np.arange(label_pos.size)}
-        )
+        del X_b
+        n_done += 1
+        if n_done % 5 == 0:
+            eta = (time.monotonic() - t0) / row_offset * max(n_cells - row_offset, 0) / 60
+            logger.info("  [pass 1/2] %.0f%% — ETA: %.0f min",
+                        row_offset / n_cells * 100, eta)
 
-        group_vars: list = []
-        for gk, grp_idx in groups.items():
-            X_g = X_batch[label_pos[grp_idx]]   # small per-group slice
-            if len(X_g) == 0:
-                continue
-            group_vars.append(np.nanvar(X_g, axis=0, ddof=1))
-            del X_g
-
-        feat_var_parts.append(
-            np.median(np.stack(group_vars, axis=0), axis=0)
-            if group_vars else np.zeros(bsz)
-        )
-
-        del X_batch
-        done = bi + 1
-        eta  = (time.monotonic() - t0) / done * (n_batches - done) / 60
-        logger.info(
-            "  [col-batch filter pass 1] batch %d/%d — ETA: %.0f min",
-            done, n_batches, eta,
-        )
-
-    # ── Compute keep masks after pass 1 ──────────────────────────────────────
+    # ── Compute keep masks ────────────────────────────────────────────────────
     cell_keep = label_mask & (bad_counts <= max_bad)
-    feat_var  = np.concatenate(feat_var_parts)
-
+    feat_var  = (
+        np.median(
+            np.stack([s["M2"] / (s["n"] - 1) if s["n"] > 1 else np.zeros(n_feat)
+                      for s in group_stats.values()], axis=0),
+            axis=0,
+        )
+        if group_stats else np.zeros(n_feat)
+    )
     feat_keep = np.isfinite(feat_var)
     if min_variance is not None:
         feat_keep &= feat_var >= min_variance
@@ -624,43 +602,39 @@ def _col_batch_filter_parquet(
     n_cells_out = int(cell_keep.sum())
     n_feat_out  = int(feat_keep.sum())
     logger.info(
-        "  [col-batch filter] pass 1 done — %d / %d cells, %d / %d features kept",
-        n_cells_out, n_cells, n_feat_out, n_feat,
+        "  [pass 1/2 done] %s / %s cells, %s / %s features kept",
+        f"{n_cells_out:,}", f"{n_cells:,}", f"{n_feat_out:,}", f"{n_feat:,}",
     )
 
-    # ── Pass 2: materialise filtered result ───────────────────────────────────
-    result = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
-    out_col = 0
-    # Build a per-batch boolean sub-mask into feat_keep
-    feat_keep_offsets = np.cumsum([0] + [len(b) for b in feat_batches])
+    # ── Pass 2: materialise ───────────────────────────────────────────────────
+    kept_feat_cols = [feat_cols[i] for i, k in enumerate(feat_keep) if k]
+    result      = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
+    out_row     = 0
+    row_offset  = 0
+
+    scanner2 = dataset.scanner(
+        columns=kept_feat_cols, batch_size=500_000, use_threads=True,
+    )
     t0 = time.monotonic()
+    n_done = 0
 
-    for bi, feat_batch in enumerate(feat_batches):
-        start  = feat_keep_offsets[bi]
-        end    = feat_keep_offsets[bi + 1]
-        local_keep = feat_keep[start:end]
-        n_local = int(local_keep.sum())
-        if n_local == 0:
-            continue
+    for batch in scanner2.to_batches():
+        n_b    = len(batch)
+        cell_b = cell_keep[row_offset : row_offset + n_b]
+        row_offset += n_b
+        if cell_b.any():
+            X_b = batch.to_pandas().values.astype(np.float32)
+            X_f = X_b[cell_b]
+            result[out_row : out_row + X_f.shape[0]] = X_f
+            out_row += X_f.shape[0]
+            del X_b, X_f
+        n_done += 1
+        if n_done % 5 == 0:
+            eta = (time.monotonic() - t0) / row_offset * max(n_cells - row_offset, 0) / 60
+            logger.info("  [pass 2/2] %.0f%% — ETA: %.0f min",
+                        row_offset / n_cells * 100, eta)
 
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            futs = [pool.submit(_read_piece, path, rg_i, feat_batch)
-                    for path, rg_i in pieces]
-            chunks = [f.result() for f in futs]
-
-        X_batch  = np.concatenate(chunks, axis=0)   # (n_cells, bsz)
-        filtered = X_batch[cell_keep][:, local_keep]  # (n_cells_out, n_local)
-        result[:, out_col : out_col + n_local] = filtered
-        out_col += n_local
-        del X_batch, chunks, filtered
-
-        done = bi + 1
-        eta  = (time.monotonic() - t0) / done * (n_batches - done) / 60
-        logger.info(
-            "  [col-batch filter pass 2] batch %d/%d — ETA: %.0f min",
-            done, n_batches, eta,
-        )
-
+    logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
     return result, cell_keep, feat_keep
 
 

@@ -48,7 +48,9 @@ from scallops.features.preprocessing import (
     remove_correlated_features,
     transform_features_yj,
 )
-from scallops.features.util import _query_anndata, _read_data, _slice_anndata
+from scallops.features.util import (
+    _query_anndata, _read_data, _read_parquet_for_map, _slice_anndata,
+)
 from scallops.io import is_parquet_file
 from scallops.utils import _fix_json
 from scallops.zarr_io import is_anndata_zarr
@@ -1834,7 +1836,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             if isinstance(cells.X, da.Array):
                 cells.X = cells.X.compute()
         else:
-            cells = _read_data(list(arguments.input))
+            cells = _read_parquet_for_map(list(arguments.input))
             # ── DO NOT call cells.X.compute() here. ─────────────────────────────
             # Raw parquet files contain ~9,000 columns × float64. Materialising
             # all of them at once requires (n_cells × n_cols × 8) bytes — easily
