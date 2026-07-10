@@ -352,7 +352,7 @@ def test_col_batch_matches_row_batch(tmp_path):
     """
     import pyarrow as _pa
     import pyarrow.parquet as _pq
-    from scallops.features.util import _read_data
+    from scallops.features.util import _read_parquet_for_map as _read_data
 
     # ── Create a synthetic dataset ────────────────────────────────────────
     np.random.seed(7)
@@ -403,7 +403,6 @@ def test_col_batch_matches_row_batch(tmp_path):
         max_fraction_not_finite=max_fnf,
         min_variance=min_var,
         max_variance=None,
-        n_workers=2,
     )
 
     # ── Path B: row-batch (dask array) ────────────────────────────────────

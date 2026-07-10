@@ -20,7 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from scallops.features.util import _read_data
+from scallops.features.util import _read_parquet_for_map as _read_data
 
 
 # ---------------------------------------------------------------------------
