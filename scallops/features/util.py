@@ -194,15 +194,17 @@ def _read_data(
     for path in paths:
         if path.lower().endswith(".parquet") or path.lower().endswith(".pq"):
             import dask
-            import fsspec as _fsspec
             import pyarrow as _pa
+            import pyarrow.fs as _pafs
             import pyarrow.parquet as _pq
 
             # ── 1. Open the parquet file and read metadata only ────────────
-            _fs, _fpath = _fsspec.url_to_fs(path)
-            with _fs.open(_fpath, "rb") as _f:
-                _schema   = _pq.read_schema(_f)
-                _pq_meta  = _pq.read_metadata(_f)
+            # Use PyArrow native filesystem throughout (not fsspec) so that
+            # pre_buffer=True can coalesce S3 range requests efficiently.
+            _pa_fs, _pa_fpath = _pafs.FileSystem.from_uri(path)
+            with _pa_fs.open_input_file(_pa_fpath) as _f:
+                _schema  = _pq.read_schema(_f)
+                _pq_meta = _pq.read_metadata(_f)
 
             # ── 2. Identify feature vs obs columns ─────────────────────────
             # schema.names includes all data columns (not the hidden index).
@@ -230,8 +232,9 @@ def _read_data(
             # and restores it automatically (RangeIndex by name, non-range
             # indices as actual columns).  This avoids a dask bug where unnamed
             # parquet indices cause `[None] not in index` KeyErrors.
-            with _fs.open(_fpath, "rb") as _f:
-                _obs_table = _pq.read_table(_f, columns=_obs_cols)
+            _obs_table = _pq.read_table(
+                _pa_fpath, columns=_obs_cols, filesystem=_pa_fs, pre_buffer=True,
+            )
             _obs_df = _obs_table.to_pandas()
 
             # ── 5. Name the obs.index ──────────────────────────────────────
@@ -255,11 +258,11 @@ def _read_data(
 
             def _read_rg(rg_idx: int) -> np.ndarray:
                 """Read one parquet row group, return feature numpy array."""
+                import pyarrow.fs as _pafs2
                 import pyarrow.parquet as _pq2
-                import fsspec as _fs2
-                _rg_fs, _rg_fp = _fs2.url_to_fs(path)
-                with _rg_fs.open(_rg_fp, "rb") as _rg_f:
-                    _pf = _pq2.ParquetFile(_rg_f)
+                _rg_pa_fs, _rg_pa_fp = _pafs2.FileSystem.from_uri(path)
+                with _rg_pa_fs.open_input_file(_rg_pa_fp) as _rg_f:
+                    _pf = _pq2.ParquetFile(_rg_f, pre_buffer=True)
                     _tbl = _pf.read_row_group(rg_idx, columns=_feat_cols)
                 return _tbl.to_pandas().values.astype(np.float32)
 
