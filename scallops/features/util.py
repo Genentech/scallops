@@ -324,10 +324,25 @@ def _read_parquet_for_map(
     if len(data_arrays) == 0:
         raise RuntimeError("No data found.")
 
-    data = (
-        data_arrays[0] if len(data_arrays) == 1
-        else anndata.concat(data_arrays, index_unique="-")
-    )
+    if len(data_arrays) == 1:
+        data = data_arrays[0]
+    else:
+        # anndata.concat with inner join on var: only features present in ALL
+        # files survive.  Log any that are dropped so users know.
+        all_feat_sets = [set(d.var.index) for d in data_arrays]
+        union_feats   = set.union(*all_feat_sets)
+        inter_feats   = set.intersection(*all_feat_sets)
+        dropped = union_feats - inter_feats
+        if dropped:
+            logger.warning(
+                "%d feature(s) dropped because they are absent from at least "
+                "one input file (inner join across %d files). "
+                "Examples: %s",
+                len(dropped), len(data_arrays),
+                ", ".join(sorted(dropped)[:5]) + (" …" if len(dropped) > 5 else ""),
+            )
+        data = anndata.concat(data_arrays, index_unique="-")
+
     if parquet_sources:
         data.uns["_parquet_sources"] = parquet_sources
     if zarr_is_remote is not None:

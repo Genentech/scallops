@@ -1117,6 +1117,10 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             X_filtered, cell_keep, feat_keep = _col_batch_filter_parquet(
                 parquet_sources, obs_all, label_mask, by_cols,
                 max_fnf, min_var, max_var,
+                # Use data.var.index (intersection across all files after concat)
+                # not sources[0]["feat_cols"] (one file's features, may differ).
+                feat_cols=list(data.var.index),
+                batch_size=getattr(args, "filter_batch_size", 500_000),
             )
         except MemoryError as exc:
             logger.critical(
