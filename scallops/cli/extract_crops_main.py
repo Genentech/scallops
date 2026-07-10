@@ -38,7 +38,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
 
     image_patterns = arguments.image_pattern
     output_dir = arguments.output
-    merge_dir = arguments.merge
+    merge_paths = arguments.merge
     subset = arguments.subset
     force = arguments.force
     groupby = arguments.groupby
@@ -70,13 +70,9 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
 
-    merge_dir_sep = None
-    if merge_dir is not None:
-        merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
-        merge_dir = merge_dir.rstrip(merge_dir_sep)
-
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
+    output_fs.mkdirs(output_dir, exist_ok=True)
 
     label_paths = arguments.labels
     no_version = arguments.no_version
@@ -105,8 +101,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
             single_crop,
             output_dir=output_dir,
             output_sep=output_fs.sep,
-            merge_dir=merge_dir,
-            merge_dir_sep=merge_dir_sep,
+            merge_paths=merge_paths,
             label_paths=label_paths,
             label_filter=label_filter,
             label_name=label_name,
@@ -141,7 +136,8 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
 
     required.add_argument(
         "--merge",
-        help="Path to directory containing output from `merge`",
+        nargs="+",
+        help="Path(s) to directory containing output from `find-objects`, `merge`, or `features`",
     )
     parser.add_argument(
         "--labels",
@@ -157,7 +153,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     parser.add_argument(
         "--label-name",
         help="Name of labels to use. For example `nuclei` or `cell`",
-        default="cell",
+        default="nuclei",
     )
     parser.add_argument(
         "--crop-size",

@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Literal
 
 import dask.array as da
@@ -46,8 +47,7 @@ def single_crop(
     label_paths: list[str] | None,
     output_dir: str,
     output_sep: str,
-    merge_dir: str,
-    merge_dir_sep: str,
+    merge_paths: list[str],
     crop_size: tuple[int, int],
     output_format: Literal["tiff", "npy"],
     label_name: str,
@@ -65,6 +65,7 @@ def single_crop(
     image_key_without_t, selected_timepoint = _image_key_without_time_and_selected_time(
         metadata
     )
+
     output_parquet_path = get_path(
         output_dir,
         output_sep,
@@ -76,7 +77,17 @@ def single_crop(
     if not force and is_parquet_file(output_parquet_path):
         logger.info(f"Skipping features for {image_key} {label_name}")
         return
-
+    merged_df = _read_merged_or_objects(
+        paths=merge_paths,
+        timepoint=selected_timepoint,
+        label_name=label_name,
+        image_key=image_key,
+        image_key_without_t=image_key_without_t,
+        label_filter=label_filter,
+        add_timepoint_suffix=False,
+    )
+    if merged_df is None:
+        raise ValueError(f"Unable to read merged data for {image_key}.")
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_fs.makedirs(output_dir, exist_ok=True)
     image = _images2fov(file_list, metadata, dask=True).squeeze().data
@@ -105,15 +116,6 @@ def single_crop(
                     break
             label_image = label_image[index]
 
-    merged_df = _read_merged_or_objects(
-        merge_dir=merge_dir,
-        merge_dir_sep=merge_dir_sep,
-        label_name=label_name,
-        image_key=image_key,
-        label_filter=label_filter,
-    )
-    if merged_df is None:
-        raise ValueError(f"Unable to read merged data for {image_key}.")
     n_labels_before_filtering = len(merged_df)
     if label_filter is not None:
         merged_df = merged_df.query(label_filter)
@@ -177,7 +179,6 @@ def single_crop(
     )
 
     output_metadata = cli_metadata() if not no_version else dict()
-
     table = pa.Table.from_pandas(merged_df, preserve_index=True)
     table = table.replace_schema_metadata(
         {
@@ -187,6 +188,7 @@ def single_crop(
     )
 
     fs, output_parquet_path = fsspec.url_to_fs(output_parquet_path)
+    fs.mkdirs(os.path.dirname(output_parquet_path.rstrip(fs.sep)), exist_ok=True)
     pq.write_table(
         table,
         output_parquet_path,

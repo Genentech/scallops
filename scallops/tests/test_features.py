@@ -69,16 +69,20 @@ def test_extract_crops_cmd(tmp_path, array_A1_102_cells, array_A1_102_alnpheno, 
         "scallops",
         "extract-crops",
         "-i",
-        zarr_path,
-        "--labels",
-        zarr_path,
+        zarr_path,  # images
         "--merge",
         objects_output_path,
         "--output",
         crops_output_path,
+        "--image-pattern",
+        "{well}",
+        "--groupby",
+        "well",
+        "--label-name",
+        "cell",
     ]
     if mask:
-        cmd.append("--mask")
+        cmd += ["--mask", "--labels", zarr_path]
 
     check_call(cmd)
     img = read_image(crops_output_path + "/cell/test/1523.tiff")
