@@ -538,11 +538,14 @@ def _col_batch_filter_parquet(
     )
 
     # ── Helper: read one row-group for a given feature batch ─────────────────
+    # Use PyArrow's native filesystem (AWS C++ SDK for S3, HTTP/2 multiplexing)
+    # rather than fsspec/s3fs (Python-level HTTP/1.1).  This matches how
+    # dd.read_parquet() reads S3 and avoids one HTTP request per column chunk.
     def _read_piece(path: str, rg_i: int, feat_batch: list[str]) -> np.ndarray:
         import pyarrow.parquet as _pq
-        import fsspec as _fsspec
-        _rg_fs, _rg_fp = _fsspec.url_to_fs(path)
-        with _rg_fs.open(_rg_fp, "rb") as _f:
+        import pyarrow.fs as _pafs
+        _pa_fs, _pa_path = _pafs.FileSystem.from_uri(path)
+        with _pa_fs.open_input_file(_pa_path) as _f:
             _pf = _pq.ParquetFile(_f)
             tbl = _pf.read_row_group(rg_i, columns=feat_batch)
         return tbl.to_pandas().values.astype(np.float32)
