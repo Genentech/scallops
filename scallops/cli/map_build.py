@@ -1135,11 +1135,15 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             "map run [filter]: done — %s cells × %s features",
             f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
         )
+        # Strip internal pipeline keys — they contain large nested structures
+        # (paths, column lists) that zarr cannot serialise as strings.
+        _uns = {k: v for k, v in data.uns.items()
+                if k not in ("_parquet_sources", "_zarr_is_remote")}
         result = anndata.AnnData(
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
             var=data.var.iloc[feat_keep].copy(),
-            uns=dict(data.uns),
+            uns=_uns,
         )
         _merge_uns(data, result)
 
@@ -1206,7 +1210,8 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
             var=data.var.iloc[feat_keep].copy(),
-            uns=dict(data.uns),
+            uns={k: v for k, v in data.uns.items()
+                 if k not in ("_parquet_sources", "_zarr_is_remote")},
         )
         _merge_uns(data, result)
 
@@ -1237,7 +1242,8 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
             var=data.var.iloc[feat_keep].copy(),
-            uns=dict(data.uns),
+            uns={k: v for k, v in data.uns.items()
+                 if k not in ("_parquet_sources", "_zarr_is_remote")},
         )
         _merge_uns(data, result)
 
