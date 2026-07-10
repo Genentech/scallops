@@ -1350,7 +1350,7 @@ def _create_run_parser(
         default=None, dest="label_filter",
     )
     filt.add_argument("--min-variance", type=float, default=0.1, dest="min_variance")
-    filt.add_argument("--max-variance", type=float, default=None, dest="max_variance")
+    filt.add_argument("--max-variance", type=float, default=5.0, dest="max_variance")
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
     filt.add_argument("--max-correlation", type=float, default=None, dest="max_correlation",

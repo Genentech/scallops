@@ -1262,6 +1262,25 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
     plate = getattr(args, "plate_column", "plate")
     well  = getattr(args, "well_column",  "well")
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
+
+    # Drop any feature with even one NaN in valid cells before fitting the
+    # power transform — PowerTransformer produces NaN output for such features.
+    max_fnf = getattr(args, "max_fraction_not_finite", 0.25)
+    if max_fnf is not None:
+        invalid_per_cell = (~np.isfinite(data.X)).sum(axis=1)
+        keep_cells = invalid_per_cell <= int(data.shape[1] * max_fnf)
+        invalid_per_feat = (~np.isfinite(data.X[keep_cells])).sum(axis=0)
+        keep_feats = invalid_per_feat == 0
+        n_dropped_cells = int((~keep_cells).sum())
+        n_dropped_feats = int((~keep_feats).sum())
+        if n_dropped_cells or n_dropped_feats:
+            logger.info(
+                "map run [transform-yj]: pre-filter dropped %s cells,"
+                " %s features with any NaN",
+                f"{n_dropped_cells:,}", f"{n_dropped_feats:,}",
+            )
+            data = _slice_anndata(data, keep_cells, keep_feats)
+
     result = transform_features_yj(data, by=by_cols)
     _merge_uns(data, result)
     return result
