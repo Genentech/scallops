@@ -526,7 +526,6 @@ def transform_all_images(
         _itk_transform_image_zarr(
             image=array,
             transform_parameter_object=transform_parameter_object,
-            channels_transform_parameter_objects=channels_transform_parameter_objects,
             image_attrs=dict(),
             image_spacing=moving_image_spacing,
             image_name=image_key,
