@@ -183,7 +183,7 @@ workflow ops_workflow {
         String register_pheno_to_pheno_suffix = "pheno-registered.zarr"
         String register_pheno_to_pheno_transform_suffix = "pheno-to-pheno-transforms"
         String register_pheno_to_iss_qc_suffix = "pheno-to-iss-qc"
-        String register_iss_to_iss_qc_directory = "iss-to-iss-qc"
+        String register_iss_to_iss_qc_suffix = "iss-to-iss-qc"
         String register_pheno_to_pheno_qc_suffix = "pheno-to-pheno-qc"
         String spot_detect_suffix = "spot-detect.zarr"
         String reads_suffix = "reads"
@@ -212,6 +212,7 @@ workflow ops_workflow {
     String reads_directory = output_stripped + reads_suffix
     String merge_meta_directory = output_stripped + merge_meta_suffix
     String merge_features_directory = output_stripped + merge_features_suffix
+    String register_iss_to_iss_qc_directory = output_stripped + register_iss_to_iss_qc_suffix
     String register_pheno_to_iss_qc_directory = output_stripped + register_pheno_to_iss_qc_suffix
     String register_pheno_to_pheno_qc_directory = output_stripped + register_pheno_to_pheno_qc_suffix
     String cell_intersects_boundary_directory = output_stripped + cell_intersects_boundary_suffix
@@ -440,7 +441,7 @@ workflow ops_workflow {
                     input:
                         images=select_first([register_pheno_to_pheno.moving_output_url]),
                         image_pattern=image_pattern_after_registration,
-                        channel=phenotype_dapi_channel,
+                        channel=select_first([phenotype_dapi_channel_before_registration, 0]),
                         label_type='nuclei',
                         reference_time=reference_phenotype_time,
                         output_directory=register_pheno_to_pheno_qc_directory,

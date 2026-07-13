@@ -199,9 +199,24 @@ def test_ops_wdl(tmp_path):
     assert len(merge_sbs_metadata_df) > len(
         merge_sbs_metadata_df.query("~barcode_count_0.isna()")
     )
-    # assert merge_sbs_metadata_df.columns.str.contains('qc').sum() == xxx
-    # assert merge_sbs_metadata_df.columns.str.contains('qc').sum() == xxx
-    # assert merge_sbs_metadata_df.columns.str.contains('qc').sum() == xxx
+    bbox_cols = sorted(
+        merge_sbs_metadata_df.columns[
+            merge_sbs_metadata_df.columns.str.contains("PearsonBox")
+        ].tolist()
+    )
+    assert bbox_cols == [
+        "Nuclei_Correlation_PearsonBox_FISH_IF",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS1",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS2",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS3",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS4",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS5",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS6",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS7",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS8",
+        "Nuclei_Correlation_PearsonBox_ISS_PHENO",
+    ]
+
     for col in [
         "Nuclei_AreaShape_Area",
         "Cells_AreaShape_Area",
