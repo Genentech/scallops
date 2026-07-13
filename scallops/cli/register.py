@@ -293,10 +293,7 @@ def single_registration(
             if len(moving_label_keys) > 0:
                 template_label_key = None
                 for key in reversed(moving_label_keys):
-                    if key.endswith("-nuclei"):
-                        template_label_key = key
-                        break
-                    elif key.endswith("-cell"):
+                    if key.endswith("-nuclei") or key.endswith("-cell"):
                         template_label_key = key
                         break
                 if template_label_key is not None:
