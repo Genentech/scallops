@@ -291,10 +291,21 @@ def single_registration(
         if landmarks_initialize:
             template_labels = None
             if len(moving_label_keys) > 0:
-                template_labels = read_ome_zarr_array(
-                    moving_label_keys[-1], dask=True
-                ).compute()
-                template_labels = _flip(template_labels, flip_moving_y, flip_moving_x)
+                template_label_key = None
+                for key in reversed(moving_label_keys):
+                    if key.endswith("-nuclei"):
+                        template_label_key = key
+                        break
+                    elif key.endswith("-cell"):
+                        template_label_key = key
+                        break
+                if template_label_key is not None:
+                    template_labels = read_ome_zarr_array(
+                        template_label_key, dask=True
+                    ).compute()
+                    template_labels = _flip(
+                        template_labels, flip_moving_y, flip_moving_x
+                    )
 
             landmarks_found = False
             grid_results = None
