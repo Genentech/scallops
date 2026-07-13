@@ -1,25 +1,46 @@
 # syntax=docker/dockerfile:1
 # SCM_VERSION is passed by:
 #   - CI:      .github/workflows/docker.yml  (resolved via python -m setuptools_scm)
-#   - locally: docker.mk                     (make -f docker.mk docker)
+#   - locally: docker.mk                     (make -f docker.mk docker / docker-gpu)
 # Falls back to 0.0.0+unknown when building directly with docker/podman build .
+#
+# GPU build (TF-GPU + RAPIDS):
+#   make -f docker.mk docker-gpu RAPIDS_VERSION=25.06
+# CPU build (default):
+#   make -f docker.mk docker
 ARG TF_VERSION=2.21.0
 ARG SCM_VERSION=0.0.0+unknown
+# RAPIDS: required when IS_GPU=1, ignored when IS_GPU=0.
+# See https://docs.rapids.ai/install for current release versions.
+ARG RAPIDS_VERSION=
+ARG RAPIDS_CUDA=cu12
 
 FROM tensorflow/tensorflow:${TF_VERSION}
 ARG SCM_VERSION
+ARG RAPIDS_VERSION
+ARG RAPIDS_CUDA
+# IS_GPU is derived from TF_VERSION by docker.mk (1 when TF_VERSION contains
+# -gpu, 0 otherwise). Docker ENV cannot evaluate shell expressions, so ARG is
+# the necessary bridge: docker.mk computes it, ARG captures it, ENV persists it.
+# Default 0 (CPU) when building directly without docker.mk.
+ARG IS_GPU=0
+ENV IS_GPU=${IS_GPU}
 
 COPY --from=docker.io/astral/uv:latest /uv /uvx /bin/
 
-# Remove NVIDIA and deadsnakes PPA repos shipped by the TF base image before
-# any apt-get update — they fail SSL verification on networks with certificate
-# inspection and are not needed (CUDA comes from PyPI wheels, not apt packages).
+# CPU builds: remove NVIDIA and deadsnakes apt repos — they fail SSL
+# verification on restricted networks and are unused (CUDA comes from PyPI
+# wheels, not apt).
+# GPU builds: keep the NVIDIA repos (the GPU base image uses them) but still
+# remove deadsnakes which is never needed.
 # build-essential: needed for mahotas/centrosome (requirements.txt) and Cython.
 # git: needed to clone ufish from its pinned tag.
-RUN rm -f /etc/apt/sources.list.d/cuda.list \
-          /etc/apt/sources.list.d/nvidia-ml.list \
-          /etc/apt/trusted.gpg.d/cuda-keyring.gpg \
-          /etc/apt/sources.list.d/deadsnakes*.list && \
+RUN if [ "$IS_GPU" = "0" ]; then \
+      rm -f /etc/apt/sources.list.d/cuda.list \
+            /etc/apt/sources.list.d/nvidia-ml.list \
+            /etc/apt/trusted.gpg.d/cuda-keyring.gpg; \
+    fi && \
+    rm -f /etc/apt/sources.list.d/deadsnakes*.list && \
     apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive apt-get install -qq --no-install-recommends -y \
       build-essential \
@@ -59,13 +80,27 @@ RUN uv pip install pysam dask-ml miniwdl
 COPY requirements.txt ./
 RUN grep -v '^tensorflow' requirements.txt | uv pip install -r /dev/stdin
 
+# RAPIDS: GPU-accelerated drop-in replacements for pandas (cuDF), scikit-learn
+# (cuML), and dask (dask-cudf). Only installed when IS_GPU=1.
+# For CPU builds this step is a no-op.
+RUN if [ "$IS_GPU" = "1" ]; then \
+      if [ -z "${RAPIDS_VERSION}" ]; then \
+        echo "ERROR: RAPIDS_VERSION is required for GPU builds." \
+             "Pass --build-arg RAPIDS_VERSION=<version>" \
+             "(see https://docs.rapids.ai/install)" && exit 1; \
+      fi && \
+      pip install --no-cache-dir \
+        --extra-index-url https://pypi.nvidia.com \
+        cudf-${RAPIDS_CUDA}==${RAPIDS_VERSION} \
+        cuml-${RAPIDS_CUDA}==${RAPIDS_VERSION} \
+        dask-cudf-${RAPIDS_CUDA}==${RAPIDS_VERSION}; \
+    fi
+
 # --no-deps: all deps already installed above; avoids re-downloading tensorflow.
 # SETUPTOOLS_SCM_PRETEND_VERSION (set via ENV above) ensures setuptools_scm
 # writes the correct version into _version.py and the wheel metadata.
 # PYTHON_VERSION is inferred dynamically from the interpreter so it always
 # matches whatever Python the TF base image ships — no ARG to keep in sync.
-# || true on compileall: torch ships py312_intrinsics.py (PEP 695 syntax) that
-# Python 3.11 cannot parse — that file is never imported on 3.11.
 COPY . .
 RUN [ "${SCM_VERSION}" = "0.0.0+unknown" ] && \
       echo "WARNING: SCM_VERSION not set — version will be 0.0.0+unknown. Use 'make -f docker.mk docker' to stamp the correct version." || true && \

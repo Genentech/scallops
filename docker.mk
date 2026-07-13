@@ -11,18 +11,30 @@
 #   - Automatic push to ghcr.io — use `make -f docker.mk docker-push` explicitly
 #
 # Usage:
-#   make -f docker.mk docker                         # CPU image (default)
-#   make -f docker.mk docker-gpu TORCH_COMPUTE=cu124 # GPU image
-#   make -f docker.mk docker-push                    # build CPU + push to GHCR
+#   make -f docker.mk docker                                    # CPU image (default)
+#   make -f docker.mk docker-gpu RAPIDS_VERSION=25.06           # GPU image + RAPIDS
+#   make -f docker.mk docker-push                               # build CPU + push to GHCR
+#   make -f docker.mk docker-push TF_VERSION=2.21.0-gpu \
+#                                 RAPIDS_VERSION=25.06          # build GPU + push
 
 # ── configurable knobs ────────────────────────────────────────────────────────
 REGISTRY      ?= ghcr.io/genentech
 IMAGE         ?= scallops
 TF_VERSION    ?= 2.21.0
-TORCH_COMPUTE ?= cpu
+# RAPIDS_VERSION: required for GPU builds, ignored for CPU builds.
+# See https://docs.rapids.ai/install for current release versions.
+RAPIDS_VERSION ?=
+RAPIDS_CUDA   ?= cu12
+
+# ── derived flags ─────────────────────────────────────────────────────────────
+# IS_GPU is computed from TF_VERSION so the Dockerfile never needs it passed
+# explicitly by the user. Docker ENV cannot evaluate shell expressions, so
+# docker.mk is the place to derive it.
+IS_GPU := $(if $(findstring -gpu,$(TF_VERSION)),1,0)
+
+FULL_IMAGE    := $(REGISTRY)/$(IMAGE)
 
 # ── uv: prefer PATH, fall back to the default install location ────────────────
-# If uv is not found, _check_prereqs installs it there automatically.
 UV := $(shell which uv 2>/dev/null || echo "$(HOME)/.local/bin/uv")
 
 # ── values computed at parse time (none depend on setuptools_scm) ─────────────
@@ -31,7 +43,6 @@ GIT_SHA_SHORT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown
 GIT_SOURCE    := $(shell git remote get-url origin 2>/dev/null \
                    | sed 's|git@github.com:|https://github.com/|; s|\.git$$||')
 BUILD_DATE    := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-FULL_IMAGE    := $(REGISTRY)/$(IMAGE)
 
 # ── internal helpers ──────────────────────────────────────────────────────────
 
@@ -40,8 +51,12 @@ FULL_IMAGE    := $(REGISTRY)/$(IMAGE)
 # errors on Homebrew/system Python installs.
 define _check_prereqs
 	@"$(UV)" --version >/dev/null 2>&1 \
-	    || (echo "[docker.mk] uv not found — installing via official installer..." \
-	        && curl -LsSf https://astral.sh/uv/install.sh | sh)
+	    || (echo "[docker.mk] uv not found at $(UV) — installing via official installer..." \
+	        && curl -LsSf https://astral.sh/uv/install.sh | sh \
+	        && "$(UV)" --version >/dev/null 2>&1) \
+	    || (echo "[docker.mk] ERROR: uv not found and installation failed." \
+	            "Install manually: https://docs.astral.sh/uv/getting-started/installation/" \
+	        && exit 1)
 	@docker buildx version >/dev/null 2>&1 \
 	    || (echo "[docker.mk] ERROR: docker buildx required (Docker 20.10+ or the buildx plugin)" \
 	        && exit 1)
@@ -51,15 +66,19 @@ endef
 # time, after _check_prereqs has ensured uv is present.
 # `uv run --with setuptools_scm` creates a throwaway venv — no system Python
 # pollution, no pip permission issues.
+# IS_GPU and RAPIDS args are always passed; the Dockerfile ignores RAPIDS when
+# IS_GPU=0 so there is no penalty for always forwarding them.
 define _build
 	@SCM_VERSION=$$("$(UV)" run --with setuptools_scm --no-project --quiet \
 	                  python3 -m setuptools_scm) \
 	 && DOCKER_TAG=$$(echo "$$SCM_VERSION" | tr '+' '-') \
-	 && echo "[docker.mk] Building $(FULL_IMAGE):$$DOCKER_TAG (package version $$SCM_VERSION)" \
+	 && echo "[docker.mk] Building $(FULL_IMAGE):$$DOCKER_TAG (IS_GPU=$(IS_GPU), package version $$SCM_VERSION)" \
 	 && docker buildx build \
 	      --build-arg SCM_VERSION=$$SCM_VERSION \
 	      --build-arg TF_VERSION=$(TF_VERSION) \
-	      --build-arg TORCH_COMPUTE=$(TORCH_COMPUTE) \
+	      --build-arg IS_GPU=$(IS_GPU) \
+	      --build-arg RAPIDS_VERSION=$(RAPIDS_VERSION) \
+	      --build-arg RAPIDS_CUDA=$(RAPIDS_CUDA) \
 	      --label "org.opencontainers.image.created=$(BUILD_DATE)" \
 	      --label "org.opencontainers.image.revision=$(GIT_SHA)" \
 	      --label "org.opencontainers.image.source=$(GIT_SOURCE)" \
@@ -78,9 +97,15 @@ docker:
 	$(call _check_prereqs)
 	$(call _build) .
 
-## Build a GPU image; override TORCH_COMPUTE if needed (e.g. cu126)
+## Build the GPU image (TF-GPU base + RAPIDS). RAPIDS_VERSION is required.
+## Example: make -f docker.mk docker-gpu RAPIDS_VERSION=25.06
 docker-gpu:
-	$(MAKE) -f docker.mk docker TORCH_COMPUTE=$(or $(TORCH_COMPUTE),cu124)
+	@[ -n "$(RAPIDS_VERSION)" ] \
+	    || (echo "[docker.mk] ERROR: RAPIDS_VERSION is required for GPU builds." \
+	            "Example: make -f docker.mk docker-gpu RAPIDS_VERSION=25.06" \
+	            "(see https://docs.rapids.ai/install)" && exit 1)
+	$(call _check_prereqs)
+	$(call _build) .
 
 ## Build and push to GHCR (requires `docker login ghcr.io` first)
 docker-push:
