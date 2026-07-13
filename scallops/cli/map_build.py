@@ -1147,6 +1147,33 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             uns=dict(data.uns),
         )
         _merge_uns(data, result)
+        # Centroid columns needed by local-zscore may have been dropped by the
+        # variance/NaN filter.  Read them directly from parquet for kept cells.
+        if getattr(args, "scale_method", "global") == "local":
+            _cy = getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y")
+            _cx = getattr(args, "localz_centroid_x", "Nuclei_AreaShape_Center_X")
+            _cent_need = [
+                c for c in [_cy, _cx]
+                if c not in result.obs.columns and c in list(data.var.index)
+            ]
+            if _cent_need:
+                import pyarrow.dataset as _pads
+                import pyarrow.fs as _pafs2
+                _cfs, _ = _pafs2.FileSystem.from_uri(parquet_sources[0]["path"])
+                _cpaths = [_pafs2.FileSystem.from_uri(src["path"])[1]
+                           for src in parquet_sources]
+                _cds = _pads.dataset(_cpaths, filesystem=_cfs, format="parquet")
+                _ctab = (
+                    _cds.scanner(columns=_cent_need, use_threads=True)
+                    .to_table().to_pandas()
+                )
+                for col in _cent_need:
+                    if col in _ctab.columns:
+                        result.obs[col] = _ctab[col].values[cell_keep]
+                        logger.info(
+                            "map run [filter]: saved centroid '%s' to obs "
+                            "(dropped by variance/NaN filter, needed by local-zscore)", col
+                        )
 
     elif isinstance(data.X, da.Array):
         # ── Zarr row-batch path ────────────────────────────────────────────
