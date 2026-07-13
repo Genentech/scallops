@@ -329,11 +329,11 @@ task register_qc {
             if reference_time != "":
                 reference_time_index = -1
                 for i in range(len(src_times)):
-                    if str(src_times[i])==reference_time:
-                        reference_time_index = -1
+                    if str(src_times[i])==str(reference_time):
+                        reference_time_index = i
                         break
             if reference_time_index == -1:
-                raise ValueError("Reference time not found")
+                raise ValueError(f"Reference time {reference_time} not found.")
             test_channels = []
             channel_index = channel
             channel_rename = {}
