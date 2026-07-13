@@ -61,6 +61,9 @@ _SCALLOPS_UNS_KEY = "scallops"
 
 
 
+_INTERNAL_UNS_KEYS = ("_parquet_sources", "_zarr_is_remote")
+
+
 def _merge_uns(source: anndata.AnnData, result: anndata.AnnData) -> None:
     """Forward ``uns`` and ``varm`` from *source* into *result*.
 
@@ -78,7 +81,7 @@ def _merge_uns(source: anndata.AnnData, result: anndata.AnnData) -> None:
     :param result: AnnData that receives the missing keys.
     """
     for key, value in source.uns.items():
-        if key not in result.uns:
+        if key not in result.uns and key not in _INTERNAL_UNS_KEYS:
             result.uns[key] = value
     if source.var.index.equals(result.var.index):
         for key, value in source.varm.items():
@@ -1135,15 +1138,11 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             "map run [filter]: done — %s cells × %s features",
             f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
         )
-        # Strip internal pipeline keys — they contain large nested structures
-        # (paths, column lists) that zarr cannot serialise as strings.
-        _uns = {k: v for k, v in data.uns.items()
-                if k not in ("_parquet_sources", "_zarr_is_remote")}
         result = anndata.AnnData(
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
             var=data.var.iloc[feat_keep].copy(),
-            uns=_uns,
+            uns=dict(data.uns),
         )
         _merge_uns(data, result)
 
@@ -1210,8 +1209,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
             var=data.var.iloc[feat_keep].copy(),
-            uns={k: v for k, v in data.uns.items()
-                 if k not in ("_parquet_sources", "_zarr_is_remote")},
+            uns=dict(data.uns),
         )
         _merge_uns(data, result)
 
@@ -1242,8 +1240,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
             var=data.var.iloc[feat_keep].copy(),
-            uns={k: v for k, v in data.uns.items()
-                 if k not in ("_parquet_sources", "_zarr_is_remote")},
+            uns=dict(data.uns),
         )
         _merge_uns(data, result)
 
