@@ -156,6 +156,8 @@ def _save_zarr(data: anndata.AnnData, output: str, metadata: dict) -> None:
     data.uns[_SCALLOPS_UNS_KEY] = json.dumps(
         prev_chain + [_fix_json(metadata)], default=str
     )
+    for _k in _INTERNAL_UNS_KEYS:
+        data.uns.pop(_k, None)
     data.write_zarr(output, convert_strings_to_categoricals=False)
 
 
@@ -1271,6 +1273,21 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
     plate = getattr(args, "plate_column", "plate")
     well  = getattr(args, "well_column",  "well")
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
+
+    # Preserve centroid columns in obs before the NaN pre-filter may drop them
+    # from var.  The local-z-score scale step needs them from obs regardless.
+    if getattr(args, "scale_method", "global") == "local":
+        cy = getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y")
+        cx = getattr(args, "localz_centroid_x", "Nuclei_AreaShape_Center_X")
+        for col in [cy, cx]:
+            if col in data.var.index and col not in data.obs.columns:
+                idx = data.var.index.get_loc(col)
+                X_vals = np.asarray(data.X[:, idx], dtype=np.float64)
+                data.obs[col] = X_vals
+                logger.info(
+                    "map run [transform-yj]: saved '%s' from X to obs "
+                    "(centroid column, preserved before NaN pre-filter)", col
+                )
 
     # Drop any feature with even one NaN in valid cells before fitting the
     # power transform — PowerTransformer produces NaN output for such features.
