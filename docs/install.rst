@@ -68,28 +68,56 @@ GPU support
 -----------
 
 The default image uses ``tensorflow/tensorflow:2.21.0`` (CPU variant) as its
-base.  **PyTorch** (used by cellpose and U-FISH) is installed from PyPI and
-ships CUDA-capable wheels — it will automatically use an NVIDIA GPU at runtime
-if one is available.  **TensorFlow** runs on CPU only in the default image;
-this affects the ``segment`` command when using the StarDist backend, which
-relies on TensorFlow for model inference.
+base.  The table below summarises which libraries use the GPU and which
+commands are affected:
 
-To enable GPU acceleration for TensorFlow as well, build with the GPU base
-image::
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 35 25
 
-    make -f docker.mk docker TF_VERSION=2.21.0-gpu
+   * - Library
+     - GPU in default image
+     - Affected commands
+     - Notes
+   * - PyTorch
+     - **Yes** (auto-detected)
+     - ``segment`` (cellpose backend), ``dialout`` (U-FISH)
+     - PyPI wheels are CUDA-capable; GPU is used automatically when available
+   * - TensorFlow
+     - No (CPU only)
+     - ``segment`` (StarDist backend)
+     - Requires the GPU image (see below)
+   * - RAPIDS
+     - No (CPU only)
+     - All commands using pandas / scikit-learn / dask internally
+     - Requires the GPU image (see below)
+
+**GPU image** — enables TensorFlow GPU and installs `RAPIDS`_ (cuDF, cuML,
+dask-cudf), which accelerate the data-science operations used throughout the
+pipeline.  ``RAPIDS_VERSION`` must match a `current RAPIDS release`_::
+
+    make -f docker.mk docker-gpu RAPIDS_VERSION=25.06
+
+The build automatically sets the ``IS_GPU`` environment variable to ``1``
+inside the container.  You can inspect it at runtime to confirm GPU support
+was compiled in::
+
+    docker run --rm ghcr.io/genentech/scallops:latest printenv IS_GPU
 
 At runtime, pass ``--gpus all`` (Docker) or the equivalent Podman flag and
 ensure the `NVIDIA Container Toolkit`_ is installed on the host::
 
-    docker run --gpus all --rm ghcr.io/genentech/scallops:latest scallops ...
+    docker run --gpus all --rm <gpu-image> scallops segment ...
 
 .. note::
 
-   GPU containers require NVIDIA drivers on the host machine.  The image
-   itself does not need to change — the same image works on CPU-only and
-   GPU-equipped hosts; PyTorch selects the appropriate backend automatically.
+   NVIDIA drivers must be installed on the host — the container image itself
+   does not include drivers.  PyTorch selects the GPU backend automatically;
+   TensorFlow and RAPIDS require the GPU image built with
+   ``TF_VERSION=2.21.0-gpu``.
 
 .. _Mamba: https://mamba.readthedocs.io/en/latest/installation.html
 .. _Conda: https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
 .. _NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+.. _RAPIDS: https://rapids.ai
+.. _current RAPIDS release: https://docs.rapids.ai/install
