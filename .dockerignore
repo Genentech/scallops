@@ -1,2 +1,38 @@
+# Version control
+.git
+.github
+
+# IDE / editor
+.idea
+.vscode
+*.swp
+*.swo
+
+# Python build artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+dist
+build
+.tox
+.nox
+
+# Tests and coverage
 scallops/tests
+.pytest_cache
+.coverage
+.coverage.*
+htmlcov
+
+# Documentation (not needed for install)
 docs
+requirements.doc.txt
+
+# macOS
+.DS_Store
+
+# _version.py is injected via --build-arg SCM_VERSION by the Makefile (make docker)
+# so it does not need to be in the build context
+scallops/_version.py
