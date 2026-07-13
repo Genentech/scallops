@@ -275,9 +275,10 @@ task register_qc {
         Int channel
         String subset
         String output_directory
-        String channel_prefix
+        String? channel_prefix
         Array[String] groupby
         Boolean? force
+        String? reference_time
 
         String docker
         String zones
@@ -306,8 +307,8 @@ task register_qc {
         image_pattern = "~{image_pattern}"
         label_type = "~{label_type}"
         labels = "~{labels}"
-
-        channel = "~{channel}"
+        reference_time = "~{reference_time}"
+        channel = ~{channel}
         subset = "~{subset}".split(" ")
         output_directory = "~{output_directory}"
         groupby = "~{sep=',' groupby}".split(",")
@@ -319,16 +320,45 @@ task register_qc {
         if len(keys) == 0:
             raise ValueError("No images found")
         image = exp.images[keys[0]]
-        size_t = image.sizes['t']
-        size_c = image.sizes['c']
-        channel_rename = {}
-        t = 0
-        for i in range(int(channel), size_t * size_c, size_c):
-            channel_rename[f"{i}"] = f"{channel_prefix}{t}"
-            t += 1
+        channel_rename = None
+        if "src_channels" in image.attrs:
+            src_channels = image.attrs["src_channels"]
+            src_times = image.attrs["src_times"]
+            ref_channel = channel
+            reference_time_index = 0
+            if reference_time != "":
+                reference_time_index = -1
+                for i in range(len(src_times)):
+                    if str(src_times[i])==reference_time:
+                        reference_time_index = -1
+                        break
+            if reference_time_index == -1:
+                raise ValueError("Reference time not found")
+            test_channels = []
+            channel_index = channel
+            channel_rename = {}
+
+            for i in range(len(src_times)):
+                n_channels = len(src_channels[i])
+                if reference_time_index == i:
+                    ref_channel = str(channel_index)
+                else:
+                    test_channels.append(str(channel_index))
+                channel_rename[f"{channel_index}"] = f"{src_times[i]}"
+                channel_index += n_channels
+            features =  f"correlationpearsonbox_{ref_channel}_{','.join(test_channels)}"
+        else:
+            size_t = image.sizes['t']
+            size_c = image.sizes['c']
+            channel_rename = {}
+            t = 0
+            for i in range(channel, size_t * size_c, size_c):
+                channel_rename[f"{i}"] = f"{channel_prefix}{t}"
+                t += 1
+            features =  f"correlationpearsonbox_{channel}_{channel}:{size_t * size_c}:{size_c}"
 
         cmd = ["scallops", "features"]
-        cmd += [f"--features-{label_type}", f"correlationpearsonbox_{channel}_{channel}:{size_t * size_c}:{size_c}"]
+        cmd += [f"--features-{label_type}", features]
         cmd += ["--labels", labels]
 
         if image_pattern != "":
@@ -340,7 +370,8 @@ task register_qc {
             cmd += subset
         cmd += ["--output", output_directory]
         cmd += ["--images", images]
-        cmd += ["--channel-rename", f"{json.dumps(channel_rename)}"]
+        if channel_rename is not None:
+            cmd += ["--channel-rename", f"{json.dumps(channel_rename)}"]
 
         if force == "true":
             cmd.append("--force")
@@ -697,6 +728,7 @@ task merge {
         String? objects_cell
         String? register_pheno_to_iss_qc
         String? register_iss_to_iss_qc
+        String? register_pheno_to_pheno_qc
         String? objects_cytosol
         String? cell_intersects_boundary
         String? cell_intersects_boundary_t
@@ -737,6 +769,7 @@ task merge {
         ~{cell_intersects_boundary_t} \
         ~{register_pheno_to_iss_qc} \
         ~{register_iss_to_iss_qc} \
+        ~{register_pheno_to_pheno_qc} \
         --subset ~{subset} \
         ~{"--barcode-col " + barcode_column} \
         ~{if defined(extra_arguments) then extra_arguments else ''} \
