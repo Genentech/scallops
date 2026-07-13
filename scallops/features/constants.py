@@ -102,7 +102,7 @@ _metadata_columns_whitelist = [
     "Location_IntersectsBoundary",
     "Neighbors_FirstClosestObjectNumber",
     "Neighbors_SecondClosestObjectNumber",
-    "-qc",
+    "qc",
 ]
 
 _metadata_columns_whitelist_str = "|".join(_metadata_columns_whitelist)
