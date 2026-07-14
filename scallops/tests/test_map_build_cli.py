@@ -31,12 +31,15 @@ from scallops.features.backprojection import (
     top_features_from_backprojection,
 )
 from scallops.cli.map_build import (
+    _log_attrition,
     run_pipeline_map_agg,
+    run_pipeline_map_backproject,
     run_pipeline_map_center,
     run_pipeline_map_filter,
     run_pipeline_map_pca,
     run_pipeline_map_pca_select,
     run_pipeline_map_recall,
+    run_pipeline_map_scale,
     run_pipeline_map_similarity,
     run_pipeline_map_sphere,
     run_pipeline_map_transform_yj,
@@ -1601,3 +1604,508 @@ def test_map_pca_select_propagates_uns(cell_data, tmp_path):
     )
     result = _read_zarr(out + ".zarr")
     assert result.uns.get("upstream") == 99
+
+
+# ---------------------------------------------------------------------------
+# _log_attrition
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_log_attrition_emits_when_cells_dropped(caplog):
+    """_log_attrition must log when cells are removed."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="scallops"):
+        _log_attrition("filter", "test", 1000, 800, 50, 50)
+    assert any("attrition" in r.message for r in caplog.records)
+    assert any("200" in r.message for r in caplog.records)  # cells dropped
+
+
+@pytest.mark.features
+def test_log_attrition_emits_when_features_dropped(caplog):
+    """_log_attrition must log when features are removed."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="scallops"):
+        _log_attrition("filter", "test", 1000, 1000, 50, 40)
+    assert any("attrition" in r.message for r in caplog.records)
+
+
+@pytest.mark.features
+def test_log_attrition_silent_when_nothing_dropped(caplog):
+    """_log_attrition must not log when both cells and features are unchanged."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="scallops"):
+        _log_attrition("filter", "test", 100, 100, 50, 50)
+    assert not any("attrition" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# map-scale
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cell_data_with_centroids(cell_data):
+    """cell_data extended with centroid columns in obs (no NaN)."""
+    np.random.seed(7)
+    n = cell_data.shape[0]
+    cell_data.obs["Nuclei_AreaShape_Center_Y"] = np.random.uniform(0, 512, n).astype(np.float32)
+    cell_data.obs["Nuclei_AreaShape_Center_X"] = np.random.uniform(0, 512, n).astype(np.float32)
+    return cell_data
+
+
+@pytest.mark.features
+def test_map_scale_global_shape_unchanged(cell_data, tmp_path):
+    """map-scale global must preserve shape."""
+    inp = _write_zarr(cell_data, tmp_path / "input")
+    out = str(tmp_path / "scaled")
+    run_pipeline_map_scale(
+        _ns(input=[inp], output=out,
+            scale_method="global", plate_column="plate", well_column="well")
+    )
+    result = _read_zarr(out + ".zarr")
+    assert result.shape == cell_data.shape
+
+
+@pytest.mark.features
+def test_map_scale_global_ntc_mean_near_zero(cell_data, tmp_path):
+    """Global z-score: NTC mean per feature should be close to 0."""
+    inp = _write_zarr(cell_data, tmp_path / "input")
+    out = str(tmp_path / "scaled")
+    run_pipeline_map_scale(
+        _ns(input=[inp], output=out,
+            scale_method="global", plate_column="plate", well_column="well")
+    )
+    result = _read_zarr(out + ".zarr")
+    ntc = result[result.obs["gene_symbol"] == "NTC"].X
+    assert np.nanmax(np.abs(ntc.mean(axis=0))) < 1.0
+
+
+@pytest.mark.features
+def test_map_scale_local_shape_unchanged(cell_data_with_centroids, tmp_path):
+    """map-scale local must preserve shape (minus any NaN-centroid cells)."""
+    inp = _write_zarr(cell_data_with_centroids, tmp_path / "input")
+    out = str(tmp_path / "scaled_local")
+    run_pipeline_map_scale(
+        _ns(input=[inp], output=out,
+            scale_method="local", plate_column="plate", well_column="well",
+            localz_centroid_y="Nuclei_AreaShape_Center_Y",
+            localz_centroid_x="Nuclei_AreaShape_Center_X",
+            localz_neighbors=3, localz_batch_size=50,
+            localz_max_value=5.0)
+    )
+    result = _read_zarr(out + ".zarr")
+    assert result.shape[1] == cell_data_with_centroids.shape[1]
+    assert result.shape[0] <= cell_data_with_centroids.shape[0]
+
+
+@pytest.mark.features
+def test_map_scale_local_drops_nan_centroid_cells(tmp_path):
+    """map-scale local must silently drop cells whose centroid is NaN."""
+    np.random.seed(1)
+    n = 30
+    X = np.random.randn(n, 4).astype(np.float32)
+    cy = np.random.uniform(0, 256, n).astype(np.float32)
+    cx = np.random.uniform(0, 256, n).astype(np.float32)
+    cy[0] = np.nan  # one NaN centroid
+    adata = anndata.AnnData(
+        X=X,
+        obs=pd.DataFrame({
+            "gene_symbol": ["NTC"] * 15 + ["GENE"] * 15,
+            "plate": "P1",
+            "well": ["W1"] * 15 + ["W2"] * 15,
+            "Nuclei_AreaShape_Center_Y": cy,
+            "Nuclei_AreaShape_Center_X": cx,
+        }, index=pd.RangeIndex(n).astype(str)),
+        var=pd.DataFrame(index=[f"F{i}" for i in range(4)]),
+    )
+    inp = _write_zarr(adata, tmp_path / "input")
+    out = str(tmp_path / "scaled")
+    run_pipeline_map_scale(
+        _ns(input=[inp], output=out,
+            scale_method="local", plate_column="plate", well_column="well",
+            localz_centroid_y="Nuclei_AreaShape_Center_Y",
+            localz_centroid_x="Nuclei_AreaShape_Center_X",
+            localz_neighbors=3, localz_batch_size=50,
+            localz_max_value=5.0)
+    )
+    result = _read_zarr(out + ".zarr")
+    assert result.shape[0] == n - 1  # NaN-centroid cell dropped
+
+
+@pytest.mark.features
+def test_map_scale_propagates_uns(cell_data, tmp_path):
+    """map-scale must forward upstream uns."""
+    cell_data.uns["sentinel"] = "preserved"
+    inp = _write_zarr(cell_data, tmp_path / "input")
+    out = str(tmp_path / "scaled")
+    run_pipeline_map_scale(
+        _ns(input=[inp], output=out,
+            scale_method="global", plate_column="plate", well_column="well")
+    )
+    result = _read_zarr(out + ".zarr")
+    assert result.uns.get("sentinel") == "preserved"
+
+
+# ---------------------------------------------------------------------------
+# transform-yj uns preservation across _slice_anndata
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_map_transform_yj_preserves_uns_after_nan_prefilter(tmp_path):
+    """uns must survive when the NaN pre-filter calls _slice_anndata."""
+    np.random.seed(3)
+    n, p = 30, 5
+    X = np.random.randn(n, p).astype(np.float32)
+    # Add NaN in one feature for half the cells → pre-filter will drop them
+    X[:15, 0] = np.nan
+    adata = anndata.AnnData(
+        X=X,
+        obs=pd.DataFrame({
+            "gene_symbol": ["NTC"] * 15 + ["GENE"] * 15,
+            "plate": "P1",
+            "well": ["W1"] * 15 + ["W2"] * 15,
+        }, index=pd.RangeIndex(n).astype(str)),
+        var=pd.DataFrame(index=[f"F{i}" for i in range(p)]),
+    )
+    adata.uns["upstream"] = "sentinel"
+    inp = _write_zarr(adata, tmp_path / "input")
+    out = str(tmp_path / "yj")
+    run_pipeline_map_transform_yj(
+        _ns(input=[inp], output=out, by=None,
+            max_fraction_not_finite=0.25,
+            plate_column="plate", well_column="well",
+            scale_method="global")
+    )
+    result = _read_zarr(out + ".zarr")
+    assert result.uns.get("upstream") == "sentinel", (
+        "uns must survive when _slice_anndata is called during YJ NaN pre-filter"
+    )
+
+
+# ---------------------------------------------------------------------------
+# map-pca batch_size=0 (full-dataset non-incremental PCA)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_map_pca_batch_size_zero_same_shape(cell_data, tmp_path):
+    """batch_size=0 must produce the same output shape as batch_size=None."""
+    inp = _write_zarr(cell_data, tmp_path / "input")
+    out0 = str(tmp_path / "pca_bs0")
+    run_pipeline_map_pca(
+        _ns(input=[inp], output=out0, components=N_FEATURES,
+            batch_size=0, whiten=False, reference=None)
+    )
+    result = _read_zarr(out0 + ".zarr")
+    assert "X_pca" in result.obsm
+    assert result.obsm["X_pca"].shape == (cell_data.shape[0], N_FEATURES)
+
+
+# ---------------------------------------------------------------------------
+# map-sphere / map-tvn use obsm["X_pca"], not data.X
+# ---------------------------------------------------------------------------
+
+
+def _make_pca_adata(cell_data, tmp_path):
+    """Return a zarr path whose AnnData has obsm['X_pca'] set by map-pca."""
+    inp = _write_zarr(cell_data, tmp_path / "raw")
+    pca_out = str(tmp_path / "pca")
+    run_pipeline_map_pca(
+        _ns(input=[inp], output=pca_out, components=N_FEATURES,
+            batch_size=0, whiten=False, reference=None)
+    )
+    return pca_out + ".zarr"
+
+
+@pytest.mark.features
+def test_map_sphere_operates_on_obsm_x_pca(cell_data, tmp_path):
+    """When obsm['X_pca'] exists, sphere must update it, not data.X."""
+    pca_zarr = _make_pca_adata(cell_data, tmp_path)
+    out = str(tmp_path / "sphere")
+    run_pipeline_map_sphere(
+        _ns(input=[pca_zarr], output=out, by=None, epsilon=1e-5)
+    )
+    result = _read_zarr(out + ".zarr")
+    # X must remain the original scaled features (same shape), not PC-space
+    assert result.shape == cell_data.shape, "X shape must equal original feature shape"
+    # obsm["X_pca"] must exist and contain the sphered PCA embedding
+    assert "X_pca" in result.obsm
+
+
+@pytest.mark.features
+def test_map_tvn_operates_on_obsm_x_pca(cell_data, tmp_path):
+    """When obsm['X_pca'] exists, tvn must produce obsm['X_tvn'], not overwrite X."""
+    pca_zarr = _make_pca_adata(cell_data, tmp_path)
+    out = str(tmp_path / "tvn")
+    run_pipeline_map_tvn(
+        _ns(input=[pca_zarr], output=out,
+            reference_query="gene_symbol=='NTC'", by=None)
+    )
+    result = _read_zarr(out + ".zarr")
+    assert result.shape == cell_data.shape, "X shape must equal original feature shape"
+    assert "X_tvn" in result.obsm, "TVN embedding must be stored in obsm['X_tvn']"
+    assert result.obsm["X_tvn"].shape[0] == cell_data.shape[0]
+
+
+@pytest.mark.features
+def test_map_agg_uses_obsm_x_tvn(cell_data, tmp_path):
+    """map-agg must aggregate obsm['X_tvn'] when it is present."""
+    pca_zarr = _make_pca_adata(cell_data, tmp_path)
+    tvn_out = str(tmp_path / "tvn")
+    run_pipeline_map_tvn(
+        _ns(input=[pca_zarr], output=tvn_out,
+            reference_query="gene_symbol=='NTC'", by=None)
+    )
+    agg_out = str(tmp_path / "agg")
+    run_pipeline_map_agg(
+        _ns(input=[tvn_out + ".zarr"], output=agg_out,
+            by=["gene_symbol"], method="mean", min_cells=None,
+            perturbation="gene_symbol", barcode="barcode_0",
+            agg_by_barcode=False)
+    )
+    result = _read_zarr(agg_out + ".zarr")
+    n_perts = cell_data.obs["gene_symbol"].nunique()
+    assert result.shape[0] == n_perts, "One profile per perturbation"
+    # var should be PC names when X_tvn was used
+    assert all(v.startswith("PC") for v in result.var.index), (
+        "Aggregated profiles must index var by PC names when X_tvn was used"
+    )
+
+
+# ---------------------------------------------------------------------------
+# map-similarity --output-format anndata (obs index / column conflict fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_map_similarity_anndata_format_writes_without_error(
+    tvn_data, tmp_path
+):
+    """output_format='anndata' must write without index-name/column conflict."""
+    from scallops.features.agg import agg_features
+
+    profiles = agg_features(tvn_data, by=["gene_symbol"])
+    inp = _write_zarr(profiles, tmp_path / "profiles")
+    out = str(tmp_path / "sim_adata")
+    run_pipeline_map_similarity(
+        _ns(input=[inp], output=out,
+            metric="cosine",
+            perturbation="gene_symbol",
+            exclude_reference_query=None,
+            output_format="anndata",
+            cluster_method=None)
+    )
+    result = _read_zarr(out + ".zarr")
+    assert "similarity" in result.obsp
+    assert result.shape[0] == profiles.shape[0]
+
+
+@pytest.mark.features
+def test_map_similarity_anndata_format_obs_index_unique(tvn_data, tmp_path):
+    """The anndata output's obs index must equal perturbation labels."""
+    from scallops.features.agg import agg_features
+
+    profiles = agg_features(tvn_data, by=["gene_symbol"])
+    inp = _write_zarr(profiles, tmp_path / "profiles")
+    out = str(tmp_path / "sim_adata")
+    run_pipeline_map_similarity(
+        _ns(input=[inp], output=out,
+            metric="cosine",
+            perturbation="gene_symbol",
+            exclude_reference_query=None,
+            output_format="anndata",
+            cluster_method=None)
+    )
+    result = _read_zarr(out + ".zarr")
+    perts = sorted(profiles.obs["gene_symbol"].unique())
+    assert sorted(result.obs.index.tolist()) == perts
+
+
+# ---------------------------------------------------------------------------
+# map-backproject
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def agg_profiles(tvn_data):
+    """Aggregated TVN profiles with backprojection uns and varm intact.
+
+    Mirrors profile_data but uses agg_features so the obs index matches
+    what the pipeline produces, while manually propagating uns/varm from
+    the TVN output (agg_features does not propagate them automatically).
+    """
+    from scallops.features.agg import agg_features
+
+    profiles = agg_features(tvn_data, by=["gene_symbol"])
+    # Propagate backprojection uns and varm from the TVN-normalized source
+    for k, v in tvn_data.uns.items():
+        if k not in profiles.uns:
+            profiles.uns[k] = v
+    if tvn_data.var.index.equals(profiles.var.index):
+        for k, v in tvn_data.varm.items():
+            if k not in profiles.varm:
+                profiles.varm[k] = v
+    return profiles
+
+
+@pytest.mark.features
+def test_map_backproject_by_gene_writes_parquet(agg_profiles, tmp_path):
+    """map backproject --query must write a parquet with feature/score/pvalue."""
+    inp = _write_zarr(agg_profiles, tmp_path / "profiles")
+    out = str(tmp_path / "bp.parquet")
+    run_pipeline_map_backproject(
+        _ns(input=[inp], output=out,
+            query=["gene_A"],
+            reference=None,
+            cluster_query=None,
+            cluster_ref=None,
+            cluster_labels_zarr=None,
+            perturbation_column="gene_symbol",
+            top_k=None,
+            pc_stat_filter=None,
+            pc_pvalue_threshold=0.05,
+            group=None,
+            to_original_scale=False)
+    )
+    import os
+    assert os.path.exists(out)
+    df = pd.read_parquet(out)
+    assert list(df.columns) == ["feature", "score", "pvalue"]
+    assert len(df) == agg_profiles.shape[1]
+
+
+@pytest.mark.features
+def test_map_backproject_top_k(agg_profiles, tmp_path):
+    """--top-k must limit the number of returned features."""
+    inp = _write_zarr(agg_profiles, tmp_path / "profiles")
+    out = str(tmp_path / "bp_topk.parquet")
+    run_pipeline_map_backproject(
+        _ns(input=[inp], output=out,
+            query=["gene_A"],
+            reference=None,
+            cluster_query=None, cluster_ref=None, cluster_labels_zarr=None,
+            perturbation_column="gene_symbol",
+            top_k=2,
+            pc_stat_filter=None, pc_pvalue_threshold=0.05,
+            group=None, to_original_scale=False)
+    )
+    df = pd.read_parquet(out)
+    assert len(df) == 2
+
+
+@pytest.mark.features
+def test_map_backproject_sorted_by_abs_score(agg_profiles, tmp_path):
+    """Rows must be sorted by |score| descending."""
+    inp = _write_zarr(agg_profiles, tmp_path / "profiles")
+    out = str(tmp_path / "bp_sorted.parquet")
+    run_pipeline_map_backproject(
+        _ns(input=[inp], output=out,
+            query=["gene_A"],
+            reference=None,
+            cluster_query=None, cluster_ref=None, cluster_labels_zarr=None,
+            perturbation_column="gene_symbol",
+            top_k=None,
+            pc_stat_filter=None, pc_pvalue_threshold=0.05,
+            group=None, to_original_scale=False)
+    )
+    df = pd.read_parquet(out)
+    abs_scores = df["score"].abs().tolist()
+    assert abs_scores == sorted(abs_scores, reverse=True)
+
+
+@pytest.mark.features
+def test_map_backproject_explicit_reference(agg_profiles, tmp_path):
+    """--reference must restrict the reference set to the named perturbations."""
+    inp = _write_zarr(agg_profiles, tmp_path / "profiles")
+    out = str(tmp_path / "bp_ref.parquet")
+    run_pipeline_map_backproject(
+        _ns(input=[inp], output=out,
+            query=["gene_A"],
+            reference=["NTC"],
+            cluster_query=None, cluster_ref=None, cluster_labels_zarr=None,
+            perturbation_column="gene_symbol",
+            top_k=None,
+            pc_stat_filter=None, pc_pvalue_threshold=0.05,
+            group=None, to_original_scale=False)
+    )
+    df = pd.read_parquet(out)
+    assert len(df) == agg_profiles.shape[1]
+
+
+@pytest.mark.features
+def test_map_backproject_pc_stat_filter_ttest(tvn_data, tmp_path):
+    """pc_stat_filter='ttest' must populate pvalue column (not all NaN).
+
+    Uses cell-level TVN data so each group has ≥ 2 samples (required by
+    the Welch t-test; skipped on aggregated profiles which have 1 row each).
+    """
+    inp = _write_zarr(tvn_data, tmp_path / "tvn")
+    out = str(tmp_path / "bp_ttest.parquet")
+    run_pipeline_map_backproject(
+        _ns(input=[inp], output=out,
+            query=["gene_A"],
+            reference=["NTC"],
+            cluster_query=None, cluster_ref=None, cluster_labels_zarr=None,
+            perturbation_column="gene_symbol",
+            top_k=None,
+            pc_stat_filter="ttest", pc_pvalue_threshold=1.0,
+            group=None, to_original_scale=False)
+    )
+    df = pd.read_parquet(out)
+    assert not df["pvalue"].isna().all(), "ttest filter must populate pvalue"
+
+
+@pytest.mark.features
+def test_map_backproject_to_original_scale(agg_profiles, tmp_path):
+    """--to-original-scale must produce different scores than z-score space."""
+    inp = _write_zarr(agg_profiles, tmp_path / "profiles")
+    out_z = str(tmp_path / "bp_z.parquet")
+    out_orig = str(tmp_path / "bp_orig.parquet")
+    ns_base = dict(
+        query=["gene_A"], reference=None,
+        cluster_query=None, cluster_ref=None, cluster_labels_zarr=None,
+        perturbation_column="gene_symbol", top_k=None,
+        pc_stat_filter=None, pc_pvalue_threshold=0.05, group=None,
+    )
+    run_pipeline_map_backproject(_ns(input=[inp], output=out_z,
+                                     to_original_scale=False, **ns_base))
+    run_pipeline_map_backproject(_ns(input=[inp], output=out_orig,
+                                     to_original_scale=True, **ns_base))
+    df_z = pd.read_parquet(out_z)
+    df_orig = pd.read_parquet(out_orig)
+    assert not np.allclose(df_z["score"].values, df_orig["score"].values), (
+        "Original-scale scores must differ from z-score-space scores"
+    )
+
+
+@pytest.mark.features
+def test_map_backproject_cluster_query(agg_profiles, tmp_path):
+    """--cluster-query must work when cluster labels are supplied."""
+    import os
+
+    # Attach integer cluster labels to the aggregated profiles
+    n_pert = agg_profiles.shape[0]
+    agg_profiles.obs["cluster"] = ([0] * (n_pert // 2) +
+                                   [1] * (n_pert - n_pert // 2))
+
+    inp    = _write_zarr(agg_profiles, tmp_path / "profiles")
+    cl_zarr = _write_zarr(agg_profiles, tmp_path / "sim")  # same data as cluster source
+    out    = str(tmp_path / "bp_cl.parquet")
+
+    run_pipeline_map_backproject(
+        _ns(input=[inp], output=out,
+            query=None,
+            reference=None,
+            cluster_query=0,
+            cluster_ref=None,
+            cluster_labels_zarr=cl_zarr,
+            perturbation_column="gene_symbol",
+            top_k=None,
+            pc_stat_filter=None, pc_pvalue_threshold=0.05,
+            group=None, to_original_scale=False)
+    )
+    assert os.path.exists(out)
+    df = pd.read_parquet(out)
+    assert len(df) > 0

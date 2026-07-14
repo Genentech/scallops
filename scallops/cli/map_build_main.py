@@ -1247,6 +1247,132 @@ def _create_map_cluster_parser(
 
 
 # ---------------------------------------------------------------------------
+# map-backproject
+# ---------------------------------------------------------------------------
+
+
+def _run_map_backproject(arguments: argparse.Namespace):
+    from scallops.cli.map_build import run_pipeline_map_backproject
+
+    run_pipeline_map_backproject(arguments)
+
+
+def _create_map_backproject_parser(
+    subparsers: argparse.ArgumentParser, default_help: bool
+) -> None:
+    parser = subparsers.add_parser(
+        "map-backproject",
+        help="Rank original features by their contribution to a query vs. reference "
+             "centroid difference, backprojected through the TVN/PCA chain.",
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter
+            if default_help
+            else argparse.HelpFormatter
+        ),
+    )
+    required = parser.add_argument_group("required arguments")
+    required.add_argument(
+        "-i", "--input",
+        help="Path to TVN/aggregated AnnData Zarr (e.g. profiles.zarr from map agg).",
+        required=True,
+        nargs="+",
+    )
+    required.add_argument(
+        "--output",
+        help="Output Parquet path for the ranked feature table.",
+        required=True,
+    )
+
+    query_grp = parser.add_argument_group(
+        "query selector (provide --query OR --cluster-query + --cluster-labels-zarr)"
+    )
+    query_grp.add_argument(
+        "--query",
+        nargs="+",
+        dest="query",
+        metavar="PERTURBATION",
+        help="Perturbation name(s) in --perturbation-column that form the query set.",
+    )
+    query_grp.add_argument(
+        "--cluster-query",
+        dest="cluster_query",
+        metavar="LABEL",
+        help="Cluster label value to select as the query set "
+             "(requires --cluster-labels-zarr).",
+    )
+    query_grp.add_argument(
+        "--cluster-labels-zarr",
+        dest="cluster_labels_zarr",
+        metavar="PATH",
+        help="Similarity AnnData Zarr containing obs['cluster'] labels "
+             "(written by map cluster / map similarity).",
+    )
+
+    ref_grp = parser.add_argument_group(
+        "reference selector (default: all non-query observations)"
+    )
+    ref_grp.add_argument(
+        "--reference",
+        nargs="+",
+        dest="reference",
+        metavar="PERTURBATION",
+        help="Perturbation name(s) that form the reference set.",
+    )
+    ref_grp.add_argument(
+        "--cluster-ref",
+        dest="cluster_ref",
+        metavar="LABEL",
+        help="Cluster label value(s) to use as the reference set.",
+    )
+
+    parser.add_argument(
+        "--perturbation-column",
+        default="gene_symbol",
+        dest="perturbation_column",
+        help="obs column that identifies perturbations.",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        dest="top_k",
+        help="Return only the top-k features by |score|.  None = all.",
+    )
+    parser.add_argument(
+        "--pc-stat-filter",
+        choices=["ttest", "mannwhitney"],
+        default=None,
+        dest="pc_stat_filter",
+        help="Statistical test to prune non-significant PC components before "
+             "backprojection.  None skips filtering.",
+    )
+    parser.add_argument(
+        "--pc-pvalue-threshold",
+        type=float,
+        default=0.05,
+        dest="pc_pvalue_threshold",
+        help="p-value cutoff for --pc-stat-filter.",
+    )
+    parser.add_argument(
+        "--group",
+        default=None,
+        dest="group",
+        help="Covariance-alignment group key (required when TVN was run with "
+             "--tvn-by and multiple groups exist).",
+    )
+    parser.add_argument(
+        "--to-original-scale",
+        action="store_true",
+        dest="to_original_scale",
+        help="Backproject past the z-scoring step to recover original measurement units.",
+    )
+    force_arg(parser)
+    no_version_arg(parser)
+    _sort_groups(parser)
+    parser.set_defaults(func=_run_map_backproject)
+
+
+# ---------------------------------------------------------------------------
 # map subcommand registry
 # ---------------------------------------------------------------------------
 
@@ -1294,6 +1420,7 @@ def register_map_subcommands(
     _create_map_similarity_parser(_Renaming(map_subparsers, "similarity"), default_help)
     _create_map_cluster_parser(_Renaming(map_subparsers, "cluster"), default_help)
     _create_map_recall_parser(_Renaming(map_subparsers, "recall"), default_help)
+    _create_map_backproject_parser(_Renaming(map_subparsers, "backproject"), default_help)
     _create_run_parser(map_subparsers, default_help)
 
 

@@ -2533,3 +2533,107 @@ def run_pipeline_map_pca_select(arguments: argparse.Namespace) -> None:
         _merge_uns(data, result)
         logger.info(f"After selection: {result.shape[1]:,} PCs retained")
         _save_zarr(result, output, metadata)
+
+
+# ---------------------------------------------------------------------------
+# map-backproject
+# ---------------------------------------------------------------------------
+
+
+def run_pipeline_map_backproject(arguments: argparse.Namespace) -> None:
+    """Backproject TVN embeddings to rank original features.
+
+    Reads aggregated or cell-level TVN profiles from an AnnData Zarr produced
+    by ``map tvn`` / ``map agg`` / ``map center`` and calls
+    :func:`~scallops.features.backprojection.top_features_from_backprojection`
+    to compute the signed centroid difference between a *query* set and a
+    *reference* set in the original feature space.
+
+    The query can be specified as:
+
+    * **Perturbation names** (``--query``): one or more values in the
+      ``--perturbation-column`` obs column.
+    * **Cluster label** (``--cluster-query`` + ``--cluster-labels-zarr``):
+      a cluster value found in the cluster-label array stored in
+      ``obs["cluster"]`` of the similarity Zarr.
+
+    The reference defaults to all observations not in the query; it can be
+    narrowed with ``--reference`` or ``--cluster-ref``.
+
+    Output is a Parquet file with columns ``feature``, ``score``, ``pvalue``
+    sorted by ``|score|`` descending.
+
+    :param arguments: Parsed CLI namespace.
+    """
+    from scallops.features.backprojection import top_features_from_backprojection
+
+    paths      = arguments.input
+    output     = arguments.output
+    force      = arguments.force
+
+    if _skip_if_exists(output, force):
+        return
+
+    # ── Query / reference selectors ──────────────────────────────────────────
+    query_genes   = getattr(arguments, "query", None)        # list[str] | None
+    ref_genes     = getattr(arguments, "reference", None)    # list[str] | None
+    cluster_query = getattr(arguments, "cluster_query", None)
+    cluster_ref   = getattr(arguments, "cluster_ref",   None)
+    cl_zarr_path  = getattr(arguments, "cluster_labels_zarr", None)
+
+    pert_col  = getattr(arguments, "perturbation_column", "gene_symbol")
+    top_k     = getattr(arguments, "top_k", None)
+    pc_filter = getattr(arguments, "pc_stat_filter", None) or None
+    pc_pval   = float(getattr(arguments, "pc_pvalue_threshold", 0.05))
+    group     = getattr(arguments, "group", None) or None
+    orig_scale = getattr(arguments, "to_original_scale", False)
+
+    with _create_default_dask_config():
+        data = _read_data(paths)
+        if isinstance(data.X, da.Array):
+            data.X = data.X.compute()
+        logger.info("backproject: input %s obs × %s features", f"{data.shape[0]:,}", f"{data.shape[1]:,}")
+
+        # Optionally load cluster labels from a separate similarity Zarr
+        cluster_labels = None
+        if cl_zarr_path is not None:
+            cl_data = _read_data([cl_zarr_path])
+            if "cluster" in cl_data.obs.columns:
+                cluster_labels = cl_data.obs["cluster"].values
+                logger.info(
+                    "backproject: loaded %d cluster labels from %s",
+                    len(cluster_labels), cl_zarr_path,
+                )
+            else:
+                logger.warning(
+                    "backproject: obs['cluster'] not found in %s — "
+                    "cluster_query / cluster_ref will be ignored", cl_zarr_path,
+                )
+
+        result_df = top_features_from_backprojection(
+            data,
+            genes=query_genes,
+            perturbation_column=pert_col,
+            cluster_labels=cluster_labels,
+            cluster_query=cluster_query,
+            genes_ref=ref_genes,
+            cluster_ref=cluster_ref,
+            top_k=top_k,
+            pc_stat_filter=pc_filter,
+            pc_pvalue_threshold=pc_pval,
+            group=group,
+            to_original_scale=orig_scale,
+        )
+        logger.info(
+            "backproject: %d features ranked; top feature: %s (score=%.4f)",
+            len(result_df),
+            result_df["feature"].iloc[0] if len(result_df) else "—",
+            result_df["score"].iloc[0]   if len(result_df) else 0.0,
+        )
+
+        out_path = output if output.endswith(".parquet") else output + ".parquet"
+        import fsspec as _fsspec
+        _fs_out, _path_out = _fsspec.url_to_fs(out_path)
+        with _fs_out.open(_path_out, "wb") as _fh:
+            result_df.to_parquet(_fh, index=False)
+        logger.info("backproject: results written → %s", out_path)
