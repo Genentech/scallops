@@ -377,6 +377,58 @@ def run_pipeline_map_transform_yj(arguments: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# map-scale
+# ---------------------------------------------------------------------------
+
+
+def run_pipeline_map_scale(arguments: argparse.Namespace) -> None:
+    """Well-level z-score or spatial local z-score normalisation.
+
+    Two modes are available via ``--scale-method``:
+
+    ``global`` (default)
+        Standard well-level z-score: subtract the well mean and divide by the
+        well std, stratified by ``--plate-column`` × ``--well-column``.
+
+    ``local``
+        Spatial k-NN z-score: each cell is normalised relative to its *k*
+        nearest spatial neighbours within the same plate × well group.
+        Requires centroid columns in ``obs`` (copied from ``var`` automatically
+        when they are present there as morphological features).
+
+    :param arguments: Parsed CLI namespace.  Expected attributes:
+
+        * ``input`` (*list[str]*) — input Zarr or Parquet path(s).
+        * ``output`` (*str*) — output Zarr path.
+        * ``scale_method`` (*str*) — ``"global"`` or ``"local"``.
+        * ``plate_column``, ``well_column`` (*str*) — grouping columns.
+        * ``localz_neighbors`` (*int*) — k for spatial k-NN (local only).
+        * ``localz_batch_size`` (*int*) — cells per batch (local only).
+        * ``localz_centroid_y``, ``localz_centroid_x`` (*str*) — obs / var
+          column names for spatial coordinates (local only).
+        * ``localz_max_value`` (*float*) — clip value after normalisation.
+        * ``force``, ``no_version`` — standard flags.
+    """
+    paths      = arguments.input
+    output     = arguments.output
+    force      = arguments.force
+    no_version = arguments.no_version
+
+    if _skip_if_exists(output, force):
+        return
+
+    metadata: dict = {} if no_version else cli_metadata()
+
+    with _create_default_dask_config():
+        data = _read_data(paths)
+        if isinstance(data.X, da.Array):
+            data.X = data.X.compute()
+        logger.info("map scale: %s cells × %s features", f"{data.shape[0]:,}", f"{data.shape[1]:,}")
+        result = _apply_scale_inmem(data, arguments)
+        _save_zarr(result, output, metadata)
+
+
+# ---------------------------------------------------------------------------
 # map-pca
 # ---------------------------------------------------------------------------
 
@@ -570,14 +622,17 @@ def run_pipeline_map_tvn(arguments: argparse.Namespace) -> None:
             logger.info("Computing dask array for TVN")
             data.X = data.X.compute()
         logger.info(f"Shape: {data.shape[0]:,} x {data.shape[1]:,}")
-        result = typical_variation_normalization(
-            data, reference_query=reference_query, by=by
-        )
-        # Store the TVN embedding in obsm["X_tvn"] (scanpy/AnnData convention)
-        # in addition to X so downstream tools can access it via the standard key.
-        result.obsm["X_tvn"] = np.asarray(result.X, dtype=np.float32)
-        # TVN sets its own uns keys and varm["PCs"]; upstream keys fill in the rest.
-        _merge_uns(data, result)
+        # When X_pca is present (i.e. data comes from map-pca / map-sphere),
+        # run TVN on the PCA embedding exactly as map run does — keeping X intact.
+        # When X_pca is absent (legacy / direct feature input), run TVN on X.
+        if "X_pca" in data.obsm:
+            result = _apply_tvn_inmem(data, arguments)
+        else:
+            result = typical_variation_normalization(
+                data, reference_query=reference_query, by=by
+            )
+            result.obsm["X_tvn"] = np.asarray(result.X, dtype=np.float32)
+            _merge_uns(data, result)
         _save_zarr(result, output, metadata)
 
 
@@ -658,14 +713,28 @@ def run_pipeline_map_agg(arguments: argparse.Namespace) -> None:
                 f"{len(keep):,} perturbations retained"
             )
 
+        # When X_tvn is present (data from map-tvn), aggregate the TVN embedding —
+        # exactly as map run does.  Otherwise fall back to aggregating X directly.
+        if "X_tvn" in data.obsm:
+            n_pcs = data.obsm["X_tvn"].shape[1]
+            agg_src = anndata.AnnData(
+                X=np.asarray(data.obsm["X_tvn"], dtype=np.float32),
+                obs=data.obs.copy(),
+                var=pd.DataFrame(index=[f"PC{i + 1}" for i in range(n_pcs)]),
+            )
+        else:
+            if isinstance(data.X, da.Array):
+                data.X = data.X.compute()
+            agg_src = data
+
         if agg_by_barcode and barcode_column is not None:
             barcode_by = list(by) + [barcode_column] if by else [barcode_column]
-            intermediate = agg_features(data, by=barcode_by, agg_func=method)
+            intermediate = agg_features(agg_src, by=barcode_by, agg_func=method)
             _merge_uns(data, intermediate)
-            data = intermediate
-            logger.info(f"After barcode aggregation: {data.shape[0]:,} profiles")
+            agg_src = intermediate
+            logger.info(f"After barcode aggregation: {agg_src.shape[0]:,} profiles")
 
-        result = agg_features(data, by=by, agg_func=method)
+        result = agg_features(agg_src, by=by, agg_func=method)
         _merge_uns(data, result)
         logger.info(
             f"After aggregation: {result.shape[0]:,} profiles, "
@@ -2306,8 +2375,14 @@ def run_pipeline_map_sphere(arguments: argparse.Namespace) -> None:
             logger.info("Computing dask array for sphering")
             data.X = data.X.compute()
         logger.info(f"Shape: {data.shape[0]:,} x {data.shape[1]:,}")
-        result = sphere(data, by=by, epsilon=epsilon)
-        _merge_uns(data, result)
+        # When X_pca is present (i.e. data comes from map-pca / map-pca-select),
+        # sphere the PCA embedding exactly as map run does — keeping X intact.
+        # When X_pca is absent (legacy / direct feature input), sphere X directly.
+        if "X_pca" in data.obsm:
+            result = _apply_sphere_inmem(data)
+        else:
+            result = sphere(data, by=by, epsilon=epsilon)
+            _merge_uns(data, result)
         _save_zarr(result, output, metadata)
 
 

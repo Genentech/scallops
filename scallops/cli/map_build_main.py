@@ -239,6 +239,101 @@ def _create_map_transform_yj_parser(
 
 
 # ---------------------------------------------------------------------------
+# map-scale
+# ---------------------------------------------------------------------------
+
+
+def _run_map_scale(arguments: argparse.Namespace):
+    from scallops.cli.map_build import run_pipeline_map_scale
+
+    run_pipeline_map_scale(arguments)
+
+
+def _create_map_scale_parser(
+    subparsers: argparse.ArgumentParser, default_help: bool
+) -> None:
+    parser = subparsers.add_parser(
+        "map-scale",
+        help="Well-level z-score (global) or spatial k-NN z-score (local) normalisation",
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter
+            if default_help
+            else argparse.HelpFormatter
+        ),
+    )
+    required = parser.add_argument_group("required arguments")
+    required.add_argument(
+        "-i",
+        "--input",
+        help="Path to input Zarr or Parquet file(s)",
+        required=True,
+        nargs="+",
+    )
+    required.add_argument(
+        "--output",
+        help="Path to save scaled data in Zarr format",
+        required=True,
+    )
+    parser.add_argument(
+        "--scale-method",
+        choices=["global", "local"],
+        default="global",
+        dest="scale_method",
+        help="'global' for well-level z-score; 'local' for spatial k-NN z-score.",
+    )
+    parser.add_argument(
+        "--plate-column",
+        default="plate",
+        dest="plate_column",
+        help="obs column identifying the plate.",
+    )
+    parser.add_argument(
+        "--well-column",
+        default="well",
+        dest="well_column",
+        help="obs column identifying the well.",
+    )
+    local = parser.add_argument_group("local z-score options (--scale-method local)")
+    local.add_argument(
+        "--localz-neighbors",
+        type=int,
+        default=75,
+        dest="localz_neighbors",
+        help="Number of spatial nearest neighbours per cell.",
+    )
+    local.add_argument(
+        "--localz-batch-size",
+        type=int,
+        default=50_000,
+        dest="localz_batch_size",
+        help="Cells processed per batch (caps peak memory).",
+    )
+    local.add_argument(
+        "--localz-centroid-y",
+        default="Nuclei_AreaShape_Center_Y",
+        dest="localz_centroid_y",
+        help="obs or var column with the y spatial coordinate.",
+    )
+    local.add_argument(
+        "--localz-centroid-x",
+        default="Nuclei_AreaShape_Center_X",
+        dest="localz_centroid_x",
+        help="obs or var column with the x spatial coordinate.",
+    )
+    local.add_argument(
+        "--localz-max-value",
+        type=float,
+        default=5.0,
+        dest="localz_max_value",
+        help="Clip z-scores to ±this value after normalisation.",
+    )
+    force_arg(parser)
+    no_version_arg(parser)
+    _sort_groups(parser)
+    parser.set_defaults(func=_run_map_scale)
+
+
+# ---------------------------------------------------------------------------
 # map-pca
 # ---------------------------------------------------------------------------
 
@@ -1189,6 +1284,7 @@ def register_map_subcommands(
     """
     _create_map_filter_parser(_Renaming(map_subparsers, "filter"), default_help)
     _create_map_transform_yj_parser(_Renaming(map_subparsers, "transform-yj"), default_help)
+    _create_map_scale_parser(_Renaming(map_subparsers, "scale"), default_help)
     _create_map_pca_parser(_Renaming(map_subparsers, "pca"), default_help)
     _create_map_pca_select_parser(_Renaming(map_subparsers, "pca-select"), default_help)
     _create_map_sphere_parser(_Renaming(map_subparsers, "sphere"), default_help)
