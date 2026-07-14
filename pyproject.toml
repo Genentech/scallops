@@ -61,6 +61,7 @@ dependencies = [
     "pyarrow",
     "pydantic",
     "scikit-image",
+    "hdbscan",
     "scikit-learn",
     "scipy",
     "seaborn",
