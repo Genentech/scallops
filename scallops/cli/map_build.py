@@ -64,6 +64,34 @@ _SCALLOPS_UNS_KEY = "scallops"
 _INTERNAL_UNS_KEYS = ("_parquet_sources", "_zarr_is_remote")
 
 
+def _log_attrition(
+    step: str,
+    reason: str,
+    cells_before: int,
+    cells_after: int,
+    feats_before: int,
+    feats_after: int,
+) -> None:
+    """Log one row of the incremental attrition table.
+
+    Emitted whenever cells or features are dropped so callers can build a
+    running picture of how much data survives each filtering stage.
+    """
+    cell_drop = cells_before - cells_after
+    feat_drop = feats_before - feats_after
+    if cell_drop == 0 and feat_drop == 0:
+        return
+    logger.info(
+        "attrition [%s / %s]  cells: %s → %s (-%s, %.1f%%)  "
+        "features: %s → %s (-%s, %.1f%%)",
+        step, reason,
+        f"{cells_before:,}", f"{cells_after:,}",
+        f"{cell_drop:,}", 100 * cell_drop / max(cells_before, 1),
+        f"{feats_before:,}", f"{feats_after:,}",
+        f"{feat_drop:,}", 100 * feat_drop / max(feats_before, 1),
+    )
+
+
 def _merge_uns(source: anndata.AnnData, result: anndata.AnnData) -> None:
     """Forward ``uns`` and ``varm`` from *source* into *result*.
 
@@ -705,12 +733,18 @@ def run_pipeline_map_agg(arguments: argparse.Namespace) -> None:
         if min_cells is not None and perturbation_column is not None:
             counts = data.obs[perturbation_column].value_counts()
             keep = counts[counts >= min_cells].index
+            n_before = data.shape[0]
             data = _slice_anndata(
                 data, data.obs[perturbation_column].isin(keep)
             )
             logger.info(
                 f"After min-cells ({min_cells}) filter: {data.shape[0]:,} cells, "
                 f"{len(keep):,} perturbations retained"
+            )
+            _log_attrition(
+                "agg", f"min-cells={min_cells}",
+                n_before, data.shape[0],
+                data.shape[1], data.shape[1],
             )
 
         # When X_tvn is present (data from map-tvn), aggregate the TVN embedding —
@@ -908,6 +942,10 @@ def run_pipeline_map_similarity(arguments: argparse.Namespace) -> None:
             # set_benchmark can match genes against the correct rows/columns.
             obs_copy = data.obs.copy()
             obs_copy.index = pd.Index(labels, name=perturbation_column)
+            # Drop any obs column that duplicates the index name — anndata
+            # zarr writer rejects an index.name that matches a column name.
+            if perturbation_column in obs_copy.columns:
+                obs_copy = obs_copy.drop(columns=[perturbation_column])
             sim_adata = anndata.AnnData(
                 X=np.asarray(data.X, dtype=np.float32),
                 obs=obs_copy,
@@ -1209,6 +1247,11 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             "map run [filter]: done — %s cells × %s features",
             f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
         )
+        _log_attrition(
+            "filter", "variance/NaN/label",
+            len(obs_all), int(cell_keep.sum()),
+            len(data.var), int(feat_keep.sum()),
+        )
         result = anndata.AnnData(
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
@@ -1303,6 +1346,11 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             if _mem_stop is not None:
                 _mem_stop.set()
 
+        _log_attrition(
+            "filter", "variance/NaN/label",
+            len(obs_all), int(cell_keep.sum()),
+            X_orig.shape[1], int(feat_keep.sum()),
+        )
         result = anndata.AnnData(
             X=X_filtered,
             obs=obs_all.iloc[cell_keep].copy(),
@@ -1333,6 +1381,11 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         logger.info(
             "map run [filter]: in-memory — %s cells × %s features",
             f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
+        )
+        _log_attrition(
+            "filter", "variance/NaN/label",
+            len(obs_all), int(cell_keep.sum()),
+            len(data.var), int(feat_keep.sum()),
         )
         result = anndata.AnnData(
             X=X_filtered,
@@ -1404,6 +1457,11 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
                 " %s features with any NaN",
                 f"{n_dropped_cells:,}", f"{n_dropped_feats:,}",
             )
+            _log_attrition(
+                "transform-yj", "NaN pre-filter",
+                len(keep_cells), int(keep_cells.sum()),
+                len(keep_feats), int(keep_feats.sum()),
+            )
             data = _slice_anndata(data, keep_cells, keep_feats)
             data.uns.update(_saved_uns)
 
@@ -1457,6 +1515,21 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
                         f"--localz-centroid column '{centroid_col}' not found in "
                         f"obs or var.  Check --localz-centroid-y / --localz-centroid-x."
                     )
+
+        # Drop cells with NaN centroids — sklearn NearestNeighbors rejects them.
+        nan_centroid = data.obs[[cy, cx]].isna().any(axis=1)
+        n_nan = int(nan_centroid.sum())
+        if n_nan:
+            logger.warning(
+                "scale [local]: dropping %d cells with NaN centroid values "
+                "before local-zscore k-NN (columns: %s, %s)", n_nan, cy, cx,
+            )
+            _log_attrition(
+                "scale", "NaN centroid",
+                len(nan_centroid), len(nan_centroid) - n_nan,
+                data.shape[1], data.shape[1],
+            )
+            data = _slice_anndata(data, ~nan_centroid.values)
 
         # batch_size caps the intermediate (batch × neighbors × features) array.
         # 100K × 75 × 5K × 4 bytes = 150 GB — acceptable on ≥256 GB machines.

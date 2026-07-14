@@ -62,6 +62,7 @@ dependencies = [
     "pydantic",
     "scikit-image",
     "hdbscan",
+    "leidenalg",
     "scikit-learn",
     "scipy",
     "seaborn",
