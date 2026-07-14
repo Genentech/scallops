@@ -1316,6 +1316,9 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
                     "(centroid column, preserved before NaN pre-filter)", col
                 )
 
+    # _slice_anndata drops uns; save it so _merge_uns can propagate it to result.
+    _saved_uns = dict(data.uns)
+
     # Drop any feature with even one NaN in valid cells before fitting the
     # power transform — PowerTransformer produces NaN output for such features.
     max_fnf = getattr(args, "max_fraction_not_finite", 0.25)
@@ -1333,6 +1336,7 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
                 f"{n_dropped_cells:,}", f"{n_dropped_feats:,}",
             )
             data = _slice_anndata(data, keep_cells, keep_feats)
+            data.uns.update(_saved_uns)
 
     result = transform_features_yj(data, by=by_cols)
     _merge_uns(data, result)
@@ -1437,6 +1441,9 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     ref_q      = getattr(args, "reference_query", None)
     n_comp     = getattr(args, "pca_components", 128)
     batch_size = getattr(args, "pca_batch_size", 200_000)
+    # 0 / None / negative → non-incremental (full-dataset) PCA
+    if not batch_size or batch_size < 0:
+        batch_size = None
     if isinstance(data.X, da.Array):
         data.X = data.X.compute()
 
@@ -1452,11 +1459,12 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     mean_f32 = (pca_info["mean"].astype(np.float32)
                 if pca_info["mean"] is not None else None)
 
-    n_total = data.shape[0]
-    n_pcs   = PCs_f32.shape[1]
-    X_pca   = np.empty((n_total, n_pcs), dtype=np.float32)
-    for start in range(0, n_total, batch_size):
-        end   = min(start + batch_size, n_total)
+    n_total    = data.shape[0]
+    n_pcs      = PCs_f32.shape[1]
+    proj_batch = batch_size if batch_size else n_total
+    X_pca      = np.empty((n_total, n_pcs), dtype=np.float32)
+    for start in range(0, n_total, proj_batch):
+        end   = min(start + proj_batch, n_total)
         chunk = np.asarray(data.X[start:end], dtype=np.float32)
         if mean_f32 is not None:
             chunk -= mean_f32
