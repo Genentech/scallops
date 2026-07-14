@@ -688,7 +688,7 @@ def _list_images_wdl(
     """Used by WDL workflow to output info about images"""
     from scallops.io import _set_up_experiment
 
-    batch_size = 0
+    batch_size = 1
     expected_cycles = None
     if expected_cycles_str != "":
         expected_cycles = int(expected_cycles_str)
@@ -710,41 +710,26 @@ def _list_images_wdl(
     if not save_group_size:
         with open("group_size.txt", "wt") as f:
             f.write("0\n")
-    if batch_size > 0:
-        with open("groups.txt", "wt") as f:
-            ids = []
-            first = True
-            for g, file_list, metadata in exp_gen:
-                if first:
-                    first = False
-                    if save_group_size:
-                        _write_group_size(metadata)
-                if not groupby_t and "t" in metadata["file_metadata"][0]:
-                    t = [md["t"] for md in metadata["file_metadata"]]
-                    if expected_cycles is not None:
-                        assert len(t) == expected_cycles
 
-                ids.append('"' + metadata["id"] + '"')
-                if len(ids) == batch_size:
-                    f.write(" ".join(ids))
-                    f.write("\n")
-                    ids = []
-            if len(ids) > 0:
-                f.write(" ".join(ids))
-                f.write("\n")
-    else:
-        with open("groups.txt", "wt") as f:
-            first = True
-            for g, file_list, metadata in exp_gen:
-                f.write(metadata["id"])
-                f.write("\n")
-                if first:
-                    first = False
-                    if save_group_size:
-                        _write_group_size(metadata)
-                    if not groupby_t and "t" in metadata["file_metadata"][0]:
-                        t = [md["t"] for md in metadata["file_metadata"]]
+    first = True
+    subset_ids = []
+    for g, file_list, metadata in exp_gen:
+        subset_ids.append(metadata["id"])
 
+        if first:
+            first = False
+            if save_group_size:
+                _write_group_size(metadata)
+            if not groupby_t and "t" in metadata["file_metadata"][0]:
+                t = [md["t"] for md in metadata["file_metadata"]]
+                if expected_cycles is not None:
+                    assert len(t) == expected_cycles
+
+    with open("groups.txt", "wt") as f:  # ["plate1-A1", "plate1-A2", ...]
+        for i in range(0, len(subset_ids), batch_size):
+            selected = subset_ids[i : i + batch_size]
+            f.write(" ".join(selected))
+            f.write("\n")
     with open("groupby.txt", "wt") as f:
         for g in groupby:
             f.write(g)

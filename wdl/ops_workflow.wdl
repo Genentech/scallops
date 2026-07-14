@@ -98,6 +98,7 @@ workflow ops_workflow {
         Boolean force_find_objects = false
         Boolean force_register_pheno_to_iss_qc = false
         Boolean force_register_iss_to_iss_qc = false
+        Boolean force_register_pheno_to_pheno_qc = false
 
         # general options
         Array[String]? subset
@@ -144,6 +145,10 @@ workflow ops_workflow {
         Int register_pheno_to_iss_qc_cpu = 48
         String register_pheno_to_iss_qc_disks = "local-disk 200 HDD"
 
+        String register_pheno_to_pheno_qc_memory = "96 GiB"
+        Int register_pheno_to_pheno_qc_cpu = 48
+        String register_pheno_to_pheno_qc_disks = "local-disk 200 HDD"
+
         String register_iss_to_iss_qc_memory = "48 GiB"
         Int register_iss_to_iss_qc_cpu = 24
         String register_iss_to_iss_qc_disks = "local-disk 200 HDD"
@@ -178,7 +183,8 @@ workflow ops_workflow {
         String register_pheno_to_pheno_suffix = "pheno-registered.zarr"
         String register_pheno_to_pheno_transform_suffix = "pheno-to-pheno-transforms"
         String register_pheno_to_iss_qc_suffix = "pheno-to-iss-qc"
-        String register_iss_to_iss_qc_directory = "iss-to-iss-qc"
+        String register_iss_to_iss_qc_suffix = "iss-to-iss-qc"
+        String register_pheno_to_pheno_qc_suffix = "pheno-to-pheno-qc"
         String spot_detect_suffix = "spot-detect.zarr"
         String reads_suffix = "reads"
         String merge_meta_suffix = "merge-sbs-metadata"
@@ -206,7 +212,9 @@ workflow ops_workflow {
     String reads_directory = output_stripped + reads_suffix
     String merge_meta_directory = output_stripped + merge_meta_suffix
     String merge_features_directory = output_stripped + merge_features_suffix
+    String register_iss_to_iss_qc_directory = output_stripped + register_iss_to_iss_qc_suffix
     String register_pheno_to_iss_qc_directory = output_stripped + register_pheno_to_iss_qc_suffix
+    String register_pheno_to_pheno_qc_directory = output_stripped + register_pheno_to_pheno_qc_suffix
     String cell_intersects_boundary_directory = output_stripped + cell_intersects_boundary_suffix
     String cell_intersects_boundary_directory_non_reference_t = output_stripped + cell_intersects_boundary_non_reference_t_suffix
 
@@ -427,7 +435,30 @@ workflow ops_workflow {
                     max_retries = max_retries
             }
         }
+        if(length(times)>1) {
 
+           call tasks.register_qc as register_pheno_to_pheno_qc {
+                    input:
+                        images=select_first([register_pheno_to_pheno.moving_output_url]),
+                        image_pattern=image_pattern_after_registration,
+                        channel=select_first([phenotype_dapi_channel_before_registration, 0]),
+                        label_type='nuclei',
+                        reference_time=reference_phenotype_time,
+                        output_directory=register_pheno_to_pheno_qc_directory,
+                        labels=select_first([segment_nuclei.output_url]),
+                        subset = group,
+                        groupby=groupby,
+                        force = force_register_pheno_to_pheno_qc,
+                        docker=docker,
+                        zones = zones,
+                        preemptible = preemptible,
+                        aws_queue_arn = aws_queue_arn,
+                        disks = register_pheno_to_pheno_qc_disks,
+                        memory = register_pheno_to_pheno_qc_memory,
+                        cpu = register_pheno_to_pheno_qc_cpu,
+                        max_retries = max_retries
+                }
+        }
         if(iss_url_supplied && pheno_url_supplied) {
             call tasks.register_elastix as register_pheno_to_iss {
                 input:
@@ -589,6 +620,7 @@ workflow ops_workflow {
                         cell_intersects_boundary=cell_intersects_boundary.output_url,
                         cell_intersects_boundary_t=cell_intersects_boundary_t.output_url,
                         register_pheno_to_iss_qc=register_pheno_to_iss_qc.output_url,
+                        register_pheno_to_pheno_qc=register_pheno_to_pheno_qc.output_url,
                         register_iss_to_iss_qc=register_iss_to_iss_qc.output_url,
                         barcodes=select_first([barcodes]),
                         barcode_column=barcode_column,
