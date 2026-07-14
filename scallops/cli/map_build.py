@@ -579,6 +579,12 @@ def run_pipeline_map_pca(arguments: argparse.Namespace) -> None:
         # Store the PCA embedding in obsm["X_pca"] (scanpy convention) in addition
         # to X so downstream Python analysis can access it via the standard key.
         result.obsm["X_pca"] = X_transformed.copy()
+        # Also store under "map_pca" (original p-dimensional feature space PCA)
+        # so that backprojection can find it after TVN overwrites uns["pca"] with
+        # its own internal K×K PCA.  Include feature names for reporting.
+        map_pca_entry = dict(pca_info)
+        map_pca_entry["features"] = list(data.var.index)
+        result.uns["map_pca"] = map_pca_entry
         # Propagate upstream uns; pca_result.uns["pca"] already has priority
         _merge_uns(data, result)
         _save_zarr(result, output, metadata)
@@ -730,6 +736,10 @@ def run_pipeline_map_agg(arguments: argparse.Namespace) -> None:
         data = _read_data(paths)
         logger.info(f"Input: {data.shape[0]:,} cells, {data.shape[1]:,} features")
 
+        # Save uns before any _slice_anndata call — _slice_anndata creates a
+        # fresh AnnData without uns, which would break _merge_uns downstream.
+        _saved_uns = dict(data.uns)
+
         if min_cells is not None and perturbation_column is not None:
             counts = data.obs[perturbation_column].value_counts()
             keep = counts[counts >= min_cells].index
@@ -737,6 +747,7 @@ def run_pipeline_map_agg(arguments: argparse.Namespace) -> None:
             data = _slice_anndata(
                 data, data.obs[perturbation_column].isin(keep)
             )
+            data.uns.update(_saved_uns)
             logger.info(
                 f"After min-cells ({min_cells}) filter: {data.shape[0]:,} cells, "
                 f"{len(keep):,} perturbations retained"
@@ -1926,11 +1937,11 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     recall_zarr   = f"{out_dir}{_sep}recall_annotated.zarr"
 
     all_steps = [
-        "filter", "transform-yj", "scale",   # scale can be global or local (--scale-method)
-        "pca", "pca-select", "sphere", "tvn", # → all accumulate in cells.zarr
-        "agg",                                # → profiles.zarr
-        "center", "similarity",               # → similarity.zarr
-        "recall",                             # → recall.parquet + recall_annotated.zarr
+        "filter", "transform-yj", "scale",  # scale can be global or local (--scale-method)
+        "pca", "pca-select", "tvn",          # sphere excluded from default (use --steps to add)
+        "agg",                               # → profiles.zarr
+        "center", "similarity",              # → similarity.zarr
+        "recall",                            # → recall.parquet + recall_annotated.zarr
     ]
     requested = arguments.steps.lower()
     steps = set(all_steps) if requested == "all" else {s.strip() for s in requested.split(",")}
@@ -1954,7 +1965,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     # ============================================================
     # PHASE 1 — cell-level transforms → single cells.zarr
     # ============================================================
-    cell_steps = ["filter", "transform-yj", "scale", "pca", "pca-select", "sphere", "tvn"]
+    cell_steps = ["filter", "transform-yj", "scale", "pca", "pca-select", "sphere", "tvn"]  # sphere kept here so --steps sphere still works
     cell_steps_wanted = [s for s in cell_steps if s in steps]
 
     already_done_cells = _completed(cells_zarr)

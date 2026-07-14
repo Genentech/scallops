@@ -1872,6 +1872,38 @@ def test_map_agg_uses_obsm_x_tvn(cell_data, tmp_path):
     assert all(v.startswith("PC") for v in result.var.index), (
         "Aggregated profiles must index var by PC names when X_tvn was used"
     )
+    # TVN backprojection uns must survive aggregation
+    assert "tvn_pre_scale_mean" in result.uns, (
+        "TVN uns must propagate through map-agg (needed for backprojection)"
+    )
+
+
+@pytest.mark.features
+def test_map_agg_uns_survives_min_cells_filter(cell_data, tmp_path):
+    """TVN uns must propagate even when min_cells triggers _slice_anndata.
+
+    _slice_anndata drops uns; run_pipeline_map_agg must save/restore it
+    before and after the min-cells filter so _merge_uns still has a source.
+    """
+    pca_zarr = _make_pca_adata(cell_data, tmp_path)
+    tvn_out = str(tmp_path / "tvn")
+    run_pipeline_map_tvn(
+        _ns(input=[pca_zarr], output=tvn_out,
+            reference_query="gene_symbol=='NTC'", by=None)
+    )
+    agg_out = str(tmp_path / "agg_mc")
+    run_pipeline_map_agg(
+        _ns(input=[tvn_out + ".zarr"], output=agg_out,
+            by=["gene_symbol"], method="mean",
+            # min_cells=1 triggers _slice_anndata even if nothing is dropped
+            min_cells=1,
+            perturbation="gene_symbol", barcode="barcode_0",
+            agg_by_barcode=False)
+    )
+    result = _read_zarr(agg_out + ".zarr")
+    assert "tvn_pre_scale_mean" in result.uns, (
+        "TVN uns must survive even when min_cells filter calls _slice_anndata"
+    )
 
 
 # ---------------------------------------------------------------------------
