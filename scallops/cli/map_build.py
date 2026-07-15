@@ -190,6 +190,37 @@ def _save_zarr(data: anndata.AnnData, output: str, metadata: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shared helper: S3/local glob expansion for standalone subcommands
+# ---------------------------------------------------------------------------
+
+
+def _expand_inputs(paths: list[str]) -> list[str]:
+    """Expand glob patterns in *paths* (e.g. ``s3://bucket/dir/*.parquet``).
+
+    Works for S3, GCS, Azure, and local paths via fsspec.  Paths without
+    wildcards are returned unchanged.  Raises ``FileNotFoundError`` if a
+    glob matches nothing.
+    """
+    import fsspec as _fsspec
+
+    expanded: list[str] = []
+    for pat in paths:
+        if not any(c in pat for c in ("*", "?", "[")):
+            expanded.append(pat)
+            continue
+        _fs, _ = _fsspec.url_to_fs(pat)
+        matched = _fs.glob(pat) if hasattr(_fs, "glob") else []
+        matched = [_fs.unstrip_protocol(p) for p in matched]
+        if not matched:
+            raise FileNotFoundError(f"glob matched no files: {pat!r}")
+        expanded.extend(sorted(matched))
+    if len(expanded) != len(paths):
+        logger.info("inputs: expanded %d pattern(s) → %d file(s)",
+                    len(paths), len(expanded))
+    return expanded
+
+
+# ---------------------------------------------------------------------------
 # map-filter
 # ---------------------------------------------------------------------------
 
@@ -247,42 +278,32 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
           batch-correlation test (default 0.05).
         * ``batch_method`` (*str*) — ``"kruskal"`` (default) or ``"anova"``.
     """
-    paths = arguments.input
+    # Expand glob patterns (e.g. s3://bucket/dir/*.parquet) before reading.
+    arguments = argparse.Namespace(**{**vars(arguments),
+                                      "input": _expand_inputs(list(arguments.input))})
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    min_variance = arguments.min_variance
-    max_variance = arguments.max_variance
-    max_fraction_not_finite = arguments.max_fraction_not_finite
-    by = arguments.by
-    label_filter = arguments.label_filter
-    features = arguments.features
 
-    if min_variance is not None and min_variance < 0:
-        min_variance = None
-    if max_variance is not None and max_variance < 0:
-        max_variance = None
-    if max_fraction_not_finite is not None and max_fraction_not_finite < 0:
-        max_fraction_not_finite = None
-
-    # Optional filters — use getattr for backward compatibility
-    max_correlation = getattr(arguments, "max_correlation", None)
-    corr_reference = getattr(arguments, "correlation_reference", None)
-    corr_chunk = int(getattr(arguments, "correlation_chunk_size", 512))
-    max_zero_fraction = getattr(arguments, "max_zero_fraction", None)
-    near_zero_threshold = float(getattr(arguments, "near_zero_threshold", 0.0))
-    min_unique = getattr(arguments, "min_unique", None)
-    batch_column = getattr(arguments, "batch_column", None)
-    batch_reference = getattr(arguments, "batch_reference", None)
-    batch_pvalue = float(getattr(arguments, "batch_pvalue", 0.05))
-    batch_method = getattr(arguments, "batch_method", "kruskal")
+    # Map --by [col1 col2 ...] to plate_column / well_column used by
+    # _apply_filter_inmem so that --by plate well works for stratified variance.
+    by = arguments.by or []
+    if by and not hasattr(arguments, "plate_column"):
+        pc = by[0] if len(by) >= 1 else "plate"
+        wc = by[1] if len(by) >= 2 else "well"
+        arguments = argparse.Namespace(**{**vars(arguments),
+                                          "plate_column": pc, "well_column": wc})
+    if not hasattr(arguments, "filter_batch_size"):
+        arguments = argparse.Namespace(**{**vars(arguments),
+                                          "filter_batch_size": 500_000})
+    if not hasattr(arguments, "scale_method"):
+        arguments = argparse.Namespace(**{**vars(arguments), "scale_method": "global"})
 
     if _skip_if_exists(output, force):
         return
 
-    metadata = {}
-    if not no_version:
-        metadata.update(cli_metadata())
+    metadata: dict = {} if no_version else cli_metadata()
 
     dask_server_url = arguments.client
     dask_cluster_parameters = (
@@ -295,61 +316,41 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        data = _read_data(paths, features)
-        if label_filter is not None:
-            data = _slice_anndata(data, _query_anndata(data, label_filter).index)
+        features = arguments.features
+        data = _read_parquet_for_map(paths) if all(
+            p.lower().endswith((".parquet", ".pq")) for p in paths
+        ) else _read_data(paths, features)
 
         logger.info(
-            f"Before filter: {data.shape[0]:,} cells, {data.shape[1]:,} features"
+            "map filter: %s cells × %s features",
+            f"{data.shape[0]:,}", f"{data.shape[1]:,}",
         )
+        # Use the efficient _apply_filter_inmem path (2-pass column-batch scanner
+        # for parquet; zarr/numpy streaming for other formats).
+        result = _apply_filter_inmem(data, arguments)
 
-        # Variance + finite-value filter
-        result = filter_data(
-            data,
-            max_fraction_not_finite=max_fraction_not_finite,
-            min_variance=min_variance,
-            max_variance=max_variance,
-            by=by,
+        # Optional post-filter steps not handled by _apply_filter_inmem
+        from scallops.features.preprocessing import (
+            filter_zero_inflated, filter_low_cardinality
         )
-        _merge_uns(data, result)
-        data = result
-
-        # Zero-inflation filter
+        max_zero_fraction = getattr(arguments, "max_zero_fraction", None)
+        near_zero_threshold = float(getattr(arguments, "near_zero_threshold", 0.0))
+        min_unique = getattr(arguments, "min_unique", None)
         if max_zero_fraction is not None:
-            data = filter_zero_inflated(
-                data,
+            result = filter_zero_inflated(
+                result,
                 max_zero_fraction=max_zero_fraction,
                 near_zero_threshold=near_zero_threshold,
-                by=by,
+                by=by or None,
             )
-
-        # Low-cardinality (categorical) filter
         if min_unique is not None:
-            data = filter_low_cardinality(data, min_unique=int(min_unique))
-
-        # Batch-correlation filter
-        if batch_column is not None:
-            data = filter_batch_correlated(
-                data,
-                batch_column=batch_column,
-                reference_query=batch_reference,
-                pvalue_threshold=batch_pvalue,
-                method=batch_method,
-            )
-
-        # Correlated-feature filter (done last so p is already minimal)
-        if max_correlation is not None:
-            data = remove_correlated_features(
-                data,
-                threshold=float(max_correlation),
-                reference_query=corr_reference,
-                chunk_size=corr_chunk,
-            )
+            result = filter_low_cardinality(result, min_unique=int(min_unique))
 
         logger.info(
-            f"After filter: {data.shape[0]:,} cells, {data.shape[1]:,} features"
+            "map filter: done — %s cells × %s features",
+            f"{result.shape[0]:,}", f"{result.shape[1]:,}",
         )
-        _save_zarr(data, output, metadata)
+        _save_zarr(result, output, metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +374,7 @@ def run_pipeline_map_transform_yj(arguments: argparse.Namespace) -> None:
         * ``client``, ``dask_cluster``, ``force``, ``no_version`` — see
           :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -484,7 +485,7 @@ def run_pipeline_map_pca(arguments: argparse.Namespace) -> None:
         * ``client``, ``dask_cluster``, ``force``, ``no_version`` — see
           :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -626,7 +627,7 @@ def run_pipeline_map_tvn(arguments: argparse.Namespace) -> None:
         * ``client``, ``dask_cluster``, ``force``, ``no_version`` — see
           :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -704,7 +705,7 @@ def run_pipeline_map_agg(arguments: argparse.Namespace) -> None:
         * ``client``, ``dask_cluster``, ``force``, ``no_version`` — see
           :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -819,7 +820,7 @@ def run_pipeline_map_center(arguments: argparse.Namespace) -> None:
         * ``robust`` (*bool*) — use median instead of mean.
         * ``force``, ``no_version`` — see :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -879,7 +880,7 @@ def run_pipeline_map_similarity(arguments: argparse.Namespace) -> None:
           been applied because NTC becomes the zero vector.
         * ``force``, ``no_version`` — see :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -1035,7 +1036,7 @@ def run_pipeline_map_cluster(arguments: argparse.Namespace) -> None:
         * ``random_state`` (*int*) — random seed for Leiden.
         * ``force``, ``no_version`` — see :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -2253,7 +2254,7 @@ def run_pipeline_map_recall(arguments: argparse.Namespace) -> None:
         * ``min_pairs`` (*int*) — minimum pair count for pairwise benchmarks.
         * ``force``, ``no_version`` — see :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -2439,7 +2440,7 @@ def run_pipeline_map_sphere(arguments: argparse.Namespace) -> None:
           inversion (default 1e-5).
         * ``force``, ``no_version`` — see :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
@@ -2509,7 +2510,7 @@ def run_pipeline_map_pca_select(arguments: argparse.Namespace) -> None:
           *None*.
         * ``force``, ``no_version`` — see :func:`run_pipeline_map_filter`.
     """
-    paths = arguments.input
+    paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
