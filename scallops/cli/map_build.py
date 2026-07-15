@@ -1593,35 +1593,50 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
             else:
                 fine_codes = np.zeros(len(data.obs), dtype=np.int64)
 
-            # Argsort-based groupby: O(n log n) total, no O(n × g) mask loop.
-            sort_order  = np.argsort(fine_codes, kind="stable")
+            # Parallelise imputation across features (columns).
+            # Processing column-by-column is cache-friendly and embarrassingly
+            # parallel: 1212 features / 128 CPUs ≈ 10 batches → ~10-30 s.
+            from joblib import Parallel, delayed as _jdelay
+
+            # Pre-sort rows so group access is contiguous in memory
+            sort_order   = np.argsort(fine_codes, kind="stable")
             sorted_codes = fine_codes[sort_order]
-            # Find group boundaries via the positions where code changes
-            boundaries = np.concatenate(
+            boundaries   = np.concatenate(
                 ([0], np.where(np.diff(sorted_codes))[0] + 1, [len(sorted_codes)])
             )
-            for start, end in zip(boundaries[:-1], boundaries[1:]):
-                orig_idx = sort_order[start:end]   # original row indices for this group
-                code     = fine_codes[orig_idx[0]]
-                g_block  = X[orig_idx]
-                nan_g    = ~np.isfinite(g_block)
-                if not nan_g.any():
-                    continue
-                n_cells = end - start
-                if n_cells >= _MIN_CELLS_FINE:
-                    col_med = np.nanmedian(g_block, axis=0)
-                    # Fall back for features where the entire fine group is NaN
-                    all_nan_cols = np.isnan(col_med)
-                    if all_nan_cols.any() and _coarse_cols:
-                        ck = coarse_key_arr[orig_idx[0]]
-                        col_med[all_nan_cols] = coarse_meds.get(ck, global_med)[all_nan_cols]
-                elif _coarse_cols:
-                    ck = coarse_key_arr[orig_idx[0]]
-                    col_med = coarse_meds.get(ck, global_med).copy()
-                else:
-                    col_med = global_med.copy()
-                g_block[nan_g] = np.take(col_med, np.where(nan_g)[1])
-                X[orig_idx] = g_block
+            X_sorted = X[sort_order]  # sort rows once; group slices are then contiguous
+
+            def _impute_col(j: int) -> tuple[int, np.ndarray]:
+                """Impute one feature column using per-fine-group median."""
+                col = X_sorted[:, j].copy()
+                for s, e in zip(boundaries[:-1], boundaries[1:]):
+                    seg = col[s:e]
+                    nan_mask_seg = ~np.isfinite(seg)
+                    if not nan_mask_seg.any():
+                        continue
+                    n_g = e - s
+                    med = np.nanmedian(seg)
+                    if np.isnan(med):
+                        # Fall back to coarse or global median
+                        if _coarse_cols:
+                            ck = coarse_key_arr[sort_order[s]]
+                            med = float(np.nanmedian(
+                                X[coarse_key_arr == ck, j]
+                            ))
+                        if np.isnan(med):
+                            med = float(global_med[j])
+                    seg[nan_mask_seg] = med
+                    col[s:e] = seg
+                return j, col
+
+            imp_results = Parallel(n_jobs=-1)(
+                _jdelay(_impute_col)(j)
+                for j in range(X.shape[1])
+            )
+            for j, col in imp_results:
+                X_sorted[:, j] = col
+            # Undo the sort to restore original row order
+            X[sort_order] = X_sorted
 
             data = anndata.AnnData(
                 X=X, obs=data.obs.copy(), var=data.var.copy(), uns=data.uns.copy()
