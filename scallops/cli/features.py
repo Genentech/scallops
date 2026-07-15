@@ -388,7 +388,14 @@ def single_feature(
             f"{prefix}{n_labels:,} {pluralize('label', n_labels)}. "
             f"Area: {merged_df[area_column].min():,.0f} to {merged_df[area_column].max():,.0f}."
         )
-
+        bounding_box_columns = [
+            f"{label_prefix}_AreaShape_BoundingBoxMinimum_Y",
+            f"{label_prefix}_AreaShape_BoundingBoxMinimum_X",
+            f"{label_prefix}_AreaShape_BoundingBoxMaximum_Y",
+            f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
+        ]
+        for c in bounding_box_columns:
+            merged_df[c] = merged_df[c].astype(int)
         df = label_features(
             objects_df=merged_df,
             label_image=zarr_labels if zarr_inputs else da.from_zarr(zarr_labels),
