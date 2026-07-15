@@ -1603,6 +1603,28 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
                 X=X, obs=data.obs.copy(), var=data.var.copy(), uns=data.uns.copy()
             )
 
+    # Clip extreme values per feature before fitting the power transform.
+    # The Yeo-Johnson optimiser can produce extreme output (or fail to converge)
+    # when a feature has even one extreme outlier.  Winsorising at the 99.9th
+    # percentile removes these without discarding any cells or features.
+    _clip_pct = getattr(args, "yj_clip_percentile", 99.9)
+    if _clip_pct is not None and _clip_pct < 100:
+        X_clip = np.asarray(data.X, dtype=np.float32)
+        lo = np.nanpercentile(X_clip, 100 - _clip_pct, axis=0)
+        hi = np.nanpercentile(X_clip,         _clip_pct, axis=0)
+        n_clipped = int(((X_clip < lo) | (X_clip > hi)).sum())
+        if n_clipped:
+            X_clip = np.clip(X_clip, lo, hi)
+            logger.info(
+                "map run [transform-yj]: clipped %s extreme values "
+                "to [%.1f, %.1f]th percentile range",
+                f"{n_clipped:,}", 100 - _clip_pct, _clip_pct,
+            )
+            data = anndata.AnnData(
+                X=X_clip, obs=data.obs.copy(),
+                var=data.var.copy(), uns=data.uns.copy()
+            )
+
     result = transform_features_yj(data, by=by_cols)
     _merge_uns(data, result)
     return result

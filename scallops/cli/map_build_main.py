@@ -278,6 +278,16 @@ def _create_map_transform_yj_parser(
         nargs="*",
     )
     parser.add_argument(
+        "--yj-clip-percentile",
+        type=float,
+        default=99.9,
+        dest="yj_clip_percentile",
+        help="Winsorise each feature to this percentile before fitting the "
+             "Yeo-Johnson transform (default 99.9). Prevents a single extreme "
+             "outlier from breaking the PowerTransformer optimiser.  Set to "
+             "100 or None to disable.",
+    )
+    parser.add_argument(
         "--max-fraction-not-finite",
         type=float,
         default=0.25,
