@@ -1550,12 +1550,15 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
         # Grouping: (plate × well × perturbation) so that the imputed value
         # reflects the same genetic background, not a well-wide average that
         # mixes all KO phenotypes.  Falls back to (plate × well) for genes
-        # with fewer than 10 cells (too small for a stable median estimate).
+        # with fewer than 10 cells (too few for a stable median).
+        #
+        # Implementation: pandas groupby + numpy nanmedian.  Using groupby
+        # avoids O(n_cells × n_groups) string-comparison loops that would
+        # take hours with ~240 K fine groups.
         n_nan_remaining = int(nan_mask.sum())
         if n_nan_remaining > 0:
             n_feat_with_nan = int(nan_mask.any(axis=0).sum())
             pert_col = getattr(args, "perturbation", "gene_symbol")
-            # Build fine-grained group key: plate × well × perturbation
             _fine_cols = (by_cols or []) + (
                 [pert_col] if pert_col in data.obs.columns else []
             )
@@ -1567,37 +1570,50 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
                 " × ".join(_fine_cols) if _fine_cols else "global",
             )
             X = np.asarray(data.X, dtype=np.float32)
-            _MIN_CELLS_FINE = 10  # fall back to coarser group below this
+            _MIN_CELLS_FINE = 10
 
-            def _make_keys(cols: list[str]) -> "pd.Series":
-                if not cols:
-                    return pd.Series(["all"] * len(data.obs), index=data.obs.index)
-                if len(cols) == 1:
-                    return data.obs[cols[0]].astype(str)
-                return data.obs[cols].astype(str).agg("-".join, axis=1)
-
-            fine_keys   = _make_keys(_fine_cols)
-            coarse_keys = _make_keys(_coarse_cols)
-            # Pre-compute coarse medians as fallback
+            # Pre-compute coarse (plate × well) medians as fallback
             coarse_meds: dict = {}
-            for ck in coarse_keys.unique():
-                cidx = (coarse_keys == ck).values
-                coarse_meds[ck] = np.nanmedian(X[cidx], axis=0)
+            if _coarse_cols:
+                coarse_key_ser = data.obs[_coarse_cols].astype(str).agg(
+                    "-".join, axis=1
+                ) if len(_coarse_cols) > 1 else data.obs[_coarse_cols[0]].astype(str)
+                coarse_key_arr = coarse_key_ser.values
+                for ck in np.unique(coarse_key_arr):
+                    coarse_meds[ck] = np.nanmedian(X[coarse_key_arr == ck], axis=0)
+            global_med = np.nanmedian(X, axis=0)  # last-resort fallback
 
-            for fk in fine_keys.unique():
-                fidx = (fine_keys == fk).values
-                g_block = X[fidx]
+            # Build integer group codes for fast groupby (no string comparisons)
+            if _fine_cols:
+                _obs_sub = data.obs[_fine_cols].astype(str)
+                fine_codes, _ = pd.factorize(
+                    _obs_sub.agg("-".join, axis=1) if len(_fine_cols) > 1
+                    else _obs_sub.iloc[:, 0]
+                )
+            else:
+                fine_codes = np.zeros(len(data.obs), dtype=np.int64)
+
+            for code in np.unique(fine_codes):
+                idx = fine_codes == code
+                g_block = X[idx]
                 nan_g   = ~np.isfinite(g_block)
                 if not nan_g.any():
                     continue
-                if fidx.sum() >= _MIN_CELLS_FINE:
+                n_cells = int(idx.sum())
+                if n_cells >= _MIN_CELLS_FINE:
                     col_med = np.nanmedian(g_block, axis=0)
+                    # If all-NaN column in fine group, fall back to coarse median
+                    all_nan_cols = np.isnan(col_med)
+                    if all_nan_cols.any() and _coarse_cols:
+                        ck = coarse_key_arr[idx][0]
+                        col_med[all_nan_cols] = coarse_meds.get(ck, global_med)[all_nan_cols]
+                elif _coarse_cols:
+                    ck = coarse_key_arr[idx][0]
+                    col_med = coarse_meds.get(ck, global_med)
                 else:
-                    # Too few cells — use coarse (plate × well) median
-                    ck = coarse_keys[fidx].iloc[0]
-                    col_med = coarse_meds[ck]
+                    col_med = global_med
                 g_block[nan_g] = np.take(col_med, np.where(nan_g)[1])
-                X[fidx] = g_block
+                X[idx] = g_block
 
             data = anndata.AnnData(
                 X=X, obs=data.obs.copy(), var=data.var.copy(), uns=data.uns.copy()
