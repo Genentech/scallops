@@ -62,6 +62,9 @@ def recall(
         if isinstance(null_distribution, da.Array)
         else null_distribution
     )
+    if isinstance(null_distribution, da.Array):
+        sorted_null_distribution = da.from_array(sorted_null_distribution)
+
     xp = get_namespace(query_distribution)
     if left:
         query_percentage_ranks_left = xp.searchsorted(
@@ -93,7 +96,7 @@ def recall(
             ) / len(query_distribution)
         results.append(result)
     if isinstance(query_distribution, da.Array):
-        results = dask.compute(results)
+        results = dask.compute(*results)
     return pd.DataFrame(results)
 
 
