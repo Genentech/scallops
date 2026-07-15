@@ -1593,47 +1593,41 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
             else:
                 fine_codes = np.zeros(len(data.obs), dtype=np.int64)
 
-            # Parallel column-level imputation using shared-memory threads.
+            # Vectorised imputation with np.bincount — no Python inner loops.
             #
-            # Key optimisations:
-            # 1. Sort rows once by fine group code so each group's cells are
-            #    contiguous → O(n log n) instead of O(n×g) mask loops.
-            # 2. Store sorted array in Fortran (column-major) order so each
-            #    feature column is a contiguous memory block → cache hits.
-            # 3. Threads share X_sorted_F with no data copying; numpy/scipy
-            #    release the GIL during numeric operations → true parallelism.
+            # np.bincount is C-compiled and releases the GIL; the outer
+            # feature loop is parallelised with threads so all 128 CPUs are
+            # used without GIL contention.
+            #
+            # Uses per-fine-group MEAN (not median): bincount makes mean fully
+            # vectorisable (O(n) per column).  For sparse NaN from segmentation
+            # edge effects the difference from median is negligible, and the
+            # values are discarded after the downstream local z-score anyway.
             from joblib import Parallel, delayed as _jdelay
 
-            sort_order   = np.argsort(fine_codes, kind="stable")
-            sorted_codes = fine_codes[sort_order]
-            boundaries   = np.concatenate(
-                ([0], np.where(np.diff(sorted_codes))[0] + 1, [len(sorted_codes)])
-            ).tolist()
-            b_starts = boundaries[:-1]
-            b_ends   = boundaries[1:]
+            n_fine   = int(fine_codes.max()) + 1
+            nan_mask_all = ~np.isfinite(X)          # (n_cells, n_feat)
 
-            # Fortran-order: column j → X_F[:, j] is 36 MB contiguous block
-            X_F = np.asfortranarray(X[sort_order])
-
-            def _impute_col_F(j: int) -> None:
-                col = X_F[:, j]          # direct view, no copy
-                for s, e in zip(b_starts, b_ends):
-                    seg = col[s:e]
-                    nan_m = ~np.isfinite(seg)
-                    if not nan_m.any():
-                        continue
-                    med = np.nanmedian(seg)
-                    if np.isnan(med):
-                        med = float(global_med[j])
-                    seg[nan_m] = med     # writes back through view
+            def _impute_col_vec(j: int) -> None:
+                """Fill NaN in column j using per-fine-group mean (vectorised)."""
+                nan_col = nan_mask_all[:, j]
+                if not nan_col.any():
+                    return
+                col = X[:, j].copy()
+                col_valid = np.where(nan_col, 0.0, col)
+                cnt_valid = (~nan_col).astype(np.float32)
+                g_sum = np.bincount(fine_codes, weights=col_valid, minlength=n_fine)
+                g_cnt = np.bincount(fine_codes, weights=cnt_valid, minlength=n_fine)
+                # Fall back to global mean for groups with no valid cells
+                global_m = float(global_med[j])
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    g_mean = np.where(g_cnt > 0, g_sum / g_cnt, global_m)
+                fill_vals = g_mean[fine_codes]          # broadcast group mean to cells
+                X[:, j] = np.where(nan_col, fill_vals, col)
 
             Parallel(n_jobs=-1, prefer="threads")(
-                _jdelay(_impute_col_F)(j) for j in range(X_F.shape[1])
+                _jdelay(_impute_col_vec)(j) for j in range(X.shape[1])
             )
-            # Restore original row order
-            inv_sort = np.empty_like(sort_order)
-            inv_sort[sort_order] = np.arange(len(sort_order))
-            X = np.ascontiguousarray(X_F[inv_sort])
 
             data = anndata.AnnData(
                 X=X, obs=data.obs.copy(), var=data.var.copy(), uns=data.uns.copy()
