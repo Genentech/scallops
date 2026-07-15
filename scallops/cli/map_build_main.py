@@ -112,6 +112,17 @@ def _create_map_filter_parser(
         default=100_000,
         dest="filter_batch_size",
     )
+    parser.add_argument(
+        "--filter-max-memory",
+        help="Memory budget in GB for the PyArrow read-ahead buffer during the "
+             "parquet filter scan.  Set this to a fraction of the node's RAM when "
+             "running in a shared cluster environment (e.g. 32 on a 256 GB node "
+             "shared with 4 jobs).  When omitted, 70%% of currently available RAM "
+             "is used automatically (appropriate for dedicated nodes).",
+        type=float,
+        default=None,
+        dest="filter_max_memory_gb",
+    )
 
     # --- Condition column ---
     cond = parser.add_argument_group(
@@ -1613,10 +1624,16 @@ def _create_run_parser(
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
     filt.add_argument(
-        "--filter-batch-size", type=int, default=500_000, dest="filter_batch_size",
-        help="Rows per streaming batch during parquet filter (default 500 000). "
-             "Larger = more RAM used but fewer batches; auto-scales readahead "
-             "to stay within available memory.",
+        "--filter-batch-size", type=int, default=100_000, dest="filter_batch_size",
+        help="Rows per streaming batch during parquet filter (default 100 000). "
+             "Smaller batches allow more source files to be read concurrently on "
+             "high-RAM machines.  Increase on RAM-constrained nodes.",
+    )
+    filt.add_argument(
+        "--filter-max-memory", type=float, default=None, dest="filter_max_memory_gb",
+        help="Memory budget in GB for the PyArrow read-ahead buffer (e.g. 32 for a "
+             "shared node with 256 GB RAM).  When omitted, 70%% of available RAM "
+             "is used automatically — appropriate for dedicated nodes.",
     )
     filt.add_argument("--max-correlation", type=float, default=None, dest="max_correlation",
                       help="Remove pairs of features with |r| above this threshold "

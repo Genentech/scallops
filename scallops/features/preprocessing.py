@@ -473,6 +473,7 @@ def _col_batch_filter_parquet(
     max_variance: float | None,
     feat_cols: "list[str] | None" = None,
     batch_size: int = 500_000,
+    max_memory_gb: float | None = None,
 ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
     """Two-pass sequential streaming filter for parquet files (local or S3).
 
@@ -534,18 +535,29 @@ def _col_batch_filter_parquet(
     group_stats: dict = {}
     row_offset  = 0
 
-    # Compute batch_readahead / fragment_readahead from available RAM so the
-    # scanner doesn't buffer more than 70% of available memory in read-ahead.
-    # On high-RAM machines (≥256 GB) this unlocks concurrent reads across all
-    # source files, dramatically improving S3 throughput.
+    # Compute batch_readahead / fragment_readahead from the memory budget.
+    #
+    # max_memory_gb (explicit):  Use this many GB for the read-ahead buffer.
+    #   Pass a value ≤ available physical RAM for dedicated machines, or a
+    #   smaller fraction for shared/cluster environments (e.g. --max-memory 32
+    #   on a 256 GB node with 8 concurrent jobs).
+    #
+    # max_memory_gb is None (auto):  Use 70 % of currently available RAM.
+    #   This is the right default for dedicated compute nodes; if you share the
+    #   node set --max-memory explicitly.
+    #
     # float64 parquet → worst-case 8 bytes/element per batch.
-    try:
-        import psutil as _psutil
-        _avail_gb = _psutil.virtual_memory().available / 1e9
-    except Exception:
-        _avail_gb = 64.0   # conservative fallback
-    _batch_gb  = batch_size * n_feat * 8 / 1e9          # float64 worst case
-    _budget_batches = max(2, int(_avail_gb * 0.70 / max(_batch_gb, 0.1)))
+    _batch_gb = batch_size * n_feat * 8 / 1e9
+    if max_memory_gb is not None:
+        _budget_gb = float(max_memory_gb)
+    else:
+        try:
+            import psutil as _psutil
+            _avail_gb = _psutil.virtual_memory().available / 1e9
+        except Exception:
+            _avail_gb = 64.0   # conservative fallback
+        _budget_gb = _avail_gb * 0.70
+    _budget_batches = max(2, int(_budget_gb / max(_batch_gb, 0.1)))
     _frag_ra   = max(1, min(len(sources), _budget_batches // 3))
     _batch_ra  = max(2, min(16, _budget_batches // max(1, _frag_ra)))
     logger.info(
