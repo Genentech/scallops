@@ -79,7 +79,9 @@ def transform_features_yj(
         return gk, j, col
 
     X_out = np.empty((n_obs, n_feat), dtype=np.float32)
-    results = Parallel(n_jobs=n_jobs)(
+    # prefer="threads": threads share X_full in memory (no 87 GB pickle per
+    # worker); scipy.stats.yeojohnson releases the GIL in C → true parallelism.
+    results = Parallel(n_jobs=n_jobs, prefer="threads")(
         delayed(_process)(gk, j)
         for gk in unique_groups
         for j in range(n_feat)
