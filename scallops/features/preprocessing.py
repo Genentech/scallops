@@ -535,7 +535,9 @@ def _col_batch_filter_parquet(
     row_offset  = 0
 
     # Compute batch_readahead / fragment_readahead from available RAM so the
-    # scanner doesn't buffer more than 40% of available memory in read-ahead.
+    # scanner doesn't buffer more than 70% of available memory in read-ahead.
+    # On high-RAM machines (≥256 GB) this unlocks concurrent reads across all
+    # source files, dramatically improving S3 throughput.
     # float64 parquet → worst-case 8 bytes/element per batch.
     try:
         import psutil as _psutil
@@ -543,9 +545,9 @@ def _col_batch_filter_parquet(
     except Exception:
         _avail_gb = 64.0   # conservative fallback
     _batch_gb  = batch_size * n_feat * 8 / 1e9          # float64 worst case
-    _budget_batches = max(2, int(_avail_gb * 0.40 / max(_batch_gb, 0.1)))
+    _budget_batches = max(2, int(_avail_gb * 0.70 / max(_batch_gb, 0.1)))
     _frag_ra   = max(1, min(len(sources), _budget_batches // 3))
-    _batch_ra  = max(2, min(8, _budget_batches // max(1, _frag_ra)))
+    _batch_ra  = max(2, min(16, _budget_batches // max(1, _frag_ra)))
     logger.info(
         "  [scanner] available=%.0f GB → fragment_readahead=%d, batch_readahead=%d"
         " (budget ≈%.0f GB)",

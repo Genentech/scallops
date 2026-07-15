@@ -103,6 +103,15 @@ def _create_map_filter_parser(
         help="Column(s) in obs to stratify variance computation (e.g. plate well).",
         nargs="*",
     )
+    parser.add_argument(
+        "--filter-batch-size",
+        help="Parquet streaming batch size (rows). Smaller values allow PyArrow to "
+             "read more source files concurrently on high-RAM machines; larger values "
+             "reduce loop overhead on memory-constrained machines.",
+        type=int,
+        default=100_000,
+        dest="filter_batch_size",
+    )
 
     # --- Condition column ---
     cond = parser.add_argument_group(
