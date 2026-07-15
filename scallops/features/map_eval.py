@@ -31,18 +31,36 @@ def recall(
     :return Dataframe containing recall at given thresholds
     """
 
+    left = False
+    right = False
+    # validate inputs and check which directions are needed
+    for threshold in recall_thresholds:
+        if np.isscalar(threshold):
+            assert 0 <= threshold <= 1
+            if threshold >= 0.5:
+                left = True
+            else:
+                right = True
+        else:
+            left_threshold, right_threshold = np.min(threshold), np.max(threshold)
+            assert 0.5 <= left_threshold <= 1
+            assert 0 <= right_threshold <= 0.5
+            left = True
+            right = True
+
     sorted_null_distribution = np.sort(null_distribution)
-    query_percentage_ranks_left = np.searchsorted(
-        sorted_null_distribution, query_distribution, side="left"
-    ) / len(sorted_null_distribution)
-    query_percentage_ranks_right = np.searchsorted(
-        sorted_null_distribution, query_distribution, side="right"
-    ) / len(sorted_null_distribution)
+    if left:
+        query_percentage_ranks_left = np.searchsorted(
+            sorted_null_distribution, query_distribution, side="left"
+        ) / len(sorted_null_distribution)
+    if right:
+        query_percentage_ranks_right = np.searchsorted(
+            sorted_null_distribution, query_distribution, side="right"
+        ) / len(sorted_null_distribution)
     results = []
     for threshold in recall_thresholds:
         result = dict()
         if np.isscalar(threshold):
-            assert 0 <= threshold <= 1
             result["threshold"] = threshold
             if threshold >= 0.5:
                 result["recall"] = np.sum(
@@ -54,8 +72,6 @@ def recall(
                 ) / len(query_distribution)
         else:
             left_threshold, right_threshold = np.min(threshold), np.max(threshold)
-            assert 0 <= left_threshold <= 1
-            assert 0 <= right_threshold <= 1
             result["threshold"] = (left_threshold, right_threshold)
             result["recall"] = np.sum(
                 (query_percentage_ranks_right <= left_threshold)
