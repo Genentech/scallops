@@ -557,9 +557,12 @@ def _col_batch_filter_parquet(
         except Exception:
             _avail_gb = 64.0   # conservative fallback
         _budget_gb = _avail_gb * 0.70
+    # Cap fragment_readahead at 4: S3 column-chunk range requests multiply with
+    # the number of concurrent fragments (n_frags × n_columns per row-group),
+    # so >4 concurrent files degrades throughput through connection overhead.
     _budget_batches = max(2, int(_budget_gb / max(_batch_gb, 0.1)))
-    _frag_ra   = max(1, min(len(sources), _budget_batches // 3))
-    _batch_ra  = max(2, min(16, _budget_batches // max(1, _frag_ra)))
+    _frag_ra   = max(1, min(min(len(sources), 4), _budget_batches // 3))
+    _batch_ra  = max(2, min(8, _budget_batches // max(1, _frag_ra)))
     logger.info(
         "  [scanner] available=%.0f GB → fragment_readahead=%d, batch_readahead=%d"
         " (budget ≈%.0f GB)",
