@@ -277,6 +277,36 @@ def _create_map_transform_yj_parser(
         help="Column(s) in obs to stratify the transform (e.g. plate well).",
         nargs="*",
     )
+    parser.add_argument(
+        "--max-fraction-not-finite",
+        type=float,
+        default=0.25,
+        dest="max_fraction_not_finite",
+        help="Drop features with any NaN in valid cells before fitting the "
+             "power transform (PowerTransformer fails on NaN input).  Also "
+             "drops cells with more than this fraction of NaN features.  "
+             "Set to None / negative to disable.",
+    )
+    parser.add_argument(
+        "--scale-method",
+        default="global",
+        dest="scale_method",
+        choices=["global", "local"],
+        help="Scale method expected downstream (used only to decide whether to "
+             "preserve centroid columns in obs before the NaN pre-filter).",
+    )
+    parser.add_argument(
+        "--localz-centroid-y",
+        default="Nuclei_AreaShape_Center_Y",
+        dest="localz_centroid_y",
+        help="obs/var column for y spatial centroid (needed when --scale-method local).",
+    )
+    parser.add_argument(
+        "--localz-centroid-x",
+        default="Nuclei_AreaShape_Center_X",
+        dest="localz_centroid_x",
+        help="obs/var column for x spatial centroid (needed when --scale-method local).",
+    )
     dask_client_arg(parser)
     dask_cluster_arg(parser)
     force_arg(parser)

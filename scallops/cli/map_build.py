@@ -455,9 +455,17 @@ def run_pipeline_map_transform_yj(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(paths)
-        logger.info(f"Shape: {data.shape[0]:,} x {data.shape[1]:,}")
-        result = transform_features_yj(data, by=by)
-        _merge_uns(data, result)
+        if isinstance(data.X, da.Array):
+            data.X = data.X.compute()
+        logger.info("map transform-yj: %s cells × %s features",
+                    f"{data.shape[0]:,}", f"{data.shape[1]:,}")
+        # Delegate to _apply_transform_yj_inmem so that:
+        # (a) the NaN pre-filter runs first (drops features/cells with any NaN,
+        #     which can be 70–80% of features — 5× speedup on PowerTransformer);
+        # (b) centroid columns are preserved in obs before the NaN filter drops them;
+        # (c) uns is saved/restored around _slice_anndata so the provenance chain
+        #     remains intact.
+        result = _apply_transform_yj_inmem(data, arguments)
         _save_zarr(result, output, metadata)
 
 
