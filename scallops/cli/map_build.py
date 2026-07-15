@@ -1593,41 +1593,40 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
             else:
                 fine_codes = np.zeros(len(data.obs), dtype=np.int64)
 
-            # Vectorised imputation with np.bincount — no Python inner loops.
+            # Cache-efficient imputation: sort rows by group → Fortran-order.
             #
-            # np.bincount is C-compiled and releases the GIL; the outer
-            # feature loop is parallelised with threads so all 128 CPUs are
-            # used without GIL contention.
-            #
-            # Uses per-fine-group MEAN (not median): bincount makes mean fully
-            # vectorisable (O(n) per column).  For sparse NaN from segmentation
-            # edge effects the difference from median is negligible, and the
-            # values are discarded after the downstream local z-score anyway.
-            from joblib import Parallel, delayed as _jdelay
-
-            n_fine   = int(fine_codes.max()) + 1
-            nan_mask_all = ~np.isfinite(X)          # (n_cells, n_feat)
-
-            def _impute_col_vec(j: int) -> None:
-                """Fill NaN in column j using per-fine-group mean (vectorised)."""
-                nan_col = nan_mask_all[:, j]
-                if not nan_col.any():
-                    return
-                col = X[:, j].copy()
-                col_valid = np.where(nan_col, 0.0, col)
-                cnt_valid = (~nan_col).astype(np.float32)
-                g_sum = np.bincount(fine_codes, weights=col_valid, minlength=n_fine)
-                g_cnt = np.bincount(fine_codes, weights=cnt_valid, minlength=n_fine)
-                # Fall back to global mean for groups with no valid cells
-                global_m = float(global_med[j])
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    g_mean = np.where(g_cnt > 0, g_sum / g_cnt, global_m)
-                fill_vals = g_mean[fine_codes]          # broadcast group mean to cells
-                X[:, j] = np.where(nan_col, fill_vals, col)
-
-            Parallel(n_jobs=-1, prefer="threads")(
-                _jdelay(_impute_col_vec)(j) for j in range(X.shape[1])
+            # After sorting, each group occupies a contiguous block of rows.
+            # Fortran (column-major) order makes each feature column contiguous.
+            # Each group iteration processes a (k × p) block that fits in L3
+            # cache (~180 KB for k=37, p=1212) → ~8 s total vs 10+ min with
+            # strided C-order column access.
+            sort_order   = np.argsort(fine_codes, kind="stable")
+            sorted_codes = fine_codes[sort_order]
+            boundaries   = np.concatenate(
+                ([0], np.where(np.diff(sorted_codes))[0] + 1, [len(sorted_codes)])
             )
+
+            # F-order: X_F[s:e, :] is a fully contiguous (k × p) block
+            X_F  = np.asfortranarray(X[sort_order])
+            glb  = global_med   # (p,) fallback
+
+            for s, e in zip(boundaries[:-1], boundaries[1:]):
+                block    = X_F[s:e, :]                  # view, not copy
+                nan_b    = ~np.isfinite(block)
+                if not nan_b.any():
+                    continue
+                means    = np.nanmean(block, axis=0)    # (p,) vectorised
+                all_nan  = np.isnan(means)
+                if all_nan.any():
+                    means[all_nan] = glb[all_nan]
+                # Fancy-index only the NaN cells (avoids writing clean values)
+                nan_rows, nan_cols = np.where(nan_b)
+                block[nan_rows, nan_cols] = means[nan_cols]
+
+            # Unsort rows back to original order
+            inv   = np.empty_like(sort_order)
+            inv[sort_order] = np.arange(len(sort_order))
+            X     = np.ascontiguousarray(X_F[inv])
 
             data = anndata.AnnData(
                 X=X, obs=data.obs.copy(), var=data.var.copy(), uns=data.uns.copy()
