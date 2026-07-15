@@ -1518,29 +1518,66 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
     # _slice_anndata drops uns; save it so _merge_uns can propagate it to result.
     _saved_uns = dict(data.uns)
 
-    # Drop any feature with even one NaN in valid cells before fitting the
-    # power transform — PowerTransformer produces NaN output for such features.
+    # Pre-filter strategy: drop cells (rows) that are too sparse, then impute
+    # remaining NaN values with per-group median so that all features are kept.
+    #
+    # Dropping features with any NaN (the old approach) silently discards up to
+    # 80% of features that passed the variance filter — those are valid features
+    # that merely have occasional missing measurements in some cells.  Imputation
+    # is the right answer: the median within each plate×well group is a neutral,
+    # robust estimate; downstream local z-score normalises the data anyway.
     max_fnf = getattr(args, "max_fraction_not_finite", 0.25)
     if max_fnf is not None:
-        invalid_per_cell = (~np.isfinite(data.X)).sum(axis=1)
+        nan_mask = ~np.isfinite(data.X)
+        invalid_per_cell = nan_mask.sum(axis=1)
         keep_cells = invalid_per_cell <= int(data.shape[1] * max_fnf)
-        invalid_per_feat = (~np.isfinite(data.X[keep_cells])).sum(axis=0)
-        keep_feats = invalid_per_feat == 0
         n_dropped_cells = int((~keep_cells).sum())
-        n_dropped_feats = int((~keep_feats).sum())
-        if n_dropped_cells or n_dropped_feats:
+        if n_dropped_cells:
             logger.info(
-                "map run [transform-yj]: pre-filter dropped %s cells,"
-                " %s features with any NaN",
-                f"{n_dropped_cells:,}", f"{n_dropped_feats:,}",
+                "map run [transform-yj]: dropped %s cells with >%.0f%% NaN features",
+                f"{n_dropped_cells:,}", (max_fnf or 0) * 100,
             )
             _log_attrition(
-                "transform-yj", "NaN pre-filter",
+                "transform-yj", "NaN cell-filter",
                 len(keep_cells), int(keep_cells.sum()),
-                len(keep_feats), int(keep_feats.sum()),
+                data.shape[1], data.shape[1],
             )
-            data = _slice_anndata(data, keep_cells, keep_feats)
+            data = _slice_anndata(data, keep_cells, None)
             data.uns.update(_saved_uns)
+            nan_mask = ~np.isfinite(data.X)
+
+        # Impute remaining NaN with per-group column median (keeps all features).
+        n_nan_remaining = int(nan_mask.sum())
+        if n_nan_remaining > 0:
+            n_feat_with_nan = int(nan_mask.any(axis=0).sum())
+            logger.info(
+                "map run [transform-yj]: imputing %s NaN values "
+                "across %s features with per-group median",
+                f"{n_nan_remaining:,}", f"{n_feat_with_nan:,}",
+            )
+            X = np.asarray(data.X, dtype=np.float32)
+            if by_cols:
+                # Impute per (plate × well) group
+                group_keys = (
+                    data.obs[by_cols[0]].astype(str)
+                    if len(by_cols) == 1
+                    else data.obs[by_cols].astype(str).agg("-".join, axis=1)
+                )
+                for gk in group_keys.unique():
+                    g_idx = (group_keys == gk).values
+                    g_block = X[g_idx]
+                    col_med = np.nanmedian(g_block, axis=0)
+                    nan_g = ~np.isfinite(g_block)
+                    if nan_g.any():
+                        g_block[nan_g] = np.take(col_med, np.where(nan_g)[1])
+                        X[g_idx] = g_block
+            else:
+                col_med = np.nanmedian(X, axis=0)
+                nan_remaining = ~np.isfinite(X)
+                X[nan_remaining] = np.take(col_med, np.where(nan_remaining)[1])
+            data = anndata.AnnData(
+                X=X, obs=data.obs.copy(), var=data.var.copy(), uns=data.uns.copy()
+            )
 
     result = transform_features_yj(data, by=by_cols)
     _merge_uns(data, result)
