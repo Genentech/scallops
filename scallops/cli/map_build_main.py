@@ -278,6 +278,13 @@ def _create_map_transform_yj_parser(
         nargs="*",
     )
     parser.add_argument(
+        "--perturbation",
+        default="gene_symbol",
+        dest="perturbation",
+        help="obs column identifying perturbations (default: gene_symbol). Used "
+             "to group NaN imputation by plate × well × perturbation.",
+    )
+    parser.add_argument(
         "--yj-clip-percentile",
         type=float,
         default=99.9,
