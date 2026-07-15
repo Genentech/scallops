@@ -104,6 +104,33 @@ def _create_map_filter_parser(
         nargs="*",
     )
 
+    # --- Condition column ---
+    cond = parser.add_argument_group(
+        "condition column (add a derived obs column from a source column → label map)"
+    )
+    cond.add_argument(
+        "--condition-column",
+        default=None,
+        dest="condition_column",
+        help="Name of the new obs column to create (e.g. 'condition').  "
+             "When omitted no condition column is added.",
+    )
+    cond.add_argument(
+        "--condition-source-column",
+        default="well",
+        dest="condition_source_column",
+        help="Existing obs column whose values are looked up in --condition-map "
+             "(default: 'well').",
+    )
+    cond.add_argument(
+        "--condition-map",
+        default=None,
+        dest="condition_map",
+        help="JSON dict mapping source-column values to condition labels "
+             "(e.g. '{\"1\":\"GIRED\",\"4\":\"DMSO\"}').  "
+             "When omitted the column must already exist in the input.",
+    )
+
     # --- Correlated-feature filter ---
     corr = parser.add_argument_group("correlated-feature filter")
     corr.add_argument(

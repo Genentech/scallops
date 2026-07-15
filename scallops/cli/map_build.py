@@ -190,7 +190,7 @@ def _save_zarr(data: anndata.AnnData, output: str, metadata: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared helper: S3/local glob expansion for standalone subcommands
+# Shared helpers: glob expansion and condition-column creation
 # ---------------------------------------------------------------------------
 
 
@@ -218,6 +218,59 @@ def _expand_inputs(paths: list[str]) -> list[str]:
         logger.info("inputs: expanded %d pattern(s) → %d file(s)",
                     len(paths), len(expanded))
     return expanded
+
+
+def _apply_condition_column(data: anndata.AnnData, arguments: argparse.Namespace) -> anndata.AnnData:
+    """Create or verify a condition obs column from CLI arguments.
+
+    Reusable across ``map filter``, ``map run``, and any other step that
+    needs to label cells by experimental condition.
+
+    :param data: AnnData to label in-place.
+    :param arguments: Parsed CLI namespace.  Reads ``condition_column``,
+        ``condition_map`` (JSON string or dict), and ``condition_source_column``.
+    :return: *data* (mutated in place, returned for chaining).
+    """
+    import json as _j
+
+    condition_column = getattr(arguments, "condition_column", None)
+    if not condition_column:
+        return data
+
+    condition_map_raw = getattr(arguments, "condition_map", None)
+    condition_source  = getattr(arguments, "condition_source_column", "well")
+
+    if not condition_map_raw:
+        if condition_column not in data.obs.columns:
+            raise ValueError(
+                f"--condition-column '{condition_column}' was specified without "
+                f"--condition-map, so the column must already exist in obs — "
+                f"but it was not found.  Either add --condition-map or pre-label "
+                f"your input."
+            )
+        counts = data.obs[condition_column].value_counts().to_dict()
+        logger.info("condition: using pre-existing obs['%s']  (%s)",
+                    condition_column, counts)
+        return data
+
+    mapping = _j.loads(condition_map_raw) if isinstance(condition_map_raw, str) else condition_map_raw
+    if condition_source not in data.obs.columns:
+        raise ValueError(
+            f"--condition-source-column '{condition_source}' not found in obs.  "
+            f"Available: {list(data.obs.columns)}"
+        )
+    data.obs[condition_column] = data.obs[condition_source].astype(str).map(mapping)
+    n_unmapped = int(data.obs[condition_column].isna().sum())
+    if n_unmapped:
+        unique_vals = data.obs[condition_source].astype(str).unique().tolist()
+        raise ValueError(
+            f"{n_unmapped:,} cells have '{condition_source}' values not in "
+            f"--condition-map {mapping}.  Values seen: {unique_vals}"
+        )
+    counts = data.obs[condition_column].value_counts().to_dict()
+    logger.info("condition: created obs['%s'] from obs['%s'] via %s  (%s)",
+                condition_column, condition_source, mapping, counts)
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +373,9 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         data = _read_parquet_for_map(paths) if all(
             p.lower().endswith((".parquet", ".pq")) for p in paths
         ) else _read_data(paths, features)
+
+        # Optionally derive a condition obs column from well→condition mapping
+        data = _apply_condition_column(data, arguments)
 
         logger.info(
             "map filter: %s cells × %s features",
@@ -1972,70 +2028,10 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     already_done_cells = _completed(cells_zarr)
     steps_todo = [s for s in cell_steps_wanted if s not in already_done_cells]
 
-    # ── Condition column: create a derived obs column from a well→condition map ──
-    # Needed when the biological condition (e.g. GIRED vs DMSO) is encoded in
-    # the well number and not stored explicitly in the data.
-    condition_column = getattr(arguments, "condition_column", None)
-    condition_map_raw = getattr(arguments, "condition_map", None)
-    condition_source = getattr(arguments, "condition_source_column", "well")
-
+    # ── Condition column — delegate to the shared module-level helper ────────
     def _add_condition_column(data: anndata.AnnData) -> anndata.AnnData:
-        """Ensure the requested condition column exists in obs.
-
-        Two modes:
-
-        * ``--condition-map`` **provided**: derive the column from
-          ``--condition-source-column`` using the supplied dict mapping.
-          Raises if any source value is missing from the map.
-
-        * ``--condition-map`` **omitted**: assume the column already exists in
-          the input data and just verify it is present.  This covers cases where
-          the parquet/zarr files were pre-labelled before ingestion.
-        """
-        if not condition_column:
-            return data
-
-        if not condition_map_raw:
-            # Pre-existing column mode: just verify it's there
-            if condition_column not in data.obs.columns:
-                raise ValueError(
-                    f"--condition-column '{condition_column}' was specified without "
-                    f"--condition-map, so the column is expected to already exist in "
-                    f"the input data — but it was not found in obs.  "
-                    f"Either add --condition-map or pre-label your input with this column."
-                )
-            counts = data.obs[condition_column].value_counts().to_dict()
-            logger.info(
-                f"map run: using pre-existing obs['{condition_column}']  ({counts})"
-            )
-            return data
-
-        # Derived column mode: apply the well→condition mapping
-        import json as _j
-        mapping = _j.loads(condition_map_raw) if isinstance(condition_map_raw, str) else condition_map_raw
-        if condition_source not in data.obs.columns:
-            raise ValueError(
-                f"--condition-source-column '{condition_source}' not found in obs.  "
-                f"Available: {list(data.obs.columns)}"
-            )
-        data.obs[condition_column] = (
-            data.obs[condition_source].astype(str).map(mapping)
-        )
-        n_unmapped = int(data.obs[condition_column].isna().sum())
-        if n_unmapped:
-            unique_vals = data.obs[condition_source].astype(str).unique().tolist()
-            raise ValueError(
-                f"{n_unmapped:,} cells have '{condition_source}' values not in "
-                f"--condition-map {mapping}.  "
-                f"Values seen in data: {unique_vals}"
-            )
-        counts = data.obs[condition_column].value_counts().to_dict()
-        logger.info(
-            f"map run: created obs['{condition_column}'] from obs['{condition_source}'] "
-            f"via {mapping}  ({counts})"
-        )
-        return data
-    # ──────────────────────────────────────────────────────────────────────────
+        return _apply_condition_column(data, arguments)
+    # ─────────────────────────────────────────────────────────────────────────
 
     if not steps_todo:
         logger.info("map run [cell-level]: all steps already in provenance — loading cells.zarr")
