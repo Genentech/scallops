@@ -105,11 +105,11 @@ def _create_map_filter_parser(
     )
     parser.add_argument(
         "--filter-batch-size",
-        help="Parquet streaming batch size (rows). Smaller values allow PyArrow to "
-             "read more source files concurrently on high-RAM machines; larger values "
-             "reduce loop overhead on memory-constrained machines.",
+        help="Parquet streaming batch size (rows). 200 000 is the sweet spot on "
+             "high-RAM machines: maximises S3 concurrency while keeping numpy "
+             "per-batch overhead low. Increase to 500 000 on RAM-constrained nodes.",
         type=int,
-        default=100_000,
+        default=200_000,
         dest="filter_batch_size",
     )
     parser.add_argument(
@@ -1624,10 +1624,12 @@ def _create_run_parser(
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
     filt.add_argument(
-        "--filter-batch-size", type=int, default=100_000, dest="filter_batch_size",
-        help="Rows per streaming batch during parquet filter (default 100 000). "
-             "Smaller batches allow more source files to be read concurrently on "
-             "high-RAM machines.  Increase on RAM-constrained nodes.",
+        "--filter-batch-size", type=int, default=200_000, dest="filter_batch_size",
+        help="Rows per streaming batch during parquet filter (default 200 000). "
+             "200 000 is the sweet spot on high-RAM machines: large enough for "
+             "efficient numpy ops while small enough to keep fragment_readahead=12 "
+             "(all source files read concurrently).  Increase to 500 000 on "
+             "RAM-constrained nodes.",
     )
     filt.add_argument(
         "--filter-max-memory", type=float, default=None, dest="filter_max_memory_gb",
