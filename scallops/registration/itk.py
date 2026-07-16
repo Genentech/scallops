@@ -1185,11 +1185,12 @@ def _itk_transform_image_zarr(
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
     data = group.create_array(
-        "0",
+        "s0",
         shape=dim_sizes + output_size,
         chunks=chunks,
         dtype=image.dtype,
         overwrite=True,
+        **_create_array_kwargs(),
     )
 
     _itk_transform_image(
