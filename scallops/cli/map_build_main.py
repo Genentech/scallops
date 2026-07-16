@@ -1704,7 +1704,7 @@ def _create_run_parser(
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
     filt.add_argument(
-        "--filter-batch-size", type=int, default=200_000, dest="filter_batch_size",
+        "--filter-batch-size", type=int, default=500_000, dest="filter_batch_size",
         help="Rows per streaming batch during parquet filter (default 200 000). "
              "200 000 is the sweet spot on high-RAM machines: large enough for "
              "efficient numpy ops while small enough to keep fragment_readahead=12 "
