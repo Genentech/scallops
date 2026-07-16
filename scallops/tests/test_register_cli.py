@@ -248,7 +248,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         reference_timepoint=reference_t,
     )
 
-    xr.testing.assert_equal(result_np, transformed_image)
+    xr.testing.assert_identical(result_np, transformed_image)
 
 
 @pytest.mark.registration

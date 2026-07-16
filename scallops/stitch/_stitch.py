@@ -6,7 +6,6 @@ import shutil
 from collections.abc import Sequence
 from typing import Literal
 
-import dask.array as da
 import fsspec
 import numpy as np
 import pandas as pd
@@ -14,13 +13,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import zarr
 from sklearn.cluster import AgglomerativeClustering
-from zarr.errors import PathNotFoundError
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
 from scallops.io import is_parquet_file, read_image
 from scallops.stitch._align import stitch_align
 from scallops.stitch._plots import _qc_report
-from scallops.stitch.fuse import _create_label_ome_metadata, _create_ome_metadata, _fuse
+from scallops.stitch.fuse import _fuse
 from scallops.stitch.shift_utils import _zncc, convert_stage_positions
 from scallops.stitch.utils import (
     _download_path,
@@ -31,8 +29,13 @@ from scallops.stitch.utils import (
     tile_overlap_mask,
     tile_source_labels,
 )
-from scallops.utils import _dask_from_array_no_copy
-from scallops.zarr_io import _da_to_zarr_kwargs, _omero_channels, is_ome_zarr_array
+from scallops.zarr_io import (
+    _attrs_axes_scales,
+    _create_array_kwargs,
+    _create_zarr_attrs,
+    _current_format,
+    is_ome_zarr_array,
+)
 
 logger = _get_cli_logger()
 
@@ -87,14 +90,14 @@ def _single_stitch(
                 if is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif not no_save_labels:
             try:
                 if is_ome_zarr_array(image_output_root.get(f"labels/{image_key}-mask")):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
-            except PathNotFoundError:
+            except:  # noqa: E722
                 pass
         elif is_parquet_file(f"{other_output_path}{image_key}-positions.parquet"):
             logger.info(f"Skipping stitching for {image_key}.")
@@ -429,60 +432,46 @@ def _write_arrays(
     channel_filter_percentiles,
 ):
     gc.collect()
+    fmt = _current_format()
     if not no_save_labels:
         labels_group = image_output_root.require_group("labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
-        zarr_kwargs = _da_to_zarr_kwargs()
-        array = group.create_dataset(
-            name="0",
-            shape=(fused_y_size, fused_x_size),
-            chunks=chunk_size,
-            dtype=np.uint8,
-            overwrite=True,
-            **zarr_kwargs,
-        )
-
-        da.store(
-            _dask_from_array_no_copy(
-                tile_overlap_mask(
-                    stitch_positions_df,
-                    fill=blend != "none",
-                    tile_shape=fused_tile_shape,
-                ),
-                chunks=chunk_size,
+        group.create_array(
+            name="s0",
+            data=tile_overlap_mask(
+                stitch_positions_df,
+                fill=blend != "none",
+                tile_shape=fused_tile_shape,
             ),
-            array,
-            compute=True,
+            chunks=chunk_size,
+            overwrite=True,
+            **_create_array_kwargs(fmt=fmt),
         )
-        group.attrs.update(
-            _create_label_ome_metadata(image_spacing, image_key + "-mask")
+        image_attrs, axes, scale_dict = _attrs_axes_scales(
+            {"physical_pixel_sizes": image_spacing}, None, ["y", "x"], np.uint8
         )
+        zarr_attrs = _create_zarr_attrs(
+            fmt, group, ["y", "x"], image_attrs, axes, scale_dict
+        )
+        group.attrs.update(zarr_attrs)
+
         if blend == "none":
             group = labels_group.create_group(image_key + "-tile", overwrite=True)
-            array = group.create_dataset(
-                name="0",
-                shape=(fused_y_size, fused_x_size),
+            group.create_array(
+                name="s0",
+                data=tile_source_labels(stitch_positions_df, fused_tile_shape),
                 chunks=chunk_size,
-                dtype=np.uint16,
                 overwrite=True,
-                **zarr_kwargs,
+                **_create_array_kwargs(fmt=fmt),
             )
 
-            da.store(
-                _dask_from_array_no_copy(
-                    tile_source_labels(stitch_positions_df, fused_tile_shape),
-                    chunks=chunk_size,
-                ),
-                array,
-                compute=True,
+            image_attrs, axes, scale_dict = _attrs_axes_scales(
+                {"physical_pixel_sizes": image_spacing}, None, ["y", "x"], np.uint16
             )
-            label_metadata = _create_label_ome_metadata(
-                image_spacing, image_key + "-tile"
+            zarr_attrs = _create_zarr_attrs(
+                fmt, group, ["y", "x"], image_attrs, axes, scale_dict
             )
-            label_metadata["multiscales"][0]["metadata"] = {
-                "source": f"../../images/{image_key}"
-            }
-            group.attrs.update(label_metadata)
+            group.attrs.update(zarr_attrs)
     cleanup_paths = []
     if not no_save_image:
         group = image_output_root.require_group("images").require_group(
@@ -536,12 +525,14 @@ def _write_arrays(
 
             dfp = dfp.values
 
-        tile_channel_names = _fuse(
+        _fuse(
             df=stitch_positions_df_local,
             group=group,
             z_index=z_index,
             blend=blend,
             output_channels=output_channels,
+            channel_names=channel_names,
+            image_spacing=image_spacing,
             ffp=ffp,
             dfp=dfp,
             crop_width=fuse_crop_width,
@@ -552,24 +543,6 @@ def _write_arrays(
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
         )
-
-        ome_metadata = _create_ome_metadata(
-            image_key=image_key,
-            stitch_coords=stitch_positions_df,
-            **metadata,
-        )
-        # Fall back to the channel names read from the source tiles when the user
-        # did not explicitly pass --channel-name.
-        if channel_names is None:
-            channel_names = tile_channel_names
-        if channel_names is not None:
-            if output_channels is not None:
-                channel_names = channel_names[output_channels]
-            channel_names = [
-                name.replace("_", "-").replace(" ", "-") for name in channel_names
-            ]
-            ome_metadata["omero"] = _omero_channels(channel_names)
-        group.attrs.update(ome_metadata)
 
     # cleanup
     for path in cleanup_paths:

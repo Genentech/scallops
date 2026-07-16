@@ -11,8 +11,6 @@ Authors:
 import json
 import logging
 import os
-import uuid
-import warnings
 from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -27,17 +25,7 @@ import dask.array as da
 import numpy as np
 import pandas as pd
 import skimage
-from dask import is_dask_collection
-from dask.array.core import (
-    getter,
-    getter_nofancy,
-    graph_from_arraylike,
-    normalize_chunks,
-    slices_from_chunks,
-)
 from dask.system import CPU_COUNT
-from dask.tokenize import tokenize
-from dask.utils import SerializableLock
 from decorator import decorator
 from kneed import KneeLocator
 from skimage import restoration
@@ -544,99 +532,6 @@ def dask_chunk_stats(
         dtype=float,
         drop_axis=0 if b is None else None,
     ).squeeze()
-
-
-def _dask_from_array_no_copy(
-    x,
-    chunks="auto",
-    name=None,
-    lock=False,
-    asarray=False,
-    fancy=True,
-    getitem=None,
-    meta=None,
-    inline_array=False,
-):
-    """Create dask array from something that looks like an array without copying."""
-
-    if isinstance(x, da.Array):
-        raise ValueError(
-            "Array is already a dask array. Use 'asarray' or 'rechunk' instead."
-        )
-
-    elif is_dask_collection(x):
-        warnings.warn(
-            "Passing an object to dask.array.from_array which is already a "
-            "Dask collection. This can lead to unexpected behavior."
-        )
-
-    if isinstance(x, (list, tuple, memoryview) + np.ScalarType):
-        x = np.array(x)
-
-    # if is_arraylike(x) and hasattr(x, "copy"):
-    #     x = x.copy()
-
-    if asarray is None:
-        asarray = not hasattr(x, "__array_function__")
-
-    previous_chunks = getattr(x, "chunks", None)
-
-    chunks = normalize_chunks(
-        chunks, x.shape, dtype=x.dtype, previous_chunks=previous_chunks
-    )
-
-    if name in (None, True):
-        token = tokenize(x, chunks, lock, asarray, fancy, getitem, inline_array)
-        name = name or "array-" + token
-    elif name is False:
-        name = "array-" + str(uuid.uuid1())
-
-    if lock is True:
-        lock = SerializableLock()
-
-    is_ndarray = type(x) in (np.ndarray, np.ma.core.MaskedArray)
-    is_single_block = all(len(c) == 1 for c in chunks)
-    # Always use the getter for h5py etc. Not using isinstance(x, np.ndarray)
-    # because np.matrix is a subclass of np.ndarray.
-    if is_ndarray and not is_single_block and not lock:
-        # eagerly slice numpy arrays to prevent memory blowup
-        # GH5367, GH5601
-        slices = slices_from_chunks(chunks)
-        keys = product([name], *(range(len(bds)) for bds in chunks))
-        values = [x[slc] for slc in slices]
-        dsk = dict(zip(keys, values))
-
-    elif is_ndarray and is_single_block:
-        # No slicing needed
-        dsk = {(name,) + (0,) * x.ndim: x}
-    else:
-        if getitem is None:
-            if fancy:
-                getitem = getter
-            else:
-                getitem = getter_nofancy
-
-        dsk = graph_from_arraylike(
-            x,
-            chunks,
-            x.shape,
-            name,
-            getitem=getitem,
-            lock=lock,
-            asarray=asarray,
-            dtype=x.dtype,
-            inline_array=inline_array,
-        )
-
-    # Workaround for TileDB, its indexing is 1-based,
-    # and doesn't seems to support 0-length slicing
-    if x.__class__.__module__.split(".")[0] == "tiledb" and hasattr(x, "_ctx_"):
-        return da.Array(dsk, name, chunks, dtype=x.dtype)
-
-    if meta is None:
-        meta = x
-
-    return da.Array(dsk, name, chunks, meta=meta, dtype=getattr(x, "dtype", None))
 
 
 def _write_img_size(file_list: list[str]):

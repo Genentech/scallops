@@ -31,7 +31,6 @@ from natsort import natsorted
 
 from scallops.io import _download_file, _get_fs_protocol, get_image_spacing
 from scallops.registration.landmarks import _get_translation, find_landmarks
-from scallops.utils import _dask_from_array_no_copy
 from scallops.xr import _get_dims
 from scallops.zarr_io import open_ome_zarr, write_zarr
 
@@ -331,7 +330,7 @@ def _itk_align_reference_time_zarr(
             group = images_group.create_group(
                 image_name.replace("/", "-"), overwrite=True
             )
-            zarr_dataset = group.create_dataset(
+            zarr_dataset = group.create_array(
                 "0",
                 shape=shape,
                 chunks=(1,) * (len(shape) - 2) + chunk_size,
@@ -374,9 +373,8 @@ def _itk_align_reference_time_zarr(
             idx = (idx,)
         if isinstance(val, xr.DataArray):
             val = val.data
-        if not isinstance(val, da.Array):
-            val = _dask_from_array_no_copy(val, chunks=x.chunks[-2:])
-        da.store(val, x, regions=idx, compute=True)
+
+        x[idx] = val
 
     _itk_align_reference_time(
         moving_image=moving_image,
@@ -1182,7 +1180,7 @@ def _itk_transform_image_zarr(
         image_name.replace("/", "-"), overwrite=True
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
-    data = group.create_dataset(
+    data = group.create_array(
         "0",
         shape=dim_sizes + output_size,
         chunks=chunks,

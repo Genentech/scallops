@@ -130,7 +130,7 @@ def test_align_image_align_within_time(experiment_c):
     known_good = read_image("scallops/tests/data/align/align_within_time_channels.tif")
     np.testing.assert_array_equal(result.values, known_good.values)
 
-    xr.testing.assert_equal(image_copy, image)
+    xr.testing.assert_identical(image_copy, image)
 
 
 @pytest.mark.registration
@@ -145,4 +145,4 @@ def test_align_image_align_between_time(experiment_c):
     )
     known_good = read_image("scallops/tests/data/align/align_between_time_channel.tif")
     np.testing.assert_array_equal(result.values, known_good.values)
-    xr.testing.assert_equal(image_copy, image)
+    xr.testing.assert_identical(image_copy, image)

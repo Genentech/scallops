@@ -7,7 +7,6 @@ from collections.abc import Sequence
 from typing import Literal
 
 import dask
-import dask.array as da
 import numpy as np
 import pandas as pd
 import psutil
@@ -24,81 +23,15 @@ from scallops.registration.crosscorrelation import _apply_window, _filter_percen
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import calc_best_shift
 from scallops.stitch.utils import _crop_image, dtype_convert
-from scallops.utils import _cpu_count, _dask_from_array_no_copy
-from scallops.zarr_io import _da_to_zarr_kwargs
+from scallops.utils import _cpu_count
+from scallops.zarr_io import (
+    _attrs_axes_scales,
+    _create_array_kwargs,
+    _create_zarr_attrs,
+    _current_format,
+)
 
 logger = logging.getLogger("scallops")
-
-
-def _create_label_ome_metadata(image_spacing: tuple[float, float], label_name: str):
-    return {
-        "multiscales": [
-            {
-                "axes": [
-                    {"name": "y", "type": "space", "unit": "micrometer"},
-                    {"name": "x", "type": "space", "unit": "micrometer"},
-                ],
-                "datasets": [
-                    {
-                        "coordinateTransformations": [
-                            {
-                                "scale": [
-                                    float(image_spacing[0]),
-                                    float(image_spacing[1]),
-                                ],
-                                "type": "scale",
-                            }
-                        ],
-                        "path": "0",
-                    }
-                ],
-                "name": f"/labels/{label_name}",
-                "version": "0.4",
-            }
-        ]
-    }
-
-
-def _create_ome_metadata(
-    image_spacing: tuple[float, float],
-    stitch_coords: pd.DataFrame,
-    image_key: str,
-    **kwargs,
-):
-    metadata = {}
-    metadata.update(**kwargs)
-    metadata["stitch_coords"] = dict()
-    for c in stitch_coords:  # convert to dict
-        metadata["stitch_coords"][c] = stitch_coords[c].to_list()
-    return {
-        "multiscales": [
-            {
-                "metadata": metadata,
-                "axes": [
-                    {"name": "c", "type": "channel"},
-                    {"name": "y", "type": "space", "unit": "micrometer"},
-                    {"name": "x", "type": "space", "unit": "micrometer"},
-                ],
-                "datasets": [
-                    {
-                        "coordinateTransformations": [
-                            {
-                                "scale": [
-                                    1.0,
-                                    float(image_spacing[0]),
-                                    float(image_spacing[1]),
-                                ],
-                                "type": "scale",
-                            }
-                        ],
-                        "path": "0",
-                    }
-                ],
-                "name": f"/images/{image_key}",
-                "version": "0.4",
-            }
-        ]
-    }
 
 
 def _fuse(
@@ -107,6 +40,8 @@ def _fuse(
     z_index: int | Literal["max"] | None = None,
     blend: Literal["none", "linear"] = "none",
     output_channels: Sequence[int] | None = None,
+    channel_names: Sequence[str] | None = None,
+    image_spacing: tuple[float, float] | None = None,
     ffp: np.ndarray | None = None,
     dfp: np.ndarray | None = None,
     crop_width: tuple[int, int] | None = None,
@@ -117,7 +52,7 @@ def _fuse(
     channel_window: int = 2,
     channel_cross_correlation_upsample: int = 2,
     channel_filter_percentiles: tuple[float, float] | None = None,
-) -> list[str] | None:
+):
     """Use stitching coordinates to fuse tiles.
 
     :param df: Stitch output dataframe.
@@ -139,8 +74,6 @@ def _fuse(
     :param channel_cross_correlation_upsample: Perform subpixel alignment for registration across channels if greater than one
     :param channel_filter_percentiles: Replace data outside of percentile range [q1, q2] with uniform noise over the range
         [q1,q2] for registration across channels.
-    :return: Channel names read from the source tiles (e.g. from nd2 metadata), or
-        None when the tiles carry no named channel coordinate.
     """
     assert blend in ["none", "linear"]
     if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
@@ -243,8 +176,8 @@ def _fuse(
             locks.append(threading.Lock())
         locks = np.array(locks)
         partition_tree = shapely.STRtree(partition_boxes)
-
-    result = group.create_dataset(
+    fmt = _current_format()
+    result_zarr_array = group.create_array(
         shape=(
             len(output_channels),  # c
             fused_y_size,
@@ -252,9 +185,9 @@ def _fuse(
         ),
         dtype=target_dtype,
         chunks=(1,) + chunk_size,
-        name="0",
+        name="s0",
         overwrite=True,
-        **_da_to_zarr_kwargs(),
+        **_create_array_kwargs(fmt),
     )
 
     _fuse_image_delayed = delayed(_fuse_image)
@@ -392,17 +325,32 @@ def _fuse(
             target = target / weights_sum
             target = np.round(target).astype(target_dtype)
 
-        with ProgressBar():
-            logger.info("Writing to disk.")
-            target = _dask_from_array_no_copy(target, chunks=(1,) + chunk_size)
-            da.store(
-                target,
-                result,
-                regions=(slice(channel_batch, channel_batch + channels_per_batch),),
-                compute=True,
-            )
+        sl = slice(channel_batch, channel_batch + channels_per_batch)
 
-    return tile_channel_names
+        result_zarr_array[sl] = target
+
+    # Fall back to the channel names read from the source tiles when the user
+    # did not explicitly pass --channel-name.
+    if channel_names is None:
+        channel_names = tile_channel_names
+    if channel_names is not None:
+        channel_names = [channel_names[index] for index in output_channels]
+        channel_names = [
+            name.replace("_", "-").replace(" ", "-") for name in channel_names
+        ]
+
+    image_attrs, axes, scale_dict = _attrs_axes_scales(
+        {"physical_pixel_sizes": image_spacing}
+        if image_spacing is not None
+        else dict(),
+        {"c": channel_names},
+        ["c", "y", "x"],
+        np.uint16,
+    )
+    zarr_attrs = _create_zarr_attrs(
+        fmt, group, ["c", "y", "x"], image_attrs, axes, scale_dict
+    )
+    group.attrs.update(zarr_attrs)
 
 
 def _register_across_channels(
