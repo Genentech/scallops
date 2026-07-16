@@ -300,7 +300,7 @@ def _attrs_axes_scales(
             if physical_pixel_sizes is not None and axis["type"] == "space":
                 scale_dict[d] = physical_pixel_sizes[space_index]
                 if physical_pixel_units is not None:
-                    unit = physical_pixel_units.get(space_index)
+                    unit = physical_pixel_units[space_index]
                     if unit is not None:
                         axis["unit"] = unit
                 space_index = space_index + 1
