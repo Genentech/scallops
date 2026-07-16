@@ -15,11 +15,46 @@ logger = logging.getLogger("scallops")
 
 
 def _yj_fit_transform_col(col: np.ndarray, standardize: bool) -> np.ndarray:
-    """Fit + apply Yeo-Johnson on a single feature column.  Top-level for
-    multiprocessing pickling.  Uses scipy directly — avoids sklearn's overhead
-    and naturally releases the GIL during numerical optimisation."""
+    """Fit Yeo-Johnson on the *finite* values of a column, then apply to all
+    values while propagating NaN for missing entries.
+
+    Top-level for joblib pickling.  Uses scipy directly so it releases the
+    GIL during numerical optimisation.
+    """
     from scipy.stats import yeojohnson as _yj
-    transformed, _ = _yj(col.astype(np.float64))
+    col = col.astype(np.float64)
+    finite_mask = np.isfinite(col)
+    if not finite_mask.all():
+        # Fit on non-NaN only, apply to finite subset, leave NaN as-is
+        valid = col[finite_mask]
+        if len(valid) < 2:
+            return col.astype(np.float32)
+        transformed_valid, lmbda = _yj(valid)
+        # Apply the fitted lambda to all finite cells using the forward transform
+        from scipy.stats import yeojohnson_normmax as _yjnorm
+        out = np.full_like(col, np.nan)
+        # yeojohnson with known lambda: use boxcox1p / sign-aware formula
+        pos = valid >= 0
+        neg = ~pos
+        out_valid = np.empty_like(valid)
+        if pos.any():
+            if lmbda != 0:
+                out_valid[pos] = (np.power(valid[pos] + 1, lmbda) - 1) / lmbda
+            else:
+                out_valid[pos] = np.log1p(valid[pos])
+        if neg.any():
+            if lmbda != 2:
+                out_valid[neg] = -(np.power(-valid[neg] + 1, 2 - lmbda) - 1) / (2 - lmbda)
+            else:
+                out_valid[neg] = -np.log1p(-valid[neg])
+        out[finite_mask] = out_valid
+        if standardize:
+            std = np.nanstd(out)
+            if std > 0:
+                out = (out - np.nanmean(out)) / std
+        return out.astype(np.float32)
+    # No NaN: standard path
+    transformed, _ = _yj(col)
     if standardize:
         std = transformed.std()
         if std > 0:

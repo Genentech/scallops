@@ -1546,91 +1546,18 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
             data.uns.update(_saved_uns)
             nan_mask = ~np.isfinite(data.X)
 
-        # Impute remaining NaN with per-group column median (keeps all features).
-        # Grouping: (plate × well × perturbation) so that the imputed value
-        # reflects the same genetic background, not a well-wide average that
-        # mixes all KO phenotypes.  Falls back to (plate × well) for genes
-        # with fewer than 10 cells (too few for a stable median).
-        #
-        # Implementation: pandas groupby + numpy nanmedian.  Using groupby
-        # avoids O(n_cells × n_groups) string-comparison loops that would
-        # take hours with ~240 K fine groups.
+        # NaN values are propagated — no imputation.  The YJ transform in
+        # transform_features_yj/_yj_fit_transform_col fits on non-NaN cells
+        # per feature and propagates NaN through the transform output.
+        # A second map-filter step after YJ (--max-fraction-not-finite on
+        # features, then on cells) removes whatever NaN remains before PCA.
         n_nan_remaining = int(nan_mask.sum())
         if n_nan_remaining > 0:
             n_feat_with_nan = int(nan_mask.any(axis=0).sum())
-            pert_col = getattr(args, "perturbation", "gene_symbol")
-            _fine_cols = (by_cols or []) + (
-                [pert_col] if pert_col in data.obs.columns else []
-            )
-            _coarse_cols = by_cols or []
             logger.info(
-                "map run [transform-yj]: imputing %s NaN values across %s features "
-                "with per-(%s) median",
+                "map run [transform-yj]: %s NaN values across %s features will "
+                "be fitted around (non-NaN fit) and propagated through transform",
                 f"{n_nan_remaining:,}", f"{n_feat_with_nan:,}",
-                " × ".join(_fine_cols) if _fine_cols else "global",
-            )
-            X = np.asarray(data.X, dtype=np.float32)
-            _MIN_CELLS_FINE = 10
-
-            # Pre-compute coarse (plate × well) medians as fallback
-            coarse_meds: dict = {}
-            if _coarse_cols:
-                coarse_key_ser = data.obs[_coarse_cols].astype(str).agg(
-                    "-".join, axis=1
-                ) if len(_coarse_cols) > 1 else data.obs[_coarse_cols[0]].astype(str)
-                coarse_key_arr = coarse_key_ser.values
-                for ck in np.unique(coarse_key_arr):
-                    coarse_meds[ck] = np.nanmedian(X[coarse_key_arr == ck], axis=0)
-            global_med = np.nanmedian(X, axis=0)  # last-resort fallback
-
-            # Build integer group codes for fast groupby (no string comparisons)
-            if _fine_cols:
-                _obs_sub = data.obs[_fine_cols].astype(str)
-                fine_codes, _ = pd.factorize(
-                    _obs_sub.agg("-".join, axis=1) if len(_fine_cols) > 1
-                    else _obs_sub.iloc[:, 0]
-                )
-            else:
-                fine_codes = np.zeros(len(data.obs), dtype=np.int64)
-
-            # Per-column vectorised imputation (no Python group loop).
-            #
-            # Algorithm per column j:
-            #   g_mean[g] = sum(col[fine_codes==g, ~nan]) / count(~nan)
-            # Implemented with np.bincount — pure C, releases GIL, O(n).
-            #
-            # Fortran-order (column-major) makes col = X_F[:, j] a contiguous
-            # 36 MB block so each thread's bincount reads are cache-friendly.
-            # Threads share X_F with no write conflict (each thread writes to
-            # a distinct column offset) → true parallelism, GIL released by
-            # bincount for >0.7 ms per call → scales to all 128 CPUs.
-            from joblib import Parallel, delayed as _jdelay
-
-            n_fine = int(fine_codes.max()) + 1
-            X_F    = np.asfortranarray(X)        # col j → contiguous 36 MB block
-            nan_F  = np.asfortranarray(~np.isfinite(X))  # same layout
-
-            def _impute_col_bincount(j: int) -> None:
-                nan_m = nan_F[:, j]
-                if not nan_m.any():
-                    return
-                col        = X_F[:, j].copy()
-                col_valid  = np.where(nan_m, 0.0, col)
-                cnt_valid  = (~nan_m).astype(np.float32)
-                g_sum = np.bincount(fine_codes, weights=col_valid, minlength=n_fine)
-                g_cnt = np.bincount(fine_codes, weights=cnt_valid, minlength=n_fine)
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    g_mean = np.where(g_cnt > 0, g_sum / g_cnt, float(global_med[j]))
-                col[nan_m] = g_mean[fine_codes[nan_m]]
-                X_F[:, j]  = col   # write-back to shared F-order array (no conflict)
-
-            Parallel(n_jobs=-1, prefer="threads")(
-                _jdelay(_impute_col_bincount)(j) for j in range(X_F.shape[1])
-            )
-            X = np.ascontiguousarray(X_F)   # convert back to C-order for downstream
-
-            data = anndata.AnnData(
-                X=X, obs=data.obs.copy(), var=data.var.copy(), uns=data.uns.copy()
             )
 
     # Clip extreme values per feature before fitting the power transform.
