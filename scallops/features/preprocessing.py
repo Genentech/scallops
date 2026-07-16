@@ -5,6 +5,7 @@ import anndata
 import dask
 import dask.array as da
 import numpy as np
+import pandas as pd
 import xarray as xr
 from array_api_compat import get_namespace
 from sklearn.preprocessing import PowerTransformer
