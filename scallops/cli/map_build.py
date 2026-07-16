@@ -1467,6 +1467,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     )
 
     parquet_sources = data.uns.get("_parquet_sources")
+    _feat_report = None   # populated by parquet path; None for zarr/in-memory
 
     if parquet_sources:
         # ── Parquet column-batch path ──────────────────────────────────────
@@ -1476,7 +1477,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         )
         _mem_stop = _memory_monitor_start()
         try:
-            X_filtered, cell_keep, feat_keep = _col_batch_filter_parquet(
+            X_filtered, cell_keep, feat_keep, _feat_report = _col_batch_filter_parquet(
                 parquet_sources, obs_all, label_mask, by_cols,
                 max_fnf, min_var, max_var,
                 # Use data.var.index (intersection across all files after concat)
@@ -1511,6 +1512,20 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             uns=dict(data.uns),
         )
         _merge_uns(data, result)
+
+        # Write the feature-drop report for downstream analysis
+        if _feat_report is not None and not _feat_report.empty:
+            _report_path = output.rstrip("/").replace(".zarr", "") + "_feature_report.parquet"
+            if not _report_path.endswith(".parquet"):
+                _report_path += "_feature_report.parquet"
+            try:
+                import fsspec as _fsspec
+                _fs_r, _p_r = _fsspec.url_to_fs(_report_path)
+                with _fs_r.open(_p_r, "wb") as _fh:
+                    _feat_report.to_parquet(_fh, index=False)
+                logger.info("filter: feature-drop report → %s", _report_path)
+            except Exception as _e:
+                logger.warning("filter: could not write feature report: %s", _e)
         # Centroid columns needed by local-zscore may have been dropped by the
         # variance/NaN filter.  Read them directly from parquet for kept cells.
         if getattr(args, "scale_method", "global") == "local":

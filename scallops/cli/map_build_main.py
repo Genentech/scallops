@@ -94,11 +94,14 @@ def _create_map_filter_parser(
     )
     parser.add_argument(
         "--max-feature-nan-fraction",
-        help="Drop features where the fraction of NaN/Inf values across all cells "
-             "exceeds this threshold BEFORE computing variance.  Applied first so "
-             "the variance filter only sees reliable, non-sparse features.  "
-             "Default 0.05 (drop features with >5%% NaN).  Set to None/1.0 to disable.",
-        default=0.05,
+        help="Step 1 of 3-step NaN filter: drop features where the NaN/Inf "
+             "fraction across all cells exceeds this threshold.  Default 0.50 "
+             "(drop features with >50%% NaN — only truly broken features).  "
+             "After this, cells with >--max-fraction-not-finite NaN are removed "
+             "(step 2), and any features still containing NaN in the surviving "
+             "cells are dropped automatically in step 3 — giving a clean matrix "
+             "with no imputation required.",
+        default=0.50,
         type=float,
         dest="max_feature_nan_fraction",
     )
@@ -1697,7 +1700,7 @@ def _create_run_parser(
     )
     filt.add_argument("--min-variance", type=float, default=0.1, dest="min_variance")
     filt.add_argument("--max-variance", type=float, default=5.0, dest="max_variance")
-    filt.add_argument("--max-feature-nan-fraction", type=float, default=0.05,
+    filt.add_argument("--max-feature-nan-fraction", type=float, default=0.50,
                       dest="max_feature_nan_fraction",
                       help="Drop features with > this fraction of NaN/Inf cells "
                            "BEFORE the variance filter (default 0.05 = 5%%).")

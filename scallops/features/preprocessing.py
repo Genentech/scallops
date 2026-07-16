@@ -543,7 +543,7 @@ def _col_batch_filter_parquet(
     batch_size: int = 500_000,
     max_memory_gb: float | None = None,
     max_feature_nan_fraction: float | None = None,
-) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+) -> "tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]":
     """Two-pass sequential streaming filter for parquet files (local or S3).
 
     Works for both parquet AND any format accepted by the PyArrow dataset API.
@@ -613,8 +613,9 @@ def _col_batch_filter_parquet(
     obs_label  = obs_df.iloc[label_mask]
 
     # ── Pass 1: finite-value counts (per cell AND per feature) + Welford variance
-    bad_counts       = np.zeros(n_cells, dtype=np.int32)
-    nan_per_feat     = np.zeros(n_feat,  dtype=np.int64)   # NEW: NaN count per feature
+    bad_counts        = np.zeros(n_cells, dtype=np.int32)
+    nan_per_feat      = np.zeros(n_feat,  dtype=np.int64)   # NaN count per feature (all cells)
+    nan_per_feat_bad  = np.zeros(n_feat,  dtype=np.int64)   # NaN count per feature in bad cells
     group_stats: dict = {}
     row_offset  = 0
 
@@ -673,10 +674,14 @@ def _col_batch_filter_parquet(
         row_offset += n_b
 
         not_finite_b = ~np.isfinite(X_b)
-        bad_counts[row_offset - n_b : row_offset] = (
-            not_finite_b.sum(axis=1).astype(np.int32)
-        )
-        nan_per_feat += not_finite_b.sum(axis=0).astype(np.int64)  # accumulate per-feature
+        per_cell_nan = not_finite_b.sum(axis=1).astype(np.int32)
+        bad_counts[row_offset - n_b : row_offset] = per_cell_nan
+        nan_per_feat += not_finite_b.sum(axis=0).astype(np.int64)
+        # Track NaN in cells that will be dropped (>max_bad NaN) — identifies
+        # which features are causing cell attrition.
+        bad_mask = per_cell_nan > max_bad
+        if bad_mask.any():
+            nan_per_feat_bad += not_finite_b[bad_mask].sum(axis=0).astype(np.int64)
 
         if label_b.any():
             X_kept   = X_b[label_b]
@@ -758,11 +763,10 @@ def _col_batch_filter_parquet(
         # the original bad_counts (cells with ≤ max_bad NaN in ALL features also
         # have ≤ max_bad NaN in the kept-feature subset).
         pass   # bad_counts already correct as a conservative bound
-    max_bad_reliable = (
-        int(feat_keep.sum() * max_fraction_not_finite)
-        if max_fraction_not_finite is not None else feat_keep.sum()
-    )
-    cell_keep = label_mask & (bad_counts <= max_bad_reliable)
+    # Cell NaN threshold uses n_feat (all features entering the filter, post inner-join)
+    # as denominator because bad_counts was accumulated over all those features.
+    # Using feat_keep.sum() would make the threshold smaller and drop more cells.
+    cell_keep = label_mask & (bad_counts <= max_bad)
 
     n_cells_out = int(cell_keep.sum())
     n_feat_out  = int(feat_keep.sum())
@@ -810,7 +814,87 @@ def _col_batch_filter_parquet(
                         row_offset / n_cells * 100, eta)
 
     logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
-    return result, cell_keep, feat_keep
+
+    # ── Build the feature-drop report before step 3 modifies feat_keep ────────
+    _feat_names = list(feat_cols) if feat_cols else [f"feat_{i}" for i in range(n_feat)]
+
+    def _parse_feature_name(name: str) -> dict:
+        """Split CellProfiler name into compartment + measurement type."""
+        parts = name.split("_")
+        compartment = parts[0] if parts else "Unknown"
+        mtype = parts[1] if len(parts) > 1 else "Unknown"
+        return {"compartment": compartment, "measurement_type": mtype}
+
+    # ── Step 3: remove features with any remaining NaN in the kept cells ──────
+    # After removing bad cells (step 2), features whose NaN came solely from
+    # those bad cells are now completely clean.  Dropping the remainder gives
+    # a NaN-free matrix without imputation and without an extra S3 scan.
+    nan_per_feat_final = np.isnan(result).sum(axis=0)   # (n_feat_out,)
+    feat_still_nan = nan_per_feat_final > 0
+    if feat_still_nan.any():
+        n_drop = int(feat_still_nan.sum())
+        n_keep = n_feat_out - n_drop
+        logger.info(
+            "  [step 3] dropping %d features with remaining NaN in kept cells"
+            " → %d clean features",
+            n_drop, n_keep,
+        )
+        result = result[:, ~feat_still_nan]
+        # Update feat_keep to reflect the additional removal
+        feat_keep_indices  = np.where(feat_keep)[0]
+        feat_keep[feat_keep_indices[feat_still_nan]] = False
+
+    # ── Build the feature-drop report ─────────────────────────────────────────
+    records = []
+    feat_nan_frac_all = nan_per_feat / max(n_cells, 1)
+    feat_nan_frac_bad = nan_per_feat_bad / max(int((~cell_keep).sum()), 1)
+
+    for i, name in enumerate(_feat_names):
+        kept = bool(feat_keep[i])
+        parsed = _parse_feature_name(name)
+        # Determine why this feature was dropped
+        if kept:
+            drop_step = None
+        elif max_feature_nan_fraction is not None and feat_nan_frac_all[i] > max_feature_nan_fraction:
+            drop_step = "step1_feature_nan"
+        elif not (np.isfinite(feat_var[i]) and
+                  (min_variance is None or feat_var[i] >= min_variance) and
+                  (max_variance is None or feat_var[i] <= max_variance)):
+            drop_step = "step2_variance"
+        else:
+            drop_step = "step3_remaining_nan"
+
+        records.append({
+            "feature":             name,
+            "compartment":         parsed["compartment"],
+            "measurement_type":    parsed["measurement_type"],
+            "kept":                kept,
+            "drop_step":           drop_step,
+            "nan_frac_all_cells":  round(float(feat_nan_frac_all[i]), 5),
+            "nan_frac_bad_cells":  round(float(feat_nan_frac_bad[i]), 5),
+            "median_variance":     round(float(feat_var[i]) if np.isfinite(feat_var[i]) else 0.0, 6),
+        })
+
+    report_df = pd.DataFrame(records)
+
+    # Log a compartment × drop_step breakdown for the analysis
+    if not report_df.empty:
+        dropped = report_df[~report_df["kept"]]
+        if not dropped.empty:
+            summary = (dropped.groupby(["compartment", "drop_step"])
+                       .size().reset_index(name="n_dropped"))
+            logger.info("  Feature drop breakdown:\n%s", summary.to_string(index=False))
+
+            # Top features driving cell dropping (high NaN in bad cells)
+            top_culprits = (
+                dropped.sort_values("nan_frac_bad_cells", ascending=False)
+                .head(10)[["feature", "compartment", "measurement_type",
+                            "nan_frac_all_cells", "nan_frac_bad_cells"]]
+            )
+            logger.info("  Top features driving cell dropout:\n%s",
+                        top_culprits.to_string(index=False))
+
+    return result, cell_keep, feat_keep, report_df
 
 
 # ---------------------------------------------------------------------------
