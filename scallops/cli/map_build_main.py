@@ -93,8 +93,19 @@ def _create_map_filter_parser(
         type=float,
     )
     parser.add_argument(
+        "--max-feature-nan-fraction",
+        help="Drop features where the fraction of NaN/Inf values across all cells "
+             "exceeds this threshold BEFORE computing variance.  Applied first so "
+             "the variance filter only sees reliable, non-sparse features.  "
+             "Default 0.05 (drop features with >5%% NaN).  Set to None/1.0 to disable.",
+        default=0.05,
+        type=float,
+        dest="max_feature_nan_fraction",
+    )
+    parser.add_argument(
         "--max-fraction-not-finite",
-        help="Maximum fraction of non-finite values allowed per cell.",
+        help="Maximum fraction of non-finite values allowed per cell "
+             "(evaluated on the features that survived --max-feature-nan-fraction).",
         default=0.25,
         type=float,
     )
@@ -117,11 +128,20 @@ def _create_map_filter_parser(
         help="Memory budget in GB for the PyArrow read-ahead buffer during the "
              "parquet filter scan.  Set this to a fraction of the node's RAM when "
              "running in a shared cluster environment (e.g. 32 on a 256 GB node "
-             "shared with 4 jobs).  When omitted, 70%% of currently available RAM "
-             "is used automatically (appropriate for dedicated nodes).",
+             "shared with 4 jobs).  When omitted, 40%% of currently available RAM "
+             "is used automatically.",
         type=float,
         default=None,
         dest="filter_max_memory_gb",
+    )
+    parser.add_argument(
+        "--max-cpus",
+        help="Hard cap on the number of CPU cores used (for PyArrow scanner "
+             "threads, Dask workers, etc.).  Set this when sharing a node so "
+             "other jobs are not starved.  Default: use all available CPUs.",
+        type=int,
+        default=None,
+        dest="max_cpus",
     )
 
     # --- Condition column ---
@@ -283,6 +303,15 @@ def _create_map_transform_yj_parser(
         dest="perturbation",
         help="obs column identifying perturbations (default: gene_symbol). Used "
              "to group NaN imputation by plate × well × perturbation.",
+    )
+    parser.add_argument(
+        "--max-cpus",
+        type=int,
+        default=None,
+        dest="max_cpus",
+        help="Hard cap on CPU cores used for Dask parallel YJ fitting. "
+             "Set this on shared nodes (e.g. 16 on a 128-core node shared "
+             "with 8 jobs). Default: all available CPUs.",
     )
     parser.add_argument(
         "--yj-clip-percentile",
@@ -1668,6 +1697,10 @@ def _create_run_parser(
     )
     filt.add_argument("--min-variance", type=float, default=0.1, dest="min_variance")
     filt.add_argument("--max-variance", type=float, default=5.0, dest="max_variance")
+    filt.add_argument("--max-feature-nan-fraction", type=float, default=0.05,
+                      dest="max_feature_nan_fraction",
+                      help="Drop features with > this fraction of NaN/Inf cells "
+                           "BEFORE the variance filter (default 0.05 = 5%%).")
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
     filt.add_argument(

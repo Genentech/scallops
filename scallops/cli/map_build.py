@@ -190,8 +190,130 @@ def _save_zarr(data: anndata.AnnData, output: str, metadata: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers: glob expansion and condition-column creation
+# Shared helpers: glob expansion, condition-column, resource estimation
 # ---------------------------------------------------------------------------
+
+
+def _available_memory_gb() -> float:
+    """Return the effective memory ceiling in GB, respecting cgroup limits.
+
+    Priority order (largest → smallest restriction wins):
+    1. cgroup v2  ``/sys/fs/cgroup/memory.max``  (set by SLURM, k8s, Docker)
+    2. cgroup v1  ``/sys/fs/cgroup/memory/memory.limit_in_bytes``
+    3. ``psutil.virtual_memory().available``  (currently free on the node)
+    4. Hard-coded 64 GB fallback
+    """
+    for path in ("/sys/fs/cgroup/memory.max",
+                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            raw = open(path).read().strip()
+            if raw not in ("max", ""):
+                limit = int(raw)
+                if limit < (1 << 62):   # skip the "unlimited" sentinel
+                    return limit / 1e9
+        except (FileNotFoundError, ValueError, PermissionError):
+            pass
+    try:
+        import psutil as _ps
+        return _ps.virtual_memory().available / 1e9
+    except Exception:
+        return 64.0
+
+
+def _step_resource_plan(zarr_path: str, step: str,
+                        max_cpus: int | None = None) -> dict:
+    """Estimate memory and optimal CPU count for the *next* pipeline step.
+
+    Reads the zarr shape and dtype from metadata (no data loaded) and
+    applies step-specific memory formulas to recommend:
+
+    * ``load_gb``     — minimum RAM to hold the working array
+    * ``peak_gb``     — peak RAM during the step (including temporaries)
+    * ``optimal_cpus`` — largest core count that fits within available RAM
+    * ``warning``     — non-empty string if recommended count was clamped
+
+    :param zarr_path: Path to the input AnnData zarr for the next step.
+    :param step: Pipeline step name (``'transform-yj'``, ``'scale-local'``,
+        ``'pca'``, etc.).
+    :param max_cpus: Hard CPU cap (``None`` → ``os.cpu_count()``).
+    :return: Dict with estimation results.
+    """
+    import zarr as _zarr
+    from scallops.zarr_io import is_anndata_zarr
+
+    avail_gb  = _available_memory_gb()
+    n_cpus    = min(max_cpus or os.cpu_count() or 1, os.cpu_count() or 1)
+
+    # Read shape + dtype without loading data
+    try:
+        if zarr_path.startswith(("s3://", "gs://", "az://", "abfs://")):
+            import s3fs as _s3; import s3fs
+            fs  = _s3.S3FileSystem()
+            store = s3fs.S3Map(root=zarr_path, s3=fs)
+        else:
+            store = zarr_path
+        root  = _zarr.open_group(store, mode="r")
+        shape = tuple(root["X"].shape)
+        itemsize = root["X"].dtype.itemsize
+    except Exception:
+        logger.debug("_step_resource_plan: could not read %s", zarr_path)
+        return {"optimal_cpus": n_cpus, "warning": ""}
+
+    n_cells, n_feat = shape
+    raw_gb = n_cells * n_feat * itemsize / 1e9
+
+    # ── Per-step formulas ────────────────────────────────────────────────────
+    if step == "transform-yj":
+        # float32 load + float64 working copy (2×) + float32 output
+        load_gb  = raw_gb
+        peak_gb  = raw_gb * 3.5           # float64 X_full + output + temporaries
+        # Each Dask thread needs: one column slice × one group (6-7 MB per task)
+        per_task_mb = max(1.0, n_cells / 12 * 8 / 1e6 + 20)   # float64 col + scipy
+        # Cores limited by per-task overhead (threads share X_full)
+        mem_limited = int(avail_gb * 1000 / per_task_mb)
+        optimal = min(n_cpus, max(1, mem_limited))
+
+    elif step in ("scale-global", "scale-local"):
+        # Batch of 100K cells × features × float32; kNN coords are small
+        batch_gb = 100_000 * n_feat * 4 / 1e9
+        load_gb  = raw_gb
+        peak_gb  = raw_gb + batch_gb * 4  # data + a few in-flight batches
+        mem_limited = max(1, int(avail_gb / max(batch_gb, 0.1)))
+        optimal = min(n_cpus, mem_limited)
+
+    elif step == "pca":
+        # PCA works on float64; n_components << n_feat so output is small
+        load_gb  = raw_gb
+        peak_gb  = raw_gb * 2.5           # float64 + LAPACK workspace
+        optimal  = n_cpus                  # sklearn PCA uses BLAS threads internally
+
+    else:
+        load_gb = peak_gb = raw_gb
+        optimal = n_cpus
+
+    warning = ""
+    if optimal < n_cpus:
+        warning = (
+            f"RAM limit ({avail_gb:.0f} GB available) constrains cores to "
+            f"{optimal} (requested {n_cpus}).  Use --max-cpus {optimal} "
+            f"or free RAM."
+        )
+
+    msg = (
+        "resource plan [%s]: shape=%s  load=%.1f GB  peak≈%.1f GB  "
+        "avail=%.0f GB  → recommended cores=%d%s"
+    )
+    logger.info(msg, step, shape, load_gb, peak_gb, avail_gb, optimal,
+                f"  ⚠ {warning}" if warning else "")
+
+    return {
+        "shape":        shape,
+        "load_gb":      load_gb,
+        "peak_gb":      peak_gb,
+        "avail_gb":     avail_gb,
+        "optimal_cpus": optimal,
+        "warning":      warning,
+    }
 
 
 def _expand_inputs(paths: list[str]) -> list[str]:
@@ -407,6 +529,13 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
             f"{result.shape[0]:,}", f"{result.shape[1]:,}",
         )
         _save_zarr(result, output, metadata)
+
+        # After writing, estimate resources for the downstream steps so the
+        # user can set --max-cpus / --max-memory appropriately.
+        _out = output if output.endswith(".zarr") else output + ".zarr"
+        for _step in ("transform-yj", "scale-local", "pca"):
+            _step_resource_plan(_out, _step,
+                                max_cpus=getattr(arguments, "max_cpus", None))
 
 
 # ---------------------------------------------------------------------------
@@ -1310,6 +1439,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 feat_cols=list(data.var.index),
                 batch_size=getattr(args, "filter_batch_size", 100_000),
                 max_memory_gb=getattr(args, "filter_max_memory_gb", None),
+                max_feature_nan_fraction=getattr(args, "max_feature_nan_fraction", None),
             )
         except MemoryError as exc:
             logger.critical(
@@ -1582,7 +1712,9 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
                 var=data.var.copy(), uns=data.uns.copy()
             )
 
-    result = transform_features_yj(data, by=by_cols)
+    _max_cpus = getattr(args, "max_cpus", None)
+    _n_jobs   = _max_cpus if _max_cpus else -1
+    result = transform_features_yj(data, by=by_cols, n_jobs=_n_jobs)
     _merge_uns(data, result)
     return result
 
