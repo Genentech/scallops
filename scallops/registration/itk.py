@@ -340,7 +340,7 @@ def _itk_align_reference_time_zarr(
             )
 
         return {
-            "zarr_array": zarr_array,
+            "data": zarr_array,
             "group": group,
             "dims": dims,
             "coords": coords,
@@ -352,7 +352,7 @@ def _itk_align_reference_time_zarr(
 
         :param d: Dictionary containing dataset and metadata information.
         """
-        zarr_array = d["zarr_array"]
+        zarr_array = d["data"]
         group = d["group"]
         dims = d["dims"]
         coords = d["coords"]
@@ -678,7 +678,7 @@ def _itk_align_reference_time(
         )
     )
 
-    zarr_array = init_dict["zarr_array"]
+    result_array = init_dict["data"]
     output_fs = fsspec.core.url_to_fs(output_dir)[0] if output_dir is not None else None
     unrolled_t_index = 0
 
@@ -839,7 +839,7 @@ def _itk_align_reference_time(
 
             index = (i, j) if not unroll_channels else unrolled_t_index + j
             logger.info(f"Writing t={i}, c={j}.")
-            write_callback(zarr_array, index, image_i_j)
+            write_callback(result_array, index, image_i_j)
             del image_i_j
 
         del transform_parameter_object
