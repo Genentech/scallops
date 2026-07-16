@@ -32,7 +32,7 @@ from natsort import natsorted
 from scallops.io import _download_file, _get_fs_protocol, get_image_spacing
 from scallops.registration.landmarks import _get_translation, find_landmarks
 from scallops.xr import _get_dims
-from scallops.zarr_io import open_ome_zarr, write_zarr
+from scallops.zarr_io import _create_array_kwargs, open_ome_zarr, write_zarr
 
 logger = logging.getLogger("scallops")
 
@@ -323,23 +323,24 @@ def _itk_align_reference_time_zarr(
         attrs = init_params["attrs"]
         dtype = init_params["dtype"]
         chunk_size = init_params["chunk_size"]
-        zarr_dataset = None
+        zarr_array = None
         group = None
         if image_root is not None:
             images_group = image_root.require_group("images", overwrite=False)
             group = images_group.create_group(
                 image_name.replace("/", "-"), overwrite=True
             )
-            zarr_dataset = group.create_array(
-                "0",
+            zarr_array = group.create_array(
+                "s0",
                 shape=shape,
                 chunks=(1,) * (len(shape) - 2) + chunk_size,
                 dtype=dtype,
                 overwrite=True,
+                **_create_array_kwargs(),
             )
 
         return {
-            "data": zarr_dataset,
+            "zarr_array": zarr_array,
             "group": group,
             "dims": dims,
             "coords": coords,
@@ -351,30 +352,33 @@ def _itk_align_reference_time_zarr(
 
         :param d: Dictionary containing dataset and metadata information.
         """
-        data = d["data"]
+        zarr_array = d["zarr_array"]
         group = d["group"]
         dims = d["dims"]
         coords = d["coords"]
         image_attrs = d["attrs"]
-        if data is not None:
+        if zarr_array is not None:
             write_zarr(
                 grp=group,
-                data=data,
+                data=zarr_array,
                 image_attrs=image_attrs,
                 coords=coords,
                 dims=dims,
                 zarr_format="zarr",
             )
 
-    def _write_callback(x, idx, val):
-        if x is None:
+    def _write_callback(zarr_array, idx, val):
+        if zarr_array is None:  # do not save image
             return
-        if isinstance(idx, int):
-            idx = (idx,)
+
         if isinstance(val, xr.DataArray):
             val = val.data
-
-        x[idx] = val
+        if isinstance(val, da.Array):
+            if isinstance(idx, int):
+                idx = (idx,)
+            da.store(val, zarr_array, regions=idx, compute=True)
+        else:
+            zarr_array[idx] = val
 
     _itk_align_reference_time(
         moving_image=moving_image,
@@ -674,7 +678,7 @@ def _itk_align_reference_time(
         )
     )
 
-    result_data = init_dict["data"]
+    zarr_array = init_dict["zarr_array"]
     output_fs = fsspec.core.url_to_fs(output_dir)[0] if output_dir is not None else None
     unrolled_t_index = 0
 
@@ -835,7 +839,7 @@ def _itk_align_reference_time(
 
             index = (i, j) if not unroll_channels else unrolled_t_index + j
             logger.info(f"Writing t={i}, c={j}.")
-            write_callback(result_data, index, image_i_j)
+            write_callback(zarr_array, index, image_i_j)
             del image_i_j
 
         del transform_parameter_object
