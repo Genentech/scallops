@@ -64,6 +64,10 @@ _SCALLOPS_UNS_KEY = "scallops"
 _INTERNAL_UNS_KEYS = ("_parquet_sources", "_zarr_is_remote")
 
 
+# In-process attrition ledger — accumulated by _log_attrition, printed at exit.
+_ATTRITION_LEDGER: list[dict] = []
+
+
 def _log_attrition(
     step: str,
     reason: str,
@@ -72,7 +76,7 @@ def _log_attrition(
     feats_before: int,
     feats_after: int,
 ) -> None:
-    """Log one row of the incremental attrition table.
+    """Log one row of the incremental attrition table and append to the ledger.
 
     Emitted whenever cells or features are dropped so callers can build a
     running picture of how much data survives each filtering stage.
@@ -90,6 +94,46 @@ def _log_attrition(
         f"{feats_before:,}", f"{feats_after:,}",
         f"{feat_drop:,}", 100 * feat_drop / max(feats_before, 1),
     )
+    _ATTRITION_LEDGER.append({
+        "step": step,
+        "reason": reason,
+        "cells_before": cells_before,
+        "cells_after": cells_after,
+        "cells_dropped": cell_drop,
+        "cells_pct_dropped": round(100 * cell_drop / max(cells_before, 1), 2),
+        "feats_before": feats_before,
+        "feats_after": feats_after,
+        "feats_dropped": feat_drop,
+        "feats_pct_dropped": round(100 * feat_drop / max(feats_before, 1), 2),
+    })
+
+
+def print_attrition_table() -> None:
+    """Print the accumulated attrition ledger as an aligned table.
+
+    Called automatically at the end of every standalone pipeline step and
+    at the end of ``map run``.
+    """
+    if not _ATTRITION_LEDGER:
+        return
+    # Header
+    hdr = (f"{'Step':<22}  {'Reason':<25}  "
+           f"{'Cells before':>13}  {'Cells after':>12}  {'Dropped':>9}  {'%':>6}  "
+           f"{'Feats before':>13}  {'Feats after':>12}  {'Dropped':>9}  {'%':>6}")
+    sep = "─" * len(hdr)
+    logger.info("\n%s\nAttrition summary\n%s", sep, sep)
+    logger.info(hdr)
+    logger.info(sep)
+    for r in _ATTRITION_LEDGER:
+        logger.info(
+            "%-22s  %-25s  %13s  %12s  %9s  %5.1f%%  %13s  %12s  %9s  %5.1f%%",
+            r["step"], r["reason"],
+            f"{r['cells_before']:,}", f"{r['cells_after']:,}",
+            f"{r['cells_dropped']:,}", r["cells_pct_dropped"],
+            f"{r['feats_before']:,}", f"{r['feats_after']:,}",
+            f"{r['feats_dropped']:,}", r["feats_pct_dropped"],
+        )
+    logger.info(sep)
 
 
 def _merge_uns(source: anndata.AnnData, result: anndata.AnnData) -> None:
@@ -529,6 +573,7 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
             f"{result.shape[0]:,}", f"{result.shape[1]:,}",
         )
         _save_zarr(result, output, metadata)
+        print_attrition_table()
 
         # After writing, estimate resources for the downstream steps so the
         # user can set --max-cpus / --max-memory appropriately.
@@ -2390,6 +2435,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     logger.info(f"          → {sim_zarr}")
     if is_parquet_file(recall_pq):
         logger.info(f"          → {recall_pq}")
+    print_attrition_table()
 
 
 def run_pipeline_map_recall(arguments: argparse.Namespace) -> None:
