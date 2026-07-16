@@ -18,6 +18,7 @@ Covers:
 
 import argparse
 import json
+import os
 
 import anndata
 import numpy as np
@@ -2141,3 +2142,156 @@ def test_map_backproject_cluster_query(agg_profiles, tmp_path):
     assert os.path.exists(out)
     df = pd.read_parquet(out)
     assert len(df) > 0
+
+
+# ---------------------------------------------------------------------------
+# Parquet-path coverage for map-filter
+# (the zarr/in-memory path is tested above; _col_batch_filter_parquet is only
+#  triggered when the input is parquet — previously untested, leading to the
+#  `pd not defined` NameError in production)
+# ---------------------------------------------------------------------------
+
+
+def _write_parquet(data: anndata.AnnData, path) -> str:
+    """Write AnnData to a parquet file readable by _read_parquet_for_map.
+
+    Feature columns use Nuclei_ prefix so _read_parquet_for_map classifies
+    them as features; obs columns are kept as metadata.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    out = str(path) + ".parquet"
+    # Combine obs + X into one DataFrame
+    feat_names = [f"Nuclei_{c}" for c in data.var.index]
+    df = data.obs.copy().reset_index(drop=True)
+    for j, fname in enumerate(feat_names):
+        df[fname] = data.X[:, j]
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    pq.write_table(table, out)
+    return out
+
+
+@pytest.fixture
+def cell_data_parquet_friendly() -> anndata.AnnData:
+    """AnnData with Nuclei_* feature names (needed for parquet classification)."""
+    np.random.seed(42)
+    n, p = 60, 5
+    genes = ["NTC"] * 24 + ["gene_A"] * 18 + ["gene_B"] * 18
+    X = np.random.randn(n, p).astype(np.float32)
+    # Introduce >50% NaN in the last feature (should be dropped by step 1)
+    X[:, -1] = np.nan
+    # Introduce sparse NaN in feature 2 for some cells
+    X[::5, 2] = np.nan
+
+    return anndata.AnnData(
+        X=X,
+        obs=pd.DataFrame({
+            "gene_symbol": genes,
+            "plate":       ["plate1"] * n,
+            "well":        ["well1" if i < 30 else "well2" for i in range(n)],
+            "barcode_0":   [f"bc_{g}" for g in genes],
+        }, index=pd.RangeIndex(n).astype(str)),
+        var=pd.DataFrame(index=[f"Feature_{i}" for i in range(p)]),
+    )
+
+
+@pytest.mark.features
+def test_map_filter_parquet_path_runs(cell_data_parquet_friendly, tmp_path):
+    """run_pipeline_map_filter on a parquet input exercises _col_batch_filter_parquet."""
+    pq_path = _write_parquet(cell_data_parquet_friendly, tmp_path / "input")
+    out = str(tmp_path / "filtered")
+
+    run_pipeline_map_filter(
+        _ns(
+            input=[pq_path],
+            output=out,
+            min_variance=0.0,
+            max_variance=None,
+            max_fraction_not_finite=0.25,
+            max_feature_nan_fraction=0.50,
+            filter_batch_size=50,
+            filter_max_memory_gb=None,
+            max_cpus=1,
+            plate_column="plate",
+            well_column="well",
+            scale_method="global",
+            condition_column=None,
+            condition_map=None,
+            condition_source_column="well",
+        )
+    )
+    result = _read_zarr(out + ".zarr")
+    # Feature with 100% NaN (last column, step 1) must be dropped
+    assert result.shape[1] < cell_data_parquet_friendly.shape[1], \
+        "Parquet filter must drop the all-NaN feature"
+    # No NaN should remain in the output (step 3 cleans up)
+    assert not np.isnan(result.X).any(), \
+        "Output matrix must be NaN-free after step 3"
+
+
+@pytest.mark.features
+def test_map_filter_parquet_feature_report_written(cell_data_parquet_friendly, tmp_path):
+    """map-filter writes a feature-drop report parquet alongside the zarr."""
+    pq_path = _write_parquet(cell_data_parquet_friendly, tmp_path / "input")
+    out = str(tmp_path / "filtered")
+
+    run_pipeline_map_filter(
+        _ns(
+            input=[pq_path],
+            output=out,
+            min_variance=0.0,
+            max_variance=None,
+            max_fraction_not_finite=0.25,
+            max_feature_nan_fraction=0.50,
+            filter_batch_size=50,
+            filter_max_memory_gb=None,
+            max_cpus=1,
+            plate_column="plate",
+            well_column="well",
+            scale_method="global",
+            condition_column=None,
+            condition_map=None,
+            condition_source_column="well",
+        )
+    )
+    report_path = out + "_feature_report.parquet"
+    assert os.path.exists(report_path), "Feature-drop report parquet must be written"
+
+    df = pd.read_parquet(report_path)
+    assert set(["feature", "compartment", "drop_step", "nan_frac_all_cells", "kept"]) \
+        <= set(df.columns)
+    # The all-NaN feature should appear as dropped (step1 or step3)
+    dropped = df[~df["kept"]]
+    assert len(dropped) > 0, "At least one feature should be dropped"
+
+
+@pytest.mark.features
+def test_map_filter_parquet_step3_removes_sparse_nan(cell_data_parquet_friendly, tmp_path):
+    """Step 3 must remove features that still have NaN in the kept cells."""
+    pq_path = _write_parquet(cell_data_parquet_friendly, tmp_path / "input")
+    out = str(tmp_path / "filtered")
+
+    run_pipeline_map_filter(
+        _ns(
+            input=[pq_path],
+            output=out,
+            min_variance=0.0,
+            max_variance=None,
+            max_fraction_not_finite=1.0,   # keep all cells regardless of NaN
+            max_feature_nan_fraction=1.0,   # step 1 keeps all
+            filter_batch_size=50,
+            filter_max_memory_gb=None,
+            max_cpus=1,
+            plate_column="plate",
+            well_column="well",
+            scale_method="global",
+            condition_column=None,
+            condition_map=None,
+            condition_source_column="well",
+        )
+    )
+    result = _read_zarr(out + ".zarr")
+    # With step 3 active, no NaN should remain even when we keep all cells/features in step 1/2
+    assert not np.isnan(result.X).any(), \
+        "Step 3 must eliminate all remaining NaN even when steps 1+2 are permissive"

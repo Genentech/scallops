@@ -572,8 +572,25 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
             "map filter: done — %s cells × %s features",
             f"{result.shape[0]:,}", f"{result.shape[1]:,}",
         )
+        # Extract feature-drop report before _save_zarr strips the stash key
+        _report_json = result.uns.pop("_filter_feature_report_json", None)
         _save_zarr(result, output, metadata)
         print_attrition_table()
+
+        # Write the feature-drop report for analysis
+        if _report_json:
+            import io as _io
+            _report_df = pd.read_json(_io.StringIO(_report_json), orient="records")
+            _report_path = (output if output.endswith(".zarr") else output + ".zarr"
+                            ).rstrip("/").removesuffix(".zarr") + "_feature_report.parquet"
+            try:
+                import fsspec as _fsspec
+                _fs_r, _p_r = _fsspec.url_to_fs(_report_path)
+                with _fs_r.open(_p_r, "wb") as _fh:
+                    _report_df.to_parquet(_fh, index=False)
+                logger.info("filter: feature-drop report → %s", _report_path)
+            except Exception as _e:
+                logger.warning("filter: could not write feature report: %s", _e)
 
         # After writing, estimate resources for the downstream steps so the
         # user can set --max-cpus / --max-memory appropriately.
@@ -1513,19 +1530,9 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         )
         _merge_uns(data, result)
 
-        # Write the feature-drop report for downstream analysis
+        # Stash the feature-drop report in uns so callers can retrieve and write it
         if _feat_report is not None and not _feat_report.empty:
-            _report_path = output.rstrip("/").replace(".zarr", "") + "_feature_report.parquet"
-            if not _report_path.endswith(".parquet"):
-                _report_path += "_feature_report.parquet"
-            try:
-                import fsspec as _fsspec
-                _fs_r, _p_r = _fsspec.url_to_fs(_report_path)
-                with _fs_r.open(_p_r, "wb") as _fh:
-                    _feat_report.to_parquet(_fh, index=False)
-                logger.info("filter: feature-drop report → %s", _report_path)
-            except Exception as _e:
-                logger.warning("filter: could not write feature report: %s", _e)
+            result.uns["_filter_feature_report_json"] = _feat_report.to_json(orient="records")
         # Centroid columns needed by local-zscore may have been dropped by the
         # variance/NaN filter.  Read them directly from parquet for kept cells.
         if getattr(args, "scale_method", "global") == "local":
