@@ -4,7 +4,7 @@ import math
 import os
 import threading
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import dask
 import numpy as np
@@ -41,7 +41,7 @@ def _fuse(
     blend: Literal["none", "linear"] = "none",
     output_channels: Sequence[int] | None = None,
     channel_names: Sequence[str] | None = None,
-    image_spacing: tuple[float, float] | None = None,
+    output_metadata: dict[str, Any] | None = None,
     ffp: np.ndarray | None = None,
     dfp: np.ndarray | None = None,
     crop_width: tuple[int, int] | None = None,
@@ -60,6 +60,8 @@ def _fuse(
     :param z_index: z-index or 'max'. Ignored when df contains `z_index` column.
     :param blend: Blending mode
     :param output_channels: Optional output channels to include
+    :param channel_names: Optional channel names to output, overwriting channel names derived from image tiles
+    :param output_metadata: Optional output metadata
     :param ffp: ffp image for illumination correction
     :param dfp: dfp image for illumination correction
     :param crop_width: Image crop width
@@ -340,9 +342,7 @@ def _fuse(
         ]
 
     image_attrs, axes, scale_dict = _attrs_axes_scales(
-        {"physical_pixel_sizes": image_spacing}
-        if image_spacing is not None
-        else dict(),
+        output_metadata,
         {"c": channel_names},
         ["c", "y", "x"],
         np.uint16,

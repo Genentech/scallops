@@ -271,6 +271,7 @@ def _attrs_axes_scales(
     """
 
     omero = _create_omero_metadata(coords, dims, image_dtype)
+    image_attrs = image_attrs.copy()
     if omero is not None:
         image_attrs["omero"] = omero
 
@@ -296,12 +297,12 @@ def _attrs_axes_scales(
         scale_dict = dict()
         for d in dims:
             axis = {"name": d, "type": KNOWN_AXES.get(d)}
-            if physical_pixel_units is not None and axis["type"] == "space":
-                #  axes_units[d] = physical_pixel_units[space_index]
+            if physical_pixel_sizes is not None and axis["type"] == "space":
                 scale_dict[d] = physical_pixel_sizes[space_index]
-                unit = physical_pixel_units.get(space_index)
-                if unit is not None:
-                    axis["unit"] = unit
+                if physical_pixel_units is not None:
+                    unit = physical_pixel_units.get(space_index)
+                    if unit is not None:
+                        axis["unit"] = unit
                 space_index = space_index + 1
             axes.append(axis)
 

@@ -167,7 +167,8 @@ def _single_stitch(
         if isinstance(image_spacing, np.ndarray)
         else image_spacing
     )
-
+    output_metadata["physical_pixel_sizes"] = output_metadata["image_spacing"]
+    output_metadata["physical_pixel_units"] = ["micrometer", "micrometer"]
     auto_radial_correction = radial_correction_k == "auto"
     stitch_result = stitch_align(
         filepaths=filepaths,
@@ -381,11 +382,8 @@ def _single_stitch(
         blend,
         image_output_root,
         image_key,
-        fused_y_size,
-        fused_x_size,
         fused_tile_shape,
         chunk_size,
-        image_spacing,
         no_save_labels,
         no_save_image,
         ffp_path,
@@ -411,11 +409,8 @@ def _write_arrays(
     blend,
     image_output_root,
     image_key,
-    fused_y_size,
-    fused_x_size,
     fused_tile_shape,
     chunk_size,
-    image_spacing,
     no_save_labels,
     no_save_image,
     ffp_path,
@@ -448,7 +443,7 @@ def _write_arrays(
             **_create_array_kwargs(fmt=fmt),
         )
         image_attrs, axes, scale_dict = _attrs_axes_scales(
-            {"physical_pixel_sizes": image_spacing}, None, ["y", "x"], np.uint8
+            metadata, None, ["y", "x"], np.uint8
         )
         zarr_attrs = _create_zarr_attrs(
             fmt, group, ["y", "x"], image_attrs, axes, scale_dict
@@ -466,7 +461,7 @@ def _write_arrays(
             )
 
             image_attrs, axes, scale_dict = _attrs_axes_scales(
-                {"physical_pixel_sizes": image_spacing}, None, ["y", "x"], np.uint16
+                metadata, None, ["y", "x"], np.uint16
             )
             zarr_attrs = _create_zarr_attrs(
                 fmt, group, ["y", "x"], image_attrs, axes, scale_dict
@@ -532,7 +527,7 @@ def _write_arrays(
             blend=blend,
             output_channels=output_channels,
             channel_names=channel_names,
-            image_spacing=image_spacing,
+            output_metadata=metadata,
             ffp=ffp,
             dfp=dfp,
             crop_width=fuse_crop_width,
