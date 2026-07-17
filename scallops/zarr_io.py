@@ -297,6 +297,12 @@ def _attrs_axes_scales(
         axes = []
         scale_dict = dict()
         space_index = 0
+        if "z" in dims:
+            if physical_pixel_sizes is not None and len(physical_pixel_sizes) == 2:
+                physical_pixel_sizes = [1.0] + list(physical_pixel_sizes)
+            if physical_pixel_units is not None and len(physical_pixel_units) == 2:
+                physical_pixel_units = ["micrometer"] + list(physical_pixel_units)
+
         for d in dims:
             axis = {"name": d, "type": KNOWN_AXES.get(d)}
             if physical_pixel_sizes is not None and axis["type"] == "space":
