@@ -1782,6 +1782,37 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
     _max_cpus = getattr(args, "max_cpus", None)
     _n_jobs   = _max_cpus if _max_cpus else -1
     result = transform_features_yj(data, by=by_cols, n_jobs=_n_jobs)
+
+    # Post-YJ safety clip: clamp each feature to ±max_yj_sigma robust standard
+    # deviations computed from the result.  YJ output is approximately Gaussian so
+    # anything outside ±10 IQR-based sigmas is an artefact (e.g. float32 overflow
+    # from heavy-tailed features like PercentTouching_Expanded).  This prevents
+    # all-constant overflow values that make well-level means Inf and z-scores NaN.
+    _max_sigma = getattr(args, "yj_post_clip_sigma", 10.0)
+    if _max_sigma is not None and _max_sigma > 0:
+        X_res = np.asarray(result.X, dtype=np.float32)
+        # Robust scale: use IQR/1.35 ≈ std for Gaussian (ignores extreme outliers)
+        q25 = np.nanpercentile(X_res, 25, axis=0)
+        q75 = np.nanpercentile(X_res, 75, axis=0)
+        robust_std = (q75 - q25) / 1.35
+        robust_std = np.where(robust_std > 0, robust_std, 1.0)
+        med = np.nanmedian(X_res, axis=0)
+        lo_post = med - _max_sigma * robust_std
+        hi_post = med + _max_sigma * robust_std
+        n_post = int(((X_res < lo_post) | (X_res > hi_post) | ~np.isfinite(X_res)).sum())
+        if n_post:
+            X_res = np.clip(X_res, lo_post, hi_post)
+            np.nan_to_num(X_res, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
+            logger.info(
+                "map run [transform-yj]: post-YJ safety clip clamped %s values "
+                "to ±%.0f robust σ (prevents float32 overflow in downstream z-score)",
+                f"{n_post:,}", _max_sigma,
+            )
+            result = anndata.AnnData(
+                X=X_res, obs=result.obs.copy(),
+                var=result.var.copy(), uns=result.uns.copy(),
+            )
+
     _merge_uns(data, result)
     return result
 
