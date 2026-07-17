@@ -37,32 +37,34 @@ this is critical for understanding the memory cost of each step (see
     Input (AnnData Zarr / Parquet from pooled-sbs merge)
       │                   shape: N × p_raw   (e.g. 10M × 10 000)
       ▼
-    map filter          ← remove low-variance, sparse, categorical, and batch-
-      │                   correlated features; filter high-nan cells
-      │                   shape: N × p       (e.g. 10M × 5 000)
+    map filter          ← 3-step NaN filter + variance filter
+      │                   step 1: drop features with > --max-feature-nan-fraction NaN (default 50%)
+      │                   step 2: drop cells with > --max-fraction-not-finite NaN (default 25%)
+      │                   step 3: drop features with any remaining NaN in kept cells
+      │                   → writes feature_report.parquet alongside cells.zarr
+      │                   shape: N × p       (e.g. 10M × 270–1 200)
       ▼
-    map transform-yj    ← Yeo-Johnson power transform (optional)
+    map transform-yj    ← Yeo-Johnson power transform per plate × well
+      │                   fits on non-NaN cells per feature; NaN propagated (no imputation)
+      │                   parallel via Dask threads (n_jobs=-1)
       │                   shape: N × p       (unchanged)
       ▼
-    norm-features       ← well-level z-score  (--by plate well)
+    map scale           ← well-level z-score (global) or spatial k-NN z-score (local)
+      │                   --scale-method local  uses centroid coordinates for kNN
+      │                   --scale-method global  is the classic plate × well z-score
       │                   shape: N × p       (unchanged)
       ▼
     map pca             ← *** DIMENSIONALITY REDUCTION ***
-      │                   fit on NTC subset, project ALL cells
+      │                   fit on NTC subset (--reference-query), project ALL cells
+      │                   stores PCs in uns["map_pca"] for downstream backprojection
       │                   shape: N × K       (e.g. 10M × 128 PCs)
       │
-      ├─ map pca-select ← retain statistically significant PCs
-      │                   shape: N × K'      (K' ≤ K)
-      │
-      └─ map sphere     ← ZCA whitening (optional, between PCA and TVN)
-                          shape: N × K'      (unchanged)
+      └─ map pca-select ← retain statistically significant PCs (variance, permutation,
+                          or Tracy-Widom); shape: N × K'  (K' ≤ K)
       ▼
     map tvn             ← Typical Variation Normalization
       │                   input is already N × K', NOT N × p  ← this is why TVN is cheap
       │                   stores PCA + covariance-alignment parameters for backprojection
-      │                   shape: N × K'      (unchanged)
-      ▼
-    norm-features       ← normalize to NTC reference (optional)
       │                   shape: N × K'      (unchanged)
       ▼
     map agg             ← aggregate cells → perturbation profiles
@@ -71,13 +73,45 @@ this is critical for understanding the memory cost of each step (see
     map center          ← subtract NTC mean (optional, before similarity)
       │                   shape: n_pert × K'
       ▼
-    map similarity      ← pairwise cosine / Pearson similarity
+    map similarity      ← pairwise cosine / Pearson similarity + optional clustering
       │                   shape: n_pert × n_pert  (e.g. 5 000 × 5 000)  ← tiny!
       ▼
-    map cluster         ← cluster perturbations, reorder similarity matrix
+    map cluster         ← cluster perturbations, reorder similarity matrix (standalone)
       │                   shape: n_pert × n_pert  (reordered)
       ▼
     map recall          ← Parquet recall metrics + optional AnnData injection
+      ▼
+    map backproject     ← rank original features per cluster or gene query
+                          score[f] = Δ_centroid_PCA @ PCs_tvn @ PCs_map[f]
+                          writes Parquet with feature / score / pvalue columns
+
+.. note::
+
+   **map sphere is optional, not in the default** ``--steps all`` **run.**
+   ZCA whitening (``map sphere``) decorrelates PCA components so that each PC
+   has unit variance before TVN.  This can improve clustering when the top PCs
+   dominate the cosine similarity and you want a more isotropic embedding.
+   However, it equalises PC variances, which diffuses per-feature signals and
+   can make backprojection less interpretable.
+
+   **When to include sphere:** use it when downstream clustering is the primary
+   goal and interpretability of individual features is secondary.
+
+   **When to skip sphere** (default): when you will run ``map backproject`` to
+   identify the original features driving each cluster — unwhitened PCs preserve
+   the feature loadings needed for the inverse projection.
+
+   To enable sphere in ``map run``, list it explicitly::
+
+       scallops map run --steps filter,transform-yj,scale,pca,pca-select,sphere,tvn,...
+
+   Or use the standalone command between ``map pca-select`` and ``map tvn``::
+
+       scallops map sphere --input cells_pca_sel.zarr --output cells_sphere.zarr
+
+   **map scale replaces norm-features for the z-score step.**  ``scallops norm-features``
+   is a general-purpose normalisation command; ``map scale`` is the pipeline-integrated
+   equivalent that participates in provenance tracking and the ``map run`` resume logic.
 
 
 .. _memory-requirements:
@@ -94,8 +128,9 @@ The key insight
 **TVN operates on PCA-reduced data, not on raw features.**
 
 ``map pca`` reduces N × p (e.g. 10M × 5 000) to N × K PCs (e.g. 10M × 128).
-Everything from ``map sphere`` onward — including ``map tvn`` — sees the smaller
-N × K representation.  This makes TVN much cheaper than it looks.
+Everything from ``map pca-select`` onward — including ``map tvn`` — sees the smaller
+N × K representation.  This makes TVN much cheaper than it looks.  If ``map sphere``
+is included it also operates on N × K (never on the original p features).
 
 .. list-table:: Analytical RAM estimates at production scale (10M cells)
    :header-rows: 1
@@ -113,10 +148,11 @@ N × K representation.  This makes TVN much cheaper than it looks.
      - N × p
      - **8 GB** / worker
      - Dask chunk-bounded.  ``chunk × p × 8 B`` (float64 PowerTransformer)
-   * - **norm-features** (scale)
+   * - **map scale** (z-score)
      - N × p
-     - **4 GB** / worker
-     - Dask chunk-bounded.  ``chunk × p × 4 B``
+     - **4 GB** / worker (global) · **8–36 GB** / group (local k-NN, batch-bounded)
+     - Global: Dask chunk-bounded. ``chunk × p × 4 B``.
+       Local: kNN lookup ``batch × k × p × 4 B`` = ``100K × 75 × p × 4``
    * - **map pca** (fit, incremental)
      - NTC × p
      - **8 GB**
@@ -126,10 +162,11 @@ N × K representation.  This makes TVN much cheaper than it looks.
      - **9–10 GB**
      - Chunk input + full output.  ``(batch × p × 4) + (N × K × 4)``
        = ``(200K × 5K × 4) + (10M × 128 × 4)`` = 4 + 5.1 GB
-   * - **map sphere**
+   * - **map sphere** *(optional)*
      - N × K
      - **10 GB**
-     - Materialises all cells for SVD.  ``N × K × 8 B`` (float64)
+     - Materialises all cells for SVD.  ``N × K × 8 B`` (float64).
+       Not in default ``--steps all``; see note above.
    * - **map tvn** ← surprisingly cheap!
      - N × K
      - **5.6 GB**

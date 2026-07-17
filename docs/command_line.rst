@@ -282,8 +282,25 @@ size.
 scallops map filter
 -------------------
 
-Filter cells with too many non-finite values and features with variance outside
-the requested bounds.
+Three-step NaN-aware filter:
+
+1. **Feature NaN filter** (``--max-feature-nan-fraction``, default 50%):
+   drop features where more than this fraction of cells have NaN/Inf.
+   Applied *before* the variance filter so variance is only computed on
+   reliable, non-sparse features.
+2. **Cell NaN filter** (``--max-fraction-not-finite``, default 25%):
+   drop cells with too many NaN values across the remaining features.
+3. **Residual feature cleanup**: after removing bad cells, any feature that
+   still contains NaN in the surviving cells is automatically dropped,
+   producing a NaN-free output matrix with no imputation.
+
+The step also writes a ``{output}_feature_report.parquet`` file recording
+for every feature: which step dropped it, NaN fraction in all cells and in
+dropped cells (to identify which features drove cell attrition), and median
+variance. Use this for biological QC of the feature set.
+
+``--condition-map`` is also available on this step (same as ``map run``) so
+that a condition label can be added to ``obs`` at filter time.
 
 .. argparse::
    :module: scallops.__main__
@@ -301,6 +318,25 @@ Apply a Yeo-Johnson power transform to normalise feature distributions.
    :func: create_parsers
    :prog: scallops
    :path: map transform-yj
+
+scallops map scale
+------------------
+
+Well-level z-score or spatial k-NN z-score normalisation.
+
+* **global** (``--scale-method global``): subtract the well mean and divide by
+  the well std, stratified by ``--plate-column`` × ``--well-column``.
+* **local** (``--scale-method local``): each cell is normalised relative to its
+  *k* nearest spatial neighbours (``--localz-neighbors``, default 75) within the
+  same plate × well.  Removes both global well bias and local spatial gradients
+  (e.g. edge effects).  Requires centroid columns in ``obs``, which ``map filter``
+  preserves automatically from the input parquet when ``--scale-method local`` is set.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map scale
 
 scallops map pca
 ----------------
@@ -377,13 +413,49 @@ Recommended method for morphological profiling data: ``--method variance``
 scallops map sphere
 -------------------
 
-Apply ZCA sphering (whitening) between ``map pca`` and ``map tvn``.
+Apply ZCA sphering (whitening) to decorrelate PCA components before TVN.
+Each PC is rescaled to unit variance so that no single dimension dominates
+cosine similarity.
+
+**When to use:** when clustering quality is the primary goal and you want a
+more isotropic embedding.  Not in ``--steps all`` by default because it
+equalises PC variances, which can diffuse per-feature signals and reduce
+backprojection interpretability.  Enable explicitly with
+``--steps ...,sphere,tvn,...``.
 
 .. argparse::
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
    :path: map sphere
+
+scallops map backproject
+------------------------
+
+Rank original morphological features by their contribution to the centroid
+difference between a query group and a reference, backprojected through the
+inverse TVN → PCA chain.
+
+The score for feature *f* is:
+
+.. code-block:: text
+
+    score[f] = (mean(query_PCA) − mean(ref_PCA)) @ PCs_tvn @ PCs_map[f]
+
+where ``PCs_tvn`` is the TVN-internal PCA and ``PCs_map`` are the original
+map-pca loadings stored in ``uns["map_pca"]``.  An optional PC-level
+statistical filter (``--pc-stat-filter ttest`` or ``mannwhitney``) zeros
+non-significant PC dimensions before backprojection, exploiting the
+orthogonality of the PC basis to avoid correlated-feature multiple-testing.
+
+Output is a Parquet file with columns ``feature``, ``score``, ``pvalue``,
+sorted by ``|score|`` descending.
+
+.. argparse::
+   :module: scallops.__main__
+   :func: create_parsers
+   :prog: scallops
+   :path: map backproject
 
 scallops map recall
 -------------------

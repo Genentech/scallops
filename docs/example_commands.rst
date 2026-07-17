@@ -526,38 +526,46 @@ Global transform::
         --output yj.zarr
 
 
-Step 3 – Well-level z-score
-----------------------------
+Step 3 – Well-level z-score or spatial local z-score
+------------------------------------------------------
 
-Normalise each feature to zero mean and unit variance within each well/plate
-using the existing ``norm-features`` command.
+Use ``map scale`` (the pipeline-integrated replacement for the older
+``norm-features`` command) to normalise each feature within each plate × well.
+``map scale`` participates in provenance tracking and the ``map run`` resume
+logic; its output can be used directly by ``map pca``.
 
-All cells as reference (standard z-score)::
+Global z-score (subtract well mean, divide by well std)::
 
-    scallops norm-features \
+    scallops map scale \
         --input yj.zarr \
         --output scaled.zarr \
-        --by plate well \
-        --method zscore
+        --scale-method global \
+        --plate-column plate \
+        --well-column well
 
-NTC controls as reference (recommended)::
+Local z-score — spatial k-NN (recommended for high-density OPS experiments)::
 
-    scallops norm-features \
+    scallops map scale \
         --input yj.zarr \
         --output scaled.zarr \
-        --by plate well \
-        --reference "gene_symbol=='NTC'" \
-        --method zscore \
-        --no-scaling
+        --scale-method local \
+        --plate-column plate \
+        --well-column well \
+        --localz-neighbors 75 \
+        --localz-centroid-y Nuclei_AreaShape_Center_Y \
+        --localz-centroid-x Nuclei_AreaShape_Center_X \
+        --localz-max-value 5.0
 
-Robust statistics (median / MAD instead of mean / std)::
+Each cell is normalised relative to its 75 nearest spatial neighbours within
+the same plate × well, removing both global well bias and local spatial
+gradients (plate edge effects, staining gradients).  The centroid columns are
+preserved automatically by ``map filter`` when ``--scale-method local`` is set.
 
-    scallops norm-features \
-        --input yj.zarr \
-        --output scaled.zarr \
-        --by plate well \
-        --reference "gene_symbol=='NTC'" \
-        --robust
+.. note::
+
+   The older ``scallops norm-features --method zscore`` command still works but
+   does not integrate with the ``map run`` provenance chain.  Use ``map scale``
+   for new pipelines.
 
 
 Step 4a – PCA embedding (runs BEFORE TVN — critical for memory)

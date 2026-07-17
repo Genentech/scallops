@@ -584,8 +584,11 @@ def _col_batch_filter_parquet(
     :param max_variance: Maximum variance threshold (None = disabled).
     :param feat_cols: Authoritative feature column list (intersection across all
         files after ``anndata.concat``). Defaults to ``sources[0]['feat_cols']``.
-    :return: ``(X_filtered, cell_keep, feat_keep)`` — float32 array and two bool
-        masks.
+    :return: ``(X_filtered, cell_keep, feat_keep, report_df)`` — float32 array,
+        two bool masks, and a :class:`pandas.DataFrame` with one row per input
+        feature recording ``feature``, ``compartment``, ``measurement_type``,
+        ``kept``, ``drop_step``, ``nan_frac_all_cells``, ``nan_frac_bad_cells``,
+        and ``median_variance``.
     """
     import time
     import pyarrow.dataset as _ds
