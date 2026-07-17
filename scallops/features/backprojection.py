@@ -96,7 +96,7 @@ def _resolve_cov_alignment(
     if group is not None:
         key = str(group)
         if key not in cov_alignment_inv:
-            raise KeyError(
+            raise ValueError(
                 f"Group {group!r} not found in uns['covariance_alignment_inv']. "
                 f"Available: {list(cov_alignment_inv)}"
             )
@@ -234,6 +234,13 @@ def _build_obs_mask(
             )
         if not isinstance(cluster_values, (list, tuple, np.ndarray)):
             cluster_values = [cluster_values]
+        # Coerce query values to match label dtype to avoid silent int/str mismatches
+        # (e.g. np.isin(["0","1"], [0]) returns all-False without warning).
+        label_dtype = cluster_arr.dtype
+        try:
+            cluster_values = [label_dtype.type(v) for v in cluster_values]
+        except (ValueError, TypeError):
+            pass  # leave as-is if coercion fails
         return np.isin(cluster_arr, cluster_values)
     return None
 
@@ -261,16 +268,14 @@ def _pc_mannwhitney(
 ) -> np.ndarray:
     """Mann-Whitney U test on each PC dimension (query vs. reference).
 
+    Uses the vectorised ``axis=`` API (scipy ≥ 1.8) to avoid a Python loop
+    over PC dimensions, matching the structure of :func:`_pc_ttest`.
+
     :param query: PC scores for the query set, shape ``(n_query, n_pcs)``.
     :param ref: PC scores for the reference set, shape ``(n_ref, n_pcs)``.
     :return: p-value array of length ``n_pcs``.
     """
-    n_pcs = query.shape[1]
-    pvalues = np.zeros(n_pcs)
-    for i in range(n_pcs):
-        res = stats.mannwhitneyu(query[:, i], ref[:, i], alternative="two-sided")
-        pvalues[i] = res.pvalue
-    return pvalues
+    return stats.mannwhitneyu(query, ref, axis=0, alternative="two-sided").pvalue
 
 
 # ---------------------------------------------------------------------------
@@ -368,14 +373,20 @@ def top_features_from_backprojection(
     _validate_tvn_uns(data)
 
     # --- Build query mask ---
-    if genes is not None and cluster_query is not None and cluster_labels is None:
+    if genes is not None and cluster_query is not None:
         raise ValueError(
-            "Provide `cluster_labels` when using `cluster_query`."
+            "`genes` and `cluster_query` are mutually exclusive — use one or the other."
         )
-    if genes is not None and cluster_labels is not None and cluster_query is not None:
+    if genes is not None and cluster_labels is not None and cluster_query is None:
+        warnings.warn(
+            "`cluster_labels` was provided with `genes` but no `cluster_query`. "
+            "`cluster_labels` will be ignored; the query is built from `genes` only.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if cluster_query is not None and cluster_labels is None:
         raise ValueError(
-            "Specify the query using either `genes` or "
-            "`cluster_labels` + `cluster_query`, not both."
+            "`cluster_labels` must be provided when `cluster_query` is given."
         )
     query_mask = _build_obs_mask(
         data, genes, perturbation_column, cluster_labels, cluster_query
@@ -425,7 +436,17 @@ def top_features_from_backprojection(
     # --- Centroid difference in PCA space ---
     X_query = X_pca[query_mask]   # (n_query, n_pcs)
     X_ref = X_pca[ref_mask]       # (n_ref, n_pcs)
-    diff_pca = X_query.mean(0) - X_ref.mean(0)  # (n_pcs,)
+    # Use nanmean so that residual NaN cells (e.g. from an upstream pipeline that
+    # did not fully clean the data) do not propagate silently into all-NaN scores.
+    n_nan = int(np.isnan(X_query).sum() + np.isnan(X_ref).sum())
+    if n_nan:
+        warnings.warn(
+            f"top_features_from_backprojection: {n_nan} NaN values in X "
+            "for query/ref cells — using nanmean; check upstream cleaning.",
+            UserWarning,
+            stacklevel=2,
+        )
+    diff_pca = np.nanmean(X_query, axis=0) - np.nanmean(X_ref, axis=0)  # (n_pcs,)
 
     # --- Optional PC-level statistical filter ---
     pc_pvalues: np.ndarray | None = None
@@ -486,7 +507,16 @@ def top_features_from_backprojection(
         # un-z-score using the per-feature scale stored by TVN
         pre_std = np.asarray(data.uns["tvn_pre_scale_std"], dtype=np.float64)
         pre_std = np.where(pre_std == 0.0, 1.0, pre_std)
-        if len(pre_std) == len(feature_scores):
+        if len(pre_std) != len(feature_scores):
+            warnings.warn(
+                f"to_original_scale=True: tvn_pre_scale_std has {len(pre_std)} entries "
+                f"but feature_scores has {len(feature_scores)}.  This happens when "
+                "uns['map_pca'] is present (TVN ran on K PCs, not on p features).  "
+                "The original-scale rescaling is skipped — scores remain in z-score space.",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
             feature_scores = feature_scores * pre_std
 
     # --- Per-feature p-value (contribution-weighted average of PC p-values) ---
@@ -507,7 +537,9 @@ def top_features_from_backprojection(
         total = contrib.sum(axis=0)
         with np.errstate(invalid="ignore", divide="ignore"):
             weighted_sum = (contrib * pc_pvalues[:, np.newaxis]).sum(axis=0)
-            feature_pvalues = np.where(total > 0, weighted_sum / total, np.nan)
+            # Use 1.0 (not NaN) for features with zero contribution — those features
+            # are genuinely non-discriminating, not missing data.
+            feature_pvalues = np.where(total > 0, weighted_sum / total, 1.0)
     else:
         feature_pvalues = np.full(n_features, np.nan)
 

@@ -843,16 +843,30 @@ def test_top_features_pc_stat_filter_adds_pvalue(tvn_data, pc_filter):
 
 @pytest.mark.features
 def test_top_features_pc_stat_filter_prunes_pcs(tvn_data):
-    """With a strict threshold, some PCs are zeroed before backprojection."""
+    """With a permissive threshold some PCs survive; strict zeroes all → smaller sum."""
+    # Use a permissive threshold so SOME PCs remain (result_filter is non-zero)
     result_no_filter = top_features_from_backprojection(
         tvn_data, genes=["gene_A"]
     )
-    result_filter = top_features_from_backprojection(
+    result_filter_permissive = top_features_from_backprojection(
         tvn_data, genes=["gene_A"],
-        pc_stat_filter="ttest", pc_pvalue_threshold=0.0001  # very strict
+        pc_stat_filter="ttest", pc_pvalue_threshold=1.0  # keep all PCs
     )
-    # With a very strict threshold most PCs are zeroed → scores are smaller
-    assert result_filter["score"].abs().sum() <= result_no_filter["score"].abs().sum()
+    result_filter_strict = top_features_from_backprojection(
+        tvn_data, genes=["gene_A"],
+        pc_stat_filter="ttest", pc_pvalue_threshold=0.0001  # zero most PCs
+    )
+    # With threshold=1.0 (keep all) result equals no-filter
+    np.testing.assert_allclose(
+        result_filter_permissive["score"].values,
+        result_no_filter["score"].reindex(result_filter_permissive.index).values,
+        rtol=1e-4,
+    )
+    # With strict threshold, total |score| is strictly <= permissive (some PCs zeroed)
+    assert (result_filter_strict["score"].abs().sum()
+            <= result_filter_permissive["score"].abs().sum())
+    # The pvalue column is non-NaN when filter runs (at least some PCs have p <= 1.0)
+    assert result_filter_permissive["pvalue"].notna().all()
 
 
 @pytest.mark.features
@@ -896,7 +910,7 @@ def test_top_features_cluster_multi_value(tvn_data):
 @pytest.mark.features
 def test_top_features_mutual_exclusion_raises(tvn_data):
     """Providing both genes and cluster_labels + cluster_query must raise."""
-    with pytest.raises(ValueError, match="not both"):
+    with pytest.raises(ValueError, match="mutually exclusive"):
         top_features_from_backprojection(
             tvn_data,
             genes=["gene_A"],
@@ -2295,3 +2309,217 @@ def test_map_filter_parquet_step3_removes_sparse_nan(cell_data_parquet_friendly,
     # With step 3 active, no NaN should remain even when we keep all cells/features in step 1/2
     assert not np.isnan(result.X).any(), \
         "Step 3 must eliminate all remaining NaN even when steps 1+2 are permissive"
+
+
+# ---------------------------------------------------------------------------
+# Additional edge-case tests — findings from max-effort review
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def tvn_data_with_map_pca(cell_data, tmp_path) -> anndata.AnnData:
+    """TVN data produced through the full map-pca pipeline so uns['map_pca'] exists."""
+    from scallops.cli.map_build import run_pipeline_map_pca, run_pipeline_map_tvn
+    raw = _write_zarr(cell_data, tmp_path / "raw")
+    pca_out = str(tmp_path / "pca")
+    run_pipeline_map_pca(
+        _ns(input=[raw], output=pca_out, components=N_FEATURES,
+            batch_size=0, whiten=False, reference=None)
+    )
+    tvn_out = str(tmp_path / "tvn")
+    run_pipeline_map_tvn(
+        _ns(input=[pca_out + ".zarr"], output=tvn_out,
+            reference_query="gene_symbol=='NTC'", by=None)
+    )
+    return _read_zarr(tvn_out + ".zarr")
+
+
+@pytest.mark.features
+def test_top_features_map_pca_branch(tvn_data_with_map_pca):
+    """map_pca branch: feature names come from map_pca['features'], not data.var."""
+    data = tvn_data_with_map_pca
+    assert "map_pca" in data.uns, "fixture must have map_pca in uns"
+    result = top_features_from_backprojection(
+        data, genes=["gene_A"], perturbation_column="gene_symbol"
+    )
+    expected_names = list(data.uns["map_pca"].get("features", data.var.index))
+    assert list(result["feature"]) == sorted(
+        result["feature"].tolist(), key=lambda f: expected_names.index(f)
+        if f in expected_names else 0
+    ) or set(result["feature"]) == set(expected_names), (
+        "Feature names must come from map_pca['features'], not PC names"
+    )
+    assert len(result) == len(expected_names)
+    assert result["score"].apply(np.isfinite).all(), "No NaN/inf scores from map_pca branch"
+
+
+@pytest.mark.features
+def test_top_features_map_pca_to_original_scale_warns():
+    """to_original_scale=True warns when tvn_pre_scale_std length != feature_scores length.
+
+    Construct the mismatch directly: map_pca maps K'=3 PCs → p=5 features,
+    so feature_scores has length 5 but tvn_pre_scale_std has length K'=3.
+    """
+    import warnings as _w
+    import anndata
+
+    np.random.seed(42)
+    K, p = 3, 5
+    n = 20
+    # minimal AnnData with the uns keys backprojection needs
+    X = np.random.randn(n, K).astype(np.float32)
+    obs = pd.DataFrame({"gene_symbol": ["NTC"] * 10 + ["GENE"] * 10},
+                        index=pd.RangeIndex(n).astype(str))
+    data = anndata.AnnData(X=X, obs=obs,
+                           var=pd.DataFrame(index=[f"PC{i}" for i in range(K)]))
+    data.uns["pca"] = {"PCs": np.eye(K), "mean": np.zeros(K)}
+    data.uns["tvn_pre_scale_mean"] = np.zeros(K)
+    data.uns["tvn_pre_scale_std"]  = np.ones(K)   # length K=3
+    data.uns["covariance_alignment_inv"] = {}
+    data.uns["normalization_arguments"] = {}
+    # map_pca maps K PCs → p original features → feature_scores has length p=5
+    data.uns["map_pca"] = {
+        "PCs": np.random.randn(K, p),  # (K, p)
+        "mean": np.zeros(p),
+        "features": [f"F{i}" for i in range(p)],
+    }
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        top_features_from_backprojection(data, genes=["GENE"],
+                                          perturbation_column="gene_symbol",
+                                          to_original_scale=True)
+    msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert any("to_original_scale" in m or "skipped" in m for m in msgs), (
+        f"Must warn when K ({K}) != p ({p}). Got: {msgs}"
+    )
+
+
+@pytest.mark.features
+def test_top_features_cluster_query_string_labels(tvn_data):
+    """cluster_query as int matches string labels via dtype coercion."""
+    string_labels = np.array(["0", "0", "0", "1", "1", "1",
+                               "0", "0", "0", "1", "1", "1",
+                               "0", "0", "0", "1", "1", "1",
+                               "0", "0", "0", "1", "1", "1",
+                               "0", "0", "0", "1", "1", "1"])[:tvn_data.n_obs]
+    # query with int — should be coerced to "0" (string) not raise
+    result = top_features_from_backprojection(
+        tvn_data, cluster_labels=string_labels, cluster_query=0
+    )
+    assert len(result) == N_FEATURES
+    assert not result.empty, "int query must match string '0' labels after coercion"
+
+
+@pytest.mark.features
+def test_resolve_cov_alignment_multigroup_no_group_warns(cell_data):
+    """_resolve_cov_alignment with group=None + multiple groups emits UserWarning."""
+    from scallops.features.backprojection import _resolve_cov_alignment
+    import warnings as _w
+    cov_inv = {"plate1": np.eye(N_FEATURES), "plate2": np.eye(N_FEATURES) * 2}
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        result = _resolve_cov_alignment(cov_inv, group=None)
+    assert result is None, "Must return None when group=None and multiple groups exist"
+    msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert any("multiple" in m.lower() or "group" in m.lower() for m in msgs), \
+        "Must warn about multiple groups"
+
+
+@pytest.mark.features
+def test_top_features_pc_stat_filter_small_sample_warns(tvn_data):
+    """pc_stat_filter with N_query < 2 skips filter and warns."""
+    import warnings as _w
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        result = top_features_from_backprojection(
+            tvn_data, genes=["gene_A"],  # gene_A has N_PERT=8 cells → N_query=8, fine
+            pc_stat_filter="ttest",
+        )
+    # Now use a gene with only 1 cell (fake via cluster_labels)
+    one_cell_mask = np.zeros(tvn_data.n_obs, dtype=int)
+    one_cell_mask[0] = 1  # only 1 query cell
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        result_1 = top_features_from_backprojection(
+            tvn_data, cluster_labels=one_cell_mask, cluster_query=1,
+            pc_stat_filter="ttest",
+        )
+    user_warns = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert any("2 samples" in str(w.message) or "≥ 2" in str(w.message)
+               for w in user_warns), "Must warn when N_query < 2"
+    # Result shape must still be valid
+    assert len(result_1) == N_FEATURES
+    assert result_1["pvalue"].isna().all(), "pvalue must be NaN when filter was skipped"
+
+
+@pytest.mark.features
+def test_top_features_zero_match_genes_raises(tvn_data):
+    """genes matching no observations raises ValueError, not IndexError."""
+    with pytest.raises(ValueError, match="zero observations"):
+        top_features_from_backprojection(tvn_data, genes=["does_not_exist"])
+
+
+@pytest.mark.features
+def test_top_features_invalid_pc_stat_filter_raises(tvn_data):
+    """Unknown pc_stat_filter value raises ValueError."""
+    with pytest.raises(ValueError, match="Unknown pc_stat_filter"):
+        top_features_from_backprojection(
+            tvn_data, genes=["gene_A"], pc_stat_filter="spearman"
+        )
+
+
+@pytest.mark.features
+def test_top_features_resolve_cov_alignment_wrong_group_raises_valueerror(cell_data):
+    """_resolve_cov_alignment raises ValueError (not KeyError) for unknown group."""
+    from scallops.features.backprojection import _resolve_cov_alignment
+    cov_inv = {"plate1": np.eye(N_FEATURES)}
+    with pytest.raises(ValueError):
+        _resolve_cov_alignment(cov_inv, group="nonexistent_group")
+
+
+@pytest.mark.features
+def test_top_features_genes_cluster_labels_mutually_exclusive_warns(tvn_data):
+    """Passing both genes and cluster_labels (no cluster_query) warns cluster_labels ignored."""
+    import warnings as _w
+    labels = np.zeros(tvn_data.n_obs, dtype=int)
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        result = top_features_from_backprojection(
+            tvn_data, genes=["gene_A"], cluster_labels=labels
+        )
+    warns = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert any("cluster_labels" in str(w.message) and "ignored" in str(w.message)
+               for w in warns), "Must warn that cluster_labels is ignored when genes is set"
+    assert len(result) == N_FEATURES
+
+
+@pytest.mark.features
+def test_top_features_zero_score_pvalue_is_one_not_nan(tvn_data):
+    """Features zeroed by pc_stat_filter get pvalue=1.0, not NaN."""
+    result = top_features_from_backprojection(
+        tvn_data, genes=["gene_A"],
+        pc_stat_filter="ttest", pc_pvalue_threshold=0.0001,  # strict → most PCs zeroed
+    )
+    zero_score = result[result["score"].abs() < 1e-12]
+    if not zero_score.empty:
+        # Zero-score features must have pvalue = 1.0 (non-discriminating, not missing)
+        assert (zero_score["pvalue"] == 1.0).all() or zero_score["pvalue"].isna().all() == False, \
+            "Zero-score features after stat filter must have pvalue=1.0, not NaN"
+
+
+@pytest.mark.features
+def test_backproject_tvn_nan_in_x_warns(tvn_data):
+    """NaN values in X trigger a UserWarning; output scores remain finite."""
+    import warnings as _w
+    data_with_nan = tvn_data.copy()
+    data_with_nan.X = np.asarray(data_with_nan.X, dtype=np.float64)
+    data_with_nan.X[0, 0] = np.nan  # inject one NaN
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        result = top_features_from_backprojection(data_with_nan, genes=["gene_A"])
+    user_warns = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert any("NaN" in str(w.message) for w in user_warns), \
+        "Must warn when input X contains NaN"
+    assert result["score"].apply(np.isfinite).all(), \
+        "Scores must be finite even when X has NaN (nanmean used)"

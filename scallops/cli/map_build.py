@@ -500,7 +500,7 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
     # Expand glob patterns (e.g. s3://bucket/dir/*.parquet) before reading.
     arguments = argparse.Namespace(**{**vars(arguments),
                                       "input": _expand_inputs(list(arguments.input))})
-    paths = _expand_inputs(list(arguments.input))
+    paths = arguments.input  # already expanded above; don't re-expand
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
