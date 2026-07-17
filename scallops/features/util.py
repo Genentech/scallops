@@ -103,23 +103,25 @@ def _slice_anndata(
     layers = dict()
     obsm = dict()
     varm = dict()
+    for key in data.layers.keys():
+        if key is not None:
+            layers[key] = data.layers[key]
     if obs_indices is not None:
         X = X[obs_indices]
-        for key in data.layers.keys():
+        for key in layers.keys():
             if key is not None:
-                layers[key] = data.layers[key][obs_indices]
+                layers[key] = layers[key][obs_indices]
         for key in data.obsm.keys():
             obsm[key] = data.obsm[key][obs_indices]
     if var_indices is not None:
         X = X[:, var_indices]
         for key in data.layers.keys():
             if key is not None:
-                layers[key] = data.layers[key][:, var_indices]
+                layers[key] = layers[key][:, var_indices]
         for key in data.varm.keys():
             varm[key] = data.varm[key][var_indices]
     obs = data.obs.iloc[obs_indices] if obs_indices is not None else data.obs
     var = data.var.iloc[var_indices] if var_indices is not None else data.var
-
     return anndata.AnnData(X=X, obs=obs, var=var, layers=layers, obsm=obsm, varm=varm)
 
 
