@@ -647,14 +647,17 @@ def _col_batch_filter_parquet(
     #
     # float64 parquet → worst-case 8 bytes/element per batch.
     _batch_gb = batch_size * n_feat * 8 / 1e9
+    # _avail_gb is always computed so it can be logged regardless of whether
+    # max_memory_gb was supplied explicitly.
+    try:
+        import psutil as _psutil
+        _avail_gb = _psutil.virtual_memory().available / 1e9
+    except Exception:
+        _avail_gb = 64.0   # conservative fallback
+
     if max_memory_gb is not None:
         _budget_gb = float(max_memory_gb)
     else:
-        try:
-            import psutil as _psutil
-            _avail_gb = _psutil.virtual_memory().available / 1e9
-        except Exception:
-            _avail_gb = 64.0   # conservative fallback
         # 40% keeps the pre-fetch buffer small enough that PyArrow yields the
         # first batch quickly. Larger fractions stall the scan waiting to fill
         # hundreds of GB before the first batch is delivered to Python.
@@ -723,10 +726,17 @@ def _col_batch_filter_parquet(
                 max_feature_nan_fraction * 100, n_s1_drop, n_feat,
             )
 
-    # Step 2 — drop cells with >max_fraction_not_finite NaN across all features.
-    #   bad_counts was accumulated over all n_feat features; max_bad uses n_feat as
-    #   denominator so the threshold is consistent with the accumulator.
-    cell_keep = label_mask & (bad_counts <= max_bad)
+    # Step 2 — drop cells with >max_fraction_not_finite NaN across step-1-surviving
+    #   features.  bad_counts was accumulated over all n_feat features in pass 1,
+    #   so we recompute max_bad using the step-1 survivor count as the denominator.
+    #   This ensures a cell with NaN only in step-1-dropped features is not
+    #   incorrectly discarded (its bad_counts includes NaN in features that are gone).
+    n_feat_step1 = int(feat_pass1.sum())
+    max_bad_step2 = (
+        int(n_feat_step1 * max_fraction_not_finite)
+        if max_fraction_not_finite is not None else n_feat_step1
+    )
+    cell_keep = label_mask & (bad_counts <= max_bad_step2)
 
     # Steps 3 and 4 run on the materialised clean matrix — see post-pass-2 section.
     feat_keep = feat_pass1   # pass 2 materialises step-1-surviving features
@@ -802,7 +812,7 @@ def _col_batch_filter_parquet(
     feat_var = np.zeros(result.shape[1], dtype=np.float64)
     if result.shape[0] > 1:
         if by:
-            obs_kept = obs_all.iloc[cell_keep].copy()
+            obs_kept = obs_df.iloc[cell_keep].copy()
             obs_kept = obs_kept.reset_index(drop=True)
             group_vars = []
             for _, grp_idx in obs_kept.groupby(by, observed=True).groups.items():
@@ -845,6 +855,19 @@ def _col_batch_filter_parquet(
     feat_nan_frac_all = nan_per_feat / max(n_cells, 1)
     feat_nan_frac_bad = nan_per_feat_bad / max(int((~cell_keep).sum()), 1)
 
+    # feat_var is indexed by step-3 survivors (before step-4 variance filter),
+    # NOT by step-4 survivors.  Build a mapping from original feature index to
+    # the correct feat_var position before the report loop to avoid the
+    # off-by-one that would occur when using feat_keep[:i+1].sum()-1 after
+    # step-4 has further narrowed feat_keep.
+    _step3_survivors = np.where(feat_pass1)[0]   # indices after steps 1 only
+    # feat_var has len == result_after_step3.shape[1] == len(_step3_survivors),
+    # so we map original-feature-index → feat_var position.
+    _feat_var_by_orig: dict[int, float] = {}
+    if len(feat_var) == len(_step3_survivors):
+        for _pos, _orig_idx in enumerate(_step3_survivors):
+            _feat_var_by_orig[int(_orig_idx)] = float(feat_var[_pos])
+
     for i, name in enumerate(_feat_names):
         kept = bool(feat_keep[i])
         parsed = _parse_feature_name(name)
@@ -859,8 +882,8 @@ def _col_batch_filter_parquet(
         else:
             drop_step = "4_low_variance"
 
-        # feat_var only covers features that survived steps 1-3; index needs care
-        feat_var_i = float(feat_var[int(feat_keep[:i+1].sum()) - 1]) if feat_keep[i] else float(feat_nan_frac_all[i])
+        # Look up variance by original feature index (not by step-4 survivor count)
+        feat_var_i = _feat_var_by_orig.get(i, float("nan"))
 
         records.append({
             "feature":             name,

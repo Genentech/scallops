@@ -1113,7 +1113,7 @@ def test_map_run_label_filter_applied(cell_data, tmp_path):
         reference_query="gene_symbol=='NTC'",
         perturbation="gene_symbol", tvn_by=None,
         scale_method="global",
-        localz_neighbors=75, localz_max_value=5.0,
+        localz_neighbors=75, scale_max_value=5.0,
         localz_centroid_y="Nuclei_AreaShape_Center_Y",
         localz_centroid_x="Nuclei_AreaShape_Center_X",
         pca_components=N_FEATURES, pca_batch_size=10, pca_select_method="variance",
@@ -1157,7 +1157,7 @@ def test_map_run_condition_map_creates_column(cell_data, tmp_path):
         reference_query="gene_symbol=='NTC'",
         perturbation="gene_symbol", tvn_by=["cond"],
         scale_method="global",
-        localz_neighbors=75, localz_max_value=5.0,
+        localz_neighbors=75, scale_max_value=5.0,
         localz_centroid_y="Nuclei_AreaShape_Center_Y",
         localz_centroid_x="Nuclei_AreaShape_Center_X",
         pca_components=N_FEATURES, pca_batch_size=10, pca_select_method="variance",
@@ -1198,7 +1198,7 @@ def test_map_run_missing_condition_column_raises(cell_data, tmp_path):
         condition_source_column="well", condition_map=None,
         reference_query="gene_symbol=='NTC'", perturbation="gene_symbol",
         tvn_by=None, scale_method="global",
-        localz_neighbors=75, localz_max_value=5.0,
+        localz_neighbors=75, scale_max_value=5.0,
         localz_centroid_y="Nuclei_AreaShape_Center_Y",
         localz_centroid_x="Nuclei_AreaShape_Center_X",
         pca_components=N_FEATURES, pca_batch_size=10, pca_select_method="variance",
@@ -1707,7 +1707,7 @@ def test_map_scale_local_shape_unchanged(cell_data_with_centroids, tmp_path):
             localz_centroid_y="Nuclei_AreaShape_Center_Y",
             localz_centroid_x="Nuclei_AreaShape_Center_X",
             localz_neighbors=3, localz_batch_size=50,
-            localz_max_value=5.0)
+            scale_max_value=5.0)
     )
     result = _read_zarr(out + ".zarr")
     assert result.shape[1] == cell_data_with_centroids.shape[1]
@@ -1742,7 +1742,7 @@ def test_map_scale_local_drops_nan_centroid_cells(tmp_path):
             localz_centroid_y="Nuclei_AreaShape_Center_Y",
             localz_centroid_x="Nuclei_AreaShape_Center_X",
             localz_neighbors=3, localz_batch_size=50,
-            localz_max_value=5.0)
+            scale_max_value=5.0)
     )
     result = _read_zarr(out + ".zarr")
     assert result.shape[0] == n - 1  # NaN-centroid cell dropped
