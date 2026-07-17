@@ -119,11 +119,11 @@ def _create_map_filter_parser(
     )
     parser.add_argument(
         "--filter-batch-size",
-        help="Parquet streaming batch size (rows). 200 000 is the sweet spot on "
-             "high-RAM machines: maximises S3 concurrency while keeping numpy "
-             "per-batch overhead low. Increase to 500 000 on RAM-constrained nodes.",
+        help="Parquet streaming batch size (rows). 500 000 is the proven default "
+             "that keeps S3 fragment_readahead=3 (safe on all machines) while "
+             "keeping numpy per-batch overhead low.",
         type=int,
-        default=200_000,
+        default=500_000,
         dest="filter_batch_size",
     )
     parser.add_argument(

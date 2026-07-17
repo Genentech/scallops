@@ -1500,7 +1500,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 # Use data.var.index (intersection across all files after concat)
                 # not sources[0]["feat_cols"] (one file's features, may differ).
                 feat_cols=list(data.var.index),
-                batch_size=getattr(args, "filter_batch_size", 100_000),
+                batch_size=getattr(args, "filter_batch_size", 500_000),
                 max_memory_gb=getattr(args, "filter_max_memory_gb", None),
                 max_feature_nan_fraction=getattr(args, "max_feature_nan_fraction", None),
             )

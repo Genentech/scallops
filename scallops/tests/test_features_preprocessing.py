@@ -128,7 +128,13 @@ def test_transform_features_yj(by, use_dask):
     )
     df_test = df_test.sort_values(["pert", "well"]).reset_index(drop=True)
     df = df.sort_values(["pert", "well"]).reset_index(drop=True)
-    pd.testing.assert_frame_equal(df_test[df.columns], df)
+    # Use rtol/atol tolerance: our implementation uses scipy.stats.yeojohnson
+    # directly (GIL-releasing, parallelisable) instead of sklearn PowerTransformer.
+    # Both find the same optimum but via different solvers → not bit-identical.
+    # scipy.stats.yeojohnson (our implementation) returns float32; sklearn returns float64.
+    pd.testing.assert_frame_equal(df_test[df.columns], df,
+                                   check_exact=False, rtol=1e-3, atol=1e-4,
+                                   check_dtype=False)
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +403,7 @@ def test_col_batch_matches_row_batch(tmp_path):
     by_cols = ["plate", "well"]
 
     # ── Path A: column-batch (parquet) ────────────────────────────────────
-    X_col, cell_keep_col, feat_keep_col = _col_batch_filter_parquet(
+    X_col, cell_keep_col, feat_keep_col, _report = _col_batch_filter_parquet(
         parquet_sources, obs_df, label_mask,
         by=by_cols,
         max_fraction_not_finite=max_fnf,
