@@ -1779,41 +1779,37 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
                 var=data.var.copy(), uns=data.uns.copy()
             )
 
-    _max_cpus = getattr(args, "max_cpus", None)
-    _n_jobs   = _max_cpus if _max_cpus else -1
-    _output_cap = getattr(args, "yj_clip_output", 5.0) or None
+    _max_cpus    = getattr(args, "max_cpus", None)
+    _n_jobs      = _max_cpus if _max_cpus else -1
+    _standardize = bool(getattr(args, "yj_standardize", False))
+    _output_cap  = getattr(args, "yj_clip_output", None) or None
+
+    # ── Loud warning when clip-output is set without standardize ──────────────
+    # Without standardize=True, YJ output is in the original feature's scale
+    # (not σ units), so a numeric clip value like ±5 is meaningless and may
+    # silently destroy biologically valid variance.
+    if _output_cap is not None and not _standardize:
+        import warnings as _warn
+        _warn.warn(
+            f"\n\n  *** YJ OUTPUT CLIP WARNING ***\n"
+            f"  --yj-clip-output={_output_cap} is set but --yj-standardize is OFF.\n"
+            f"  The YJ transform output is in the original feature scale (not σ units),\n"
+            f"  so ±{_output_cap} clips at an arbitrary threshold with no statistical\n"
+            f"  meaning.  This will distort the data.\n"
+            f"  Either: (a) enable --yj-standardize to make clip meaningful, or\n"
+            f"          (b) remove --yj-clip-output.\n"
+            f"  The output cap has been DISABLED for this run.\n",
+            UserWarning, stacklevel=3,
+        )
+        _output_cap = None   # force-disable the meaningless clip
+
     result = transform_features_yj(data, by=by_cols, n_jobs=_n_jobs,
+                                   standardize=_standardize,
                                    output_cap=_output_cap)
 
-    # Post-YJ safety clip: clamp each feature to ±max_yj_sigma robust standard
-    # deviations computed from the result.  YJ output is approximately Gaussian so
-    # anything outside ±10 IQR-based sigmas is an artefact (e.g. float32 overflow
-    # from heavy-tailed features like PercentTouching_Expanded).  This prevents
-    # all-constant overflow values that make well-level means Inf and z-scores NaN.
-    _max_sigma = getattr(args, "yj_post_clip_sigma", 10.0)
-    if _max_sigma is not None and _max_sigma > 0:
-        X_res = np.asarray(result.X, dtype=np.float32)
-        # Robust scale: use IQR/1.35 ≈ std for Gaussian (ignores extreme outliers)
-        q25 = np.nanpercentile(X_res, 25, axis=0)
-        q75 = np.nanpercentile(X_res, 75, axis=0)
-        robust_std = (q75 - q25) / 1.35
-        robust_std = np.where(robust_std > 0, robust_std, 1.0)
-        med = np.nanmedian(X_res, axis=0)
-        lo_post = med - _max_sigma * robust_std
-        hi_post = med + _max_sigma * robust_std
-        n_post = int(((X_res < lo_post) | (X_res > hi_post) | ~np.isfinite(X_res)).sum())
-        if n_post:
-            X_res = np.clip(X_res, lo_post, hi_post)
-            np.nan_to_num(X_res, nan=0.0, posinf=0.0, neginf=0.0, copy=False)
-            logger.info(
-                "map run [transform-yj]: post-YJ safety clip clamped %s values "
-                "to ±%.0f robust σ (prevents float32 overflow in downstream z-score)",
-                f"{n_post:,}", _max_sigma,
-            )
-            result = anndata.AnnData(
-                X=X_res, obs=result.obs.copy(),
-                var=result.var.copy(), uns=result.uns.copy(),
-            )
+    # No post-YJ clip here: input winsorisation (--yj-clip-percentile) prevents
+    # overflow values; output clip (--yj-clip-output) is only meaningful when
+    # --yj-standardize is set and is handled inside _yj_fit_transform_col.
 
     _merge_uns(data, result)
     return result
@@ -1888,12 +1884,14 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
             normalize="local-zscore",
             n_neighbors=int(getattr(args, "localz_neighbors", 75)),
             by=[plate, well],
-            max_value=getattr(args, "localz_max_value", 5.0),
+            max_value=getattr(args, "scale_max_value", getattr(args, "localz_max_value", 5.0)),
             centroid_column_names=(cy, cx),
             batch_size=localz_batch,
         )
     else:
-        result = normalize_features(data, normalize="zscore", by=[plate, well])
+        max_val = getattr(args, "scale_max_value", getattr(args, "localz_max_value", 5.0))
+        result = normalize_features(data, normalize="zscore", by=[plate, well],
+                                    max_value=max_val if max_val and max_val > 0 else None)
 
     _merge_uns(data, result)
     return result
@@ -2076,7 +2074,7 @@ def _apply_localz_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     from scallops.features.normalize import normalize_features
     ref_q      = getattr(args, "reference_query", None)
     n_neighbors = int(getattr(args, "localz_neighbors", 75))
-    max_value   = getattr(args, "localz_max_value", 5.0)
+    max_value   = getattr(args, "scale_max_value", getattr(args, "localz_max_value", 5.0))
     plate_col   = getattr(args, "plate_column", "plate")
     well_col    = getattr(args, "well_column",  "well")
     centroid_y  = getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y")

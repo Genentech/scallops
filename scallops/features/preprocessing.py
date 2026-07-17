@@ -15,7 +15,7 @@ from scallops.features.util import _anndata_to_xr, _query_anndata, _slice_anndat
 logger = logging.getLogger("scallops")
 
 
-_YJ_OUTPUT_CAP = 5.0   # clip YJ output to ±this value; overridden by --yj-clip-output
+_YJ_OUTPUT_CAP = None  # no output cap by default; only meaningful with standardize=True
 
 
 def _yj_fit_transform_col(col: np.ndarray, standardize: bool,

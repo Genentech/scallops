@@ -327,14 +327,25 @@ def _create_map_transform_yj_parser(
              "100 or None to disable.",
     )
     parser.add_argument(
+        "--yj-standardize",
+        action="store_true",
+        default=False,
+        dest="yj_standardize",
+        help="Standardize each feature to zero mean and unit variance AFTER the "
+             "Yeo-Johnson transform.  Output is then in z-score space and "
+             "--yj-clip-output (e.g. 5σ) is meaningful.  Default: off — output "
+             "stays in the original feature scale.",
+    )
+    parser.add_argument(
         "--yj-clip-output",
         type=float,
-        default=5.0,
+        default=None,
         dest="yj_clip_output",
-        help="Cap the YJ transform output to ±this value after transformation "
-             "(default 5.0).  Prevents extreme YJ outputs from producing NaN "
-             "or Inf in downstream z-score normalisation.  Set to None / 0 to "
-             "disable.",
+        help="Cap the YJ transform output to ±this value.  Only meaningful when "
+             "--yj-standardize is set (output is then in σ units and ±5 is "
+             "extreme). When --yj-standardize is OFF and this flag is set, a "
+             "loud WARNING is emitted because the cap value has no interpretable "
+             "unit.  Default: None (disabled).",
     )
     parser.add_argument(
         "--max-fraction-not-finite",
@@ -429,6 +440,15 @@ def _create_map_scale_parser(
         dest="well_column",
         help="obs column identifying the well.",
     )
+    parser.add_argument(
+        "--scale-max-value",
+        type=float,
+        default=5.0,
+        dest="scale_max_value",
+        help="Clip z-scores to ±this value after normalisation (default 5.0). "
+             "Applies to both global and local z-score.  Set to None/0 to disable. "
+             "±5 standard deviations is already biologically extreme.",
+    )
     local = parser.add_argument_group("local z-score options (--scale-method local)")
     local.add_argument(
         "--localz-neighbors",
@@ -455,13 +475,6 @@ def _create_map_scale_parser(
         default="Nuclei_AreaShape_Center_X",
         dest="localz_centroid_x",
         help="obs or var column with the x spatial coordinate.",
-    )
-    local.add_argument(
-        "--localz-max-value",
-        type=float,
-        default=5.0,
-        dest="localz_max_value",
-        help="Clip z-scores to ±this value after normalisation.",
     )
     force_arg(parser)
     no_version_arg(parser)
@@ -1776,9 +1789,10 @@ def _create_run_parser(
         type=int, default=75, dest="localz_neighbors",
     )
     scale.add_argument(
-        "--localz-max-value",
-        help="Clip local z-scores to ±this value (used when --scale-method local).",
-        type=float, default=5.0, dest="localz_max_value",
+        "--scale-max-value",
+        help="Clip z-scores to ±this value after normalisation (default 5.0). "
+             "Applies to both global and local z-score.",
+        type=float, default=5.0, dest="scale_max_value",
     )
     scale.add_argument(
         "--localz-centroid-y",
