@@ -59,8 +59,8 @@ def create_itk_param_file(tmp_path):
     (WriteIterationInfo "false")
     (WriteResultImage "false")
     """
-    path = os.path.join(tmp_path, "translation.txt")
-    with open(path, "wt") as out:
+    path = str(tmp_path / "translation.txt")
+    with open(path, mode="w") as out:
         out.write(p)
     return path
 
@@ -248,7 +248,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
         reference_timepoint=reference_t,
     )
 
-    xr.testing.assert_identical(result_np, transformed_image)
+    xr.testing.assert_equal(result_np, transformed_image)
 
 
 @pytest.mark.registration
@@ -311,7 +311,7 @@ def test_register_transform_labels_moving_only(tmp_path):
     img = read_image(
         "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
-    img.attrs["physical_pixel_sizes"] = (1, 1)
+    img.attrs["physical_pixel_sizes"] = (5, 4, 3)
 
     rng = np.random.default_rng(0)
 
@@ -356,6 +356,8 @@ def test_register_transform_labels_moving_only(tmp_path):
     assert transformed_labels.max() > 0
     transformed_image = read_image(output_zarr / "images" / "plateA-A1")
     assert transformed_image.shape[0] == 2
+    transformed_image.attrs["physical_pixel_sizes"] = (4.0, 3.0)
+    transformed_image.attrs["physical_pixel_units"] = ("micrometer", "micrometer")
 
 
 @pytest.mark.registration

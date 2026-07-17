@@ -251,7 +251,10 @@ def _array_to_itk(
         )
 
         itk_image = itk.image_view_from_array(data)
-
+    if (
+        len(spacing) == 3
+    ):  # assume image had z-axis that was max-projected and z-axis is no longer present
+        spacing = spacing[1], spacing[2]
     itk_image.SetSpacing(spacing)
     return itk_image
 
