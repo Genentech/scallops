@@ -596,7 +596,7 @@ def _itk_align_reference_time(
             dim="c", keep_attrs=True
         )
     if isinstance(moving_image, xr.DataArray):
-        times = moving_image.coords["t"].values
+        times = moving_image.coords["t"].values.tolist()
     else:
         times = []
         for img in moving_image:
@@ -621,11 +621,17 @@ def _itk_align_reference_time(
             )
 
     channels = (
-        [moving_image.coords["c"].values for i in range(moving_image.sizes["t"])]
+        [
+            moving_image.coords["c"].values.tolist()
+            for _ in range(moving_image.sizes["t"])
+        ]
         if isinstance(moving_image, xr.DataArray)
-        else [moving_image[i].coords["c"].values for i in range(len(moving_image))]
+        else [
+            moving_image[i].coords["c"].values.tolist()
+            for i in range(len(moving_image))
+        ]
     )
-
+    result_image_attrs = moving_image_reference_t_moving_c.attrs.copy()
     if unroll_channels:
         logger.info(
             f"Channels per time point: {', '.join([str(c) for c in nchannels])}."
@@ -646,6 +652,9 @@ def _itk_align_reference_time(
                 all_channels.append(channel_name)
         coords = dict(c=all_channels)
         leading_dims_shape = (len(all_channels),)
+        result_image_attrs["src_channels"] = channels
+        result_image_attrs["src_times"] = times
+
     else:  # all images must have the same number of channels
         dims = ["t", "c", "y", "x"]
         leading_dims_shape = len(times), nchannels[0]
@@ -662,7 +671,7 @@ def _itk_align_reference_time(
             coords=coords,
             chunk_size=_get_chunk_size(moving_image_reference_t_moving_c),
             shape=result_image_shape,
-            attrs=moving_image_reference_t_moving_c.attrs.copy(),
+            attrs=result_image_attrs,
             dtype=moving_image_reference_t_moving_c.dtype,
         )
     )
@@ -1151,7 +1160,6 @@ def _itk_transform_image_zarr(
     chunksize: tuple[int, int] | None,
     image_attrs: dict,
     image_spacing: None | tuple[float, float] = None,
-    channels_transform_parameter_objects: dict[int, itk.ParameterObject] | None = None,
 ):
     """Apply an ITK-based transformation to an image and store the result in a Zarr group.
 
@@ -1162,8 +1170,6 @@ def _itk_transform_image_zarr(
     :param chunksize: Chunk size to use for the Zarr dataset (default is (1024, 1024)).
     :param image_attrs: Attributes to store with the transformed image.
     :param image_spacing: Physical spacing of the input image.
-    :param channels_transform_parameter_objects: Maps channel index to ITK parameter
-        object
     """
     if not isinstance(image_root, zarr.Group):
         image_root = open_ome_zarr(image_root, mode="a")

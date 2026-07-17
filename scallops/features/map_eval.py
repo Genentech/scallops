@@ -7,9 +7,12 @@ from collections.abc import Sequence
 from typing import Literal, Tuple
 
 import anndata
+import dask
+import dask.array as da
 import fsspec
 import numpy as np
 import pandas as pd
+from array_api_compat import get_namespace
 from scipy.stats import ks_2samp
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -19,8 +22,8 @@ logger = logging.getLogger("scallops")
 
 
 def recall(
-    null_distribution: np.ndarray,
-    query_distribution: np.ndarray,
+    null_distribution: np.ndarray | da.Array,
+    query_distribution: np.ndarray | da.Array,
     recall_thresholds: Sequence[Tuple[float, float] | float] = [
         (0.01, 0.99),
         (0.05, 0.95),
@@ -36,38 +39,70 @@ def recall(
     between 0 and 1.
     :return Dataframe containing recall at given thresholds
     """
+    assert isinstance(query_distribution, da.Array) == isinstance(
+        null_distribution, da.Array
+    )
+    left = False
+    right = False
+    # validate inputs and check which directions are needed
+    for threshold in recall_thresholds:
+        if np.isscalar(threshold):
+            assert 0 <= threshold <= 1
+            if threshold >= 0.5:
+                left = True
+            else:
+                right = True
+        else:
+            left_threshold, right_threshold = np.min(threshold), np.max(threshold)
+            assert 0.5 <= right_threshold <= 1
+            assert 0 <= left_threshold <= 0.5
+            left = True
+            right = True
+    if isinstance(query_distribution, da.Array) and np.isnan(
+        query_distribution.shape[0]
+    ):
+        query_distribution = query_distribution.compute_chunk_sizes()
 
-    sorted_null_distribution = np.sort(null_distribution)
-    query_percentage_ranks_left = np.searchsorted(
-        sorted_null_distribution, query_distribution, side="left"
-    ) / len(sorted_null_distribution)
-    query_percentage_ranks_right = np.searchsorted(
-        sorted_null_distribution, query_distribution, side="right"
-    ) / len(sorted_null_distribution)
+    sorted_null_distribution = np.sort(
+        null_distribution.compute()
+        if isinstance(null_distribution, da.Array)
+        else null_distribution
+    )
+    if isinstance(null_distribution, da.Array):
+        sorted_null_distribution = da.from_array(sorted_null_distribution)
+
+    xp = get_namespace(query_distribution)
+    if left:
+        query_percentage_ranks_left = xp.searchsorted(
+            sorted_null_distribution, query_distribution, side="left"
+        ) / len(sorted_null_distribution)
+    if right:
+        query_percentage_ranks_right = xp.searchsorted(
+            sorted_null_distribution, query_distribution, side="right"
+        ) / len(sorted_null_distribution)
     results = []
     for threshold in recall_thresholds:
         result = dict()
         if np.isscalar(threshold):
-            assert 0 <= threshold <= 1
             result["threshold"] = threshold
             if threshold >= 0.5:
-                result["recall"] = np.sum(
+                result["recall"] = xp.sum(
                     (query_percentage_ranks_left >= threshold)
                 ) / len(query_distribution)
             else:
-                result["recall"] = np.sum(
+                result["recall"] = xp.sum(
                     (query_percentage_ranks_right <= threshold)
                 ) / len(query_distribution)
         else:
             left_threshold, right_threshold = np.min(threshold), np.max(threshold)
-            assert 0 <= left_threshold <= 1
-            assert 0 <= right_threshold <= 1
             result["threshold"] = (left_threshold, right_threshold)
-            result["recall"] = np.sum(
+            result["recall"] = xp.sum(
                 (query_percentage_ranks_right <= left_threshold)
                 | (query_percentage_ranks_left >= right_threshold)
             ) / len(query_distribution)
         results.append(result)
+    if isinstance(query_distribution, da.Array):
+        results = dask.compute(*results)
     return pd.DataFrame(results)
 
 

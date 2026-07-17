@@ -109,7 +109,7 @@ def peak_thresholds_from_bases(
     :return: Result data frame.
     """
 
-    if n_reads is not None and n_reads < bases_array.sizes["read"]:
+    if n_reads is not None and 0 < n_reads < bases_array.sizes["read"]:
         rng = random.Random(seed)
         random_reads = rng.sample(range(0, bases_array.sizes["read"]), n_reads)
         random_reads = np.sort(random_reads)

@@ -141,12 +141,12 @@ def test_ops_wdl(tmp_path):
     )
     phenotype_tile[10, 10] = 2
     exp = Experiment(
-        images={"A1-102-1": pheno_img, "A1-102-2": pheno_img},
+        images={"A1-102-IF": pheno_img, "A1-102-FISH": pheno_img},
         labels={
-            "A1-102-1-mask": phenotype_mask,
-            "A1-102-1-tile": phenotype_tile,
-            "A1-102-2-mask": phenotype_mask,
-            "A1-102-2-tile": phenotype_tile,
+            "A1-102-IF-mask": phenotype_mask,
+            "A1-102-IF-tile": phenotype_tile,
+            "A1-102-FISH-mask": phenotype_mask,
+            "A1-102-FISH-tile": phenotype_tile,
         },
     )
     exp.save(str(pheno_dir))
@@ -161,6 +161,7 @@ def test_ops_wdl(tmp_path):
         "pheno_registration_extra_arguments": "--no-landmarks",
         "phenotype_cyto_channel": [1],
         "phenotype_dapi_channel": 0,
+        "reference_phenotype_time": "IF",
         "phenotype_url": str(pheno_dir.absolute()),
         "phenotype_nuclei_features": ["intensity_0", "intensity_1"],
         # 2 batches
@@ -198,6 +199,23 @@ def test_ops_wdl(tmp_path):
     assert len(merge_sbs_metadata_df) > len(
         merge_sbs_metadata_df.query("~barcode_count_0.isna()")
     )
+    bbox_cols = sorted(
+        merge_sbs_metadata_df.columns[
+            merge_sbs_metadata_df.columns.str.contains("PearsonBox")
+        ].tolist()
+    )
+    assert bbox_cols == [
+        "Nuclei_Correlation_PearsonBox_FISH_IF",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS1",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS2",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS3",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS4",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS5",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS6",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS7",
+        "Nuclei_Correlation_PearsonBox_ISS0_ISS8",
+        "Nuclei_Correlation_PearsonBox_ISS_PHENO",
+    ]
 
     for col in [
         "Nuclei_AreaShape_Area",

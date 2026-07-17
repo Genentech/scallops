@@ -23,6 +23,8 @@ workflow stitch_workflow {
         Float? stitch_min_overlap_fraction
         Array[Int]? stitch_output_channels
         Int? expected_cycles
+        String? stitch_extra_arguments # Single string with extra arguments
+        String? illumination_correction_extra_arguments
 
         String? z_index
         String illumination_agg_method = "mean"
@@ -90,6 +92,7 @@ workflow stitch_workflow {
                     agg_method=illumination_agg_method,
                     z_index=z_index,
                     expected_images=expected_images,
+                    extra_arguments=illumination_correction_extra_arguments,
                     subset = group,
                     groupby=list_images.filtered_groupby,
                     force=force_illumination_correction,

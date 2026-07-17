@@ -40,12 +40,12 @@ def pandas_to_anndata(
     if isinstance(df, dd.DataFrame):
         df = df.compute()
     obs = df.reset_index(drop=df.index.name is None)
-    skip = [s for s in ["barcode_Q_0", "barcode_Q_1"] if s in df.columns]
-    if len(skip) > 0:
-        obs = obs.drop(skip, axis=1)
+
     obs.index = obs.index.astype(str)
     for c in obs.columns:
-        if pd.api.types.is_object_dtype(obs[c]):
+        if not pd.api.types.is_string_dtype(obs[c]) and pd.api.types.is_object_dtype(
+            obs[c]
+        ):
             obs[c] = obs[c].astype(str)  # to save with anndata
     return anndata.AnnData(
         obs=obs,

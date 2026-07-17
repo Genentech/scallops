@@ -5,6 +5,7 @@ task illumination_correction {
         Array[String] images
         String subset
         String? z_index
+        String? extra_arguments
         String agg_method
         Int? expected_images
         String? image_pattern
@@ -20,40 +21,23 @@ task illumination_correction {
         String memory
         Int max_retries
     }
-    #Array[String] images_quoted = quote(images)
 
     command <<<
-        set -e
 
-        python <<CODE
-        from subprocess import check_call
+        set -ex
 
-        force = "~{force}"
-        expected_images = "~{expected_images}"
-        image_pattern = "~{image_pattern}"
-        z_index = "~{z_index}"
-        cmd = ["scallops", "illum-corr", "agg"]
-        cmd += ["--images"]
-        cmd += "~{sep=',' images}".split(",")
-        if image_pattern != "":
-            cmd += ["--image-pattern", image_pattern]
-        cmd += ["--groupby"]
-        cmd += "~{sep=',' groupby}".split(",")
-        cmd += ["--subset", "~{subset}"]
-        cmd += ["--output-image-format", "tiff"]
-        cmd += ["-o",  "~{output_directory}/"]
-        cmd += ["--agg-method", "~{agg_method}"]
-        if force=="true":
-            cmd.append("--force")
-        if expected_images != "":
-            cmd.append("--expected-images")
-            cmd.append(expected_images)
-        if z_index != "":
-            cmd.append("--z-index")
-            cmd.append(z_index)
-        print(' '.join(cmd))
-        check_call(cmd)
-        CODE
+        scallops illum-corr agg \
+        --images ~{sep=" " images} \
+        ~{"--image-pattern " + image_pattern} \
+        --groupby ~{sep=" " groupby} \
+        --subset ~{subset} \
+        --output-image-format tiff \
+        --output "~{output_directory}/" \
+        --agg-method ~{agg_method} \
+        ~{true="--force" false="" force} \
+        ~{"--expected-images " + expected_images} \
+        ~{"--z-index " + z_index} \
+        ~{extra_arguments}
     >>>
 
     output {
@@ -87,6 +71,7 @@ task stitch {
         Array[String]? channel_names
         String? image_pattern
         String output_directory
+        String? extra_arguments
 
         String? radial_correction_k
         String? stage_positions
@@ -113,6 +98,7 @@ task stitch {
         python <<CODE
         import subprocess
 
+        extra_arguments = "~{extra_arguments}"
         z_index = "~{z_index}"
         image_output = "~{output_directory}" + "/stitch.zarr"
         report_output = "~{output_directory}" + "/stitch-report"
@@ -120,7 +106,7 @@ task stitch {
         rename = "~{rename}"
         expected_images = "~{expected_images}"
         radial_correction_k = "~{radial_correction_k}"
-        stage_positions = "~{ stage_positions}"
+        stage_positions = "~{stage_positions}"
         crop_y = "~{crop_y}"
         crop_x = "~{crop_x}"
         min_overlap_fraction = "~{min_overlap_fraction}"
@@ -181,6 +167,8 @@ task stitch {
                 cmd.append(z_index_url)
             else:
                 cmd.append(z_index)
+        if extra_arguments != "":
+            cmd += extra_arguments.split(" ")
         print(' '.join(cmd))
         subprocess.check_call(cmd)
 
