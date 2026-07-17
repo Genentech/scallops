@@ -1291,7 +1291,7 @@ def reads_main(arguments: argparse.Namespace):
         for key in image_keys:
             reads_pipeline(
                 key,
-                spots_root=zarr.open(spots, "r"),
+                spots_root=zarr.open(spots, mode="r"),
                 labels_root=zarr.open(labels + labels_fs.sep + "labels", mode="r"),
                 barcodes_file=barcodes_file,
                 file_separator=output_fs.sep,
