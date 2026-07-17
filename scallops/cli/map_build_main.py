@@ -327,6 +327,16 @@ def _create_map_transform_yj_parser(
              "100 or None to disable.",
     )
     parser.add_argument(
+        "--yj-clip-output",
+        type=float,
+        default=5.0,
+        dest="yj_clip_output",
+        help="Cap the YJ transform output to ±this value after transformation "
+             "(default 5.0).  Prevents extreme YJ outputs from producing NaN "
+             "or Inf in downstream z-score normalisation.  Set to None / 0 to "
+             "disable.",
+    )
+    parser.add_argument(
         "--max-fraction-not-finite",
         type=float,
         default=0.25,

@@ -1781,7 +1781,9 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
 
     _max_cpus = getattr(args, "max_cpus", None)
     _n_jobs   = _max_cpus if _max_cpus else -1
-    result = transform_features_yj(data, by=by_cols, n_jobs=_n_jobs)
+    _output_cap = getattr(args, "yj_clip_output", 5.0) or None
+    result = transform_features_yj(data, by=by_cols, n_jobs=_n_jobs,
+                                   output_cap=_output_cap)
 
     # Post-YJ safety clip: clamp each feature to ±max_yj_sigma robust standard
     # deviations computed from the result.  YJ output is approximately Gaussian so

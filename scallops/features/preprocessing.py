@@ -15,7 +15,11 @@ from scallops.features.util import _anndata_to_xr, _query_anndata, _slice_anndat
 logger = logging.getLogger("scallops")
 
 
-def _yj_fit_transform_col(col: np.ndarray, standardize: bool) -> np.ndarray:
+_YJ_OUTPUT_CAP = 5.0   # clip YJ output to ±this value; overridden by --yj-clip-output
+
+
+def _yj_fit_transform_col(col: np.ndarray, standardize: bool,
+                          output_cap: float = _YJ_OUTPUT_CAP) -> np.ndarray:
     """Fit Yeo-Johnson on the *finite* values of a column, then apply to all
     values while propagating NaN for missing entries.
 
@@ -53,6 +57,8 @@ def _yj_fit_transform_col(col: np.ndarray, standardize: bool) -> np.ndarray:
             std = np.nanstd(out)
             if std > 0:
                 out = (out - np.nanmean(out)) / std
+        if output_cap is not None and np.isfinite(output_cap):
+            np.clip(out, -output_cap, output_cap, out=out)
         return out.astype(np.float32)
     # No NaN: standard path
     transformed, _ = _yj(col)
@@ -60,8 +66,10 @@ def _yj_fit_transform_col(col: np.ndarray, standardize: bool) -> np.ndarray:
         std = transformed.std()
         if std > 0:
             transformed = (transformed - transformed.mean()) / std
-    # Clip to float32 range before casting to avoid Inf from overflow
-    np.clip(transformed, -3.4e38, 3.4e38, out=transformed)
+    # Cap output to prevent extreme values from corrupting downstream z-scores.
+    # Default ±5 is already extreme for any normalised biological measurement.
+    if output_cap is not None and np.isfinite(output_cap):
+        np.clip(transformed, -output_cap, output_cap, out=transformed)
     return transformed.astype(np.float32)
 
 
@@ -70,6 +78,7 @@ def transform_features_yj(
     by: str | Sequence | None = None,
     standardize: bool = False,
     n_jobs: int = -1,
+    output_cap: float | None = _YJ_OUTPUT_CAP,
 ) -> anndata.AnnData:
     """Transform features using Yeo-Johnson transform.
 
@@ -99,7 +108,8 @@ def transform_features_yj(
 
     if not by_cols:
         # Single-group: parallelise over features with Dask threads
-        tasks = [_dd(_yj_fit_transform_col)(X_full[:, j], standardize)
+        tasks = [_dd(_yj_fit_transform_col)(X_full[:, j], standardize,
+                                             output_cap=output_cap)
                  for j in range(n_feat)]
         cols_out = dask.compute(*tasks, scheduler="threads", num_workers=n_workers)
         X_out = np.column_stack(cols_out).astype(np.float32)
@@ -116,7 +126,8 @@ def transform_features_yj(
     group_masks = {gk: group_keys == gk for gk in unique_groups}
 
     def _process(gk: str, j: int) -> tuple[str, int, np.ndarray]:
-        return gk, j, _yj_fit_transform_col(X_full[group_masks[gk], j], standardize)
+        return gk, j, _yj_fit_transform_col(X_full[group_masks[gk], j], standardize,
+                                             output_cap=output_cap)
 
     tasks = [_dd(_process)(gk, j)
              for gk in unique_groups
@@ -616,11 +627,11 @@ def _col_batch_filter_parquet(
     # Precompute label-filtered obs once (in RAM, no I/O)
     obs_label  = obs_df.iloc[label_mask]
 
-    # ── Pass 1: finite-value counts (per cell AND per feature) + Welford variance
+    # ── Pass 1: count NaN per cell and per feature (no Welford — variance computed
+    # in step 4 on the already-clean materialised matrix, which is more accurate).
     bad_counts        = np.zeros(n_cells, dtype=np.int32)
-    nan_per_feat      = np.zeros(n_feat,  dtype=np.int64)   # NaN count per feature (all cells)
-    nan_per_feat_bad  = np.zeros(n_feat,  dtype=np.int64)   # NaN count per feature in bad cells
-    group_stats: dict = {}
+    nan_per_feat      = np.zeros(n_feat,  dtype=np.int64)
+    nan_per_feat_bad  = np.zeros(n_feat,  dtype=np.int64)
     row_offset  = 0
 
     # Compute batch_readahead / fragment_readahead from the memory budget.
@@ -687,38 +698,8 @@ def _col_batch_filter_parquet(
         if bad_mask.any():
             nan_per_feat_bad += not_finite_b[bad_mask].sum(axis=0).astype(np.int64)
 
-        if label_b.any():
-            X_kept   = X_b[label_b]
-            # obs rows for this batch's kept cells — use row position in obs_label
-            n_kept_so_far = int(label_mask[: row_offset - n_b].sum())
-            n_kept_batch  = int(label_b.sum())
-            obs_b_kept    = obs_label.iloc[n_kept_so_far : n_kept_so_far + n_kept_batch]
-
-            grp_iter = (
-                obs_b_kept.groupby(by, observed=True).indices.items()
-                if by else [("_all_", np.arange(n_kept_batch))]
-            )
-            for gk, idx in grp_iter:
-                X_g = X_kept[idx]
-                if len(X_g) == 0:
-                    continue
-                n_g = len(X_g)
-                import warnings as _w
-                with _w.catch_warnings():
-                    _w.simplefilter("ignore", RuntimeWarning)
-                    mean_g = np.nanmean(X_g, axis=0)
-                    var_g  = np.nanvar(X_g, axis=0, ddof=0)
-                if gk not in group_stats:
-                    group_stats[gk] = {"n": n_g, "mean": mean_g.copy(), "M2": var_g * n_g}
-                else:
-                    s  = group_stats[gk]
-                    nt = s["n"] + n_g
-                    d  = mean_g - s["mean"]
-                    s["mean"] += d * n_g / nt
-                    s["M2"]   += var_g * n_g + d ** 2 * s["n"] * n_g / nt
-                    s["n"]     = nt
-            del X_kept
-
+        # No Welford streaming needed — variance computed on the clean matrix after
+        # materialisation (step 4), which is more accurate and avoids nanvar bias.
         del X_b
         n_done += 1
         if n_done % 5 == 0:
@@ -726,56 +707,35 @@ def _col_batch_filter_parquet(
             logger.info("  [pass 1/2] %.0f%% — ETA: %.0f min",
                         row_offset / n_cells * 100, eta)
 
-    # ── Compute keep masks: features first, then cells on reliable features ──────
+    # ── Four-step filter (applied in the correct order) ──────────────────────────
     #
-    # Step 1: feature NaN filter (applied before variance so variance is only
-    # computed on reliable, non-sparse features).
-    feat_reliable = np.ones(n_feat, dtype=bool)
+    # Step 1 — drop features with >max_feature_nan_fraction NaN across ALL cells.
+    #   Applied first so that the cell filter (step 2) is not corrupted by features
+    #   that are fundamentally broken (e.g. edge-cell colocalization).
+    feat_pass1 = np.ones(n_feat, dtype=bool)
     if max_feature_nan_fraction is not None:
         feat_nan_frac = nan_per_feat / max(n_cells, 1)
-        feat_reliable &= feat_nan_frac <= max_feature_nan_fraction
-        n_unreliable = int((~feat_reliable).sum())
-        if n_unreliable:
+        feat_pass1 &= feat_nan_frac <= max_feature_nan_fraction
+        n_s1_drop = int((~feat_pass1).sum())
+        if n_s1_drop:
             logger.info(
-                "  [pass 1/2] feature NaN filter (>%.0f%%): dropped %d / %d features",
-                max_feature_nan_fraction * 100, n_unreliable, n_feat,
+                "  [step 1] feature NaN filter (>%.0f%%): %d / %d features dropped",
+                max_feature_nan_fraction * 100, n_s1_drop, n_feat,
             )
 
-    # Step 2: variance filter on reliable features only
-    feat_var  = (
-        np.median(
-            np.stack([s["M2"] / (s["n"] - 1) if s["n"] > 1 else np.zeros(n_feat)
-                      for s in group_stats.values()], axis=0),
-            axis=0,
-        )
-        if group_stats else np.zeros(n_feat)
-    )
-    feat_keep = feat_reliable & np.isfinite(feat_var)
-    if min_variance is not None:
-        feat_keep &= feat_var >= min_variance
-    if max_variance is not None:
-        feat_keep &= feat_var <= max_variance
-
-    # Step 3: cell NaN filter — recomputed on the KEPT features only so cells
-    # that appeared NaN-heavy solely because of the now-dropped features are
-    # correctly retained (bad_counts counted NaN across ALL features).
-    if max_feature_nan_fraction is not None and feat_reliable.any():
-        # Adjust bad_counts: subtract the NaN contributions from dropped features.
-        # We use the per-feature NaN counts to approximate how many cells had NaN
-        # only in unreliable features and are clean in kept features.
-        # Exact recounting requires a second scan; here we conservatively keep
-        # the original bad_counts (cells with ≤ max_bad NaN in ALL features also
-        # have ≤ max_bad NaN in the kept-feature subset).
-        pass   # bad_counts already correct as a conservative bound
-    # Cell NaN threshold uses n_feat (all features entering the filter, post inner-join)
-    # as denominator because bad_counts was accumulated over all those features.
-    # Using feat_keep.sum() would make the threshold smaller and drop more cells.
+    # Step 2 — drop cells with >max_fraction_not_finite NaN across all features.
+    #   bad_counts was accumulated over all n_feat features; max_bad uses n_feat as
+    #   denominator so the threshold is consistent with the accumulator.
     cell_keep = label_mask & (bad_counts <= max_bad)
+
+    # Steps 3 and 4 run on the materialised clean matrix — see post-pass-2 section.
+    feat_keep = feat_pass1   # pass 2 materialises step-1-surviving features
 
     n_cells_out = int(cell_keep.sum())
     n_feat_out  = int(feat_keep.sum())
     logger.info(
-        "  [pass 1/2 done] %s / %s cells, %s / %s features kept",
+        "  [feature NaN + cell NaN filters done] %s / %s cells · %s / %s features"
+        " → materialising …",
         f"{n_cells_out:,}", f"{n_cells:,}", f"{n_feat_out:,}", f"{n_feat:,}",
     )
 
@@ -819,34 +779,66 @@ def _col_batch_filter_parquet(
 
     logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
 
-    # ── Build the feature-drop report before step 3 modifies feat_keep ────────
+    # ── Step 3 — remove features with any remaining NaN in the kept cells ───────
+    # After removing bad cells, features whose NaN came solely from those cells
+    # are now clean.  Dropping the remainder gives a NaN-free matrix without
+    # imputation or an extra S3 scan.
+    nan_per_feat_final = np.isnan(result).sum(axis=0)
+    feat_still_nan = nan_per_feat_final > 0
+    if feat_still_nan.any():
+        n_drop = int(feat_still_nan.sum())
+        logger.info(
+            "  [residual NaN feature removal] %d features still have NaN in kept"
+            " cells → dropped, %d remain",
+            n_drop, n_feat_out - n_drop,
+        )
+        result = result[:, ~feat_still_nan]
+        feat_keep_indices = np.where(feat_keep)[0]
+        feat_keep[feat_keep_indices[feat_still_nan]] = False
+
+    # ── Step 4 — variance filter on the clean NaN-free matrix ───────────────────
+    # Computing variance HERE (not during streaming pass 1) gives unbiased estimates
+    # because the matrix is already clean: no nanvar, no Welford approximation.
+    feat_var = np.zeros(result.shape[1], dtype=np.float64)
+    if result.shape[0] > 1:
+        if by:
+            obs_kept = obs_all.iloc[cell_keep].copy()
+            obs_kept = obs_kept.reset_index(drop=True)
+            group_vars = []
+            for _, grp_idx in obs_kept.groupby(by, observed=True).groups.items():
+                X_grp = result[grp_idx.values]
+                if len(X_grp) > 1:
+                    group_vars.append(np.var(X_grp, axis=0, ddof=1))
+            if group_vars:
+                feat_var = np.median(np.stack(group_vars), axis=0)
+        else:
+            feat_var = np.var(result, axis=0, ddof=1)
+
+    feat_var_keep = np.isfinite(feat_var)
+    if min_variance is not None:
+        feat_var_keep &= feat_var >= min_variance
+    if max_variance is not None:
+        feat_var_keep &= feat_var <= max_variance
+
+    if not feat_var_keep.all():
+        n_var_drop = int((~feat_var_keep).sum())
+        logger.info(
+            "  [variance filter] dropped %d features (var<%.2f or var>threshold)"
+            " → %d remain",
+            n_var_drop, min_variance or 0.0, int(feat_var_keep.sum()),
+        )
+        result = result[:, feat_var_keep]
+        feat_keep_indices = np.where(feat_keep)[0]
+        feat_keep[feat_keep_indices[~feat_var_keep]] = False
+
+    # ── Build the feature-drop report ─────────────────────────────────────────
     _feat_names = list(feat_cols) if feat_cols else [f"feat_{i}" for i in range(n_feat)]
 
     def _parse_feature_name(name: str) -> dict:
-        """Split CellProfiler name into compartment + measurement type."""
         parts = name.split("_")
         compartment = parts[0] if parts else "Unknown"
         mtype = parts[1] if len(parts) > 1 else "Unknown"
         return {"compartment": compartment, "measurement_type": mtype}
-
-    # ── Step 3: remove features with any remaining NaN in the kept cells ──────
-    # After removing bad cells (step 2), features whose NaN came solely from
-    # those bad cells are now completely clean.  Dropping the remainder gives
-    # a NaN-free matrix without imputation and without an extra S3 scan.
-    nan_per_feat_final = np.isnan(result).sum(axis=0)   # (n_feat_out,)
-    feat_still_nan = nan_per_feat_final > 0
-    if feat_still_nan.any():
-        n_drop = int(feat_still_nan.sum())
-        n_keep = n_feat_out - n_drop
-        logger.info(
-            "  [step 3] dropping %d features with remaining NaN in kept cells"
-            " → %d clean features",
-            n_drop, n_keep,
-        )
-        result = result[:, ~feat_still_nan]
-        # Update feat_keep to reflect the additional removal
-        feat_keep_indices  = np.where(feat_keep)[0]
-        feat_keep[feat_keep_indices[feat_still_nan]] = False
 
     # ── Build the feature-drop report ─────────────────────────────────────────
     records = []
@@ -856,17 +848,19 @@ def _col_batch_filter_parquet(
     for i, name in enumerate(_feat_names):
         kept = bool(feat_keep[i])
         parsed = _parse_feature_name(name)
-        # Determine why this feature was dropped
+        # Determine which filter step dropped this feature (correct order now)
+        # 1=feature NaN · 2=cell NaN (cells, not features) · 3=residual NaN · 4=variance
         if kept:
             drop_step = None
         elif max_feature_nan_fraction is not None and feat_nan_frac_all[i] > max_feature_nan_fraction:
-            drop_step = "step1_feature_nan"
-        elif not (np.isfinite(feat_var[i]) and
-                  (min_variance is None or feat_var[i] >= min_variance) and
-                  (max_variance is None or feat_var[i] <= max_variance)):
-            drop_step = "step2_variance"
+            drop_step = "1_feature_nan_gt50pct"
+        elif feat_nan_frac_all[i] > 0:   # had NaN but survived step1; dropped at step3
+            drop_step = "3_residual_nan_in_kept_cells"
         else:
-            drop_step = "step3_remaining_nan"
+            drop_step = "4_low_variance"
+
+        # feat_var only covers features that survived steps 1-3; index needs care
+        feat_var_i = float(feat_var[int(feat_keep[:i+1].sum()) - 1]) if feat_keep[i] else float(feat_nan_frac_all[i])
 
         records.append({
             "feature":             name,
@@ -876,7 +870,7 @@ def _col_batch_filter_parquet(
             "drop_step":           drop_step,
             "nan_frac_all_cells":  round(float(feat_nan_frac_all[i]), 5),
             "nan_frac_bad_cells":  round(float(feat_nan_frac_bad[i]), 5),
-            "median_variance":     round(float(feat_var[i]) if np.isfinite(feat_var[i]) else 0.0, 6),
+            "median_variance":     round(feat_var_i if np.isfinite(feat_var_i) else 0.0, 6),
         })
 
     report_df = pd.DataFrame(records)
