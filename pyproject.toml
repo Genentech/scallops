@@ -57,7 +57,7 @@ dependencies = [
     "numcodecs",
     "numpy",
     "ome-zarr",
-    "pandas",
+    "pandas<3",
     "pint",
     "psutil",
     "pyarrow",
@@ -76,7 +76,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Added pysam as an optional extra for Linux/macOS users
+
 dialout = [
     "pysam"
 ]
