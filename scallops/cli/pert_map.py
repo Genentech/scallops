@@ -150,6 +150,8 @@ def run_similarity_matrix(arguments: argparse.Namespace):
             )
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         data = anndata.AnnData(X=pairwise_similarities(data), obs=data.obs, var=data.obs)
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
+        fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
             data = rechunk_for_zarr(data)
             data.uns["scallops"] = _fix_json(metadata)
@@ -208,6 +210,8 @@ def run_aggregate(arguments: argparse.Namespace):
             by=by,
             agg_func="mean",
         )
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
+        fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
             data = rechunk_for_zarr(data)
             data.uns["scallops"] = _fix_json(metadata)
@@ -266,6 +270,8 @@ def run_tvn(arguments: argparse.Namespace):
             reference_query=reference_query,
             by=by,
         )
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
+        fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
             data = rechunk_for_zarr(data)
             data.uns["scallops"] = _fix_json(metadata)
@@ -327,6 +333,8 @@ def run_pca(arguments: argparse.Namespace):
             standardize_by=None,
             whiten=whiten,
         )
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
+        fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
             data = rechunk_for_zarr(data)
             data.uns["scallops"] = _fix_json(metadata)
@@ -419,6 +427,8 @@ def run_rank_features(arguments: argparse.Namespace):
             min_labels=min_labels,
             iqr_multiplier=iqr_multiplier,
         )
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(rank_output))
+        fs.makedirs(output_basename, exist_ok=True)
         if isinstance(rank_df, dd.DataFrame):
             _to_parquet(
                 rank_df,
@@ -539,7 +549,8 @@ def run_norm_features(arguments: argparse.Namespace):
             )
         else:
             logger.info("No normalization")
-
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(norm_output))
+        fs.makedirs(output_basename, exist_ok=True)
         if output_format == "zarr":
             data = rechunk_for_zarr(data)
             data.uns["scallops"] = _fix_json(metadata)
@@ -640,6 +651,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             }
         )
         fs, output_label_ids = fsspec.url_to_fs(output_label_ids)
+        fs.makedirs(os.path.basename(output_label_ids), exist_ok=True)
         pq.write_table(
             table,
             output_label_ids,
@@ -653,7 +665,8 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
                 **table.schema.metadata,
             }
         )
-        fs, output_label_ids = fsspec.url_to_fs(output_feature_ids)
+        fs, output_feature_ids = fsspec.url_to_fs(output_feature_ids)
+        fs.makedirs(os.path.basename(output_feature_ids), exist_ok=True)
         pq.write_table(
             table,
             output_feature_ids,
