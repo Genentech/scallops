@@ -856,7 +856,6 @@ def spot_detect_main(arguments: argparse.Namespace):
         chunks = (chunks, chunks)
 
     output = _add_suffix(output, ".zarr")
-
     exp_gen = _set_up_experiment(images, image_pattern, group_by, subset=subset)
     with (
         _create_default_dask_config(),
@@ -867,7 +866,7 @@ def spot_detect_main(arguments: argparse.Namespace):
             delayed_results += spot_detection_pipeline(
                 img,
                 iss_channels=channels,
-                file_separator=None,
+                output=output,
                 z_index=z_index,
                 output_image_format="zarr",
                 max_filter_width=max_filter_width,
