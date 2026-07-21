@@ -82,7 +82,8 @@ def _read_data(
             results.append(d)
 
     data = anndata.concat(results, index_unique="-")
-    data.obs.index = data.obs[keys].astype(str).agg('-'.join, axis=1)
+    if keys is not None:
+        data.obs.index = data.obs[keys].astype(str).agg('-'.join, axis=1)
     assert not data.obs.index.has_duplicates
     if isinstance(label_filter, str):
         label_filter = data.obs.query(label_filter).index
@@ -720,6 +721,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             max_variance=max_feature_variance,
             by=by,
         )
+        logger.info(f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         # save indices only
         table = pa.Table.from_pandas(data.obs[[]], preserve_index=True)
         table = table.replace_schema_metadata(
