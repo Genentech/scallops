@@ -23,7 +23,7 @@ from scallops.features.constants import (
     _other_features_single_channel,
 )
 from scallops.features.find_objects import find_objects
-from scallops.features.generate import _create_funcs, label_features
+from scallops.features.generate import _create_funcs, _rewrite_channels, label_features
 from scallops.features.spots import spot_count
 from scallops.features.texture import pftas
 from scallops.io import read_image, to_label_crops
@@ -409,18 +409,59 @@ def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
 
 
 @pytest.mark.features
+def test_rewrite_channels():
+    funcs, all_required_channels = _create_funcs(["colocalization_1_5"], 10)
+    assert funcs[0].keywords["c"] == [(1, 5)]
+    channel_names = _rewrite_channels(
+        funcs,
+        all_required_channels=all_required_channels,
+        channel_names=np.arange(10).astype(str),
+    )
+    assert channel_names == ["1", "5"]
+    assert funcs[0].keywords["c"] == [(0, 1)]
+
+    funcs, all_required_channels = _create_funcs(["intensity_5,6"], 10)
+    assert funcs[0].keywords["c"] == (5, 6)
+    channel_names = _rewrite_channels(
+        funcs,
+        all_required_channels=all_required_channels,
+        channel_names=np.arange(10).astype(str),
+    )
+    assert channel_names == ["5", "6"]
+    assert funcs[0].keywords["c"] == (0, 1)
+
+    funcs, all_required_channels = _create_funcs(["correlationpearsonbox_5_6,8"], 10)
+    assert len(funcs) == 2
+    assert funcs[0].keywords["c1"] == 5
+    assert funcs[0].keywords["c2"] == 6
+    assert funcs[1].keywords["c1"] == 5
+    assert funcs[1].keywords["c2"] == 8
+    channel_names = _rewrite_channels(
+        funcs,
+        all_required_channels=all_required_channels,
+        channel_names=np.arange(10).astype(str),
+    )
+
+    assert channel_names == ["5", "6", "8"]
+    assert funcs[0].keywords["c1"] == 0
+    assert funcs[0].keywords["c2"] == 1
+    assert funcs[1].keywords["c1"] == 0
+    assert funcs[1].keywords["c2"] == 2
+
+
+@pytest.mark.features
 def test_create_funcs():
-    funcs, requires_intensity = _create_funcs(["colocalization_*_*"], 3)
-    assert requires_intensity
+    funcs, all_required_channels = _create_funcs(["colocalization_*_*"], 3)
+    assert len(all_required_channels) > 0
     assert len(funcs) == 1
     assert funcs[0].keywords["c"] == [(0, 1), (0, 2), (1, 2)]
-    funcs, requires_intensity = _create_funcs(["haralick_*_3", "haralick_*_5"], 3)
-    assert requires_intensity
+    funcs, all_required_channels = _create_funcs(["haralick_*_3", "haralick_*_5"], 3)
+    assert len(all_required_channels) > 0
     assert len(funcs) == 2
 
-    funcs, requires_intensity = _create_funcs(["intensitydistribution_*_4"], 3)
+    funcs, all_required_channels = _create_funcs(["intensitydistribution_*_4"], 3)
     assert funcs[0].keywords == {"c": (0, 1, 2), "bin_count": 4}
-    assert requires_intensity
+    assert len(all_required_channels) > 0
     assert len(funcs) == 1
 
     funcs, _ = _create_funcs(["colocalization_0_0"], 3)
