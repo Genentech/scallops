@@ -62,12 +62,12 @@ def common_args(parser: argparse.ArgumentParser):
 
 def rechunk_args(parser: argparse.ArgumentParser):
     parser.add_argument(
-        "--rechunk-col-size",
+        "--rechunk-features",
         type=str,
-        help="Rechunk dataset columns before processing.",
+        help="Rechunk dataset features before processing.",
     )
     parser.add_argument(
-        "--rechunk-row-size", type=str, help="Rechunk dataset rows before processing."
+        "--rechunk-labels", type=str, help="Rechunk dataset labels before processing."
     )
 
 

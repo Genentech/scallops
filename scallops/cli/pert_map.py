@@ -116,8 +116,8 @@ def run_similarity_matrix(arguments: argparse.Namespace):
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_col_size
-    rechunk_feature_size = arguments.rechunk_row_size
+    rechunk_label_size = arguments.rechunk_labels
+    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     keys = arguments.key
@@ -125,7 +125,6 @@ def run_similarity_matrix(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
-    by = arguments.by
     output = arguments.output
 
     if not force and is_anndata(output):
@@ -171,8 +170,8 @@ def run_aggregate(arguments: argparse.Namespace):
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_col_size
-    rechunk_feature_size = arguments.rechunk_row_size
+    rechunk_label_size = arguments.rechunk_labels
+    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     keys = arguments.key
@@ -235,8 +234,8 @@ def run_tvn(arguments: argparse.Namespace):
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_col_size
-    rechunk_feature_size = arguments.rechunk_row_size
+    rechunk_label_size = arguments.rechunk_labels
+    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     keys = arguments.key
@@ -295,8 +294,8 @@ def run_pca(arguments: argparse.Namespace):
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_col_size
-    rechunk_feature_size = arguments.rechunk_row_size
+    rechunk_label_size = arguments.rechunk_labels
+    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     keys = arguments.key
@@ -358,8 +357,8 @@ def run_rank_features(arguments: argparse.Namespace):
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_col_size
-    rechunk_feature_size = arguments.rechunk_row_size
+    rechunk_label_size = arguments.rechunk_labels
+    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
@@ -467,8 +466,8 @@ def run_norm_features(arguments: argparse.Namespace):
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_col_size
-    rechunk_feature_size = arguments.rechunk_row_size
+    rechunk_label_size = arguments.rechunk_labels
+    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
@@ -590,8 +589,8 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_col_size
-    rechunk_feature_size = arguments.rechunk_row_size
+    rechunk_label_size = arguments.rechunk_labels
+    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
