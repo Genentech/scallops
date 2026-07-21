@@ -69,6 +69,9 @@ def _read_data(
             assert not d.obs.index.has_duplicates, "Duplicate index detected."
             assert not d.var.index.has_duplicates, "Duplicate index detected."
             results.append(d)
+    for data in results:
+        for key in keys:
+            data.obs[key] = data.obs[key].astype(str)
     data = anndata.concat(results, keys=keys, index_unique="-")
     assert not data.obs.index.has_duplicates
     if isinstance(label_filter, str):
