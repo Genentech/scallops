@@ -29,21 +29,9 @@ def client():
 
 
 @pytest.fixture
-def data():
-    df = pd.DataFrame(
-        data=dict(
-            label=np.arange(6),
-            Cells_Intensity_feature_1=[1, 2, 4, 8, 16, 32],
-            Cells_Intensity_feature_2=[10, 20, 40, 80, 160, 320],
-            gene_symbol=["a", "NTC", "a", "NTC", "a", "NTC"],
-            well=["a", "a", "a", "b", "b", "b"],
-            plate=["a", "a", "a", "b", "b", "b"],
-            Nuclei_AreaShape_Center_Y=[1, 7, 12, 16, 19, 21],
-            Nuclei_AreaShape_Center_X=[1, 7, 12, 16, 19, 21],
-        ),
-    )
+def data(test_feature_table):
     return pandas_to_anndata(
-        df, ["Cells_Intensity_feature_1", "Cells_Intensity_feature_2"]
+        test_feature_table, ["Cells_Intensity_feature_1", "Cells_Intensity_feature_2"]
     )
 
 
