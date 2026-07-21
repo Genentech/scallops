@@ -45,9 +45,17 @@ logger = _get_cli_logger()
 def _read_data(
         data_paths: list[str],
         keys: list[str],
-        feature_filter: str  | None = None,
-        label_filter: str  | None = None,
+        feature_filter: str | None = None,
+        label_filter: str | None = None,
 ) -> anndata.AnnData:
+    if label_filter is not None and fsspec.url_to_fs(label_filter)[0].exists(label_filter
+                                                                             ):
+        label_filter = pd.read_parquet(label_filter).index
+    if feature_filter is not None and fsspec.url_to_fs(feature_filter)[0].exists(
+            feature_filter
+    ):
+        feature_filter = pd.read_parquet(feature_filter).index
+
     results = []
     for data_path in data_paths:
         fs, data_path = fsspec.url_to_fs(data_path)
@@ -75,14 +83,6 @@ def _read_data(
     data = anndata.concat(results, index_unique="-")
     data.obs.index = data.obs[keys].astype(str).agg('-'.join, axis=1)
     assert not data.obs.index.has_duplicates
-    if label_filter is not None and fsspec.url_to_fs(label_filter)[0].exists(
-            label_filter
-    ):
-        label_filter = pd.read_parquet(label_filter).index
-    if feature_filter is not None and fsspec.url_to_fs(feature_filter)[0].exists(
-            feature_filter
-    ):
-        feature_filter = pd.read_parquet(feature_filter).index
     if isinstance(label_filter, str):
         label_filter = data.obs.query(label_filter).index
     if isinstance(feature_filter, str):
