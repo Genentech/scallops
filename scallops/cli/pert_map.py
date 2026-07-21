@@ -48,14 +48,16 @@ def _read_data(
         feature_filter: str | None = None,
         label_filter: str | None = None,
 ) -> anndata.AnnData:
-    if label_filter is not None and fsspec.url_to_fs(label_filter)[0].exists(label_filter
-                                                                             ):
-        label_filter = pd.read_parquet(label_filter).index
-    if feature_filter is not None and fsspec.url_to_fs(feature_filter)[0].exists(
-            feature_filter
-    ):
-        feature_filter = pd.read_parquet(feature_filter).index
-
+    if label_filter is not None:
+        if fsspec.url_to_fs(label_filter)[0].exists(label_filter):
+            label_filter = pd.read_parquet(label_filter).index
+        elif label_filter.endswith(".parquet"):
+            logger.warning(f"{label_filter} path not found.")
+    if feature_filter is not None:
+        if fsspec.url_to_fs(feature_filter)[0].exists(feature_filter):
+            feature_filter = pd.read_parquet(feature_filter).index
+        elif feature_filter.endswith(".parquet"):
+            logger.warning(f"{feature_filter} path not found.")
     results = []
     for data_path in data_paths:
         fs, data_path = fsspec.url_to_fs(data_path)
@@ -75,9 +77,8 @@ def _read_data(
                 d = read_anndata(path, dask=True)
             else:
                 raise ValueError(f"Unrecognized file type: {path}")
-            assert not d.obs.index.has_duplicates, "Duplicate index detected."
-            assert not d.var.index.has_duplicates, "Duplicate index detected."
-
+            assert not d.obs.index.has_duplicates, "Duplicate obs index detected."
+            assert not d.var.index.has_duplicates, "Duplicate var index detected."
             results.append(d)
 
     data = anndata.concat(results, index_unique="-")
