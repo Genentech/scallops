@@ -403,9 +403,7 @@ def _create_filter_parser(
     parser.add_argument(
         "--max-feature-variance",
         type=float,
-        default=5,
-        help="Maximum median feature variance across `by` to retain a feature. "
-             "Set to -1 to disable.",
+        help="Maximum median feature variance across `by` to retain a feature."
     )
     parser.add_argument(
         "--max-cell-fraction-not-finite",

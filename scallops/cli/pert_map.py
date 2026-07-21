@@ -694,6 +694,12 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     min_feature_variance = arguments.min_feature_variance
     max_feature_variance = arguments.max_feature_variance
     max_cell_fraction_not_finite = arguments.max_cell_fraction_not_finite
+    if min_feature_variance is not None and min_feature_variance < 0:
+        min_feature_variance = None
+    if max_feature_variance is not None and max_feature_variance < 0:
+        max_feature_variance = None
+    if max_cell_fraction_not_finite is not None and max_cell_fraction_not_finite < 0:
+        max_cell_fraction_not_finite = None
 
     metadata = {}
     if not no_version:
