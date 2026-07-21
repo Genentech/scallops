@@ -68,8 +68,7 @@ def _read_data(
                 raise ValueError(f"Unrecognized file type: {path}")
             assert not d.obs.index.has_duplicates, "Duplicate index detected."
             assert not d.var.index.has_duplicates, "Duplicate index detected."
-
-        results.append(d)
+            results.append(d)
     data = anndata.concat(results, keys=keys, index_unique="-")
     assert not data.obs.index.has_duplicates
     if isinstance(label_filter, str):
