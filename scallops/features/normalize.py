@@ -417,11 +417,15 @@ def _normalize_features_np(
             if scaling:
                 stds = np.nanmedian(np.abs(ref_values - means), axis=0) / mad_scale
         else:
+            # Treat Inf as NaN: stats computed from finite values only.
+            # Inf in the input will survive into the result and be clipped by max_value.
+            _ref = np.where(np.isfinite(ref_values), ref_values, np.nan)
             if centering:
-                means = np.nanmean(ref_values, axis=0)
+                means = np.nanmean(_ref, axis=0)
             if scaling:
-                stds = np.nanstd(ref_values, axis=0)
+                stds = np.nanstd(_ref, axis=0)
         if centering:
+            means = np.nan_to_num(means, nan=0.0)
             means = np.expand_dims(means, 0)
         if scaling:
             stds = np.expand_dims(stds, 0)
@@ -449,7 +453,7 @@ def _normalize_features_np(
     if centering:
         values = values - means
     if scaling:
-        stds[stds == 0] = 1.0
+        stds[(stds == 0) | ~np.isfinite(stds)] = 1.0
         values = values / stds
         if max_value is not None:
             values[values > max_value] = max_value

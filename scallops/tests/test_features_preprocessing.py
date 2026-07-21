@@ -17,6 +17,8 @@ from scallops.features.preprocessing import (
     _col_batch_filter_parquet,
     _streaming_cell_and_variance_filter,
     _streaming_materialise,
+    _apply_filter_steps_1_2,
+    _apply_filter_post_materialise,
 )
 
 
@@ -358,7 +360,7 @@ def test_col_batch_matches_row_batch(tmp_path):
     """
     import pyarrow as _pa
     import pyarrow.parquet as _pq
-    from scallops.features.util import _read_parquet_for_map as _read_data
+    from scallops.features.util import _read_map_inputs as _read_data
 
     # ── Create a synthetic dataset ────────────────────────────────────────
     np.random.seed(7)
@@ -411,15 +413,29 @@ def test_col_batch_matches_row_batch(tmp_path):
         max_variance=None,
     )
 
-    # ── Path B: row-batch (dask array) ────────────────────────────────────
-    cell_keep_row, feat_var_row = _streaming_cell_and_variance_filter(
+    # ── Path B: row-batch (dask array) via shared helpers ─────────────────
+    # _streaming_cell_and_variance_filter now returns raw NaN counts;
+    # _apply_filter_steps_1_2 converts them into the boolean masks.
+    bad_counts_row, nan_per_feat_row = _streaming_cell_and_variance_filter(
         data.X, obs_df, label_mask,
         by=by_cols,
         max_fraction_not_finite=max_fnf,
         n_prefetch=2,
     )
-    feat_keep_row = np.isfinite(feat_var_row) & (feat_var_row >= min_var)
-    X_row = _streaming_materialise(data.X, cell_keep_row, feat_keep_row, n_prefetch=2)
+    n_obs_b, n_feat_b = data.X.shape
+    feat_pass1_row, cell_keep_row = _apply_filter_steps_1_2(
+        bad_counts_row, nan_per_feat_row, label_mask, n_obs_b, n_feat_b,
+        max_feature_nan_fraction=None,
+        max_fraction_not_finite=max_fnf,
+    )
+    X_row_raw = _streaming_materialise(data.X, cell_keep_row, feat_pass1_row, n_prefetch=2)
+    obs_kept_row = obs_df.iloc[cell_keep_row].reset_index(drop=True)
+    feat_keep_b  = feat_pass1_row.copy()
+    X_row, feat_keep_row, _ = _apply_filter_post_materialise(
+        X_row_raw, feat_keep_b, obs_kept_row,
+        by=by_cols, min_variance=min_var, max_variance=None,
+        max_residual_nan_fraction=None,
+    )
 
     # ── Align feature order: both paths use the same feat_cols from uns ───
     # cell_keep masks should be identical
@@ -440,3 +456,119 @@ def test_col_batch_matches_row_batch(tmp_path):
         X_col, X_row, rtol=1e-4, atol=1e-5,
         err_msg="X_filtered values differ between col-batch and row-batch paths",
     )
+
+
+@pytest.mark.features
+def test_col_batch_report_has_variance(tmp_path):
+    """The feature-drop report must have finite median_variance values.
+
+    Regression: after the step-3/4 refactor, ``feat_var`` was reset to
+    ``np.array([])`` after calling ``_apply_filter_post_materialise``, making
+    the ``len(feat_var) == len(_step3_survivors)`` guard always False and
+    causing every feature to get ``median_variance = 0.0`` in the report.
+    """
+    import pyarrow as _pa
+    import pyarrow.parquet as _pq
+
+    np.random.seed(99)
+    n_obs, n_feat = 40, 8
+    X = np.random.randn(n_obs, n_feat).astype(np.float32)
+    # One low-variance feature → dropped by variance filter → appears in report
+    X[:, 3] = 0.0001 * np.random.randn(n_obs).astype(np.float32)
+    feat_names = [f"Cells_Intensity_feat{i}" for i in range(n_feat)]
+    df = pd.DataFrame(X, columns=feat_names)
+    df["plate"] = "p1"
+    df["well"] = "1"
+    p = str(tmp_path / "report_test.parquet")
+    _pq.write_table(_pa.Table.from_pandas(df), p)
+
+    from scallops.features.util import _read_map_inputs
+    data = _read_map_inputs([p])
+    parquet_sources = data.uns["_parquet_sources"]
+    label_mask = np.ones(len(data.obs), dtype=bool)
+
+    _, _, _, report = _col_batch_filter_parquet(
+        parquet_sources, data.obs, label_mask,
+        by=["plate", "well"],
+        max_fraction_not_finite=0.25,
+        min_variance=0.05,
+        max_variance=None,
+    )
+
+    assert report is not None and not report.empty, "Feature-drop report is empty"
+    dropped = report[~report["kept"]]
+    assert len(dropped) > 0, "No dropped features in report"
+    # At least some dropped features must have a finite median_variance
+    assert dropped["median_variance"].notna().any(), (
+        "All dropped features have NaN median_variance — "
+        "feat_var was likely reset to np.array([]) before report was built"
+    )
+    # The low-variance feature (feat3) should appear with a small but finite variance
+    feat3_row = report[report["feature"] == "Cells_Intensity_feat3"]
+    assert len(feat3_row) == 1
+    assert np.isfinite(feat3_row["median_variance"].iloc[0]), (
+        "feat3 median_variance is not finite despite being dropped by variance filter"
+    )
+
+
+@pytest.mark.features
+def test_apply_filter_inmem_parquet_e2e(tmp_path):
+    """_apply_filter_inmem must produce a non-empty AnnData when called with a
+    parquet input that has a bool obs column used in the label filter.
+
+    This exercises the full path: _read_map_inputs → label-filter with bool obs
+    column → parquet column-batch filter → cells written to output.
+    """
+    import argparse
+    import pyarrow as _pa
+    import pyarrow.parquet as _pq
+    from scallops.features.util import _read_map_inputs
+    from scallops.cli.map_build import _apply_filter_inmem
+
+    np.random.seed(1)
+    n = 30
+    X = np.random.randn(n, 5).astype(np.float32)
+    df = pd.DataFrame({
+        "Cells_Intensity_feat0": X[:, 0].astype(float),
+        "Cells_Intensity_feat1": X[:, 1].astype(float),
+        "Cells_Intensity_feat2": X[:, 2].astype(float),
+        "Cells_Intensity_feat3": X[:, 3].astype(float),
+        "Cells_Intensity_feat4": X[:, 4].astype(float),
+        # Bool obs column — label filter will use this
+        "is_boundary": [False] * 20 + [True] * 10,
+        "gene_symbol": ["NTC"] * 10 + ["g1"] * 10 + ["g2"] * 10,
+        "plate": ["p1"] * n,
+        "well": ["1"] * n,
+    }, index=pd.RangeIndex(n).astype(str))
+    p = str(tmp_path / "e2e_filter.parquet")
+    _pq.write_table(_pa.Table.from_pandas(df), p)
+
+    data = _read_map_inputs([p])
+
+    args = argparse.Namespace(
+        label_filter="is_boundary == False",   # must keep 20 rows
+        max_fraction_not_finite=0.25,
+        min_variance=0.0,
+        max_variance=None,
+        max_feature_nan_fraction=0.50,
+        max_residual_nan_fraction=None,
+        residual_nan_impute="zero",
+        perturbation="gene_symbol",
+        plate_column="plate",
+        well_column="well",
+        filter_batch_size=500_000,
+        filter_max_memory_gb=None,
+        scale_method="global",
+        batch_column=None,
+        max_correlation=None,
+        feature_channels=None,
+    )
+
+    result = _apply_filter_inmem(data, args)
+
+    assert result.n_obs == 20, (
+        f"Expected 20 cells (is_boundary==False) but got {result.n_obs}. "
+        "Bool label-filter may not be working."
+    )
+    assert result.n_vars > 0, "All features were filtered out"
+    assert not np.isnan(result.X).any(), "NaN values in filtered result"

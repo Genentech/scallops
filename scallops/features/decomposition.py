@@ -363,7 +363,7 @@ def select_pca_components(
         typically retain all PCs regardless of noise level, making it
         effectively useless as a selection criterion.  Use ``"variance"`` or
         ``"permutation"`` instead.  Tracy-Widom is retained for compatibility
-        with the gould pipeline and for datasets where features are known to be
+        with the legacy pipeline and for datasets where features are known to be
         approximately uncorrelated.
 
     .. warning::

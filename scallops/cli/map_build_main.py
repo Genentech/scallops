@@ -77,6 +77,20 @@ def _create_map_filter_parser(
         nargs="*",
     )
     parser.add_argument(
+        "--feature-channels",
+        help="Restrict features to those measured in these CellProfiler channel numbers.  "
+             "A feature is kept only when every Channel<N> token in its name appears in "
+             "this set; features with no channel token (pure morphological measurements) "
+             "are always kept.  Example: --feature-channels 4 5 6 7 8 9 10 11 12 13 "
+             "keeps only IF channels 4–13 and excludes FISH channels 0–3.  "
+             "When omitted all channels are included.",
+        nargs="+",
+        type=str,
+        default=None,
+        dest="feature_channels",
+        metavar="CHANNEL",
+    )
+    parser.add_argument(
         "--label-filter",
         help="Pandas query expression to filter cells before feature filtering.",
     )
@@ -111,6 +125,29 @@ def _create_map_filter_parser(
              "(evaluated on the features that survived --max-feature-nan-fraction).",
         default=0.25,
         type=float,
+    )
+    parser.add_argument(
+        "--max-residual-nan-fraction",
+        help="Step 3 residual-NaN tolerance.  "
+             "None (default): recommended (per-well median) — skip explicit step-3; "
+             "per-well variance with NaN propagation lets isfinite(median_var) "
+             "drop only features whose majority of wells have NaN; surviving NaN "
+             "cells are imputed to 0 after step-4.  "
+             "0.0: zero-tolerance — drop any feature with even one NaN cell.  "
+             "> 0: drop features above this NaN fraction, impute survivors.",
+        type=lambda x: None if x is None or str(x).lower() == "none" else float(x),
+        default=None,
+        dest="max_residual_nan_fraction",
+    )
+    parser.add_argument(
+        "--residual-nan-impute",
+        help="How to fill surviving NaN cells when --max-residual-nan-fraction > 0.  "
+             "'zero': replace with 0 (= well mean in z-score space, simple and safe).  "
+             "'perturbation': replace with the within-perturbation mean of finite cells "
+             "(biologically preferable; requires --perturbation to identify groups).",
+        choices=["zero", "perturbation"],
+        default="zero",
+        dest="residual_nan_impute",
     )
     parser.add_argument(
         "--by",
@@ -1522,6 +1559,53 @@ def _create_map_backproject_parser(
 
 
 # ---------------------------------------------------------------------------
+# map-shap-cosine
+# ---------------------------------------------------------------------------
+
+
+def _run_map_shap_cosine(arguments: argparse.Namespace):
+    from scallops.cli.map_build import run_pipeline_map_shap_cosine
+    run_pipeline_map_shap_cosine(arguments)
+
+
+def _create_map_shap_cosine_parser(
+    subparsers: argparse.ArgumentParser, default_help: bool
+) -> None:
+    parser = subparsers.add_parser(
+        "map-shap-cosine",
+        help="Per-feature SHAP attribution for cosine similarity across a set of perturbations.",
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter if default_help else argparse.HelpFormatter
+        ),
+    )
+    required = parser.add_argument_group("required arguments")
+    required.add_argument("-i", "--input", required=True, nargs="+",
+                          help="Aggregated/centered AnnData Zarr (output of map agg / map center).")
+    required.add_argument("--output", required=True,
+                          help="Output Parquet path for the SHAP feature table.")
+
+    sel = parser.add_argument_group("perturbation selection")
+    sel.add_argument("--pair", nargs=2, metavar=("A", "B"), dest="pair_names",
+                     help="Compute SHAP for a single pair of perturbation names.")
+    sel.add_argument("--perturbations", nargs="+",
+                     help="Subset of perturbation names. Default: all.")
+
+    parser.add_argument("--perturbation-column", default="gene_symbol",
+                        dest="perturbation_column",
+                        help="obs column identifying perturbations.")
+    parser.add_argument("--top-k", type=int, default=None, dest="top_k",
+                        help="Return only the top-k features by |SHAP|.")
+    parser.add_argument("--max-pairs-full", type=int, default=500_000,
+                        dest="max_pairs_full",
+                        help="Max pairs for full (per-pair) mode; above this uses "
+                             "aggregate mode (mean |SHAP| across all pairs).")
+    force_arg(parser)
+    no_version_arg(parser)
+    _sort_groups(parser)
+    parser.set_defaults(func=_run_map_shap_cosine)
+
+
+# ---------------------------------------------------------------------------
 # map subcommand registry
 # ---------------------------------------------------------------------------
 
@@ -1570,6 +1654,7 @@ def register_map_subcommands(
     _create_map_cluster_parser(_Renaming(map_subparsers, "cluster"), default_help)
     _create_map_recall_parser(_Renaming(map_subparsers, "recall"), default_help)
     _create_map_backproject_parser(_Renaming(map_subparsers, "backproject"), default_help)
+    _create_map_shap_cosine_parser(_Renaming(map_subparsers, "shap-cosine"), default_help)
     _create_run_parser(map_subparsers, default_help)
 
 
@@ -1721,6 +1806,14 @@ def _create_run_parser(
         "(e.g. \"barcode_count_0 / barcode_count > 0.5\").  Applied at data load time.",
         default=None, dest="label_filter",
     )
+    filt.add_argument(
+        "--feature-channels", nargs="+", type=str, default=None,
+        dest="feature_channels", metavar="CHANNEL",
+        help="Restrict to features from these CellProfiler channel numbers only "
+             "(e.g. '4 5 6 7 8 9 10 11 12 13' for IF channels 4–13). "
+             "Features with no Channel<N> token are always kept. "
+             "When omitted all channels are included.",
+    )
     filt.add_argument("--min-variance", type=float, default=0.1, dest="min_variance")
     filt.add_argument("--max-variance", type=float, default=5.0, dest="max_variance")
     filt.add_argument("--max-feature-nan-fraction", type=float, default=0.50,
@@ -1729,6 +1822,20 @@ def _create_run_parser(
                            "BEFORE the variance filter (default 0.05 = 5%%).")
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
+    filt.add_argument(
+        "--max-residual-nan-fraction", type=float, default=0.0,
+        dest="max_residual_nan_fraction",
+        help="Step-3 residual-NaN tolerance. 0.0 (default): drop any feature with "
+             "even one NaN cell. >0: keep features with NaN fraction ≤ this value "
+             "and impute surviving NaN cells (see --residual-nan-impute).",
+    )
+    filt.add_argument(
+        "--residual-nan-impute", choices=["zero", "perturbation"], default="zero",
+        dest="residual_nan_impute",
+        help="Imputation mode for surviving residual NaN cells when "
+             "--max-residual-nan-fraction > 0. 'zero': replace with 0. "
+             "'perturbation': replace with within-perturbation mean.",
+    )
     filt.add_argument(
         "--filter-batch-size", type=int, default=500_000, dest="filter_batch_size",
         help="Rows per streaming batch during parquet filter (default 200 000). "

@@ -49,7 +49,7 @@ from scallops.features.preprocessing import (
     transform_features_yj,
 )
 from scallops.features.util import (
-    _query_anndata, _read_data, _read_parquet_for_map, _slice_anndata,
+    _query_anndata, _read_data, _read_map_inputs, _slice_anndata,
 )
 from scallops.io import is_parquet_file
 from scallops.utils import _fix_json
@@ -536,7 +536,9 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         features = arguments.features
-        data = _read_parquet_for_map(paths) if all(
+        _raw_chs  = getattr(arguments, "feature_channels", None)
+        _valid_ch = set(str(c) for c in _raw_chs) if _raw_chs else None
+        data = _read_map_inputs(paths, valid_channels=_valid_ch) if all(
             p.lower().endswith((".parquet", ".pq")) for p in paths
         ) else _read_data(paths, features)
 
@@ -1415,10 +1417,9 @@ def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0, in
 def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
     """Filter cells and features.
 
-    Variance is computed **per plate × well** (stratified), matching gould's
-    ``create_steps`` behaviour.  This uses the median group-variance so that a
-    feature is only removed if it is uninformative *within* wells, not just
-    between wells.  Cell-level filtering (max_fraction_not_finite) is always
+    Variance is computed **per plate × well** (stratified), using median
+    group-variance so that a feature is only removed if it is uninformative
+    *within* wells, not just between wells.  Cell-level filtering (max_fraction_not_finite) is always
     global.
 
     Three execution paths are selected automatically:
@@ -1444,9 +1445,12 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     well  = getattr(args, "well_column",  "well")
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
 
-    max_fnf  = getattr(args, "max_fraction_not_finite", 0.25)
-    min_var  = getattr(args, "min_variance", 0.1)
-    max_var  = getattr(args, "max_variance", None)
+    max_fnf           = getattr(args, "max_fraction_not_finite", 0.25)
+    min_var           = getattr(args, "min_variance", 0.1)
+    max_var           = getattr(args, "max_variance", None)
+    max_res_nan_frac  = getattr(args, "max_residual_nan_fraction", 0.0)
+    res_nan_impute    = getattr(args, "residual_nan_impute", "zero") or "zero"
+    pert_col          = getattr(args, "perturbation", "gene_symbol")
 
     obs_all = data.obs
 
@@ -1497,12 +1501,13 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             X_filtered, cell_keep, feat_keep, _feat_report = _col_batch_filter_parquet(
                 parquet_sources, obs_all, label_mask, by_cols,
                 max_fnf, min_var, max_var,
-                # Use data.var.index (intersection across all files after concat)
-                # not sources[0]["feat_cols"] (one file's features, may differ).
                 feat_cols=list(data.var.index),
                 batch_size=getattr(args, "filter_batch_size", 500_000),
                 max_memory_gb=getattr(args, "filter_max_memory_gb", None),
                 max_feature_nan_fraction=getattr(args, "max_feature_nan_fraction", None),
+                max_residual_nan_fraction=max_res_nan_frac,
+                residual_nan_impute=res_nan_impute,
+                perturbation_column=pert_col,
             )
         except MemoryError as exc:
             logger.critical(
@@ -1581,26 +1586,33 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
 
         _mem_stop = _memory_monitor_start()
         try:
-            cell_keep, feat_var = _streaming_cell_and_variance_filter(
+            # Pass 1: scan NaN counts; pass 2: materialise filtered matrix.
+            # Steps 1+2 (feature/cell NaN filter) and steps 3+4 (residual-NaN +
+            # variance filter) use the same shared helpers as the parquet path so
+            # both paths are guaranteed identical behaviour.
+            from scallops.features.preprocessing import (
+                _streaming_cell_and_variance_filter,
+                _apply_filter_steps_1_2,
+                _apply_filter_post_materialise,
+            )
+            bad_counts, nan_per_feat = _streaming_cell_and_variance_filter(
                 X_orig, obs_all, label_mask, by_cols, max_fnf,
                 n_prefetch=n_prefetch,
             )
-            logger.info(
-                "map run [filter]: pass 1/2 done — %s cells, %s features examined",
-                f"{cell_keep.sum():,}", f"{X_orig.shape[1]:,}",
+            _n_cells_z = X_orig.shape[0]
+            _n_feat_z  = X_orig.shape[1]
+            feat_pass1, cell_keep = _apply_filter_steps_1_2(
+                bad_counts, nan_per_feat, label_mask, _n_cells_z, _n_feat_z,
+                max_feature_nan_fraction=getattr(args, "max_feature_nan_fraction", None),
+                max_fraction_not_finite=max_fnf,
             )
-
-            feat_keep = np.isfinite(feat_var)
-            if min_var is not None:
-                feat_keep &= feat_var >= min_var
-            if max_var is not None:
-                feat_keep &= feat_var <= max_var
             logger.info(
-                "map run [filter]: %s / %s features pass variance filter",
-                f"{feat_keep.sum():,}", f"{X_orig.shape[1]:,}",
+                "map run [filter]: pass 1/2 done — %s cells kept, %s / %s features",
+                f"{cell_keep.sum():,}", f"{feat_pass1.sum():,}", f"{_n_feat_z:,}",
             )
+            feat_keep = feat_pass1   # materialise only step-1-surviving features
 
-            out_gb = cell_keep.sum() * feat_keep.sum() * 4 / 1e9
+            out_gb = int(cell_keep.sum()) * int(feat_keep.sum()) * 4 / 1e9
             logger.info(
                 "map run [filter]: pass 2/2 — materialising %s × %s (%.1f GB) …",
                 f"{cell_keep.sum():,}", f"{feat_keep.sum():,}", out_gb,
@@ -1609,6 +1621,18 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                                                 n_prefetch=n_prefetch)
             logger.info(
                 "map run [filter]: materialised %.1f GB", X_filtered.nbytes / 1e9
+            )
+
+            # Steps 3 + 4 — residual-NaN handling + variance filter (shared helper)
+            obs_kept_z = obs_all.iloc[cell_keep].reset_index(drop=True)
+            X_filtered, feat_keep, _feat_var_z = _apply_filter_post_materialise(
+                X_filtered, feat_keep, obs_kept_z,
+                by=by_cols,
+                min_variance=min_var,
+                max_variance=max_var,
+                max_residual_nan_fraction=max_res_nan_frac,
+                residual_nan_impute=res_nan_impute,
+                perturbation_column=pert_col,
             )
 
         except MemoryError as exc:
@@ -1669,6 +1693,36 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         )
         _merge_uns(data, result)
 
+    # ── Final NaN safety net (all paths) ────────────────────────────────────
+    # Mirrors the pre-PCA no_nans_per_feature check in decomposition._centerscale.
+    # Regardless of the step-3 mode used above, this guarantees cells.zarr contains
+    # no NaN: features with any residual NaN are dropped (if step-3 ran in
+    # per-well-median mode and missed them) and then any isolated NaN cells in survivors are
+    # imputed to 0.  This is a no-op when the preceding steps already cleaned data.
+    _X_final = result.X if isinstance(result.X, np.ndarray) else np.asarray(result.X)
+    # Use ~isfinite (not isnan) to catch both NaN and Inf — Inf in a minority of
+    # wells can survive step-4 isfinite(median_var) because np.var([…,inf]) = nan
+    # but np.median([finite,…,nan]) is finite when nan is in the minority.
+    _bad_per_feat_final = (~np.isfinite(_X_final)).sum(axis=0)
+    _feat_all_bad = _bad_per_feat_final == _X_final.shape[0]  # every cell non-finite
+    if _feat_all_bad.any():
+        n_drop_final = int(_feat_all_bad.sum())
+        logger.warning(
+            "map run [filter]: final check — dropping %d all-nonfinite features",
+            n_drop_final,
+        )
+        result = _slice_anndata(result, None, ~_feat_all_bad)   # var mask as positional arg
+        _X_final = _X_final[:, ~_feat_all_bad]
+        _bad_per_feat_final = _bad_per_feat_final[~_feat_all_bad]
+    _remaining_bad = _bad_per_feat_final.sum()
+    if _remaining_bad > 0:
+        _X_final[~np.isfinite(_X_final)] = 0.0
+        result.X = _X_final
+        logger.info(
+            "map run [filter]: final check — zero-imputed %d residual non-finite cells",
+            int(_remaining_bad),
+        )
+
     # ── Post-filter steps (run on already-materialised numpy array) ────────
     if getattr(args, "batch_column", None):
         result = filter_batch_correlated(
@@ -1682,15 +1736,29 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     if getattr(args, "max_correlation", None) is not None:
         result = remove_correlated_features(result, threshold=args.max_correlation)
 
+    # ── Coerce bool obs columns to string for zarr serialisation ──────────
+    # Bool values are kept as Python bool through the label-filter step so
+    # that ``== False`` comparisons work correctly.  Zarr's VLenUTF8 encoder
+    # cannot handle Python bool, so we convert them to "True"/"False" strings
+    # before the result is written.  Downstream steps (scale, PCA, etc.) only
+    # use plate/well/gene_symbol and are unaffected by this conversion.
+    for _col in result.obs.columns:
+        if pd.api.types.is_object_dtype(result.obs[_col]):
+            _non_null = result.obs[_col].dropna()
+            if len(_non_null) and _non_null.apply(
+                lambda x: isinstance(x, (bool, np.bool_))
+            ).all():
+                result.obs[_col] = result.obs[_col].astype(str)
+
     return result
 
 
 def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
     """Apply Yeo-Johnson transform per plate × well.
 
-    Fitting the transform independently per well (as gould's pipeline does)
-    ensures that the power-transform parameters are not skewed by inter-well
-    differences in the marginal distributions.
+    Fitting the transform independently per well ensures that the
+    power-transform parameters are not skewed by inter-well differences in
+    the marginal distributions.
     """
     from scallops.features.preprocessing import transform_features_yj
     plate = getattr(args, "plate_column", "plate")
@@ -2324,7 +2392,9 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             if isinstance(cells.X, da.Array):
                 cells.X = cells.X.compute()
         else:
-            cells = _read_parquet_for_map(list(arguments.input))
+            _raw_chs2 = getattr(arguments, "feature_channels", None)
+            _valid_ch2 = set(str(c) for c in _raw_chs2) if _raw_chs2 else None
+            cells = _read_map_inputs(list(arguments.input), valid_channels=_valid_ch2)
             # ── DO NOT call cells.X.compute() here. ─────────────────────────────
             # Raw parquet files contain ~9,000 columns × float64. Materialising
             # all of them at once requires (n_cells × n_cols × 8) bytes — easily
@@ -2925,3 +2995,53 @@ def run_pipeline_map_backproject(arguments: argparse.Namespace) -> None:
         with _fs_out.open(_path_out, "wb") as _fh:
             result_df.to_parquet(_fh, index=False)
         logger.info("backproject: results written → %s", out_path)
+
+
+def run_pipeline_map_shap_cosine(arguments: argparse.Namespace) -> None:
+    """Compute per-feature SHAP attribution for cosine similarity across perturbations.
+
+    :param arguments: Parsed CLI namespace.
+    """
+    from scallops.features.backprojection import shap_cosine_features
+
+    paths  = arguments.input
+    output = arguments.output
+    force  = arguments.force
+
+    if _skip_if_exists(output, force):
+        return
+
+    pert_col    = getattr(arguments, "perturbation_column", "gene_symbol")
+    top_k       = getattr(arguments, "top_k", None)
+    pair_names  = getattr(arguments, "pair_names", None)   # [A, B] from --pair A B
+    perts       = getattr(arguments, "perturbations",  None)
+    max_full    = int(getattr(arguments, "max_pairs_full", 500_000))
+
+    pair = tuple(pair_names) if pair_names else None
+
+    with _create_default_dask_config():
+        data = _read_data(paths)
+        if isinstance(data.X, da.Array):
+            data.X = data.X.compute()
+        logger.info("shap-cosine: input %s obs × %s features",
+                    f"{data.shape[0]:,}", f"{data.shape[1]:,}")
+
+        result_df = shap_cosine_features(
+            data,
+            perturbations=perts,
+            perturbation_column=pert_col,
+            pair=pair,
+            top_k=top_k,
+            max_pairs_full=max_full,
+        )
+
+        n_rows = len(result_df)
+        mode   = "pair" if pair else ("full" if "shap" in result_df.columns else "aggregate")
+        logger.info("shap-cosine: %s mode → %d rows", mode, n_rows)
+
+        out_path = output if output.endswith(".parquet") else output + ".parquet"
+        import fsspec as _fsspec
+        _fs_out, _path_out = _fsspec.url_to_fs(out_path)
+        with _fs_out.open(_path_out, "wb") as _fh:
+            result_df.to_parquet(_fh, index=False)
+        logger.info("shap-cosine: results written → %s", out_path)

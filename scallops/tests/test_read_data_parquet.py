@@ -20,7 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from scallops.features.util import _read_parquet_for_map as _read_data
+from scallops.features.util import _read_map_inputs as _read_data
 
 
 # ---------------------------------------------------------------------------
@@ -221,3 +221,97 @@ def test_read_data_parquet_row_groups(tmp_path):
     # With dask.delayed per-row-group, chunks match exactly: (3, 3, 3, 1)
     assert len(data.X.chunks[0]) == 4
     assert sum(data.X.chunks[0]) == 10
+
+
+@pytest.mark.features
+def test_bool_obs_col_label_filter(tmp_path):
+    """Bool obs columns must not be coerced to str — ``== False`` must match.
+
+    Regression: _read_map_inputs used to call ``.astype(str)`` on every object
+    column, converting Python bool ``False`` to the string ``"False"``.  A
+    label filter ``col == False`` then matched nothing, producing an empty
+    AnnData.  This test pins the fix: the bool dtype must be preserved so
+    that the pandas query works correctly.
+    """
+    import pyarrow as _pa
+    import pyarrow.parquet as _pq
+    from scallops.features.util import _read_map_inputs
+
+    n = 20
+    df = pd.DataFrame({
+        # Feature columns
+        "Cells_Intensity_feat0": np.random.randn(n),
+        "Nuclei_AreaShape_feat1": np.random.randn(n),
+        # Bool obs column (Python objects, some NaN)
+        "boundary_flag": [False] * 10 + [True] * 8 + [None, None],
+        "gene_symbol": ["NTC"] * n,
+        "plate": ["A"] * n,
+        "well": ["1"] * n,
+    })
+    p = str(tmp_path / "bool_obs.parquet")
+    _pq.write_table(_pa.Table.from_pandas(df), p)
+
+    data = _read_map_inputs([p])
+
+    # boundary_flag must be in obs (it starts with no CellProfiler compartment
+    # prefix, so it stays as obs) and must remain bool-like, not string
+    assert "boundary_flag" in data.obs.columns, "boundary_flag missing from obs"
+
+    # Label filter ``== False`` must match the 10 False rows
+    from scallops.features.util import _query_anndata
+    kept = _query_anndata(data, "boundary_flag == False")
+    assert len(kept) == 10, (
+        f"Expected 10 kept rows (boundary_flag==False) but got {len(kept)}. "
+        "Bool values may have been coerced to strings."
+    )
+
+
+@pytest.mark.features
+def test_feature_channels_filter(tmp_path):
+    """--feature-channels must exclude features whose Channel<N> is not in the set.
+
+    Features with NO Channel token (e.g. purely morphological shape features)
+    are always retained regardless of the channel filter.
+    """
+    import pyarrow as _pa
+    import pyarrow.parquet as _pq
+    from scallops.features.util import _read_map_inputs, _keep_channels
+
+    n = 6
+    df = pd.DataFrame({
+        "Cells_Intensity_MeanIntensity_Channel0": np.random.randn(n),   # FISH → exclude
+        "Cells_Intensity_MeanIntensity_Channel4": np.random.randn(n),   # IF → keep
+        "Nuclei_AreaShape_Area": np.random.randn(n),                    # no channel → keep
+        "gene_symbol": ["NTC"] * n,
+        "plate": ["A"] * n,
+        "well": ["1"] * n,
+    })
+    p = str(tmp_path / "channels.parquet")
+    _pq.write_table(_pa.Table.from_pandas(df), p)
+
+    # Without channel filter: all 3 feature columns
+    data_all = _read_map_inputs([p])
+    assert data_all.shape[1] == 3, f"Expected 3 features, got {data_all.shape[1]}"
+
+    # With IF channels 4-13: Channel0 excluded, others kept
+    if_channels = {str(i) for i in range(4, 14)}
+    data_if = _read_map_inputs([p], valid_channels=if_channels)
+    assert data_if.shape[1] == 2, (
+        f"Expected 2 features (Channel4 + no-channel Area), got {data_if.shape[1]}"
+    )
+    assert "Cells_Intensity_MeanIntensity_Channel4" in data_if.var.index
+    assert "Nuclei_AreaShape_Area" in data_if.var.index
+    assert "Cells_Intensity_MeanIntensity_Channel0" not in data_if.var.index
+
+    # _keep_channels unit test
+    cols = [
+        "Cells_Intensity_Channel0",
+        "Cells_Intensity_Channel4",
+        "Nuclei_AreaShape_Area",          # no Channel token → always kept
+        "Cells_Granularity_1_Channel0_Channel4",  # mixed → excluded (Channel0 not in IF)
+    ]
+    kept = _keep_channels(cols, if_channels)
+    assert "Cells_Intensity_Channel0" not in kept
+    assert "Cells_Intensity_Channel4" in kept
+    assert "Nuclei_AreaShape_Area" in kept
+    assert "Cells_Granularity_1_Channel0_Channel4" not in kept

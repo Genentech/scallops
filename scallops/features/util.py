@@ -209,8 +209,79 @@ def _read_data(
     return data
 
 
-def _read_parquet_for_map(
-    paths: Sequence[str], features: Sequence[str] | None = None
+def _is_obs_col(column: str) -> bool:
+    """Return True for compartment-prefixed columns that are cell metadata, not
+    morphological measurements.
+
+    CellProfiler output mixes spatial/QC columns (e.g. centroid coordinates,
+    boundary flags, neighbor counts) with measurement features (intensity,
+    texture, etc.) under the same ``Cells_`` / ``Nuclei_`` / ``Cytoplasm_``
+    namespace.  The former belong in ``obs``; the latter in ``X``.
+
+    Pattern rules (no hardcoded names):
+    - Coordinate columns: name ends with ``_X`` or ``_Y``
+    - Boundary QC: name contains ``IntersectsBoundary``
+    - Topology (object refs only): name contains ``_Neighbors_ObjectNumber``
+      (quantitative neighbor measurements like Distance/Angle/Count stay in X)
+    - ISS / PHENO QC: name contains ``_ISS_PHENO`` or ends with
+      ``-pheno-to-iss-qc`` (all registration QC columns excluded from X
+      regardless of the base measurement type)
+    """
+    import re
+    if re.search(r'_(X|Y)$', column):
+        return True
+    if 'IntersectsBoundary' in column:
+        return True
+    if '_Neighbors_' in column and 'ObjectNumber' in column:
+        return True
+    if '_ISS_PHENO' in column or column.endswith('-pheno-to-iss-qc'):
+        return True
+    return False
+
+
+def _keep_channels(
+    columns: Sequence[str],
+    valid_channels: "set[str] | None",
+) -> list[str]:
+    """Filter feature column names to those whose channel references are all in
+    *valid_channels*.
+
+    A column is kept when **every** ``Channel<N>`` token in its name has
+    ``<N>`` in *valid_channels*.  Columns with *no* channel token (e.g. purely
+    morphological shape features) are kept unconditionally — they are not
+    channel-specific measurements.
+
+    When *valid_channels* is ``None`` (default) all columns are returned
+    unchanged, so existing code paths that do not use channel selection are
+    unaffected.
+
+    :param columns: Iterable of feature column names to filter.
+    :param valid_channels: Set of channel-number strings to keep
+        (e.g. ``{"4","5","6","7","8","9","10","11","12","13"}`` for IF
+        channels 4–13 in a typical OPS screen).  ``None`` = keep all.
+    :return: Filtered list of column names.
+
+    Example::
+
+        # Keep only IF channels 4–13
+        if_feats = _keep_channels(all_feats, {str(i) for i in range(4, 14)})
+    """
+    if valid_channels is None:
+        return list(columns)
+    import re
+    out = []
+    _pat = re.compile(r'Channel(\d+)')
+    for col in columns:
+        refs = _pat.findall(col)
+        if all(r in valid_channels for r in refs):   # vacuously True when refs=[]
+            out.append(col)
+    return out
+
+
+def _read_map_inputs(
+    paths: Sequence[str],
+    features: Sequence[str] | None = None,
+    valid_channels: "set[str] | None" = None,
 ) -> anndata.AnnData:
     """Read parquet files for the map pipeline.
 
@@ -235,6 +306,9 @@ def _read_parquet_for_map(
             d = anndata.read_h5ad(path)
             if features is not None and len(features) > 0:
                 d = d[:, features]
+            elif valid_channels is not None:
+                _keep = _keep_channels(list(d.var.index), valid_channels)
+                d = d[:, _keep]
             data_arrays.append(d)
             continue
 
@@ -244,6 +318,9 @@ def _read_parquet_for_map(
             d = read_anndata_zarr(path, dask=True)
             if features is not None and len(features) > 0:
                 d = d[:, features]
+            elif valid_channels is not None:
+                _keep = _keep_channels(list(d.var.index), valid_channels)
+                d = d[:, _keep]
             data_arrays.append(d)
             continue
 
@@ -254,10 +331,13 @@ def _read_parquet_for_map(
             _pq_meta = _pq.read_metadata(_f)
 
         _all_cols  = _schema.names
+        _COMPARTMENTS = {"Cells", "Nuclei", "Cytoplasm"}
         _feat_cols = list(features) if features else [
             c for c in _all_cols
-            if c.split("_")[0] in {"Cells", "Nuclei", "Cytoplasm"}
+            if c.split("_")[0] in _COMPARTMENTS and not _is_obs_col(c)
         ]
+        # Apply channel filter (e.g. restrict to IF channels 4-13)
+        _feat_cols = _keep_channels(_feat_cols, valid_channels)
         _feat_set = set(_feat_cols)
 
         # Obs: skip list/struct typed columns (e.g. barcode_Q_0)
@@ -281,7 +361,15 @@ def _read_parquet_for_map(
         _obs_df.index = _obs_df.index.astype(str)
         for _c in _obs_df.columns:
             if pd.api.types.is_object_dtype(_obs_df[_c]):
-                _obs_df[_c] = _obs_df[_c].astype(str)
+                # Keep Python bool values as bool so label filters like
+                # ``== False`` work correctly.  Convert everything else to str.
+                _non_null = _obs_df[_c].dropna()
+                if len(_non_null) and _non_null.apply(
+                    lambda x: isinstance(x, (bool, np.bool_))
+                ).all():
+                    pass  # leave as nullable-bool object dtype
+                else:
+                    _obs_df[_c] = _obs_df[_c].astype(str)
 
         # ── X: placeholder dask array (never computed; scanner reads directly) ─
         import dask

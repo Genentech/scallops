@@ -2167,9 +2167,9 @@ def test_map_backproject_cluster_query(agg_profiles, tmp_path):
 
 
 def _write_parquet(data: anndata.AnnData, path) -> str:
-    """Write AnnData to a parquet file readable by _read_parquet_for_map.
+    """Write AnnData to a parquet file readable by _read_map_inputs.
 
-    Feature columns use Nuclei_ prefix so _read_parquet_for_map classifies
+    Feature columns use Nuclei_ prefix so _read_map_inputs classifies
     them as features; obs columns are kept as metadata.
     """
     import pyarrow as pa

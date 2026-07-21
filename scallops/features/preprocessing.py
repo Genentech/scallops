@@ -237,256 +237,64 @@ def _streaming_cell_and_variance_filter(
     *,
     n_prefetch: int = 3,
 ) -> "tuple[np.ndarray, np.ndarray]":
-    """Single S3 pass: cell-keep mask + per-group Welford variance.
+    """Streaming scan: accumulate per-cell and per-feature NaN counts (zarr path).
 
-    Merges what were previously two separate passes (``_streaming_cell_filter``
-    and ``_streaming_feature_variance_by_group``) into one read.  Each chunk is
-    fetched once; the cell filter and variance update happen on the same copy.
+    Pure statistics accumulator — no filter decisions made here.  Both
+    ``bad_counts`` and ``nan_per_feat`` are passed to
+    :func:`_apply_filter_steps_1_2` which applies the same step-1 and step-2
+    logic as the parquet column-batch path, guaranteeing identical behaviour.
 
     :param X_dask: Dask array of shape (n_obs, n_feat).
-    :param obs_df: DataFrame with obs metadata, same row order as X_dask.
-    :param label_mask: Boolean mask (n_obs,) from the label-filter expression
-        (obs-only, no I/O required to compute).
-    :param by: Obs columns to stratify variance by, or None for global.
-    :param max_fraction_not_finite: Cell-level infinite/NaN fraction threshold.
+    :param obs_df: DataFrame with obs metadata (row-aligned with X_dask).
+    :param label_mask: Boolean mask (n_obs,) from obs-only label filter.
+    :param by: Unused (variance now computed post-materialise); kept for
+        call-site compatibility.
+    :param max_fraction_not_finite: Unused here; passed through to
+        ``_apply_filter_steps_1_2`` by the caller.
     :param n_prefetch: Max concurrent S3 chunk reads.
-    :return: ``(cell_keep, feat_var)`` — boolean mask (n_obs,) and float array
-        (n_feat,) of median group variance.
+    :return: ``(bad_counts, nan_per_feat)`` — per-cell NaN count (n_obs,)
+        and per-feature NaN count (n_feat,), both accumulated across ALL cells
+        (including those that will be dropped by step 2).
     """
     import time
     from concurrent.futures import ThreadPoolExecutor
 
+    n_cells  = X_dask.shape[0]
     n_feat   = X_dask.shape[1]
     n_chunks = X_dask.numblocks[0]
-    max_bad  = int(n_feat * max_fraction_not_finite) if max_fraction_not_finite is not None else n_feat
 
-    group_stats: dict = {}
-    cell_keep_parts: list = []
-    row_offset = 0
+    bad_counts   = np.zeros(n_cells, dtype=np.int32)
+    nan_per_feat = np.zeros(n_feat,  dtype=np.int64)
+    row_offset   = 0
     t0 = time.monotonic()
 
     logger.info(
-        "  [filter pass 1/2] %d chunks, %d concurrent reads"
-        " — cell filter + %s variance in one S3 pass",
+        "  [filter scan] %d chunks, %d concurrent reads — accumulating NaN counts",
         n_chunks, n_prefetch,
-        f"per-{'×'.join(by)}" if by else "global",
     )
 
     with ThreadPoolExecutor(max_workers=n_prefetch) as pool:
         futures = [pool.submit(X_dask.blocks[ci].compute) for ci in range(n_chunks)]
 
-        for ci, fut in enumerate(futures):
-            chunk_rows  = X_dask.chunks[0][ci]
-            label_ci    = label_mask[row_offset : row_offset + chunk_rows]
-            obs_ci      = obs_df.iloc[row_offset : row_offset + chunk_rows]
-            row_offset += chunk_rows
-
-            chunk = fut.result()
-
-            # ── Cell filter: label mask ∩ finite-value mask ────────────────
-            bad      = (~np.isfinite(chunk)).sum(axis=1)
-            cell_mask = label_ci & (bad <= max_bad)
-            cell_keep_parts.append(cell_mask)
-
-            # ── Welford variance update (only kept cells) ──────────────────
-            if cell_mask.any():
-                kept     = chunk[cell_mask].astype(np.float64)
-                obs_filt = obs_ci.iloc[cell_mask]
-
-                groups = obs_filt.groupby(by, observed=True).indices if by else {"_all_": np.arange(len(kept))}
-                for gk, idx in groups.items():
-                    X_g = kept[idx]
-                    if len(X_g) == 0:
-                        continue
-                    n_g    = len(X_g)
-                    mean_g = np.nanmean(X_g, axis=0)
-                    var_g  = np.nanvar(X_g, axis=0, ddof=0)
-                    if gk not in group_stats:
-                        group_stats[gk] = {"n": n_g, "mean": mean_g.copy(), "M2": var_g * n_g}
-                    else:
-                        s = group_stats[gk]
-                        nt    = s["n"] + n_g
-                        delta = mean_g - s["mean"]
-                        s["mean"] += delta * n_g / nt
-                        s["M2"]   += var_g * n_g + delta ** 2 * s["n"] * n_g / nt
-                        s["n"]     = nt
-                del kept
-
-            del chunk
-            done = ci + 1
-            eta  = (time.monotonic() - t0) / done * (n_chunks - done) / 60
-            logger.info(
-                "  [filter pass 1/2] %d/%d done — %s cells kept — ETA: %.0f min",
-                done, n_chunks, f"{int(cell_mask.sum()):,}", eta,
-            )
-
-    cell_keep = np.concatenate(cell_keep_parts)
-
-    if not group_stats:
-        return cell_keep, np.zeros(n_feat)
-
-    vars_per_group = [
-        s["M2"] / (s["n"] - 1) if s["n"] > 1 else np.zeros(n_feat)
-        for s in group_stats.values()
-    ]
-    feat_var = np.median(np.stack(vars_per_group, axis=0), axis=0)
-    return cell_keep, feat_var
-
-
-def _streaming_cell_filter(
-    X_dask: "da.Array",
-    max_fraction_not_finite: float,
-    n_prefetch: int = 3,
-) -> "np.ndarray":
-    """Boolean cell-keep mask with bounded parallel chunk prefetching.
-
-    Reads ``n_prefetch`` chunks concurrently so S3 I/O overlaps with
-    computation.  Peak memory ≈ ``n_prefetch`` × one chunk.
-
-    :param X_dask: Dask array of shape (n_obs, n_feat).
-    :param max_fraction_not_finite: Fraction threshold; cells above this are
-        dropped.
-    :param n_prefetch: Max concurrent chunk reads (higher = faster but more RAM).
-    :return: Boolean numpy array of length n_obs.
-    """
-    import time
-    from concurrent.futures import ThreadPoolExecutor
-
-    n_feat = X_dask.shape[1]
-    max_bad = int(n_feat * max_fraction_not_finite)
-    n_chunks = X_dask.numblocks[0]
-    chunk_gb = [X_dask.chunks[0][ci] * n_feat * 4 / 1e9 for ci in range(n_chunks)]
-
-    logger.info(
-        "  [cell filter] %d chunks, %d concurrent reads (peak ≈ %.0f GB)",
-        n_chunks, n_prefetch, n_prefetch * (chunk_gb[0] if chunk_gb else 0),
-    )
-
-    keeps = [None] * n_chunks
-    t0 = time.monotonic()
-
-    with ThreadPoolExecutor(max_workers=n_prefetch) as pool:
-        # Submit all chunks up-front; executor limits to n_prefetch concurrent.
-        futures = [pool.submit(X_dask.blocks[ci].compute) for ci in range(n_chunks)]
-        # Consume IN ORDER so row offsets align with obs_df later.
-        for ci, fut in enumerate(futures):
-            chunk = fut.result()
-            bad = (~np.isfinite(chunk)).sum(axis=1)
-            keeps[ci] = bad <= max_bad
-            del chunk
-            done = ci + 1
-            eta  = (time.monotonic() - t0) / done * (n_chunks - done) / 60
-            logger.info(
-                "  [cell filter] %d/%d done — %s bad cells — ETA: %.0f min",
-                done, n_chunks, f"{int((~keeps[ci]).sum()):,}", eta,
-            )
-
-    return np.concatenate(keeps)
-
-
-def _streaming_feature_variance_by_group(
-    X_dask: "da.Array",
-    obs_df: "pd.DataFrame",
-    cell_keep: "np.ndarray",
-    by: list,
-) -> "np.ndarray":
-    """Median per-group feature variance via Welford's parallel online algorithm.
-
-    Reads one dask chunk at a time — peak memory ≈ one chunk (no xarray copies,
-    no materialisation of the full array).  Preserves the stratified variance
-    semantics (median across plate × well groups).
-
-    The Welford parallel update formula is used to combine statistics from
-    different chunk slices of the same group:
-
-    .. code-block:: text
-
-        n_new   = n_a + n_b
-        mean_c  = (n_a * mean_a + n_b * mean_b) / n_new
-        M2_c    = M2_a + M2_b + delta^2 * n_a * n_b / n_new
-        (where delta = mean_b - mean_a)
-
-    :param X_dask: Dask array of shape (n_obs, n_feat).
-    :param obs_df: DataFrame with obs metadata (same row order as X_dask).
-    :param cell_keep: Boolean mask (n_obs,) of cells to include.
-    :param by: List of obs columns to stratify by (e.g. ['plate', 'well']).
-    :return: Float numpy array of length n_feat (median variance across groups).
-    """
-    import pandas as pd
-
-    import time
-    from concurrent.futures import ThreadPoolExecutor
-
-    n_feat   = X_dask.shape[1]
-    n_chunks = X_dask.numblocks[0]
-    n_prefetch = 3  # same default as cell filter
-    # group_key -> {'n': int, 'mean': ndarray(n_feat), 'M2': ndarray(n_feat)}
-    group_stats: dict = {}
-    row_offset = 0
-    t0 = time.monotonic()
-
-    logger.info(
-        "  [variance] %d chunks, %d concurrent reads", n_chunks, n_prefetch,
-    )
-
-    with ThreadPoolExecutor(max_workers=n_prefetch) as pool:
-        futures = [pool.submit(X_dask.blocks[ci].compute) for ci in range(n_chunks)]
         for ci, fut in enumerate(futures):
             chunk_rows = X_dask.chunks[0][ci]
-            cell_mask  = cell_keep[row_offset : row_offset + chunk_rows]
-            obs_ci     = obs_df.iloc[row_offset : row_offset + chunk_rows]
+            row_offset_end = row_offset + chunk_rows
+
+            chunk = fut.result()
+            not_fin = ~np.isfinite(chunk)
+            bad_counts[row_offset:row_offset_end] = not_fin.sum(axis=1).astype(np.int32)
+            nan_per_feat += not_fin.sum(axis=0).astype(np.int64)
+            del chunk, not_fin
+
             row_offset += chunk_rows
-
-            raw_chunk = fut.result()
-
-            if not cell_mask.any():
-                del raw_chunk
-                continue
-
-            chunk    = raw_chunk[cell_mask].astype(np.float64)
-            del raw_chunk
-            obs_filt = obs_ci.iloc[cell_mask]
-
-            for group_key, idx in obs_filt.groupby(by, observed=True).indices.items():
-                X_g = chunk[idx]
-                if len(X_g) == 0:
-                    continue
-                n_g    = len(X_g)
-                mean_g = np.nanmean(X_g, axis=0)
-                var_g  = np.nanvar(X_g, axis=0, ddof=0)
-
-                if group_key not in group_stats:
-                    group_stats[group_key] = {
-                        "n":    n_g,
-                        "mean": mean_g.copy(),
-                        "M2":   var_g * n_g,
-                    }
-                else:
-                    s      = group_stats[group_key]
-                    n_total = s["n"] + n_g
-                    delta   = mean_g - s["mean"]
-                    s["mean"] = s["mean"] + delta * n_g / n_total
-                    s["M2"]   = s["M2"] + var_g * n_g + delta ** 2 * s["n"] * n_g / n_total
-                    s["n"]    = n_total
-
-            del chunk
             done = ci + 1
             eta  = (time.monotonic() - t0) / done * (n_chunks - done) / 60
-            logger.info(
-                "  [variance] %d/%d done — ETA: %.0f min", done, n_chunks, eta,
-            )
+            if done % 5 == 0 or done == n_chunks:
+                logger.info(
+                    "  [filter scan] %d/%d done — ETA: %.0f min", done, n_chunks, eta,
+                )
 
-    if not group_stats:
-        return np.zeros(n_feat)
-
-    group_variances = []
-    for s in group_stats.values():
-        if s["n"] > 1:
-            group_variances.append(s["M2"] / (s["n"] - 1))  # unbiased
-        else:
-            group_variances.append(np.zeros(n_feat))
-
-    return np.median(np.stack(group_variances, axis=0), axis=0)
+    return bad_counts, nan_per_feat
 
 
 def _streaming_materialise(
@@ -539,8 +347,345 @@ def _streaming_materialise(
 
 
 # ---------------------------------------------------------------------------
+# Shared step-3 residual-NaN handler (called by parquet AND zarr paths)
+# ---------------------------------------------------------------------------
+
+
+def _apply_residual_nan_step(
+    result: "np.ndarray",
+    feat_keep: "np.ndarray",
+    obs_kept: "pd.DataFrame | None",
+    max_residual_nan_fraction: "float | None" = 0.0,
+    residual_nan_impute: "str" = "zero",
+    perturbation_column: "str | None" = None,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Apply step-3 residual-NaN logic to the materialised filter matrix.
+
+    This is the single source of truth for residual-NaN handling shared by
+    the parquet column-batch path and the zarr row-batch path.  Changing the
+    logic here automatically applies to both.
+
+    Three modes controlled by *max_residual_nan_fraction*:
+
+    ``None`` (**recommended, per-well median**)
+        **Per-well median mode** — no explicit step-3 drop.  The caller is
+        expected to run the step-4 variance filter on the matrix with residual
+        NaN still present (``np.var`` propagates NaN within a well; the median
+        across wells is finite when fewer than half the wells have NaN, matching
+        ``feature_variance(skipna=False)``).  After step 4, surviving NaN cells
+        are imputed to 0.  Features whose NaN is concentrated in ≤50% of wells
+        survive; those with majority-NaN wells are dropped by ``isfinite``.
+
+    ``0.0`` (default)
+        **Zero-tolerance drop** — any feature with ≥ 1 NaN cell is removed.
+        Conservative; keeps the output fully NaN-free before the variance step.
+
+    ``0 < f ≤ 1``
+        **Fraction-threshold** — features whose residual NaN fraction exceeds
+        *f* are dropped; surviving NaN cells are imputed (see
+        *residual_nan_impute*).
+
+    :param result: Materialised float32 array ``(n_cells, n_feat)``.
+        Modified **in place** for the imputation modes.
+    :param feat_keep: Boolean mask ``(n_original_feat,)`` tracking which
+        features are still kept.  Updated in place when features are dropped.
+    :param obs_kept: DataFrame of the *kept* cells (row-aligned with *result*).
+        Required for perturbation imputation; may be ``None`` for zero-mode.
+    :param max_residual_nan_fraction: Tolerance threshold (see above).
+    :param residual_nan_impute: ``"zero"`` or ``"perturbation"``.
+    :param perturbation_column: obs column naming each cell's perturbation.
+    :return: ``(result, feat_keep)`` — the (possibly sliced) matrix and the
+        updated keep mask.  In ``None`` mode the matrix is returned unchanged
+        (NaN cells still present) so the caller's step-4 variance filter can
+        see them.
+    """
+    # Use ~isfinite (not isnan) to also catch Inf values — Inf in a minority of
+    # wells can survive step-4 isfinite(median_var) because np.var(…, inf) = nan
+    # but np.median([finite,…, nan]) is finite when nan is in the minority.
+    nan_per_feat = (~np.isfinite(result)).sum(axis=0)   # (n_feat,) counts NaN+Inf
+    n_cells = result.shape[0]
+
+    if max_residual_nan_fraction is None:
+        # ── Per-well-median mode: pass through unchanged, step-4 handles via isfinite ──
+        n_with_nan = int((nan_per_feat > 0).sum())
+        if n_with_nan:
+            logger.info(
+                "  [residual NaN] per-well-median: %d features have residual non-finite "
+                "→ step-4 variance (isfinite) decides fate",
+                n_with_nan,
+            )
+        # No mutation — caller runs step-4 on data that may contain NaN/Inf
+        return result, feat_keep
+
+    if max_residual_nan_fraction == 0.0:
+        # ── Zero-tolerance: drop any feature with residual non-finite value ──
+        feat_still_nan = nan_per_feat > 0
+        if feat_still_nan.any():
+            n_drop = int(feat_still_nan.sum())
+            logger.info(
+                "  [residual NaN] zero-tolerance: dropped %d features → %d remain",
+                n_drop, int(feat_keep.sum()) - n_drop,
+            )
+            result = result[:, ~feat_still_nan]
+            _fk = np.where(feat_keep)[0]
+            feat_keep[_fk[feat_still_nan]] = False
+
+    else:
+        # ── Fraction-threshold: drop only features exceeding the limit ─────
+        nan_frac = nan_per_feat / max(n_cells, 1)
+        feat_too_nan = nan_frac > max_residual_nan_fraction
+        if feat_too_nan.any():
+            n_drop = int(feat_too_nan.sum())
+            logger.info(
+                "  [residual NaN] fraction-mode (>%.1f%%): dropped %d → %d remain",
+                max_residual_nan_fraction * 100, n_drop, int(feat_keep.sum()) - n_drop,
+            )
+            result = result[:, ~feat_too_nan]
+            _fk = np.where(feat_keep)[0]
+            feat_keep[_fk[feat_too_nan]] = False
+
+        # ── Impute surviving residual non-finite cells (NaN + Inf) ───────────
+        nan_mask = ~np.isfinite(result)
+        if nan_mask.any():
+            n_nan_cells = int(nan_mask.sum())
+            n_nan_feats = int(nan_mask.any(axis=0).sum())
+
+            if (residual_nan_impute == "perturbation"
+                    and perturbation_column is not None
+                    and obs_kept is not None
+                    and perturbation_column in obs_kept.columns):
+                pv = obs_kept[perturbation_column].values
+                for pk in np.unique(pv):
+                    grp = pv == pk
+                    X_g = result[grp].copy()
+                    ng  = ~np.isfinite(X_g)
+                    if not ng.any():
+                        continue
+                    X_g[ng] = np.nan          # treat Inf as NaN for mean computation
+                    mg = np.nanmean(X_g, axis=0)
+                    np.nan_to_num(mg, nan=0.0, copy=False)
+                    result[grp] = np.where(ng, mg[np.newaxis, :], result[grp])
+                logger.info(
+                    "  [residual NaN] perturbation-mean imputed %d cells"
+                    " across %d features", n_nan_cells, n_nan_feats,
+                )
+            else:
+                if residual_nan_impute == "perturbation":
+                    logger.warning(
+                        "  [residual NaN] perturbation impute requested but "
+                        "column '%s' unavailable — falling back to zero",
+                        perturbation_column,
+                    )
+                result[nan_mask] = 0.0
+                logger.info(
+                    "  [residual NaN] zero-imputed %d cells across %d features",
+                    n_nan_cells, n_nan_feats,
+                )
+
+    return result, feat_keep
+
+
+# ---------------------------------------------------------------------------
 # Column-batch filter for parquet (all row groups parallel per feature batch)
 # ---------------------------------------------------------------------------
+
+
+def _apply_variance_filter(
+    result: "np.ndarray",
+    feat_keep: "np.ndarray",
+    obs_kept: "pd.DataFrame | None",
+    by: "list | None" = None,
+    min_variance: "float | None" = 0.1,
+    max_variance: "float | None" = None,
+    max_residual_nan_fraction: "float | None" = None,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Step-4 variance filter — single source of truth for parquet AND zarr paths.
+
+    Computes per-group variance with ``np.var`` (NaN-propagating, ``ddof=0``),
+    takes the median across groups, then applies ``isfinite`` + threshold filters.
+
+    In per-well-median mode (``max_residual_nan_fraction=None``) the matrix may
+    still contain NaN cells.  ``np.var`` propagates NaN within a group → that
+    group's variance is NaN.  ``np.median`` across groups is finite when fewer
+    than half the groups have NaN variance, so ``isfinite(median_var)`` drops
+    only features whose NaN is concentrated in a majority of groups — identical
+    to ``feature_variance(skipna=False)``.  After filtering, surviving NaN cells
+    are imputed to 0.
+
+    In zero-tolerance mode (``max_residual_nan_fraction=0.0``) the matrix is
+    already NaN-free, so ``np.var`` never produces NaN and ``isfinite`` is a
+    no-op.
+
+    :param result: Float32 array ``(n_cells, n_feat)``, modified in place for
+        per-well-median-mode imputation.
+    :param feat_keep: Boolean mask over original features; updated when features
+        are dropped.
+    :param obs_kept: DataFrame of kept cells for groupby; may be ``None`` for
+        global (non-stratified) variance.
+    :param by: obs columns to stratify by (e.g. ``['plate','well']``).
+    :param min_variance: Minimum variance threshold (``None`` treated as 0).
+    :param max_variance: Maximum variance threshold (``None`` = disabled).
+    :param max_residual_nan_fraction: Passed through only to decide whether to
+        apply per-well-median post-filter imputation; the value itself is not used
+        in the variance computation.
+    :return: ``(result, feat_keep)`` — matrix (possibly NaN-imputed) and
+        updated keep mask.
+    """
+    _min_var = min_variance if min_variance is not None else 0.0
+    n_feat = result.shape[1]
+    feat_var = np.zeros(n_feat, dtype=np.float64)
+
+    if result.shape[0] > 1:
+        if by and obs_kept is not None:
+            group_vars = []
+            for _, grp_idx in obs_kept.groupby(by, observed=True).groups.items():
+                X_grp = result[grp_idx.values].astype(np.float64)
+                if len(X_grp) > 1:
+                    group_vars.append(np.var(X_grp, axis=0, ddof=0))
+            if group_vars:
+                feat_var = np.median(np.stack(group_vars), axis=0)
+        else:
+            feat_var = np.var(result.astype(np.float64), axis=0, ddof=0)
+
+    feat_var_keep = np.isfinite(feat_var) & (feat_var >= _min_var)
+    if max_variance is not None:
+        feat_var_keep &= feat_var <= max_variance
+
+    if not feat_var_keep.all():
+        n_drop = int((~feat_var_keep).sum())
+        logger.info(
+            "  [variance filter] dropped %d features (var<%.3f or not finite)"
+            " → %d remain",
+            n_drop, _min_var, int(feat_var_keep.sum()),
+        )
+        result = result[:, feat_var_keep]
+        _fk = np.where(feat_keep)[0]
+        feat_keep[_fk[~feat_var_keep]] = False
+
+    # Per-well-median mode: impute surviving non-finite cells (NaN + Inf) to 0
+    if max_residual_nan_fraction is None:
+        nan_mask = ~np.isfinite(result)
+        if nan_mask.any():
+            logger.info(
+                "  [variance filter] per-well-median: zero-imputed %d residual "
+                "non-finite cells across %d features",
+                int(nan_mask.sum()), int(nan_mask.any(axis=0).sum()),
+            )
+            result[nan_mask] = 0.0
+
+    return result, feat_keep, feat_var
+
+
+def _apply_filter_steps_1_2(
+    bad_counts: "np.ndarray",
+    nan_per_feat: "np.ndarray",
+    label_mask: "np.ndarray",
+    n_cells: int,
+    n_feat: int,
+    max_feature_nan_fraction: "float | None" = 0.50,
+    max_fraction_not_finite: "float | None" = 0.25,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Apply steps 1 and 2 from accumulated scan statistics.
+
+    Decouples the decision logic from the I/O mechanism: both the parquet
+    column-batch scanner and the zarr row-batch scanner accumulate
+    ``bad_counts`` (per-cell NaN count) and ``nan_per_feat`` (per-feature NaN
+    count) during their streaming read, then call this function identically.
+
+    Step 1 — feature NaN filter:
+        Drop features where the NaN fraction across all cells exceeds
+        ``max_feature_nan_fraction``.  Disabled when ``None``.
+
+    Step 2 — cell filter:
+        Drop cells whose NaN count across all original features exceeds
+        ``max_fraction_not_finite × n_feat``.  The denominator is always
+        the *total* original feature count (not step-1 survivors) so that
+        cells are not unfairly penalised for having NaN in features that were
+        already going to be dropped.
+
+    :param bad_counts: Per-cell NaN count over all features, shape ``(n_obs,)``.
+    :param nan_per_feat: Per-feature NaN count over all cells, shape ``(n_feat,)``.
+    :param label_mask: Boolean obs-only mask applied before both steps.
+    :param n_cells: Total cell count (len of ``bad_counts``).
+    :param n_feat: Total feature count (len of ``nan_per_feat``).
+    :param max_feature_nan_fraction: Step-1 threshold; ``None`` skips step 1.
+    :param max_fraction_not_finite: Step-2 threshold; ``None`` keeps all cells.
+    :return: ``(feat_pass1, cell_keep)`` — feature and cell boolean masks.
+    """
+    # Step 1
+    feat_pass1 = np.ones(n_feat, dtype=bool)
+    if max_feature_nan_fraction is not None:
+        feat_nan_frac = nan_per_feat / max(n_cells, 1)
+        feat_pass1 = feat_nan_frac <= max_feature_nan_fraction
+        n_s1 = int((~feat_pass1).sum())
+        if n_s1:
+            logger.info(
+                "  [step 1] feature NaN filter (>%.0f%%): %d / %d features dropped",
+                max_feature_nan_fraction * 100, n_s1, n_feat,
+            )
+
+    # Step 2 — denominator = n_feat (total), never step-1-survivors
+    max_bad = (
+        int(n_feat * max_fraction_not_finite)
+        if max_fraction_not_finite is not None else n_feat
+    )
+    cell_keep = label_mask & (bad_counts <= max_bad)
+    logger.info(
+        "  [step 2] cell filter (max_bad=%d, denom=%d): %s / %s cells kept",
+        max_bad, n_feat, f"{int(cell_keep.sum()):,}", f"{n_cells:,}",
+    )
+
+    return feat_pass1, cell_keep
+
+
+def _apply_filter_post_materialise(
+    result: "np.ndarray",
+    feat_keep: "np.ndarray",
+    obs_kept: "pd.DataFrame | None",
+    by: "list | None" = None,
+    min_variance: "float | None" = 0.1,
+    max_variance: "float | None" = None,
+    max_residual_nan_fraction: "float | None" = None,
+    residual_nan_impute: "str" = "zero",
+    perturbation_column: "str | None" = None,
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Apply steps 3 and 4 in sequence on the materialised filter matrix.
+
+    This is the **single entry point** used by both the parquet column-batch
+    path and the zarr row-batch path after ``_streaming_materialise``.  Having
+    one function guarantees both paths receive identical post-materialisation
+    processing and can never diverge.
+
+    Step 3 (``_apply_residual_nan_step``) — residual-NaN handling:
+        * ``max_residual_nan_fraction=None`` (per-well-median mode): no-op passthrough;
+          NaN cells remain so step-4 ``isfinite(median_var)`` handles them.
+        * ``0.0``: zero-tolerance drop — any feature with ≥1 NaN cell removed.
+        * ``> 0``: fraction-threshold drop + imputation of survivors.
+
+    Step 4 (``_apply_variance_filter``) — per-well variance + isfinite:
+        In per-well-median mode ``np.var`` propagates NaN within a group, so
+        ``isfinite(median_var)`` drops features whose NaN spans a majority of
+        wells — then survivors are imputed to 0.  In other modes the matrix is
+        already NaN-free and ``isfinite`` is a no-op.
+
+    :return: ``(result, feat_keep)`` — clean matrix and updated feature mask.
+    """
+    result, feat_keep = _apply_residual_nan_step(
+        result, feat_keep,
+        obs_kept=obs_kept,
+        max_residual_nan_fraction=max_residual_nan_fraction,
+        residual_nan_impute=residual_nan_impute,
+        perturbation_column=perturbation_column,
+    )
+    result, feat_keep, feat_var = _apply_variance_filter(
+        result, feat_keep,
+        obs_kept=obs_kept,
+        by=by,
+        min_variance=min_variance,
+        max_variance=max_variance,
+        max_residual_nan_fraction=max_residual_nan_fraction,
+    )
+    return result, feat_keep, feat_var
 
 
 def _col_batch_filter_parquet(
@@ -555,6 +700,9 @@ def _col_batch_filter_parquet(
     batch_size: int = 500_000,
     max_memory_gb: float | None = None,
     max_feature_nan_fraction: float | None = None,
+    max_residual_nan_fraction: float | None = 0.0,
+    residual_nan_impute: "str | None" = "zero",
+    perturbation_column: "str | None" = None,
 ) -> "tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]":
     """Two-pass sequential streaming filter for parquet files (local or S3).
 
@@ -585,7 +733,7 @@ def _col_batch_filter_parquet(
     (cell_keep × feat_keep) matrix.
 
     :param sources: List of dicts with ``path`` and ``feat_cols`` keys, as
-        produced by ``_read_parquet_for_map``.
+        produced by ``_read_map_inputs``.
     :param obs_df: DataFrame with obs metadata, row-aligned with the concatenated
         sources.
     :param label_mask: Boolean mask (n_obs,) from an obs-only label filter.
@@ -710,35 +858,11 @@ def _col_batch_filter_parquet(
             logger.info("  [pass 1/2] %.0f%% — ETA: %.0f min",
                         row_offset / n_cells * 100, eta)
 
-    # ── Four-step filter (applied in the correct order) ──────────────────────────
-    #
-    # Step 1 — drop features with >max_feature_nan_fraction NaN across ALL cells.
-    #   Applied first so that the cell filter (step 2) is not corrupted by features
-    #   that are fundamentally broken (e.g. edge-cell colocalization).
-    feat_pass1 = np.ones(n_feat, dtype=bool)
-    if max_feature_nan_fraction is not None:
-        feat_nan_frac = nan_per_feat / max(n_cells, 1)
-        feat_pass1 &= feat_nan_frac <= max_feature_nan_fraction
-        n_s1_drop = int((~feat_pass1).sum())
-        if n_s1_drop:
-            logger.info(
-                "  [step 1] feature NaN filter (>%.0f%%): %d / %d features dropped",
-                max_feature_nan_fraction * 100, n_s1_drop, n_feat,
-            )
-
-    # Step 2 — drop cells with >max_fraction_not_finite NaN across step-1-surviving
-    #   features.  bad_counts was accumulated over all n_feat features in pass 1,
-    #   so we recompute max_bad using the step-1 survivor count as the denominator.
-    #   This ensures a cell with NaN only in step-1-dropped features is not
-    #   incorrectly discarded (its bad_counts includes NaN in features that are gone).
-    n_feat_step1 = int(feat_pass1.sum())
-    max_bad_step2 = (
-        int(n_feat_step1 * max_fraction_not_finite)
-        if max_fraction_not_finite is not None else n_feat_step1
+    # ── Steps 1 + 2: shared filter logic (identical to zarr path) ────────────────
+    feat_pass1, cell_keep = _apply_filter_steps_1_2(
+        bad_counts, nan_per_feat, label_mask, n_cells, n_feat,
+        max_feature_nan_fraction, max_fraction_not_finite,
     )
-    cell_keep = label_mask & (bad_counts <= max_bad_step2)
-
-    # Steps 3 and 4 run on the materialised clean matrix — see post-pass-2 section.
     feat_keep = feat_pass1   # pass 2 materialises step-1-surviving features
 
     n_cells_out = int(cell_keep.sum())
@@ -789,57 +913,17 @@ def _col_batch_filter_parquet(
 
     logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
 
-    # ── Step 3 — remove features with any remaining NaN in the kept cells ───────
-    # After removing bad cells, features whose NaN came solely from those cells
-    # are now clean.  Dropping the remainder gives a NaN-free matrix without
-    # imputation or an extra S3 scan.
-    nan_per_feat_final = np.isnan(result).sum(axis=0)
-    feat_still_nan = nan_per_feat_final > 0
-    if feat_still_nan.any():
-        n_drop = int(feat_still_nan.sum())
-        logger.info(
-            "  [residual NaN feature removal] %d features still have NaN in kept"
-            " cells → dropped, %d remain",
-            n_drop, n_feat_out - n_drop,
-        )
-        result = result[:, ~feat_still_nan]
-        feat_keep_indices = np.where(feat_keep)[0]
-        feat_keep[feat_keep_indices[feat_still_nan]] = False
-
-    # ── Step 4 — variance filter on the clean NaN-free matrix ───────────────────
-    # Computing variance HERE (not during streaming pass 1) gives unbiased estimates
-    # because the matrix is already clean: no nanvar, no Welford approximation.
-    feat_var = np.zeros(result.shape[1], dtype=np.float64)
-    if result.shape[0] > 1:
-        if by:
-            obs_kept = obs_df.iloc[cell_keep].copy()
-            obs_kept = obs_kept.reset_index(drop=True)
-            group_vars = []
-            for _, grp_idx in obs_kept.groupby(by, observed=True).groups.items():
-                X_grp = result[grp_idx.values]
-                if len(X_grp) > 1:
-                    group_vars.append(np.var(X_grp, axis=0, ddof=1))
-            if group_vars:
-                feat_var = np.median(np.stack(group_vars), axis=0)
-        else:
-            feat_var = np.var(result, axis=0, ddof=1)
-
-    feat_var_keep = np.isfinite(feat_var)
-    if min_variance is not None:
-        feat_var_keep &= feat_var >= min_variance
-    if max_variance is not None:
-        feat_var_keep &= feat_var <= max_variance
-
-    if not feat_var_keep.all():
-        n_var_drop = int((~feat_var_keep).sum())
-        logger.info(
-            "  [variance filter] dropped %d features (var<%.2f or var>threshold)"
-            " → %d remain",
-            n_var_drop, min_variance or 0.0, int(feat_var_keep.sum()),
-        )
-        result = result[:, feat_var_keep]
-        feat_keep_indices = np.where(feat_keep)[0]
-        feat_keep[feat_keep_indices[~feat_var_keep]] = False
+    # ── Steps 3 + 4: residual-NaN handling + variance filter (shared helper) ─────
+    obs_kept = obs_df.iloc[cell_keep].reset_index(drop=True)
+    result, feat_keep, feat_var = _apply_filter_post_materialise(
+        result, feat_keep, obs_kept,
+        by=by,
+        min_variance=min_variance,
+        max_variance=max_variance,
+        max_residual_nan_fraction=max_residual_nan_fraction,
+        residual_nan_impute=residual_nan_impute,
+        perturbation_column=perturbation_column,
+    )
 
     # ── Build the feature-drop report ─────────────────────────────────────────
     _feat_names = list(feat_cols) if feat_cols else [f"feat_{i}" for i in range(n_feat)]

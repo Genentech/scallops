@@ -551,3 +551,225 @@ def top_features_from_backprojection(
     if top_k is not None:
         result = result.head(top_k)
     return result
+
+
+# ---------------------------------------------------------------------------
+# SHAP attribution for cosine similarity
+# ---------------------------------------------------------------------------
+
+
+def shap_cosine_features(
+    data: anndata.AnnData,
+    perturbations: Sequence[str] | None = None,
+    perturbation_column: str = "gene_symbol",
+    pair: tuple[str, str] | None = None,
+    top_k: int | None = None,
+    max_pairs_full: int = 500_000,
+    output_zarr: str | None = None,
+    chunk_size: int = 256,
+) -> pd.DataFrame:
+    """Per-feature SHAP attribution for cosine similarity across a set of perturbations.
+
+    For cosine similarity ``cos(a, b) = (a · b) / (|a||b|)``, the SHAP value
+    for feature *i* in the pair (a, b) is:
+
+    .. code-block:: text
+
+        φ_i(a,b) = a_i_norm · b_i_norm       where x_norm = x / |x|
+
+    The values sum to ``cos(a, b)``.  Positive → feature pulls profiles closer;
+    negative → feature drives them apart.
+
+    **Two modes depending on the number of pairs:**
+
+    * **Full pair mode** (``n_pairs ≤ max_pairs_full``): returns one row per
+      (perturbation_a, perturbation_b, feature) with the signed SHAP value and
+      the cosine similarity for that pair.
+
+    * **Aggregate mode** (``n_pairs > max_pairs_full``): returns one row per
+      feature with the mean absolute SHAP across all pairs (``mean_abs_shap``)
+      and the mean cosine similarity.  Computed in O(N·K) — no pair tensor
+      stored in memory.
+
+    If ``uns["map_pca"]`` is present the scores are projected back to the
+    original p-dimensional feature space via the stored PCA components.
+
+    **When to use SHAP vs backprojection:**
+
+    * ``top_features_from_backprojection``: *one perturbation vs. reference*
+      (e.g. NTC).  Without ``pc_stat_filter='ttest'`` the result equals a plain
+      z-score centroid difference — the PC filter is what adds value.
+
+    * ``shap_cosine_features``: *why are these two (or N) perturbations
+      similar/dissimilar?*  Best for interpreting specific pairs or clusters,
+      not bulk analysis.  Scales to large N via aggregate mode.
+
+    :param data: AnnData with profiles (post-TVN/aggregation). One row per
+        perturbation expected (output of ``map agg`` / ``map center``).
+    :param perturbations: Subset of perturbation names to include.  *None* uses
+        all observations.
+    :param perturbation_column: obs column identifying perturbations.
+    :param pair: If given as ``(name_a, name_b)``, compute SHAP only for this
+        single pair (overrides *perturbations*).
+    :param top_k: Return only the top-*k* features by ``|φ|``.  *None* = all.
+    :param max_pairs_full: Max number of pairs to handle in full (long-format)
+        mode.  Above this threshold aggregate mode is used automatically.
+    :return: DataFrame sorted by ``|shap|`` / ``|mean_abs_shap|`` descending.
+
+        **Full mode columns:** ``perturbation_a``, ``perturbation_b``,
+        ``feature``, ``shap``, ``cos_similarity``.
+
+        **Aggregate mode columns:** ``feature``, ``mean_abs_shap``,
+        ``mean_cos_similarity``.
+    """
+    X_raw = np.asarray(data.X, dtype=np.float64)
+    if X_raw.ndim == 1:
+        X_raw = X_raw[np.newaxis, :]
+
+    # --- Select subset ---
+    if pair is not None:
+        names_a, names_b = [pair[0]], [pair[1]]
+        col = data.obs[perturbation_column]
+        idx_a = np.where(col == pair[0])[0]
+        idx_b = np.where(col == pair[1])[0]
+        if len(idx_a) == 0:
+            raise ValueError(f"shap_cosine_features: '{pair[0]}' not found in obs['{perturbation_column}']")
+        if len(idx_b) == 0:
+            raise ValueError(f"shap_cosine_features: '{pair[1]}' not found in obs['{perturbation_column}']")
+        profiles = np.vstack([
+            np.nanmean(X_raw[idx_a], axis=0),
+            np.nanmean(X_raw[idx_b], axis=0),
+        ])
+        pert_names = list(pair)
+    else:
+        col = data.obs[perturbation_column]
+        if perturbations is not None:
+            mask = col.isin(perturbations)
+            X_sub = X_raw[mask.values]
+            pert_names = list(col[mask].values)
+        else:
+            X_sub = X_raw
+            pert_names = list(col.values)
+        # Mean per perturbation (handles duplicate obs)
+        unique_names = list(dict.fromkeys(pert_names))
+        profiles = np.vstack([
+            np.nanmean(X_sub[[i for i, n in enumerate(pert_names) if n == nm]], axis=0)
+            for nm in unique_names
+        ])
+        pert_names = unique_names
+
+    n_pert = len(pert_names)
+    n_pairs = n_pert * (n_pert - 1) // 2
+
+    # --- Normalize profiles (float32 throughout for memory efficiency) ---
+    profiles = profiles.astype(np.float32)
+    norms = np.linalg.norm(profiles, axis=1, keepdims=True).astype(np.float32)
+    zero_norm = (norms.ravel() == 0)
+    if zero_norm.any():
+        warnings.warn(
+            f"shap_cosine_features: {zero_norm.sum()} profiles have zero norm and will "
+            "be excluded.", UserWarning, stacklevel=2,
+        )
+        keep = ~zero_norm
+        profiles   = profiles[keep]
+        pert_names = [n for n, k in zip(pert_names, keep) if k]
+        norms      = norms[keep]
+        n_pert     = len(pert_names)
+        n_pairs    = n_pert * (n_pert - 1) // 2
+
+    X_norm = (profiles / norms).astype(np.float32)   # (N, K) float32
+
+    # --- Map back to feature space via map_pca if present ---
+    map_pca = data.uns.get("map_pca")
+    if map_pca is not None and "PCs" in map_pca:
+        PCs_map       = np.asarray(map_pca["PCs"], dtype=np.float32)  # (K', p)
+        feature_names = list(map_pca.get("features", data.var.index))
+        X_feat_norm   = (X_norm @ PCs_map).astype(np.float32)         # (N, p)
+    else:
+        feature_names = list(data.var.index)
+        X_feat_norm   = X_norm
+
+    n_feat = X_feat_norm.shape[1]
+
+    # --- Choose mode ---
+    if pair is not None or n_pairs <= max_pairs_full:
+        if output_zarr is not None:
+            # Out-of-core: stream upper-triangle pairs to zarr in row-chunks
+            import zarr as _zarr
+            z_meta = _zarr.open_group(output_zarr, mode="w")
+            z_shap = z_meta.zeros("shap",   shape=(n_pairs, n_feat),
+                                  dtype="float32", chunks=(chunk_size, n_feat))
+            z_cos  = z_meta.zeros("cos",    shape=(n_pairs,), dtype="float32",
+                                  chunks=(chunk_size,))
+            z_meta.attrs["perturbations"] = pert_names
+            z_meta.attrs["features"]      = feature_names
+
+            pair_off = 0
+            for i in range(0, n_pert, chunk_size):
+                i_end = min(i + chunk_size, n_pert)
+                X_i = X_feat_norm[i:i_end]               # (ri, p)
+                for j in range(i, n_pert, chunk_size):
+                    j_end = min(j + chunk_size, n_pert)
+                    X_j = X_feat_norm[j:j_end]           # (rj, p)
+                    # Upper-triangle pairs within this block
+                    for ii in range(i_end - i):
+                        gi = i + ii
+                        j_start_inner = max(j, gi + 1)
+                        if j_start_inner >= j_end:
+                            continue
+                        j_local = j_start_inner - j
+                        phi = X_i[ii] * X_j[j_local:]   # (m, p)
+                        m   = phi.shape[0]
+                        z_shap[pair_off:pair_off + m] = phi
+                        z_cos[pair_off:pair_off + m]  = phi.sum(axis=1)
+                        pair_off += m
+
+            # Return aggregate summary (full data is in zarr)
+            cos_vals = X_feat_norm @ X_feat_norm.T
+            np.fill_diagonal(cos_vals, np.nan)
+            mean_abs_shap = np.abs(X_feat_norm).mean(axis=0) ** 2
+            result = pd.DataFrame({
+                "feature":             feature_names,
+                "mean_abs_shap":       mean_abs_shap.astype(float),
+                "mean_cos_similarity": float(np.nanmean(cos_vals)),
+                "zarr_path":           output_zarr,
+            })
+            result = result.iloc[result["mean_abs_shap"].argsort()[::-1]].reset_index(drop=True)
+        else:
+            # Full mode in-memory (float32)
+            records = []
+            for i in range(n_pert):
+                for j in range(i + 1, n_pert):
+                    phi     = X_feat_norm[i] * X_feat_norm[j]   # (p,) float32
+                    cos_val = float(phi.sum())
+                    records.append((pert_names[i], pert_names[j],
+                                    phi.tolist(), cos_val))
+            pert_a  = [r[0] for r in records]
+            pert_b  = [r[1] for r in records]
+            cos_arr = [r[3] for r in records]
+            phi_arr = np.array([r[2] for r in records], dtype=np.float32)  # (n_pairs, p)
+            result_rows = []
+            for pi in range(len(records)):
+                for fi, feat in enumerate(feature_names):
+                    result_rows.append((pert_a[pi], pert_b[pi], feat,
+                                        float(phi_arr[pi, fi]), cos_arr[pi]))
+            result = pd.DataFrame(result_rows,
+                                  columns=["perturbation_a", "perturbation_b",
+                                           "feature", "shap", "cos_similarity"])
+            result = result.iloc[result["shap"].abs().argsort()[::-1]].reset_index(drop=True)
+    else:
+        # Aggregate mode: O(N·K) memory, no pair tensor stored
+        mean_abs_shap = np.abs(X_feat_norm).mean(axis=0).astype(np.float64) ** 2
+        cos_vals = X_feat_norm.astype(np.float64) @ X_feat_norm.astype(np.float64).T
+        np.fill_diagonal(cos_vals, np.nan)
+        mean_cos = float(np.nanmean(cos_vals))
+        result = pd.DataFrame({
+            "feature":             feature_names,
+            "mean_abs_shap":       mean_abs_shap,
+            "mean_cos_similarity": mean_cos,
+        })
+        result = result.iloc[result["mean_abs_shap"].argsort()[::-1]].reset_index(drop=True)
+
+    if top_k is not None:
+        result = result.head(top_k)
+    return result
