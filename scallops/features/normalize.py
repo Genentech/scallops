@@ -226,7 +226,7 @@ def normalize_features(
     :param centering: Whether to center the data before scaling.
     :param max_value: Truncate to this value after scaling
     :param scaling: Whether to scale the data by dividing by the standard deviation.
-    :param batch_size: Batch size to use for local scaling to conserve memory.
+    :param batch_size: Batch size to use for local z-score scaling to conserve memory.
     :param centroid_column_names: Columns for y and x centroids to use for local zscore.
     :return: Normalized data
     """

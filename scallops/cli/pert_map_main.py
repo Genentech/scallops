@@ -50,10 +50,13 @@ def dataset_arg(parser: argparse.ArgumentParser):
     )
 
 
-def common_args(parser: argparse.ArgumentParser):
-    metadata_args(parser)
-    rechunk_args(parser)
-    dask_client_arg(parser)
+def common_args(parser: argparse.ArgumentParser, metadata: bool = True, rechunk: bool = True,
+                dask_client_value: str | None = None):
+    if metadata:
+        metadata_args(parser)
+    if rechunk:
+        rechunk_args(parser)
+    dask_client_arg(parser, dask_client_value)
     dask_cluster_arg(parser)
     force_arg(parser)
     no_version_arg(parser)
@@ -75,6 +78,12 @@ def _run_norm_features(arguments: argparse.Namespace):
     from scallops.cli.pert_map import run_norm_features
 
     run_norm_features(arguments)
+
+
+def _run_recall(arguments: argparse.Namespace):
+    from scallops.cli.pert_map import run_recall
+
+    run_recall(arguments)
 
 
 def filter_args(parser: argparse.ArgumentParser, label_filter: bool = True, feature_filter: bool = True):
@@ -123,7 +132,7 @@ def _create_similarity_matrix_parser(
 
     required.add_argument(
         "--output",
-        help="Path to save result zarr or h5ad format",
+        help="Path to save result in zarr or h5ad format",
         required=True,
     )
 
@@ -155,7 +164,7 @@ def _create_aggregate_parser(
 
     required.add_argument(
         "--output",
-        help="Path to save result zarr or h5ad format",
+        help="Path to save result in zarr or h5ad format",
         required=True,
     )
 
@@ -192,7 +201,7 @@ def _create_tvn_parser(
 
     required.add_argument(
         "--output",
-        help="Path to save result zarr or h5ad format",
+        help="Path to save result in zarr or h5ad format",
         required=True,
     )
     required.add_argument("--reference-query", help="Query to extract reference observations (e.g. gene_symbol=='NTC')")
@@ -207,6 +216,34 @@ def _create_tvn_parser(
 
     common_args(parser)
     parser.set_defaults(func=_run_tvn)
+
+
+def _create_recall_parser(
+        subparsers: argparse.ArgumentParser, default_help: bool
+) -> None:
+    parser = subparsers.add_parser(
+        "recall",
+        help="Run recall",
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter
+            if default_help
+            else argparse.HelpFormatter
+        ),
+    )
+    required = parser.add_argument_group("required arguments")
+    dataset_arg(required)
+
+    required.add_argument(
+        "--output",
+        help="Path to save result in Parquet format",
+        required=True,
+    )
+    required.add_argument("--ground-truth", help="Path(s) to ground truth datasets from CORUM", nargs="+")
+    required.add_argument("--threshold", help="Recall threshold", nargs="+", type=float,
+                          default=[0.99, 0.95, 0.01, 0.05])
+
+    common_args(parser, metadata=False, rechunk=False, dask_client_value='none')
+    parser.set_defaults(func=_run_recall)
 
 
 def _create_pca_parser(
@@ -226,7 +263,7 @@ def _create_pca_parser(
 
     required.add_argument(
         "--output",
-        help="Path to save result zarr or h5ad format",
+        help="Path to save result in zarr or h5ad format",
         required=True,
     )
     filter_args(parser)
@@ -315,6 +352,21 @@ def _create_normalize_parser(
         default="normal",
         type=str,
     )
+    parser.add_argument(
+        "--max-value",
+        help="Truncate to this value after scaling",
+        type=float)
+    parser.add_argument(
+        "--batch-size",
+        help="Batch size to use for local z-score scaling to conserve memory",
+        default=25000,
+        type=int)
+    parser.add_argument(
+        "--centroid-columns",
+        help="Columns for y and x centroids to use for local zscore.",
+        default=["Nuclei_AreaShape_Center_Y", "Nuclei_AreaShape_Center_X"],
+        nargs=2)
+
     common_args(parser)
     parser.set_defaults(func=_run_norm_features)
 
@@ -459,3 +511,4 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool):
     _create_tvn_parser(subparsers, default_help)
     _create_aggregate_parser(subparsers, default_help)
     _create_similarity_matrix_parser(subparsers, default_help)
+    _create_recall_parser(subparsers, default_help)

@@ -12,6 +12,7 @@ import anndata
 import dask.array as da
 import dask.dataframe as dd
 import fsspec
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -26,7 +27,7 @@ from scallops.cli.util import (
 )
 from scallops.features.agg import agg_features
 from scallops.features.decomposition import pca
-from scallops.features.map_eval import pairwise_similarities
+from scallops.features.map_eval import pairwise_similarities, recall, read_corum
 from scallops.features.normalize import _convert_scale, normalize_features, typical_variation_normalization
 from scallops.features.preprocessing import filter_data
 from scallops.features.rank import rank_features
@@ -106,6 +107,72 @@ def rechunk(
             rechunk_feature_size = int(rechunk_feature_size)
         data.X = data.X.rechunk((rechunk_label_size, rechunk_feature_size))
     return data
+
+
+def run_recall(arguments: argparse.Namespace):
+    data_paths = arguments.dataset
+    force = arguments.force
+    no_version = arguments.no_version
+    dask_server_url = arguments.client
+    ground_truth_paths = arguments.ground_truth
+    dask_cluster_parameters = (
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+    )
+    output = arguments.output
+    recall_thresholds = arguments.threshold
+    if not force and is_parquet_file(output):
+        logger.info(f"{output} already exists, skipping. Use --force to overwrite.")
+        return
+    ground_truth = []
+    for i in range(len(ground_truth_paths)):
+        corum_df = read_corum(ground_truth_paths[i])
+        corum_df = corum_df.set_index(corum_df["a"] + "-" + corum_df["b"])
+        corum_name = os.path.basename(ground_truth_paths[i])
+        ground_truth.append((corum_name, corum_df))
+    metadata = {}
+    if not no_version:
+        metadata.update(cli_metadata())
+    with (
+        _create_default_dask_config(),
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
+    ):
+        similarity_data = _read_data(data_paths, None)
+        similarity_data.X = similarity_data.X.compute()
+        results = []
+        gene_symbols = similarity_data.obs.index.values
+        for ground_truth_name, ground_truth_df in ground_truth:
+            indices_a = []
+            indices_b = []
+            for i in range(len(gene_symbols)):
+                for j in range(i):
+                    key = gene_symbols[i] + "-" + gene_symbols[j]
+                    if key in ground_truth_df.index:
+                        indices_a.append(i)
+                        indices_b.append(j)
+            indices_a = np.array(indices_a)
+            indices_b = np.array(indices_b)
+            null_distribution = similarity_data.X[
+                np.tril_indices(similarity_data.shape[0], k=-1)
+            ]
+            query_distribution = similarity_data.X[indices_a, indices_b]
+            result = recall(
+                query_distribution=query_distribution,
+                null_distribution=null_distribution,
+                recall_thresholds=recall_thresholds,
+            )
+            result["reference"] = ground_truth_name
+            results.append(result)
+
+        df = pd.concat(results)
+        df["threshold"] = df["threshold"].astype(str)
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
+        fs.makedirs(output_basename, exist_ok=True)
+        _to_parquet(
+            df,
+            output,
+            write_index=False,
+            custom_metadata=dict(scallops=json.dumps(metadata)),
+        )
 
 
 def run_similarity_matrix(arguments: argparse.Namespace):
@@ -490,7 +557,9 @@ def run_norm_features(arguments: argparse.Namespace):
         mad_scale_factor = float(mad_scale_factor)
 
     robust = arguments.robust
-
+    max_value = arguments.max_value
+    batch_size = arguments.batch_size
+    centroid_column_names = arguments.centroid_columns
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
     suffix = os.path.splitext(norm_output.lower())[1]
@@ -551,7 +620,9 @@ def run_norm_features(arguments: argparse.Namespace):
                 mad_scale=mad_scale_factor,
                 centering=centering,
                 scaling=scaling,
-            )
+                max_value=max_value,
+                batch_size=batch_size,
+                centroid_column_names=centroid_column_names)
         else:
             logger.info("No normalization")
         fs, output_basename = fsspec.url_to_fs(os.path.basename(norm_output))
