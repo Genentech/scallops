@@ -164,10 +164,15 @@ def _create_aggregate_parser(
         help="Perturbation column(s) in dataset observations to aggregate by.",
         nargs="+",
     )
+    parser.add_argument(
+        "--center-query",
+        help="Center the data to a reference before aggregating (e.g. gene_symbol=='NTC')",
+
+    )
     filter_args(parser)
 
     common_args(parser)
-    parser.set_defaults(func=_run_tvn)
+    parser.set_defaults(func=_run_aggregate)
 
 
 def _create_tvn_parser(

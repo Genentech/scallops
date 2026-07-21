@@ -183,7 +183,7 @@ def run_aggregate(arguments: argparse.Namespace):
     if not force and is_anndata(output):
         logger.info(f"{output} already exists, skipping. Use --force to overwrite.")
         return
-
+    center_reference_query = arguments.center_reference_query
     metadata = {}
     if not no_version:
         metadata.update(cli_metadata())
@@ -203,6 +203,10 @@ def run_aggregate(arguments: argparse.Namespace):
                 join_fields,
             )
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+
+        if center_reference_query is not None:
+            data = normalize_features(data=data, normalize="zscore", scaling=False, robust=False,
+                                      reference_query=center_reference_query)
 
         data = agg_features(
             data=data,
