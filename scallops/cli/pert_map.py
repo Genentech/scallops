@@ -44,7 +44,6 @@ logger = _get_cli_logger()
 
 def _read_data(
         data_paths: list[str],
-        keys: list[str],
         feature_filter: str | None = None,
         label_filter: str | None = None,
 ) -> anndata.AnnData:
@@ -82,8 +81,7 @@ def _read_data(
             results.append(d)
 
     data = anndata.concat(results, index_unique="-")
-    if keys is not None:
-        data.obs.index = data.obs[keys].astype(str).agg('-'.join, axis=1)
+
     assert not data.obs.index.has_duplicates
     if isinstance(label_filter, str):
         label_filter = data.obs.query(label_filter).index
@@ -146,7 +144,7 @@ def run_recall(arguments: argparse.Namespace):
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        similarity_data = _read_data(data_paths, None)
+        similarity_data = _read_data(data_paths)
         similarity_data.X = similarity_data.X.compute()
         results = []
         gene_symbols = similarity_data.obs.index.values
@@ -187,17 +185,9 @@ def run_recall(arguments: argparse.Namespace):
 
 def run_similarity_matrix(arguments: argparse.Namespace):
     data_paths = arguments.dataset
-    label_filter = arguments.label_filter
-    feature_filter = arguments.feature_filter
-    join_path = arguments.metadata
-    join_fields = arguments.join
-    if join_path is not None and join_fields is None:
-        raise ValueError("Please specify join fields")
-    rechunk_label_size = arguments.rechunk_labels
-    rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
-    keys = arguments.key
+
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -215,17 +205,8 @@ def run_similarity_matrix(arguments: argparse.Namespace):
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        data = _read_data(data_paths, keys, feature_filter, label_filter)
-        data = rechunk(data, rechunk_label_size, rechunk_feature_size)
-        if join_path is not None:
-            _join_metadata(
-                data,
-                dd.read_csv(join_path)
-                if not join_path.lower().endswith(".parquet")
-                   or join_path.lower().endswith(".pq")
-                else dd.read_parquet(join_path),
-                join_fields,
-            )
+        data = _read_data(data_paths)
+
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         data = anndata.AnnData(X=pairwise_similarities(data), obs=data.obs, var=data.obs)
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
@@ -251,7 +232,7 @@ def run_aggregate(arguments: argparse.Namespace):
     rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
-    keys = arguments.key
+
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -270,7 +251,7 @@ def run_aggregate(arguments: argparse.Namespace):
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        data = _read_data(data_paths, keys, feature_filter, label_filter)
+        data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -315,7 +296,7 @@ def run_tvn(arguments: argparse.Namespace):
     rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
-    keys = arguments.key
+
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -335,7 +316,7 @@ def run_tvn(arguments: argparse.Namespace):
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        data = _read_data(data_paths, keys, feature_filter, label_filter)
+        data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -375,7 +356,7 @@ def run_pca(arguments: argparse.Namespace):
     rechunk_feature_size = arguments.rechunk_features
     force = arguments.force
     no_version = arguments.no_version
-    keys = arguments.key
+
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -395,7 +376,7 @@ def run_pca(arguments: argparse.Namespace):
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        data = _read_data(data_paths, keys, feature_filter, label_filter)
+        data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -439,7 +420,7 @@ def run_rank_features(arguments: argparse.Namespace):
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
-    keys = arguments.key
+
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -478,7 +459,7 @@ def run_rank_features(arguments: argparse.Namespace):
     ):
         if label_filter is None:
             label_filter = f"~`{perturbation_column}`.isna()"
-        data = _read_data(data_paths, keys, feature_filter, label_filter)
+        data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -548,7 +529,7 @@ def run_norm_features(arguments: argparse.Namespace):
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
-    keys = arguments.key
+
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -602,7 +583,7 @@ def run_norm_features(arguments: argparse.Namespace):
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        data = _read_data(data_paths, keys, feature_filter, label_filter)
+        data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -675,20 +656,18 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
-    keys = arguments.key
+
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
-    output_label_ids = arguments.output_label_ids
-    output_feature_ids = arguments.output_feature_ids
+    output = arguments.output
 
     if (
             not force
-            and is_parquet_file(output_label_ids)
-            and is_parquet_file(output_feature_ids)
+            and is_anndata(output)
     ):
-        logger.info(f"Skipping {output_label_ids}")
+        logger.info(f"Skipping {output}")
         return
 
     min_feature_variance = arguments.min_feature_variance
@@ -708,7 +687,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        data = _read_data(data_paths, keys, feature_filter, label_filter)
+        data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -728,33 +707,12 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             by=by,
         )
         logger.info(f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-        # save indices only
-        table = pa.Table.from_pandas(data.obs[[]], preserve_index=True)
-        table = table.replace_schema_metadata(
-            {
-                "scallops".encode(): json.dumps(metadata).encode(),
-                **table.schema.metadata,
-            }
-        )
-        fs, output_label_ids = fsspec.url_to_fs(output_label_ids)
-        fs.makedirs(os.path.basename(output_label_ids), exist_ok=True)
-        pq.write_table(
-            table,
-            output_label_ids,
-            filesystem=fs,
-        )
-
-        table = pa.Table.from_pandas(data.var[[]], preserve_index=True)
-        table = table.replace_schema_metadata(
-            {
-                "scallops".encode(): json.dumps(metadata).encode(),
-                **table.schema.metadata,
-            }
-        )
-        fs, output_feature_ids = fsspec.url_to_fs(output_feature_ids)
-        fs.makedirs(os.path.basename(output_feature_ids), exist_ok=True)
-        pq.write_table(
-            table,
-            output_feature_ids,
-            filesystem=fs,
-        )
+        fs, output_label_ids = fsspec.url_to_fs(output)
+        fs.makedirs(os.path.basename(output), exist_ok=True)
+        if output.lower().endswith(".zarr"):
+            data = rechunk_for_zarr(data)
+            data.uns["scallops"] = _fix_json(metadata)
+            data.write_zarr(output, convert_strings_to_categoricals=False)
+        else:
+            data.uns["scallops"] = _fix_json(metadata)
+            data.write_h5ad(output, convert_strings_to_categoricals=False)

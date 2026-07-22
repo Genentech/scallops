@@ -41,13 +41,6 @@ def dataset_arg(parser: argparse.ArgumentParser):
         help="Path to one or more zarr, h5ad, or Parquet files or a "
              "pattern to match files (e.g. s3://foo/*.zarr).",
     )
-    parser.add_argument(
-        "--key",
-        type=str,
-        nargs="+",
-        help="Unique label key when concatenating multiple datasets.",
-        default=["label", "plate", "well"],
-    )
 
 
 def common_args(parser: argparse.ArgumentParser, metadata: bool = True, rechunk: bool = True,
@@ -78,6 +71,12 @@ def _run_norm_features(arguments: argparse.Namespace):
     from scallops.cli.pert_map import run_norm_features
 
     run_norm_features(arguments)
+
+
+def _run_similarity_matrix(arguments: argparse.Namespace):
+    from scallops.cli.pert_map import run_similarity_matrix
+
+    run_similarity_matrix(arguments)
 
 
 def _run_recall(arguments: argparse.Namespace):
@@ -141,10 +140,9 @@ def _create_similarity_matrix_parser(
         help="Perturbation column(s) in dataset observations to aggregate by.",
         nargs="+",
     )
-    filter_args(parser)
 
-    common_args(parser)
-    parser.set_defaults(func=_run_tvn)
+    common_args(parser=parser, metadata=False, rechunk=False)
+    parser.set_defaults(func=_run_similarity_matrix)
 
 
 def _create_aggregate_parser(
@@ -387,10 +385,9 @@ def _create_filter_parser(
     required = parser.add_argument_group("required arguments")
     dataset_arg(required)
     required.add_argument(
-        "--output-label-ids", type=str, help="Path to selected label identifiers."
-    )
-    required.add_argument(
-        "--output-feature-ids", type=str, help="Path to selected feature identifiers."
+        "--output",
+        help="Path to save result in zarr or h5ad format",
+        required=True,
     )
     filter_args(parser)
     parser.add_argument(
