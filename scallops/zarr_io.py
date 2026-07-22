@@ -522,7 +522,7 @@ def write_zarr(
             pyramid=[data],
             group=grp,
             fmt=fmt,
-            storage_options=storage_options,
+            storage_options=[storage_options] if storage_options is not None else None,
             scale_factors=[1.0],
             axes=axes,
             compute=compute,
