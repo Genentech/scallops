@@ -329,6 +329,7 @@ def _write_zarr_image(
     group: str | None = "images",
     zarr_format: Literal["ome_zarr", "zarr"] = "ome_zarr",
     compute: bool = True,
+    storage_options: JSONDict | None = None,
 ) -> list[Delayed]:
     """Write image in zarr format.
 
@@ -341,6 +342,7 @@ def _write_zarr_image(
         compliant images with dimensions other than (t,c,z,y,x)
     :param compute: If true compute immediately otherwise a list
         of :class:`dask.delayed.Delayed` is returned.
+    :param storage_options: Options to be passed on to the storage backend.
     :return: Empty list if the compute flag is True, otherwise it returns a list
         of :class:`dask.delayed.Delayed` representing the value to be computed by dask.
     """
@@ -369,6 +371,7 @@ def _write_zarr_image(
         image_attrs=image_attrs,
         coords=coords,
         dims=dims,
+        storage_options=storage_options,
         metadata=metadata,
         zarr_format=zarr_format,
         compute=compute,
@@ -417,6 +420,7 @@ def write_zarr(
     metadata: dict[str, Any] | None = None,
     zarr_format: Literal["ome_zarr", "zarr"] = "ome_zarr",
     compute: bool = True,
+    storage_options: JSONDict | None = None,
 ) -> list[Delayed]:
     """Write data to a Zarr group with optional metadata and scaling.
 
@@ -437,6 +441,7 @@ def write_zarr(
     :param compute: If True, compute immediately. Otherwise, return a list of
         dask.delayed. Delayed objects representing the value to be computed by dask.
         Default is True.
+    :param storage_options: Options to be passed on to the storage backend.
     :return: Empty list if the compute flag is True, otherwise a list of
         dask.delayed.Delayed objects.
 
@@ -490,9 +495,11 @@ def write_zarr(
             if not compute:
                 dask_delayed.append(d)
         elif not isinstance(data, zarr.Array):
-            grp.create_array(
-                "s0", data=data, overwrite=True, **_create_array_kwargs(fmt)
-            )
+            create_kwds = _create_array_kwargs(fmt)
+
+            if storage_options.get("chunks") is not None:
+                create_kwds["chunks"] = storage_options["chunks"]
+            grp.create_array("s0", data=data, overwrite=True, **create_kwds)
 
         zarr_attrs = _create_zarr_attrs(fmt, grp, dims, image_attrs, axes, scale_dict)
 
@@ -515,6 +522,7 @@ def write_zarr(
             pyramid=[data],
             group=grp,
             fmt=fmt,
+            storage_options=storage_options,
             scale_factors=[1.0],
             axes=axes,
             compute=compute,
