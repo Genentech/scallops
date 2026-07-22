@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import shapely
+import xarray as xr
 import zarr
 from skimage.measure import regionprops
 
@@ -547,19 +548,16 @@ def test_features_cli_multi_images(tmp_path, array_A1_102_cells, array_A1_102_al
 
 
 @pytest.mark.features
-def test_features_cli(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    # test that all features run, can be saved to disk, and diff with known good output
-    image = (
-        array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x")).rename(
-            {"z": "t", "t": "z"}
-        )
-    ).isel(t=0, z=0)  # ops swaps z and t in saved tif
-
+def test_features_cli(tmp_path, array_A1_102_cells):
     labels = array_A1_102_cells.squeeze().copy()
     labels.values[labels.values != 17] = 0
+    rng = np.random.default_rng(1)
+    image = xr.DataArray(
+        rng.integers(low=10, high=50, size=(4,) + labels.shape), dims=["c", "y", "x"]
+    )
     zarr_path = str(tmp_path / "test.zarr")
     features_output_path = str(tmp_path / "features-out")
+    features2_output_path = str(tmp_path / "features2-out")
     objects_output_path = str(tmp_path / "objects-out")
     exp = Experiment()
     exp.images["test"] = image
@@ -596,6 +594,24 @@ def test_features_cli(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     ]
 
     check_call(cmd)
+    result_df = pd.read_parquet(features_output_path)
+    cmd = [
+        "scallops",
+        "features",
+        "--images",
+        zarr_path,
+        "--labels",
+        zarr_path,
+        "--output",
+        features2_output_path,
+        "--features-cell",
+        "intensity_2,0",
+        "--objects",
+        objects_output_path,
+    ]
+    result2_df = pd.read_parquet(features_output_path)
+    check_call(cmd)
+    pd.testing.assert_frame_equal(result_df[result2_df.columns], result2_df)
 
 
 @pytest.mark.features
