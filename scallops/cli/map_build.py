@@ -111,8 +111,9 @@ def _log_attrition(
 def print_attrition_table() -> None:
     """Print the accumulated attrition ledger as an aligned table.
 
-    Called automatically at the end of every standalone pipeline step and
-    at the end of ``map run``.
+    Called at the end of ``map run`` to give a full-pipeline summary.
+    Individual ``map <step>`` commands log attrition inline via
+    :func:`_log_attrition` but do not print the summary table.
     """
     if not _ATTRITION_LEDGER:
         return
@@ -505,14 +506,8 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
     force = arguments.force
     no_version = arguments.no_version
 
-    # Map --by [col1 col2 ...] to plate_column / well_column used by
-    # _apply_filter_inmem so that --by plate well works for stratified variance.
-    by = arguments.by or []
-    if by and not hasattr(arguments, "plate_column"):
-        pc = by[0] if len(by) >= 1 else "plate"
-        wc = by[1] if len(by) >= 2 else "well"
-        arguments = argparse.Namespace(**{**vars(arguments),
-                                          "plate_column": pc, "well_column": wc})
+    # Ensure plate_column / well_column are set (filter uses them for stratification).
+    # The standalone map-filter parser uses --plate-column/--well-column directly.
     if not hasattr(arguments, "filter_batch_size"):
         arguments = argparse.Namespace(**{**vars(arguments),
                                           "filter_batch_size": 500_000})
@@ -549,26 +544,7 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
             "map filter: %s cells × %s features",
             f"{data.shape[0]:,}", f"{data.shape[1]:,}",
         )
-        # Use the efficient _apply_filter_inmem path (2-pass column-batch scanner
-        # for parquet; zarr/numpy streaming for other formats).
         result = _apply_filter_inmem(data, arguments)
-
-        # Optional post-filter steps not handled by _apply_filter_inmem
-        from scallops.features.preprocessing import (
-            filter_zero_inflated, filter_low_cardinality
-        )
-        max_zero_fraction = getattr(arguments, "max_zero_fraction", None)
-        near_zero_threshold = float(getattr(arguments, "near_zero_threshold", 0.0))
-        min_unique = getattr(arguments, "min_unique", None)
-        if max_zero_fraction is not None:
-            result = filter_zero_inflated(
-                result,
-                max_zero_fraction=max_zero_fraction,
-                near_zero_threshold=near_zero_threshold,
-                by=by or None,
-            )
-        if min_unique is not None:
-            result = filter_low_cardinality(result, min_unique=int(min_unique))
 
         logger.info(
             "map filter: done — %s cells × %s features",
@@ -577,7 +553,6 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         # Extract feature-drop report before _save_zarr strips the stash key
         _report_json = result.uns.pop("_filter_feature_report_json", None)
         _save_zarr(result, output, metadata)
-        print_attrition_table()
 
         # Write the feature-drop report for analysis
         if _report_json:
@@ -627,7 +602,6 @@ def run_pipeline_map_transform_yj(arguments: argparse.Namespace) -> None:
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    by = arguments.by
 
     if _skip_if_exists(output, force):
         return
@@ -652,12 +626,6 @@ def run_pipeline_map_transform_yj(arguments: argparse.Namespace) -> None:
             data.X = data.X.compute()
         logger.info("map transform-yj: %s cells × %s features",
                     f"{data.shape[0]:,}", f"{data.shape[1]:,}")
-        # Delegate to _apply_transform_yj_inmem so that:
-        # (a) the NaN pre-filter runs first (drops features/cells with any NaN,
-        #     which can be 70–80% of features — 5× speedup on PowerTransformer);
-        # (b) centroid columns are preserved in obs before the NaN filter drops them;
-        # (c) uns is saved/restored around _slice_anndata so the provenance chain
-        #     remains intact.
         result = _apply_transform_yj_inmem(data, arguments)
         _save_zarr(result, output, metadata)
 
@@ -721,24 +689,18 @@ def run_pipeline_map_scale(arguments: argparse.Namespace) -> None:
 def run_pipeline_map_pca(arguments: argparse.Namespace) -> None:
     """Embed data with PCA, optionally fitting the model on a reference subset.
 
-    PCA is fitted on the reference subset (or all observations when no
-    ``reference`` is provided) and then applied to *all* observations.  The
-    fitted model is stored in ``uns["pca"]`` for downstream use.  Output
-    ``var`` is relabelled ``PC1, PC2, …, PCn``.
+    Delegates to :func:`_apply_pca_inmem` — the same function used by
+    ``map run``'s ``pca`` step — so behaviour is identical in both paths.
 
     :param arguments: Parsed CLI namespace.  Expected attributes:
 
         * ``input`` (*list[str]*) — input Zarr or Parquet path(s).
         * ``output`` (*str*) — output Zarr path.
-        * ``reference`` (*str | None*) — pandas query expression selecting
-          observations used to *fit* PCA; all cells are *projected*.  When
-          *None* PCA is fitted on the full dataset.
-        * ``components`` (*int*) — number of PCA components to retain (default
-          128).
-        * ``batch_size`` (*int*) — batch size for incremental PCA; ≤ 0
-          disables incremental fitting.
-        * ``whiten`` (*bool*) — divide each component by the square root of
-          its explained variance.
+        * ``reference_query`` (*str | None*) — PCA is fitted on matching rows;
+          all rows are projected.
+        * ``pca_components`` (*int*) — components to retain (default 128).
+        * ``pca_batch_size`` (*int*) — incremental-PCA batch size (0 = full).
+        * ``pca_whiten`` (*bool*) — divide components by √(explained variance).
         * ``client``, ``dask_cluster``, ``force``, ``no_version`` — see
           :func:`run_pipeline_map_filter`.
     """
@@ -746,12 +708,6 @@ def run_pipeline_map_pca(arguments: argparse.Namespace) -> None:
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    n_components = arguments.components
-    batch_size = arguments.batch_size
-    if batch_size is not None and batch_size <= 0:
-        batch_size = None
-    whiten = arguments.whiten
-    reference_query = getattr(arguments, "reference_query", None)
 
     if _skip_if_exists(output, force):
         return
@@ -772,79 +728,8 @@ def run_pipeline_map_pca(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(paths)
-        if isinstance(data.X, da.Array):
-            logger.info("Computing dask array for PCA")
-            data.X = data.X.compute()
-        logger.info(f"Shape: {data.shape[0]:,} x {data.shape[1]:,}")
-
-        if reference_query is not None:
-            ref_data = _slice_anndata(
-                data, _query_anndata(data, reference_query).index
-            )
-            logger.info(f"Fitting PCA on {ref_data.shape[0]:,} reference cells")
-        else:
-            ref_data = data  # fit on all; no copy needed
-
-        # Fit PCA on reference (or all) cells.
-        # When ref_data is the full dataset, pca_embed fits and transforms in one
-        # pass so we can reuse X_transformed directly instead of recomputing.
-        pca_result = pca_embed(
-            ref_data,
-            n_components=n_components,
-            batch_size=batch_size,
-            whiten=whiten,
-            standardize=False,
-        )
-        pca_info = pca_result.uns["pca"]
-
-        if reference_query is not None:
-            # Project ALL cells in chunks to avoid materialising the full
-            # N × n_features matrix at once.
-            # Peak memory per chunk: chunk_size × n_features × 4 bytes.
-            # Accumulated result:    N × n_pcs × 4 bytes.
-            PCs_f32 = pca_info["PCs"].T.astype(np.float32)   # (n_features, n_pcs)
-            mean_f32 = (pca_info["mean"].astype(np.float32)
-                        if pca_info["mean"] is not None else None)
-            var_f32 = (pca_info["variance"].astype(np.float32) if whiten else None)
-            n_total = data.shape[0]
-            n_pcs = PCs_f32.shape[1]
-            chunk_sz = batch_size if batch_size is not None else 50_000
-            X_transformed = np.empty((n_total, n_pcs), dtype=np.float32)
-            for start in range(0, n_total, chunk_sz):
-                end = min(start + chunk_sz, n_total)
-                X_chunk = np.asarray(
-                    data.X[start:end].compute()
-                    if isinstance(data.X, da.Array)
-                    else data.X[start:end],
-                    dtype=np.float32,
-                )
-                if mean_f32 is not None:
-                    X_chunk -= mean_f32
-                X_transformed[start:end] = X_chunk @ PCs_f32
-                if var_f32 is not None:
-                    X_transformed[start:end] /= np.sqrt(var_f32)
-        else:
-            # pca_result.X already contains the transformed full dataset
-            X_transformed = np.asarray(pca_result.X, dtype=np.float32)
-
-        n_out = X_transformed.shape[1]
-        result = anndata.AnnData(
-            X=X_transformed,
-            obs=data.obs.copy(),
-            var=pd.DataFrame(index=[f"PC{i + 1}" for i in range(n_out)]),
-            uns=pca_result.uns,
-        )
-        # Store the PCA embedding in obsm["X_pca"] (scanpy convention) in addition
-        # to X so downstream Python analysis can access it via the standard key.
-        result.obsm["X_pca"] = X_transformed.copy()
-        # Also store under "map_pca" (original p-dimensional feature space PCA)
-        # so that backprojection can find it after TVN overwrites uns["pca"] with
-        # its own internal K×K PCA.  Include feature names for reporting.
-        map_pca_entry = dict(pca_info)
-        map_pca_entry["features"] = list(data.var.index)
-        result.uns["map_pca"] = map_pca_entry
-        # Propagate upstream uns; pca_result.uns["pca"] already has priority
-        _merge_uns(data, result)
+        logger.info(f"map pca: {data.shape[0]:,} cells × {data.shape[1]:,} features")
+        result = _apply_pca_inmem(data, arguments)
         _save_zarr(result, output, metadata)
 
 
@@ -888,8 +773,6 @@ def run_pipeline_map_tvn(arguments: argparse.Namespace) -> None:
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    reference_query = getattr(arguments, "reference_query", "gene_symbol=='NTC'")
-    by = arguments.by
 
     if _skip_if_exists(output, force):
         return
@@ -911,20 +794,9 @@ def run_pipeline_map_tvn(arguments: argparse.Namespace) -> None:
     ):
         data = _read_data(paths)
         if isinstance(data.X, da.Array):
-            logger.info("Computing dask array for TVN")
             data.X = data.X.compute()
-        logger.info(f"Shape: {data.shape[0]:,} x {data.shape[1]:,}")
-        # When X_pca is present (i.e. data comes from map-pca / map-sphere),
-        # run TVN on the PCA embedding exactly as map run does — keeping X intact.
-        # When X_pca is absent (legacy / direct feature input), run TVN on X.
-        if "X_pca" in data.obsm:
-            result = _apply_tvn_inmem(data, arguments)
-        else:
-            result = typical_variation_normalization(
-                data, reference_query=reference_query, by=by
-            )
-            result.obsm["X_tvn"] = np.asarray(result.X, dtype=np.float32)
-            _merge_uns(data, result)
+        logger.info(f"map tvn: {data.shape[0]:,} cells × {data.shape[1]:,} features")
+        result = _apply_tvn_inmem(data, arguments)
         _save_zarr(result, output, metadata)
 
 
@@ -966,12 +838,6 @@ def run_pipeline_map_agg(arguments: argparse.Namespace) -> None:
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    by = arguments.by
-    method = arguments.method
-    min_cells = arguments.min_cells
-    barcode_column = arguments.barcode
-    agg_by_barcode = arguments.agg_by_barcode
-    perturbation_column = arguments.perturbation
 
     if _skip_if_exists(output, force):
         return
@@ -992,57 +858,9 @@ def run_pipeline_map_agg(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(paths)
-        logger.info(f"Input: {data.shape[0]:,} cells, {data.shape[1]:,} features")
-
-        # Save uns before any _slice_anndata call — _slice_anndata creates a
-        # fresh AnnData without uns, which would break _merge_uns downstream.
-        _saved_uns = dict(data.uns)
-
-        if min_cells is not None and perturbation_column is not None:
-            counts = data.obs[perturbation_column].value_counts()
-            keep = counts[counts >= min_cells].index
-            n_before = data.shape[0]
-            data = _slice_anndata(
-                data, data.obs[perturbation_column].isin(keep)
-            )
-            data.uns.update(_saved_uns)
-            logger.info(
-                f"After min-cells ({min_cells}) filter: {data.shape[0]:,} cells, "
-                f"{len(keep):,} perturbations retained"
-            )
-            _log_attrition(
-                "agg", f"min-cells={min_cells}",
-                n_before, data.shape[0],
-                data.shape[1], data.shape[1],
-            )
-
-        # When X_tvn is present (data from map-tvn), aggregate the TVN embedding —
-        # exactly as map run does.  Otherwise fall back to aggregating X directly.
-        if "X_tvn" in data.obsm:
-            n_pcs = data.obsm["X_tvn"].shape[1]
-            agg_src = anndata.AnnData(
-                X=np.asarray(data.obsm["X_tvn"], dtype=np.float32),
-                obs=data.obs.copy(),
-                var=pd.DataFrame(index=[f"PC{i + 1}" for i in range(n_pcs)]),
-            )
-        else:
-            if isinstance(data.X, da.Array):
-                data.X = data.X.compute()
-            agg_src = data
-
-        if agg_by_barcode and barcode_column is not None:
-            barcode_by = list(by) + [barcode_column] if by else [barcode_column]
-            intermediate = agg_features(agg_src, by=barcode_by, agg_func=method)
-            _merge_uns(data, intermediate)
-            agg_src = intermediate
-            logger.info(f"After barcode aggregation: {agg_src.shape[0]:,} profiles")
-
-        result = agg_features(agg_src, by=by, agg_func=method)
-        _merge_uns(data, result)
-        logger.info(
-            f"After aggregation: {result.shape[0]:,} profiles, "
-            f"{result.shape[1]:,} features"
-        )
+        logger.info(f"map agg: {data.shape[0]:,} cells, {data.shape[1]:,} features")
+        result = _apply_agg_inmem(data, arguments)
+        logger.info(f"map agg: done — {result.shape[0]:,} profiles, {result.shape[1]:,} features")
         _save_zarr(result, output, metadata)
 
 
@@ -1081,9 +899,6 @@ def run_pipeline_map_center(arguments: argparse.Namespace) -> None:
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    reference_query = getattr(arguments, "reference_query", "gene_symbol=='NTC'")
-    by = arguments.by
-    robust = arguments.robust
 
     if _skip_if_exists(output, force):
         return
@@ -1094,18 +909,8 @@ def run_pipeline_map_center(arguments: argparse.Namespace) -> None:
 
     with _create_default_dask_config():
         data = _read_data(paths)
-        if isinstance(data.X, da.Array):
-            data.X = data.X.compute()
-        logger.info(f"Shape: {data.shape[0]:,} x {data.shape[1]:,}")
-        result = normalize_features(
-            data,
-            reference_query=reference_query,
-            by=by,
-            centering=True,
-            scaling=False,
-            robust=robust,
-        )
-        _merge_uns(data, result)
+        logger.info(f"map center: {data.shape[0]:,} profiles × {data.shape[1]:,} features")
+        result = _apply_center_inmem(data, arguments)
         _save_zarr(result, output, metadata)
 
 
@@ -1116,35 +921,21 @@ def run_pipeline_map_center(arguments: argparse.Namespace) -> None:
 def run_pipeline_map_similarity(arguments: argparse.Namespace) -> None:
     """Compute the pairwise similarity matrix between perturbation profiles.
 
-    The output is an AnnData where both ``obs`` and ``var`` are indexed by the
-    perturbation labels and ``X`` contains the ``(n_perturb, n_perturb)``
-    similarity matrix.  Upstream ``uns`` (including TVN backprojection
-    parameters) is forwarded so the similarity output can be used as input to
-    :func:`run_pipeline_map_recall`.
+    Delegates to :func:`_apply_similarity_inmem` — the same function used by
+    ``map run``'s ``similarity`` step — so behaviour is identical in both paths.
 
     :param arguments: Parsed CLI namespace.  Expected attributes:
 
-        * ``input`` (*list[str]*) — input Zarr or Parquet path(s) containing
-          perturbation-level profiles.
+        * ``input`` (*list[str]*) — perturbation-level profile Zarr(s).
         * ``output`` (*str*) — output Zarr path.
-        * ``metric`` (*str*) — similarity metric: ``"cosine"`` or
-          ``"pearson"`` (default ``"cosine"``).
-        * ``perturbation`` (*str*) — column in ``obs`` used as row/column
-          labels in the similarity matrix (default ``"gene_symbol"``).
-        * ``exclude_reference`` (*str | None*) — pandas query expression
-          identifying profiles to *exclude* before computing similarities
-          (e.g. ``"gene_symbol=='NTC'"``).  Recommended when centering has
-          been applied because NTC becomes the zero vector.
+        * ``metric``, ``perturbation``, ``exclude_reference_query``,
+          ``output_format`` — see :func:`_apply_similarity_inmem`.
         * ``force``, ``no_version`` — see :func:`run_pipeline_map_filter`.
     """
     paths = _expand_inputs(list(arguments.input))
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    metric = arguments.metric
-    perturbation_column = arguments.perturbation
-    exclude_reference_query = getattr(arguments, "exclude_reference_query", None)
-    output_format = getattr(arguments, "output_format", "matrix")
     cluster_method = getattr(arguments, "cluster_method", None)
     cluster_auto_params = getattr(arguments, "cluster_auto_params", True)
     cluster_n = getattr(arguments, "cluster_n_clusters", None)
@@ -1158,6 +949,7 @@ def run_pipeline_map_similarity(arguments: argparse.Namespace) -> None:
     cluster_res_min = float(getattr(arguments, "cluster_leiden_res_min", 0.05))
     cluster_res_max = float(getattr(arguments, "cluster_leiden_res_max", 2.0))
     cluster_seed = int(getattr(arguments, "cluster_random_state", 0))
+    cluster_leaf_ordering = getattr(arguments, "cluster_leaf_ordering", "fast")
 
     if _skip_if_exists(output, force):
         return
@@ -1168,70 +960,9 @@ def run_pipeline_map_similarity(arguments: argparse.Namespace) -> None:
 
     with _create_default_dask_config():
         data = _read_data(paths)
-        if isinstance(data.X, da.Array):
-            data.X = data.X.compute()
-        logger.info(f"Input: {data.shape[0]:,} profiles, {data.shape[1]:,} features")
+        logger.info(f"map similarity: {data.shape[0]:,} profiles, {data.shape[1]:,} features")
+        sim_adata = _apply_similarity_inmem(data, arguments)
 
-        # Save uns/varm before any slicing — _slice_anndata does not preserve uns.
-        upstream_uns = dict(data.uns)
-        upstream_varm = dict(data.varm)
-
-        if exclude_reference_query is not None:
-            ref_idx = _query_anndata(data, exclude_reference_query).index
-            data = _slice_anndata(data, ~data.obs.index.isin(ref_idx))
-            logger.info(f"After excluding reference: {data.shape[0]:,} profiles")
-
-        sims = pairwise_similarities(data, metric=metric)
-
-        if perturbation_column is not None and perturbation_column in data.obs.columns:
-            labels = data.obs[perturbation_column].astype(str).values
-        else:
-            labels = data.obs.index.astype(str).values
-
-        if output_format == "matrix":
-            # Classic format: obs = var = perturbation labels, X = square sim matrix.
-            # Required by map-recall set_benchmark / pairwise_benchmark as-is.
-            sim_adata = anndata.AnnData(
-                X=sims.astype(np.float32),
-                obs=pd.DataFrame(index=labels),
-                var=pd.DataFrame(index=labels),
-            )
-            for key, value in upstream_uns.items():
-                sim_adata.uns[key] = value
-
-        else:  # "anndata"
-            # AnnData-convention format (scanpy-compatible):
-            #   X                  → profiles (n_perturb × n_features)
-            #   obs.index          → perturbation labels (consistent with matrix format)
-            #   obs (columns)      → full upstream metadata (plate, well, gene_symbol…)
-            #   var                → feature names
-            #   obsp["similarity"] → (n_perturb × n_perturb) similarity matrix
-            #   varm               → PCA loadings and other per-feature matrices
-            # obs.index is set to the perturbation labels so that map-recall and
-            # set_benchmark can match genes against the correct rows/columns.
-            obs_copy = data.obs.copy()
-            obs_copy.index = pd.Index(labels, name=perturbation_column)
-            # Drop any obs column that duplicates the index name — anndata
-            # zarr writer rejects an index.name that matches a column name.
-            if perturbation_column in obs_copy.columns:
-                obs_copy = obs_copy.drop(columns=[perturbation_column])
-            sim_adata = anndata.AnnData(
-                X=np.asarray(data.X, dtype=np.float32),
-                obs=obs_copy,
-                var=data.var.copy(),
-            )
-            for key, value in upstream_uns.items():
-                sim_adata.uns[key] = value
-            if sim_adata.var.index.equals(data.var.index):
-                for key, value in upstream_varm.items():
-                    sim_adata.varm[key] = value
-            sim_adata.obsp["similarity"] = sims.astype(np.float32)
-            logger.info(
-                f"AnnData format: X=profiles {sim_adata.shape}, "
-                f"obsp['similarity'] ({len(labels)} × {len(labels)})"
-            )
-
-        # --- Optional clustering (reorders rows/columns by cluster) ---
         if cluster_method is not None and cluster_method != "none":
             logger.info(f"Clustering with method='{cluster_method}'")
             sim_adata = cluster_similarity(
@@ -1249,6 +980,7 @@ def run_pipeline_map_similarity(arguments: argparse.Namespace) -> None:
                 leiden_res_min=cluster_res_min,
                 leiden_res_max=cluster_res_max,
                 random_state=cluster_seed,
+                leaf_ordering=cluster_leaf_ordering,
             )
             n_cl = sim_adata.uns["clustering"]["n_clusters"]
             logger.info(f"Clustering done: {n_cl} clusters, obs['cluster'] populated")
@@ -1332,6 +1064,7 @@ def run_pipeline_map_cluster(arguments: argparse.Namespace) -> None:
             leiden_res_min=float(getattr(arguments, "leiden_res_min", 0.05)),
             leiden_res_max=float(getattr(arguments, "leiden_res_max", 2.0)),
             random_state=int(getattr(arguments, "random_state", 0)),
+            leaf_ordering=getattr(arguments, "cluster_leaf_ordering", "fast"),
         )
         n_cl = result.uns["clustering"]["n_clusters"]
         logger.info(
@@ -1448,7 +1181,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     max_fnf           = getattr(args, "max_fraction_not_finite", 0.25)
     min_var           = getattr(args, "min_variance", 0.1)
     max_var           = getattr(args, "max_variance", None)
-    max_res_nan_frac  = getattr(args, "max_residual_nan_fraction", 0.0)
+    max_res_nan_frac  = getattr(args, "max_residual_nan_fraction", None)
     res_nan_impute    = getattr(args, "residual_nan_impute", "zero") or "zero"
     pert_col          = getattr(args, "perturbation", "gene_symbol")
 
@@ -1737,11 +1470,6 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         result = remove_correlated_features(result, threshold=args.max_correlation)
 
     # ── Coerce bool obs columns to string for zarr serialisation ──────────
-    # Bool values are kept as Python bool through the label-filter step so
-    # that ``== False`` comparisons work correctly.  Zarr's VLenUTF8 encoder
-    # cannot handle Python bool, so we convert them to "True"/"False" strings
-    # before the result is written.  Downstream steps (scale, PCA, etc.) only
-    # use plate/well/gene_symbol and are unaffected by this conversion.
     for _col in result.obs.columns:
         if pd.api.types.is_object_dtype(result.obs[_col]):
             _non_null = result.obs[_col].dropna()
@@ -1749,6 +1477,25 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 lambda x: isinstance(x, (bool, np.bool_))
             ).all():
                 result.obs[_col] = result.obs[_col].astype(str)
+
+    # ── Optional post-filter feature quality steps ─────────────────────────
+    # These are included here (not in run_pipeline_map_filter) so that map run
+    # and map filter are guaranteed to apply exactly the same filter logic.
+    from scallops.features.preprocessing import filter_zero_inflated, filter_low_cardinality
+    _plate = getattr(args, "plate_column", "plate")
+    _well  = getattr(args, "well_column",  "well")
+    _by_zi = [c for c in [_plate, _well] if c in result.obs.columns] or None
+    _mzf = getattr(args, "max_zero_fraction", None)
+    if _mzf is not None:
+        result = filter_zero_inflated(
+            result,
+            max_zero_fraction=_mzf,
+            near_zero_threshold=float(getattr(args, "near_zero_threshold", 0.0)),
+            by=_by_zi,
+        )
+    _muni = getattr(args, "min_unique", None)
+    if _muni is not None:
+        result = filter_low_cardinality(result, min_unique=int(_muni))
 
     return result
 
@@ -1761,8 +1508,15 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
     the marginal distributions.
     """
     from scallops.features.preprocessing import transform_features_yj
-    plate = getattr(args, "plate_column", "plate")
-    well  = getattr(args, "well_column",  "well")
+    # Resolve stratification columns.  map run uses --plate-column/--well-column;
+    # standalone map-transform-yj uses --by [col1 col2].  Support both.
+    _by_explicit = getattr(args, "by", None)
+    if _by_explicit:
+        plate = _by_explicit[0] if len(_by_explicit) > 0 else "plate"
+        well  = _by_explicit[1] if len(_by_explicit) > 1 else "well"
+    else:
+        plate = getattr(args, "plate_column", "plate")
+        well  = getattr(args, "well_column",  "well")
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
 
     # Preserve centroid columns in obs before the NaN pre-filter may drop them
@@ -1998,11 +1752,14 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     ref_q      = getattr(args, "reference_query", None)
     n_comp     = getattr(args, "pca_components", 128)
     batch_size = getattr(args, "pca_batch_size", 200_000)
+    whiten     = bool(getattr(args, "pca_whiten", False))
     # 0 / None / negative → non-incremental (full-dataset) PCA
     if not batch_size or batch_size < 0:
         batch_size = None
     if isinstance(data.X, da.Array):
         data.X = data.X.compute()
+    # Clamp components to avoid IncrementalPCA crash when n_comp > n_features
+    n_comp = min(n_comp, data.shape[1])
 
     if ref_q is not None:
         ref_data = _slice_anndata(data, _query_anndata(data, ref_q).index)
@@ -2010,11 +1767,14 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
         ref_data = data
 
     pca_result = pca_embed(ref_data, n_components=n_comp, batch_size=batch_size,
-                           whiten=False, standardize=False)
+                           whiten=whiten, standardize=False)
     pca_info = pca_result.uns["pca"]
     PCs_f32  = pca_info["PCs"].T.astype(np.float32)  # (p, K)
     mean_f32 = (pca_info["mean"].astype(np.float32)
                 if pca_info["mean"] is not None else None)
+
+    var_f32 = (pca_info["variance"].astype(np.float32)
+               if whiten and pca_info.get("variance") is not None else None)
 
     n_total    = data.shape[0]
     n_pcs      = PCs_f32.shape[1]
@@ -2026,6 +1786,8 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
         if mean_f32 is not None:
             chunk -= mean_f32
         X_pca[start:end] = chunk @ PCs_f32
+        if var_f32 is not None:
+            X_pca[start:end] /= np.sqrt(var_f32)
 
     # Keep X = scaled features; store PCA coords in obsm
     result = anndata.AnnData(
@@ -2051,11 +1813,23 @@ def _apply_pca_select_inmem(data: anndata.AnnData, args: argparse.Namespace) -> 
     if "map_pca" in data.uns:
         tmp.uns["pca"] = data.uns["map_pca"]
 
+    # map run uses pca_select_method/pca_variance_fraction;
+    # standalone map-pca-select uses method/min_variance_fraction — check both.
+    _method = getattr(args, "pca_select_method", None) or getattr(args, "method", "variance")
+    _mvf    = getattr(args, "pca_variance_fraction", None)
+    if _mvf is None:
+        _mvf = getattr(args, "min_variance_fraction", 0.95)
+    _pval       = getattr(args, "pval", 0.05)
+    _n_perms    = int(getattr(args, "n_perms", 50))
+    _max_comp   = getattr(args, "max_components", None) or getattr(args, "cluster_max_n_clusters", None)
+    _n_features = getattr(args, "n_features", None)
     selected = select_pca_components(
         tmp,
-        method=getattr(args, "pca_select_method", "variance"),
-        min_variance_fraction=getattr(args, "pca_variance_fraction", 0.95),
-        pval=0.05, n_perms=50,
+        method=_method,
+        min_variance_fraction=float(_mvf),
+        pval=_pval, n_perms=_n_perms,
+        max_components=_max_comp,
+        n_features=_n_features,
     )
     n_keep = selected.shape[1]
     # Trim the X_pca embedding to the selected columns
@@ -2087,19 +1861,29 @@ def _apply_sphere_inmem(data: anndata.AnnData) -> anndata.AnnData:
 
 
 def _apply_tvn_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
-    """Run TVN on the PCA embedding; store result in obsm["X_tvn"].
+    """Run TVN; handles both the PCA-embedding path and the legacy direct-X path.
 
-    Convention:
+    **PCA-embedding path** (data has ``obsm["X_pca"]``, set by ``map-pca``):
       ``X``            stays as the scaled features (N × p) — unchanged.
-      ``obsm["X_pca"]``  the (sphered) PCA embedding — unchanged.
+      ``obsm["X_pca"]``  the PCA embedding — unchanged.
       ``obsm["X_tvn"]``  TVN output (N × K).
-      ``uns["pca"]``   TVN's internal PCA model (operates in PC space).
-      ``uns["tvn_*"]`` TVN backprojection parameters.
-      ``varm["PCs"]``  TVN component matrix (K × K, in PC space).
+
+    **Legacy path** (no ``obsm["X_pca"]``, TVN applied directly to X):
+      ``X``            replaced by TVN output.
+      ``obsm["X_tvn"]``  copy of the TVN output (for consistent downstream access).
     """
     from scallops.features.normalize import typical_variation_normalization
     ref_q  = getattr(args, "reference_query", "gene_symbol=='NTC'")
-    by_col = getattr(args, "tvn_by", None)   # only TVN uses this in map run
+    by_col = getattr(args, "tvn_by", None)
+
+    if "X_pca" not in data.obsm:
+        # Legacy path: TVN directly on X (no prior PCA step).
+        if isinstance(data.X, da.Array):
+            data.X = data.X.compute()
+        result = typical_variation_normalization(data, reference_query=ref_q, by=by_col)
+        result.obsm["X_tvn"] = np.asarray(result.X, dtype=np.float32)
+        _merge_uns(data, result)
+        return result
 
     # TVN operates on the PCA embedding, not on the raw scaled features
     tmp = _pca_view(data)
@@ -2170,9 +1954,12 @@ def _apply_agg_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
       ``uns``   — all backprojection parameters propagated from cells
     """
     from scallops.features.agg import agg_features
-    pert   = getattr(args, "perturbation", "gene_symbol")
-    by_col = getattr(args, "agg_by", None) or [pert]
-    mc     = getattr(args, "min_cells", None)
+    pert           = getattr(args, "perturbation", "gene_symbol")
+    by_col         = getattr(args, "agg_by", None) or [pert]
+    mc             = getattr(args, "min_cells", None)
+    agg_func       = getattr(args, "agg_method", "mean")
+    barcode_column = getattr(args, "barcode", "barcode_0")
+    agg_by_barcode = bool(getattr(args, "agg_by_barcode", False))
 
     # Use the TVN embedding as the source for aggregation
     if "X_tvn" in data.obsm:
@@ -2195,20 +1982,27 @@ def _apply_agg_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
         keep   = counts[counts >= mc].index
         tmp    = _slice_anndata(tmp, tmp.obs[pert].isin(keep))
 
-    result = agg_features(tmp, by=by_col, agg_func=getattr(args, "agg_method", "mean"))
+    if agg_by_barcode and barcode_column is not None:
+        barcode_by = list(by_col) + [barcode_column]
+        tmp = agg_features(tmp, by=barcode_by, agg_func=agg_func)
+        logger.info(f"After barcode aggregation: {tmp.shape[0]:,} profiles")
+
+    result = agg_features(tmp, by=by_col, agg_func=agg_func)
     # Propagate backprojection uns + varm from cells into profiles
     _merge_uns(data, result)
     return result
 
 
 def _apply_center_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
-    """Center profiles (subtract NTC mean); operates on X = TVN profiles."""
+    """Center profiles (subtract reference mean); operates on X = TVN profiles."""
     from scallops.features.normalize import normalize_features
     if isinstance(data.X, da.Array):
         data.X = data.X.compute()
     ref_q  = getattr(args, "reference_query", "gene_symbol=='NTC'")
+    by     = getattr(args, "center_by", None) or None
+    robust = bool(getattr(args, "center_robust", False))
     result = normalize_features(data, reference_query=ref_q,
-                                centering=True, scaling=False)
+                                by=by, centering=True, scaling=False, robust=robust)
     _merge_uns(data, result)
     return result
 
@@ -2216,23 +2010,55 @@ def _apply_center_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
 def _apply_similarity_inmem(
     data: anndata.AnnData, args: argparse.Namespace
 ) -> anndata.AnnData:
-    """Compute pairwise cosine / Pearson similarity on the profile X."""
+    """Compute pairwise cosine / Pearson similarity on the profile X.
+
+    Reads ``exclude_reference_query`` (canonical name, shared by both standalone
+    ``map-similarity`` and ``map run``) to drop reference rows before computing.
+    Supports both output formats via ``output_format`` ('matrix' or 'anndata').
+    """
     if isinstance(data.X, da.Array):
         data.X = data.X.compute()
-    upstream_uns = dict(data.uns)
-    ref_q = getattr(args, "reference_query", "gene_symbol=='NTC'")
-    pert  = getattr(args, "perturbation", "gene_symbol")
-    if ref_q:
-        ref_idx = _query_anndata(data, ref_q).index
+    upstream_uns  = dict(data.uns)
+    upstream_varm = dict(data.varm)
+    excl_q        = getattr(args, "exclude_reference_query", None)
+    pert          = getattr(args, "perturbation", "gene_symbol")
+    metric        = getattr(args, "metric", "cosine")
+    output_format = getattr(args, "output_format", "matrix")
+
+    if excl_q:
+        ref_idx = _query_anndata(data, excl_q).index
         data    = _slice_anndata(data, ~data.obs.index.isin(ref_idx))
-    sims   = pairwise_similarities(data, metric=getattr(args, "metric", "cosine"))
+        logger.info(f"After excluding reference: {data.shape[0]:,} profiles")
+
+    sims   = pairwise_similarities(data, metric=metric)
     labels = (data.obs[pert].astype(str).values
               if pert in data.obs.columns else data.obs.index.astype(str).values)
-    obs_df = pd.DataFrame(index=labels)
-    out    = anndata.AnnData(
-        X=sims.astype(np.float32),
-        obs=obs_df, var=obs_df.copy(),
-    )
+
+    if output_format == "anndata":
+        obs_copy = data.obs.copy()
+        obs_copy.index = pd.Index(labels, name=pert)
+        if pert in obs_copy.columns:
+            obs_copy = obs_copy.drop(columns=[pert])
+        out = anndata.AnnData(
+            X=np.asarray(data.X, dtype=np.float32),
+            obs=obs_copy,
+            var=data.var.copy(),
+        )
+        out.obsp["similarity"] = sims.astype(np.float32)
+        if out.var.index.equals(data.var.index):
+            for k, v in upstream_varm.items():
+                out.varm[k] = v
+        logger.info(
+            f"AnnData format: X=profiles {out.shape}, "
+            f"obsp['similarity'] ({len(labels)} × {len(labels)})"
+        )
+    else:
+        obs_df = pd.DataFrame(index=labels)
+        out = anndata.AnnData(
+            X=sims.astype(np.float32),
+            obs=obs_df, var=obs_df.copy(),
+        )
+
     for k, v in upstream_uns.items():
         out.uns[k] = v
     return out
@@ -2500,6 +2326,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
                     leiden_res_min=float(getattr(arguments, "cluster_leiden_res_min", 0.05)),
                     leiden_res_max=float(getattr(arguments, "cluster_leiden_res_max", 2.0)),
                     random_state=int(getattr(arguments, "cluster_random_state", 0)),
+                    leaf_ordering=getattr(arguments, "cluster_leaf_ordering", "fast"),
                 )
             # Carry provenance from profiles into the similarity AnnData
             for k, v in profiles.uns.items():
@@ -2860,12 +2687,6 @@ def run_pipeline_map_pca_select(arguments: argparse.Namespace) -> None:
     output = arguments.output
     force = arguments.force
     no_version = arguments.no_version
-    method = getattr(arguments, "method", "variance")
-    min_variance_fraction = float(getattr(arguments, "min_variance_fraction", 0.95))
-    pval = getattr(arguments, "pval", 0.05)
-    n_perms = int(getattr(arguments, "n_perms", 100))
-    max_components = getattr(arguments, "max_components", None)
-    n_features = getattr(arguments, "n_features", None)
 
     if _skip_if_exists(output, force):
         return
@@ -2878,18 +2699,9 @@ def run_pipeline_map_pca_select(arguments: argparse.Namespace) -> None:
         data = _read_data(paths)
         if isinstance(data.X, da.Array):
             data.X = data.X.compute()
-        logger.info(f"Input: {data.shape[0]:,} obs × {data.shape[1]:,} PCs")
-        result = select_pca_components(
-            data,
-            method=method,
-            min_variance_fraction=min_variance_fraction,
-            pval=pval,
-            n_perms=n_perms,
-            max_components=max_components,
-            n_features=n_features,
-        )
-        _merge_uns(data, result)
-        logger.info(f"After selection: {result.shape[1]:,} PCs retained")
+        logger.info(f"map pca-select: {data.shape[0]:,} obs × {data.shape[1]:,} features")
+        result = _apply_pca_select_inmem(data, arguments)
+        logger.info(f"map pca-select: done — {result.obsm.get('X_pca', result.X).shape[1]:,} PCs retained")
         _save_zarr(result, output, metadata)
 
 

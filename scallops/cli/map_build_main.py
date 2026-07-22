@@ -36,6 +36,148 @@ def _reference_query_arg(
 
 
 # ---------------------------------------------------------------------------
+# Shared step-arg helpers
+#
+# Each helper registers exactly the args consumed by the corresponding
+# _apply_X_inmem function.  Both the standalone parser and the map-run
+# parser call the same helper, so they can never diverge.
+# ---------------------------------------------------------------------------
+
+
+def _add_filter_extra_args(group: argparse.ArgumentParser) -> None:
+    """Zero-inflation, low-cardinality filter args (filter step)."""
+    group.add_argument(
+        "--max-zero-fraction",
+        help="Remove features where more than this fraction of values is near-zero. "
+             "When omitted the filter is disabled.",
+        type=float, default=None, dest="max_zero_fraction",
+    )
+    group.add_argument(
+        "--near-zero-threshold",
+        help="Values with |v| ≤ this are counted as zero for --max-zero-fraction.",
+        type=float, default=0.0, dest="near_zero_threshold",
+    )
+    group.add_argument(
+        "--min-unique",
+        help="Remove features with fewer than this many distinct finite values "
+             "(catches binary / integer-coded columns). Disabled when omitted.",
+        type=int, default=None, dest="min_unique",
+    )
+
+
+def _add_yj_step_args(group: argparse.ArgumentParser) -> None:
+    """YJ-specific tuning args shared by map-transform-yj and map run."""
+    group.add_argument(
+        "--yj-clip-percentile",
+        type=float, default=99.9, dest="yj_clip_percentile",
+        help="Winsorise each feature to this percentile before fitting the "
+             "Yeo-Johnson transform (default 99.9).  Set to 100 or None to disable.",
+    )
+    group.add_argument(
+        "--yj-standardize",
+        action="store_true", default=False, dest="yj_standardize",
+        help="Standardize each feature to zero mean and unit variance after the "
+             "Yeo-Johnson transform.  Makes --yj-clip-output meaningful.  Default: off.",
+    )
+    group.add_argument(
+        "--yj-clip-output",
+        type=float, default=None, dest="yj_clip_output",
+        help="Cap the YJ transform output to ±this value.  Only meaningful when "
+             "--yj-standardize is set.  Default: None (disabled).",
+    )
+
+
+def _add_pca_step_args(group: argparse.ArgumentParser) -> None:
+    """PCA args shared by map-pca and map run."""
+    group.add_argument(
+        "--pca-components", type=int, default=128, dest="pca_components",
+        help="Number of PCA components to fit.",
+    )
+    group.add_argument(
+        "--pca-batch-size", type=int, default=200_000, dest="pca_batch_size",
+        help="Batch size for incremental PCA.  0 or negative = full-dataset fit.",
+    )
+    group.add_argument(
+        "--pca-whiten",
+        action="store_true", default=False, dest="pca_whiten",
+        help="Divide each component by the square root of its explained variance "
+             "(PCA whitening).  Default: off.",
+    )
+
+
+def _add_tvn_step_args(group: argparse.ArgumentParser) -> None:
+    """TVN covariance-alignment grouping arg shared by map-tvn and map run."""
+    group.add_argument(
+        "--tvn-by",
+        nargs="*", default=None, dest="tvn_by",
+        help="Column(s) in obs for per-group covariance alignment "
+             "(e.g. 'condition' or 'plate').  When omitted a single global "
+             "alignment is applied.",
+    )
+
+
+def _add_agg_step_args(group: argparse.ArgumentParser) -> None:
+    """Aggregation args shared by map-agg and map run."""
+    group.add_argument(
+        "--agg-by", nargs="+", default=None, dest="agg_by",
+        help="obs column(s) to aggregate by.  Defaults to --perturbation.",
+    )
+    group.add_argument(
+        "--agg-method", choices=["mean", "median"], default="mean", dest="agg_method",
+        help="Aggregation function.",
+    )
+    group.add_argument(
+        "--min-cells", type=int, default=None, dest="min_cells",
+        help="Exclude perturbations with fewer cells than this before aggregation.",
+    )
+    group.add_argument(
+        "--barcode", default="barcode_0", dest="barcode",
+        help="obs column containing the guide barcode (used with --agg-by-barcode).",
+    )
+    group.add_argument(
+        "--agg-by-barcode",
+        action="store_true", default=False, dest="agg_by_barcode",
+        help="Aggregate by barcode first, then by --agg-by.  Useful when multiple "
+             "barcodes target the same gene.",
+    )
+
+
+def _add_center_step_args(group: argparse.ArgumentParser) -> None:
+    """Centering args shared by map-center and map run."""
+    group.add_argument(
+        "--center-by", nargs="*", default=None, dest="center_by",
+        help="Column(s) in obs to stratify centering by groups.",
+    )
+    group.add_argument(
+        "--center-robust",
+        action="store_true", default=False, dest="center_robust",
+        help="Use median instead of mean for centering.",
+    )
+
+
+def _add_similarity_step_args(group: argparse.ArgumentParser) -> None:
+    """Similarity args shared by map-similarity and map run."""
+    group.add_argument(
+        "--metric", choices=["cosine", "pearson"], default="cosine",
+        help="Similarity metric.",
+    )
+    group.add_argument(
+        "--exclude-reference-query",
+        default=None, dest="exclude_reference_query",
+        help="Pandas query identifying profiles to exclude before computing "
+             "similarities (e.g. \"gene_symbol=='NTC'\").  Recommended after "
+             "centering, as the reference becomes the zero vector.",
+    )
+    group.add_argument(
+        "--output-format",
+        choices=["matrix", "anndata"], default="matrix", dest="output_format",
+        help="'matrix': X = square (n×n) similarity matrix, obs/var = perturbation "
+             "labels.  'anndata': X = profiles, obsp['similarity'] = square matrix, "
+             "obs retains full upstream metadata.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # map-filter
 # ---------------------------------------------------------------------------
 
@@ -150,9 +292,12 @@ def _create_map_filter_parser(
         dest="residual_nan_impute",
     )
     parser.add_argument(
-        "--by",
-        help="Column(s) in obs to stratify variance computation (e.g. plate well).",
-        nargs="*",
+        "--plate-column", default="plate", dest="plate_column",
+        help="obs column identifying the plate (stratifies variance computation).",
+    )
+    parser.add_argument(
+        "--well-column", default="well", dest="well_column",
+        help="obs column identifying the well.",
     )
     parser.add_argument(
         "--filter-batch-size",
@@ -234,31 +379,9 @@ def _create_map_filter_parser(
         default=512,
     )
 
-    # --- Zero-inflation filter ---
-    zi = parser.add_argument_group("zero-inflation filter")
-    zi.add_argument(
-        "--max-zero-fraction",
-        help="Remove features where more than this fraction of values is near-zero. "
-        "When omitted the filter is disabled.",
-        type=float,
-        default=None,
-    )
-    zi.add_argument(
-        "--near-zero-threshold",
-        help="Values with |v| <= this are counted as zero.",
-        type=float,
-        default=0.0,
-    )
-
-    # --- Low-cardinality / categorical filter ---
-    cat = parser.add_argument_group("categorical filter")
-    cat.add_argument(
-        "--min-unique",
-        help="Remove features with fewer than this many distinct finite values. "
-        "Catches binary / integer-coded columns. When omitted the filter is disabled.",
-        type=int,
-        default=None,
-    )
+    # --- Zero-inflation and categorical filters ---
+    extra = parser.add_argument_group("zero-inflation / categorical filters")
+    _add_filter_extra_args(extra)
 
     # --- Batch-correlation filter ---
     batch = parser.add_argument_group("batch-correlation filter")
@@ -333,87 +456,42 @@ def _create_map_transform_yj_parser(
         required=True,
     )
     parser.add_argument(
-        "--by",
-        help="Column(s) in obs to stratify the transform (e.g. plate well).",
-        nargs="*",
+        "--plate-column", default="plate", dest="plate_column",
+        help="obs column identifying the plate (used for per-plate×well stratification).",
     )
     parser.add_argument(
-        "--perturbation",
-        default="gene_symbol",
-        dest="perturbation",
-        help="obs column identifying perturbations (default: gene_symbol). Used "
-             "to group NaN imputation by plate × well × perturbation.",
+        "--well-column", default="well", dest="well_column",
+        help="obs column identifying the well.",
     )
     parser.add_argument(
-        "--max-cpus",
-        type=int,
-        default=None,
-        dest="max_cpus",
-        help="Hard cap on CPU cores used for Dask parallel YJ fitting. "
-             "Set this on shared nodes (e.g. 16 on a 128-core node shared "
-             "with 8 jobs). Default: all available CPUs.",
+        "--perturbation", default="gene_symbol", dest="perturbation",
+        help="obs column identifying perturbations.",
     )
     parser.add_argument(
-        "--yj-clip-percentile",
-        type=float,
-        default=99.9,
-        dest="yj_clip_percentile",
-        help="Winsorise each feature to this percentile before fitting the "
-             "Yeo-Johnson transform (default 99.9). Prevents a single extreme "
-             "outlier from breaking the PowerTransformer optimiser.  Set to "
-             "100 or None to disable.",
+        "--max-cpus", type=int, default=None, dest="max_cpus",
+        help="Hard cap on CPU cores for parallel YJ fitting.",
     )
     parser.add_argument(
-        "--yj-standardize",
-        action="store_true",
-        default=False,
-        dest="yj_standardize",
-        help="Standardize each feature to zero mean and unit variance AFTER the "
-             "Yeo-Johnson transform.  Output is then in z-score space and "
-             "--yj-clip-output (e.g. 5σ) is meaningful.  Default: off — output "
-             "stays in the original feature scale.",
-    )
-    parser.add_argument(
-        "--yj-clip-output",
-        type=float,
-        default=None,
-        dest="yj_clip_output",
-        help="Cap the YJ transform output to ±this value.  Only meaningful when "
-             "--yj-standardize is set (output is then in σ units and ±5 is "
-             "extreme). When --yj-standardize is OFF and this flag is set, a "
-             "loud WARNING is emitted because the cap value has no interpretable "
-             "unit.  Default: None (disabled).",
-    )
-    parser.add_argument(
-        "--max-fraction-not-finite",
-        type=float,
-        default=0.25,
+        "--max-fraction-not-finite", type=float, default=0.25,
         dest="max_fraction_not_finite",
-        help="Drop features with any NaN in valid cells before fitting the "
-             "power transform (PowerTransformer fails on NaN input).  Also "
-             "drops cells with more than this fraction of NaN features.  "
-             "Set to None / negative to disable.",
+        help="Drop cells with more than this fraction of NaN features before fitting.",
     )
     parser.add_argument(
-        "--scale-method",
-        default="global",
-        dest="scale_method",
+        "--scale-method", default="global", dest="scale_method",
         choices=["global", "local"],
-        help="Scale method expected downstream (used only to decide whether to "
-             "preserve centroid columns in obs before the NaN pre-filter).",
+        help="Scale method expected downstream (controls centroid column preservation).",
     )
     parser.add_argument(
-        "--localz-centroid-y",
-        default="Nuclei_AreaShape_Center_Y",
+        "--localz-centroid-y", default="Nuclei_AreaShape_Center_Y",
         dest="localz_centroid_y",
-        help="obs/var column for y spatial centroid (needed when --scale-method local).",
+        help="obs/var column for y centroid (needed when --scale-method local).",
     )
     parser.add_argument(
-        "--localz-centroid-x",
-        default="Nuclei_AreaShape_Center_X",
+        "--localz-centroid-x", default="Nuclei_AreaShape_Center_X",
         dest="localz_centroid_x",
-        help="obs/var column for x spatial centroid (needed when --scale-method local).",
+        help="obs/var column for x centroid (needed when --scale-method local).",
     )
+    _add_yj_step_args(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
     force_arg(parser)
@@ -560,23 +638,7 @@ def _create_map_pca_parser(
         help_suffix="When given, PCA is fitted on the reference subset only; "
         "all observations are then projected into the fitted space.",
     )
-    parser.add_argument(
-        "--components",
-        help="Number of PCA components to retain.",
-        default=128,
-        type=int,
-    )
-    parser.add_argument(
-        "--batch-size",
-        help="Batch size for incremental PCA. Use 0 or negative to disable.",
-        default=200_000,
-        type=int,
-    )
-    parser.add_argument(
-        "--whiten",
-        help="Apply PCA whitening (divide by sqrt of explained variance).",
-        action="store_true",
-    )
+    _add_pca_step_args(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
     force_arg(parser)
@@ -631,13 +693,7 @@ def _create_map_tvn_parser(
         "Examples: \"gene_symbol=='NTC'\", \"type=='intergenic'\", "
         "\"perturbation_class=='scramble'\".",
     )
-    parser.add_argument(
-        "--by",
-        help="Column(s) in obs to apply per-group covariance alignment "
-        "(e.g. plate). When provided, each group is aligned to the global "
-        "reference covariance.",
-        nargs="*",
-    )
+    _add_tvn_step_args(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
     force_arg(parser)
@@ -682,41 +738,11 @@ def _create_map_agg_parser(
         help="Path to save aggregated profiles in Zarr format",
         required=True,
     )
-    required.add_argument(
-        "--by",
-        help="Column(s) in obs to aggregate by (e.g. gene_symbol plate well).",
-        required=True,
-        nargs="+",
-    )
     parser.add_argument(
-        "--perturbation",
-        help="Column in obs identifying the perturbation, used for min-cells filtering.",
-        default="gene_symbol",
+        "--perturbation", default="gene_symbol", dest="perturbation",
+        help="obs column identifying perturbations (used for min-cells filtering).",
     )
-    parser.add_argument(
-        "--method",
-        help="Aggregation function.",
-        choices=["mean", "median"],
-        default="mean",
-    )
-    parser.add_argument(
-        "--min-cells",
-        help="Minimum number of cells required per perturbation. "
-        "Perturbations below this threshold are excluded before aggregation.",
-        type=int,
-    )
-    parser.add_argument(
-        "--barcode",
-        help="Column in obs containing the guide barcode identifier, "
-        "used when --agg-by-barcode is set.",
-        default="barcode_0",
-    )
-    parser.add_argument(
-        "--agg-by-barcode",
-        help="Aggregate by barcode first, then by the columns in --by. "
-        "Useful when multiple barcodes target the same gene.",
-        action="store_true",
-    )
+    _add_agg_step_args(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
     force_arg(parser)
@@ -770,16 +796,7 @@ def _create_map_center_parser(
         "After centering, the reference profiles become the zero vector — exclude "
         "them in map-similarity using --exclude-reference-query.",
     )
-    parser.add_argument(
-        "--by",
-        help="Column(s) in obs to stratify centering by groups.",
-        nargs="*",
-    )
-    parser.add_argument(
-        "--robust",
-        help="Use median instead of mean for centering.",
-        action="store_true",
-    )
+    _add_center_step_args(parser)
     force_arg(parser)
     no_version_arg(parser)
     _sort_groups(parser)
@@ -823,41 +840,10 @@ def _create_map_similarity_parser(
         required=True,
     )
     parser.add_argument(
-        "--metric",
-        help="Similarity metric.",
-        choices=["cosine", "pearson"],
-        default="cosine",
+        "--perturbation", default="gene_symbol", dest="perturbation",
+        help="obs column used as row/column labels in the similarity matrix.",
     )
-    parser.add_argument(
-        "--perturbation",
-        help="Column in obs used as row/column labels in the similarity matrix.",
-        default="gene_symbol",
-    )
-    parser.add_argument(
-        "--exclude-reference-query",
-        help="Pandas query expression identifying profiles to exclude before "
-        "computing similarities.  Recommended when map-center has been applied "
-        "(the reference becomes the zero vector and cosine similarity is "
-        "undefined).  Examples: \"gene_symbol=='NTC'\", \"type=='intergenic'\".",
-        default=None,
-        dest="exclude_reference_query",
-    )
-    parser.add_argument(
-        "--output-format",
-        help=(
-            "Format of the output AnnData Zarr.  "
-            "'matrix' (default): obs and var are both indexed by perturbation "
-            "labels; X is the square (n × n) similarity matrix.  Compatible "
-            "with map-recall as-is.  "
-            "'anndata': profiles are stored in X (n × n_features) and the "
-            "similarity matrix is stored in obsp[\"similarity\"].  obs retains "
-            "all upstream metadata columns.  More suitable for downstream "
-            "analysis in Python / scanpy."
-        ),
-        choices=["matrix", "anndata"],
-        default="matrix",
-        dest="output_format",
-    )
+    _add_similarity_step_args(parser)
     _cluster_args(parser)
     force_arg(parser)
     no_version_arg(parser)
@@ -1286,6 +1272,18 @@ def _cluster_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=0,
         dest="cluster_random_state",
+    )
+    shared.add_argument(
+        "--cluster-leaf-ordering",
+        help="Leaf ordering for hierarchical clustering heatmap visualisation. "
+             "'none': raw dendrogram traversal order (instant). "
+             "'fast': greedy subtree-flip approximation, O(n log n), default — "
+             "near-optimal for well-separated clusters without the runtime cost. "
+             "'exact': scipy optimal leaf ordering, O(n²) — can take hours for "
+             "n > 5 000; only use when publication-quality ordering is required.",
+        choices=["none", "fast", "exact"],
+        default="fast",
+        dest="cluster_leaf_ordering",
     )
 
 
@@ -1781,22 +1779,7 @@ def _create_run_parser(
         help="obs column identifying the well.  Together with --plate-column this "
              "defines the experimental unit used by filter, transform-yj, and scale.",
     )
-    shared.add_argument(
-        "--tvn-by",
-        help=(
-            "Column(s) in obs for TVN per-group covariance alignment.  "
-            "This is a SEPARATE question from the plate/well grouping used by "
-            "filter / transform-yj / scale.  Those steps always group by "
-            "plate × well (the experimental unit).  --tvn-by asks which *biological* "
-            "group should receive its own alignment matrix: e.g. 'condition' aligns "
-            "GIRED and DMSO cells separately; 'plate' corrects plate-to-plate "
-            "covariance shifts; omit for a single global alignment.  "
-            "Requires a column that already exists in obs or is created by "
-            "--condition-column / --condition-map."
-        ),
-        nargs="*", default=None,
-        dest="tvn_by",
-    )
+    _add_tvn_step_args(shared)
 
     # ── Filtering ─────────────────────────────────────────────────────────────
     filt = parser.add_argument_group("feature / cell filtering (map filter step)")
@@ -1823,11 +1806,15 @@ def _create_run_parser(
     filt.add_argument("--max-fraction-not-finite", type=float, default=0.25,
                       dest="max_fraction_not_finite")
     filt.add_argument(
-        "--max-residual-nan-fraction", type=float, default=0.0,
+        "--max-residual-nan-fraction",
+        type=lambda x: None if x is None or str(x).lower() == "none" else float(x),
+        default=None,
         dest="max_residual_nan_fraction",
-        help="Step-3 residual-NaN tolerance. 0.0 (default): drop any feature with "
-             "even one NaN cell. >0: keep features with NaN fraction ≤ this value "
-             "and impute surviving NaN cells (see --residual-nan-impute).",
+        help="Step-3 residual-NaN tolerance. None (default): per-well-median mode — "
+             "NaN cells are imputed per well; only features whose majority of wells "
+             "are NaN get dropped by the variance filter. "
+             "0.0: zero-tolerance — drop any feature with even one NaN cell. "
+             ">0: keep features with NaN fraction ≤ this value and impute survivors.",
     )
     filt.add_argument(
         "--residual-nan-impute", choices=["zero", "perturbation"], default="zero",
@@ -1870,6 +1857,11 @@ def _create_run_parser(
         help="Query restricting the batch-correlation test to reference cells "
              "(e.g. \"gene_symbol=='NTC'\").",
     )
+    _add_filter_extra_args(filt)
+
+    # ── YJ transform tuning ───────────────────────────────────────────────────
+    yj = parser.add_argument_group("YJ transform tuning (map transform-yj step)")
+    _add_yj_step_args(yj)
 
     # ── Scale method (global or local z-score, always by plate × well) ────────
     scale = parser.add_argument_group(
@@ -1922,10 +1914,7 @@ def _create_run_parser(
 
     # ── PCA ───────────────────────────────────────────────────────────────────
     pca = parser.add_argument_group("PCA (map pca + pca-select steps)")
-    pca.add_argument("--pca-components", type=int, default=128, dest="pca_components",
-                     help="Number of PCA components to fit.")
-    pca.add_argument("--pca-batch-size", type=int, default=200_000, dest="pca_batch_size",
-                     help="Batch size for incremental PCA.")
+    _add_pca_step_args(pca)
     pca.add_argument("--pca-select-method", default="variance",
                      choices=["variance", "permutation", "tracy_widom"],
                      dest="pca_select_method",
@@ -1937,16 +1926,15 @@ def _create_run_parser(
 
     # ── Aggregation ───────────────────────────────────────────────────────────
     agg = parser.add_argument_group("profile aggregation (map agg step)")
-    agg.add_argument("--agg-by", nargs="+", default=None, dest="agg_by",
-                     help="obs column(s) to aggregate by.  Defaults to --perturbation.")
-    agg.add_argument("--agg-method", choices=["mean", "median"], default="mean",
-                     dest="agg_method")
-    agg.add_argument("--min-cells", type=int, default=None, dest="min_cells",
-                     help="Exclude perturbations with fewer cells before aggregation.")
+    _add_agg_step_args(agg)
+
+    # ── Centering ─────────────────────────────────────────────────────────────
+    cen = parser.add_argument_group("profile centering (map center step)")
+    _add_center_step_args(cen)
 
     # ── Similarity ────────────────────────────────────────────────────────────
     sim = parser.add_argument_group("similarity (map similarity step)")
-    sim.add_argument("--metric", choices=["cosine", "pearson"], default="cosine")
+    _add_similarity_step_args(sim)
 
     # ── Clustering (all options from map cluster, incl. auto-param tuning) ───
     _cluster_args(parser)

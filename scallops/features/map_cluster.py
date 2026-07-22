@@ -22,8 +22,11 @@ from typing import Literal
 import anndata
 import numpy as np
 import pandas as pd
-from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.cluster.hierarchy import fcluster, leaves_list, linkage
 from scipy.spatial.distance import squareform
+
+# Leaf-ordering modes for hierarchical clustering.
+LeafOrdering = Literal["none", "fast", "exact"]
 
 logger = logging.getLogger("scallops")
 
@@ -69,6 +72,92 @@ def _sim_to_dist(sim: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Leaf ordering helpers
+# ---------------------------------------------------------------------------
+
+
+def _approx_leaf_ordering(Z: np.ndarray, n: int, sim: np.ndarray) -> np.ndarray:
+    """Greedy approximate leaf ordering via dendrogram subtree flipping.
+
+    At each internal node (bottom-up), the two child subtrees are
+    optionally flipped so that the boundary leaves — rightmost of the left
+    subtree and leftmost of the right subtree — have the highest pairwise
+    similarity.  This is equivalent to scipy's ``optimal_leaf_ordering``
+    but greedy (no backtracking), making it O(n log n) for balanced
+    dendrograms instead of O(n²).  In practice the result is
+    indistinguishable from the exact solution for well-separated clusters.
+
+    :param Z: Linkage matrix from ``scipy.cluster.hierarchy.linkage``.
+    :param n: Number of leaf nodes (observations).
+    :param sim: Full (n × n) similarity matrix; accessed read-only.
+    :return: 1-D integer array of length *n* giving the optimal leaf order.
+    """
+    # Each entry: tuple(forward_list, reversed_list) to avoid O(n) reversals.
+    # We store both orientations so any flip is an O(1) swap.
+    node_fwd: dict[int, list[int]] = {}
+    node_rev: dict[int, list[int]] = {}
+    for i in range(n):
+        node_fwd[i] = [i]
+        node_rev[i] = [i]
+
+    for merge_idx, row in enumerate(Z):
+        left, right = int(row[0]), int(row[1])
+        node_id = n + merge_idx
+
+        lf, lr = node_fwd.pop(left),  node_rev.pop(left)
+        rf, rr = node_fwd.pop(right), node_rev.pop(right)
+
+        # Four junction similarities: (L-end, R-start) for each flip combo.
+        # lf[-1] = right end of left-forward, lr[-1] = right end of left-reversed, etc.
+        # We want max sim[left_right_end, right_left_end].
+        combos = [
+            (lf, rf, sim[lf[-1], rf[0]]),   # left-fwd + right-fwd
+            (lf, rr, sim[lf[-1], rr[0]]),   # left-fwd + right-rev
+            (lr, rf, sim[lr[-1], rf[0]]),   # left-rev + right-fwd
+            (lr, rr, sim[lr[-1], rr[0]]),   # left-rev + right-rev
+        ]
+        best_l, best_r, _ = max(combos, key=lambda t: t[2])
+        merged = best_l + best_r
+        node_fwd[node_id] = merged
+        node_rev[node_id] = merged[::-1]
+
+    root = n + len(Z) - 1
+    return np.array(node_fwd[root])
+
+
+def _apply_leaf_ordering(
+    Z: np.ndarray,
+    n: int,
+    sim: np.ndarray,
+    mode: "LeafOrdering",
+) -> np.ndarray:
+    """Return a leaf order array according to *mode*.
+
+    :param Z: Linkage matrix.
+    :param n: Number of leaves.
+    :param sim: Full similarity matrix (used only for ``"fast"``).
+    :param mode: ``"none"`` — dendrogram default order (instant);
+        ``"fast"`` — greedy subtree-flip approximation, O(n log n);
+        ``"exact"`` — scipy optimal leaf ordering, O(n²), slow for n > 5 000.
+    :return: 1-D integer index array of length *n*.
+    """
+    if mode == "none":
+        return leaves_list(Z)
+    if mode == "fast":
+        return _approx_leaf_ordering(Z, n, sim)
+    # "exact"
+    if n > 5_000:
+        logger.warning(
+            "leaf_ordering='exact' with n=%d may take many hours. "
+            "Consider 'fast' instead.",
+            n,
+        )
+    from scipy.cluster.hierarchy import optimal_leaf_ordering
+    Z_ordered = optimal_leaf_ordering(Z, squareform(np.clip(1.0 - sim, 0, None), checks=False))
+    return leaves_list(Z_ordered)
+
+
+# ---------------------------------------------------------------------------
 # Hierarchical clustering
 # ---------------------------------------------------------------------------
 
@@ -100,7 +189,8 @@ def _cluster_hierarchical(
     linkage_method: str,
     auto_n: bool,
     max_n: int,
-) -> tuple[np.ndarray, dict]:
+    leaf_ordering: "LeafOrdering" = "fast",
+) -> tuple[np.ndarray, np.ndarray, dict]:
     """Fit hierarchical clustering on a similarity matrix.
 
     :param sim: Square (n, n) similarity matrix.
@@ -110,12 +200,19 @@ def _cluster_hierarchical(
         ``"average"``, ``"single"``).
     :param auto_n: Estimate ``n_clusters`` from the dendrogram when *True*.
     :param max_n: Maximum ``n_clusters`` for the auto-estimation search.
-    :return: ``(labels, info_dict)`` where labels are 0-indexed cluster ints.
+    :param leaf_ordering: How to order leaves within the dendrogram for
+        visualisation.  ``"none"`` uses the raw dendrogram traversal order
+        (instant); ``"fast"`` uses a greedy subtree-flip approximation
+        (O(n log n), default); ``"exact"`` uses scipy's optimal leaf ordering
+        (O(n²), slow for n > 5 000).
+    :return: ``(labels, leaf_order, info_dict)`` — cluster assignments
+        (0-indexed), the leaf traversal order to use for reordering the
+        matrix, and metadata.
     """
     n = sim.shape[0]
     dist = _sim_to_dist(sim)
     condensed = squareform(dist, checks=False)
-    Z = linkage(condensed, method=linkage_method, optimal_ordering=True)
+    Z = linkage(condensed, method=linkage_method)
 
     if n_clusters is None:
         if auto_n:
@@ -128,12 +225,14 @@ def _cluster_hierarchical(
             n_clusters = max(2, int(np.round(np.sqrt(n))))
 
     labels = fcluster(Z, t=int(n_clusters), criterion="maxclust") - 1  # 0-indexed
-    return labels.astype(int), {
+    leaf_order = _apply_leaf_ordering(Z, n, sim, leaf_ordering)
+    return labels.astype(int), leaf_order, {
         "method": "hierarchical",
         "linkage": linkage_method,
         "n_clusters": int(labels.max() + 1),
         "n_clusters_requested": int(n_clusters),
         "auto_n": auto_n,
+        "leaf_ordering": leaf_ordering,
     }
 
 
@@ -459,6 +558,7 @@ def cluster_similarity(
     leiden_res_max: float = 2.0,
     elbow_n_range: int = 20,
     random_state: int = 0,
+    leaf_ordering: "LeafOrdering" = "fast",
 ) -> anndata.AnnData:
     """Cluster perturbation profiles and reorder the similarity matrix.
 
@@ -511,6 +611,11 @@ def cluster_similarity(
     :param elbow_n_range: Number of candidate hyperparameter values to
         evaluate when running the elbow search.
     :param random_state: Random seed for Leiden.
+    :param leaf_ordering: Controls the within-dendrogram leaf order for
+        ``method="hierarchical"``.  ``"none"`` — raw dendrogram traversal
+        (instant, adequate for most uses); ``"fast"`` — greedy subtree-flip
+        approximation, O(n log n), default; ``"exact"`` — scipy optimal leaf
+        ordering, O(n²), slow for n > 5 000.  Ignored for other methods.
     :return: New AnnData with observations sorted by cluster.
     """
     use_obsp = "similarity" in data.obsp
@@ -526,13 +631,15 @@ def cluster_similarity(
         return data
 
     # --- Run chosen algorithm ---
+    leaf_order = None
     if method == "hierarchical":
-        labels, info = _cluster_hierarchical(
+        labels, leaf_order, info = _cluster_hierarchical(
             sim,
             n_clusters=n_clusters,
             linkage_method=linkage_method,
             auto_n=auto_params,
             max_n=max_n_clusters,
+            leaf_ordering=leaf_ordering,
         )
     elif method == "hdbscan":
         labels, info = _cluster_hdbscan(
@@ -563,8 +670,12 @@ def cluster_similarity(
         f"Clustering ({method}): {info['n_clusters']} clusters from {n} perturbations"
     )
 
-    # --- Reorder by cluster (stable sort preserves within-cluster ordering) ---
-    order = np.argsort(labels, kind="stable")
+    # --- Reorder: hierarchical uses dendrogram leaf order (preserves within-cluster
+    # similarity structure); other methods fall back to sorting by cluster label. ---
+    if leaf_order is not None:
+        order = leaf_order
+    else:
+        order = np.argsort(labels, kind="stable")
     labels_sorted = labels[order]
 
     # obs with cluster column; use zero-padded strings so lexicographic sort works

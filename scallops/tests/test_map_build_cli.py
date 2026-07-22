@@ -110,8 +110,15 @@ def _ns(**kwargs) -> argparse.Namespace:
         dask_cluster=None,
         features=None,
         label_filter=None,
-        by=None,
-        robust=False,
+        # canonical step-specific arg names (no legacy aliases)
+        plate_column="plate",
+        well_column="well",
+        tvn_by=None,
+        agg_by=None,
+        agg_method="mean",
+        center_by=None,
+        center_robust=False,
+        pca_whiten=False,
     )
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -261,12 +268,13 @@ def test_map_pca_output_shape_and_var_names(cell_data, tmp_path):
     n_comp = 3
 
     run_pipeline_map_pca(
-        _ns(input=[inp], output=out, components=n_comp, batch_size=0, whiten=False,
-            reference=None)
+        _ns(input=[inp], output=out, pca_components=n_comp, pca_batch_size=0,
+            reference_query=None)
     )
     result = _read_zarr(out + ".zarr")
-    assert result.shape == (cell_data.shape[0], n_comp)
-    assert list(result.var.index) == [f"PC{i + 1}" for i in range(n_comp)]
+    # New format: X = scaled features, obsm["X_pca"] = PC coordinates
+    assert result.shape == cell_data.shape
+    assert result.obsm["X_pca"].shape == (cell_data.shape[0], n_comp)
 
 
 @pytest.mark.features
@@ -275,13 +283,14 @@ def test_map_pca_stores_pca_uns(cell_data, tmp_path):
     out = str(tmp_path / "pca")
 
     run_pipeline_map_pca(
-        _ns(input=[inp], output=out, components=3, batch_size=0, whiten=False,
-            reference=None)
+        _ns(input=[inp], output=out, pca_components=3, pca_batch_size=0,
+            reference_query=None)
     )
     result = _read_zarr(out + ".zarr")
-    assert "pca" in result.uns
+    # PCA model is stored under map_pca (not pca, which is reserved for TVN's internal PCA)
+    assert "map_pca" in result.uns
     for key in ("variance_ratio", "variance", "mean", "PCs"):
-        assert key in result.uns["pca"], f"Missing pca uns key: {key}"
+        assert key in result.uns["map_pca"], f"Missing map_pca uns key: {key}"
 
 
 @pytest.mark.features
@@ -291,12 +300,13 @@ def test_map_pca_reference_subset_fitting(cell_data, tmp_path):
     out = str(tmp_path / "pca")
 
     run_pipeline_map_pca(
-        _ns(input=[inp], output=out, components=2, batch_size=0, whiten=False,
-            reference="gene_symbol=='NTC'")
+        _ns(input=[inp], output=out, pca_components=2, pca_batch_size=0,
+            reference_query="gene_symbol=='NTC'")
     )
     result = _read_zarr(out + ".zarr")
     # All cells are projected (not just the reference subset)
     assert result.shape[0] == cell_data.shape[0]
+    assert result.obsm["X_pca"].shape == (cell_data.shape[0], 2)
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +321,7 @@ def test_map_tvn_output_shape(cell_data, tmp_path):
     out = str(tmp_path / "tvn")
 
     run_pipeline_map_tvn(
-        _ns(input=[inp], output=out, reference="gene_symbol=='NTC'")
+        _ns(input=[inp], output=out, reference_query="gene_symbol=='NTC'")
     )
     result = _read_zarr(out + ".zarr")
     assert result.shape == cell_data.shape
@@ -324,7 +334,7 @@ def test_map_tvn_stores_backprojection_uns(cell_data, tmp_path):
     out = str(tmp_path / "tvn")
 
     run_pipeline_map_tvn(
-        _ns(input=[inp], output=out, reference="gene_symbol=='NTC'")
+        _ns(input=[inp], output=out, reference_query="gene_symbol=='NTC'")
     )
     result = _read_zarr(out + ".zarr")
     for key in (
@@ -346,7 +356,7 @@ def test_map_tvn_propagates_upstream_uns(cell_data, tmp_path):
     out = str(tmp_path / "tvn")
 
     run_pipeline_map_tvn(
-        _ns(input=[inp], output=out, reference="gene_symbol=='NTC'")
+        _ns(input=[inp], output=out, reference_query="gene_symbol=='NTC'")
     )
     result = _read_zarr(out + ".zarr")
     assert result.uns.get("upstream_key") == 42
@@ -363,7 +373,7 @@ def test_map_agg_reduces_to_perturbation_count(tvn_data, tmp_path):
     out = str(tmp_path / "agg")
 
     run_pipeline_map_agg(
-        _ns(input=[inp], output=out, by=["gene_symbol"], method="mean",
+        _ns(input=[inp], output=out, agg_by=["gene_symbol"], agg_method="mean",
             min_cells=None, barcode=None, agg_by_barcode=False,
             perturbation="gene_symbol")
     )
@@ -382,7 +392,7 @@ def test_map_agg_min_cells_filters_perturbations(tvn_data, tmp_path):
     # NTC has N_NTC cells; gene_A / gene_B have N_PERT each.
     # Setting min_cells = N_NTC + 1 removes NTC; N_PERT * 2 removes both perturbs.
     run_pipeline_map_agg(
-        _ns(input=[inp], output=out, by=["gene_symbol"], method="mean",
+        _ns(input=[inp], output=out, agg_by=["gene_symbol"], agg_method="mean",
             min_cells=N_PERT + 1, barcode=None, agg_by_barcode=False,
             perturbation="gene_symbol")
     )
@@ -399,7 +409,7 @@ def test_map_agg_propagates_tvn_uns(tvn_data, tmp_path):
     out = str(tmp_path / "agg")
 
     run_pipeline_map_agg(
-        _ns(input=[inp], output=out, by=["gene_symbol"], method="mean",
+        _ns(input=[inp], output=out, agg_by=["gene_symbol"], agg_method="mean",
             min_cells=None, barcode=None, agg_by_barcode=False,
             perturbation="gene_symbol")
     )
@@ -426,7 +436,7 @@ def test_map_center_subtracts_ntc_mean(tvn_data, tmp_path):
     out = str(tmp_path / "centered")
 
     run_pipeline_map_center(
-        _ns(input=[inp], output=out, reference="gene_symbol=='NTC'", robust=False)
+        _ns(input=[inp], output=out, reference_query="gene_symbol=='NTC'")
     )
     result = _read_zarr(out + ".zarr")
     ntc_mask = result.obs["gene_symbol"] == "NTC"
@@ -441,7 +451,7 @@ def test_map_center_propagates_tvn_uns(tvn_data, tmp_path):
     out = str(tmp_path / "centered")
 
     run_pipeline_map_center(
-        _ns(input=[inp], output=out, reference="gene_symbol=='NTC'", robust=False)
+        _ns(input=[inp], output=out, reference_query="gene_symbol=='NTC'")
     )
     result = _read_zarr(out + ".zarr")
     for key in ("pca", "tvn_pre_scale_mean", "tvn_pre_scale_std",
@@ -620,14 +630,14 @@ def test_uns_propagation_through_full_chain(cell_data, tmp_path):
     out_tvn = str(tmp_path / "s3_tvn")
     run_pipeline_map_tvn(
         _ns(input=[out_yj + ".zarr"], output=out_tvn,
-            reference="gene_symbol=='NTC'")
+            reference_query="gene_symbol=='NTC'")
     )
 
     # Step 4: aggregate
     out_agg = str(tmp_path / "s4_agg")
     run_pipeline_map_agg(
-        _ns(input=[out_tvn + ".zarr"], output=out_agg, by=["gene_symbol"],
-            method="mean", min_cells=None, barcode=None, agg_by_barcode=False,
+        _ns(input=[out_tvn + ".zarr"], output=out_agg, agg_by=["gene_symbol"],
+            agg_method="mean", min_cells=None, barcode=None, agg_by_barcode=False,
             perturbation="gene_symbol")
     )
 
@@ -635,7 +645,7 @@ def test_uns_propagation_through_full_chain(cell_data, tmp_path):
     out_center = str(tmp_path / "s5_center")
     run_pipeline_map_center(
         _ns(input=[out_agg + ".zarr"], output=out_center,
-            reference="gene_symbol=='NTC'", robust=False)
+            reference_query="gene_symbol=='NTC'")
     )
 
     # Step 6: similarity (exclude NTC — after centering, NTC = zero vector so
@@ -1542,8 +1552,8 @@ def test_map_pca_select_variance_method(cell_data, tmp_path):
     pca_out = str(tmp_path / "pca")
     run_pipeline_map_pca(
         _ns(input=[_write_zarr(cell_data, tmp_path / "raw")],
-            output=pca_out, components=N_FEATURES, batch_size=0,
-            whiten=False, reference=None)
+            output=pca_out, pca_components=N_FEATURES, pca_batch_size=0,
+            reference_query=None)
     )
 
     out = str(tmp_path / "selected")
@@ -1553,7 +1563,8 @@ def test_map_pca_select_variance_method(cell_data, tmp_path):
             pval=0.05, n_perms=20, max_components=None, n_features=None)
     )
     result = _read_zarr(out + ".zarr")
-    assert 1 <= result.shape[1] <= N_FEATURES
+    n_pcs = result.obsm["X_pca"].shape[1] if "X_pca" in result.obsm else result.shape[1]
+    assert 1 <= n_pcs <= N_FEATURES
 
 
 @pytest.mark.features
@@ -1562,8 +1573,8 @@ def test_map_pca_select_max_components_cap(cell_data, tmp_path):
     pca_out = str(tmp_path / "pca")
     run_pipeline_map_pca(
         _ns(input=[_write_zarr(cell_data, tmp_path / "raw")],
-            output=pca_out, components=N_FEATURES, batch_size=0,
-            whiten=False, reference=None)
+            output=pca_out, pca_components=N_FEATURES, pca_batch_size=0,
+            reference_query=None)
     )
 
     out = str(tmp_path / "selected")
@@ -1573,7 +1584,8 @@ def test_map_pca_select_max_components_cap(cell_data, tmp_path):
             pval=0.05, n_perms=10, max_components=2, n_features=None)
     )
     result = _read_zarr(out + ".zarr")
-    assert result.shape[1] <= 2
+    n_pcs = result.obsm["X_pca"].shape[1] if "X_pca" in result.obsm else result.shape[1]
+    assert n_pcs <= 2
 
 
 @pytest.mark.features
@@ -1582,8 +1594,8 @@ def test_map_pca_select_tracy_widom_warns(cell_data, tmp_path):
     pca_out = str(tmp_path / "pca")
     run_pipeline_map_pca(
         _ns(input=[_write_zarr(cell_data, tmp_path / "raw")],
-            output=pca_out, components=N_FEATURES, batch_size=0,
-            whiten=False, reference=None)
+            output=pca_out, pca_components=N_FEATURES, pca_batch_size=0,
+            reference_query=None)
     )
 
     out = str(tmp_path / "selected")
@@ -1607,8 +1619,8 @@ def test_map_pca_select_propagates_uns(cell_data, tmp_path):
     pca_out = str(tmp_path / "pca")
     run_pipeline_map_pca(
         _ns(input=[_write_zarr(cell_data, tmp_path / "raw")],
-            output=pca_out, components=N_FEATURES, batch_size=0,
-            whiten=False, reference=None)
+            output=pca_out, pca_components=N_FEATURES, pca_batch_size=0,
+            reference_query=None)
     )
 
     out = str(tmp_path / "selected")
