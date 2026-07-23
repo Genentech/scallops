@@ -9,7 +9,6 @@ import json
 import os
 
 import anndata
-import dask.array as da
 import dask.dataframe as dd
 import fsspec
 import numpy as np
@@ -27,8 +26,12 @@ from scallops.cli.util import (
 )
 from scallops.features.agg import agg_features
 from scallops.features.decomposition import pca
-from scallops.features.map_eval import pairwise_similarities, recall, read_corum
-from scallops.features.normalize import _convert_scale, normalize_features, typical_variation_normalization
+from scallops.features.map_eval import pairwise_similarities, read_corum, recall
+from scallops.features.normalize import (
+    _convert_scale,
+    normalize_features,
+    typical_variation_normalization,
+)
 from scallops.features.preprocessing import filter_data
 from scallops.features.rank import rank_features
 from scallops.features.util import (
@@ -43,9 +46,9 @@ logger = _get_cli_logger()
 
 
 def _read_data(
-        data_paths: list[str],
-        feature_filter: str | None = None,
-        label_filter: str | None = None,
+    data_paths: list[str],
+    feature_filter: str | None = None,
+    label_filter: str | None = None,
 ) -> anndata.AnnData:
     if label_filter is not None:
         if fsspec.url_to_fs(label_filter)[0].exists(label_filter):
@@ -93,7 +96,7 @@ def _read_data(
 
 
 def rechunk(
-        data: anndata.AnnData, rechunk_label_size: str, rechunk_feature_size: str
+    data: anndata.AnnData, rechunk_label_size: str, rechunk_feature_size: str
 ) -> anndata.AnnData:
     if rechunk_label_size is not None or rechunk_feature_size is not None:
         if rechunk_label_size is None:
@@ -199,7 +202,9 @@ def run_similarity_matrix(arguments: argparse.Namespace):
         data = _read_data(data_paths)
 
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-        data = anndata.AnnData(X=pairwise_similarities(data), obs=data.obs, var=data.obs)
+        data = anndata.AnnData(
+            X=pairwise_similarities(data), obs=data.obs, var=data.obs
+        )
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
@@ -247,15 +252,20 @@ def run_aggregate(arguments: argparse.Namespace):
                 data,
                 dd.read_csv(join_path)
                 if not join_path.lower().endswith(".parquet")
-                   or join_path.lower().endswith(".pq")
+                or join_path.lower().endswith(".pq")
                 else dd.read_parquet(join_path),
                 join_fields,
             )
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
 
         if center_reference_query is not None:
-            data = normalize_features(data=data, normalize="zscore", scaling=False, robust=False,
-                                      reference_query=center_reference_query)
+            data = normalize_features(
+                data=data,
+                normalize="zscore",
+                scaling=False,
+                robust=False,
+                reference_query=center_reference_query,
+            )
 
         data = agg_features(
             data=data,
@@ -310,7 +320,7 @@ def run_tvn(arguments: argparse.Namespace):
                 data,
                 dd.read_csv(join_path)
                 if not join_path.lower().endswith(".parquet")
-                   or join_path.lower().endswith(".pq")
+                or join_path.lower().endswith(".pq")
                 else dd.read_parquet(join_path),
                 join_fields,
             )
@@ -368,7 +378,7 @@ def run_pca(arguments: argparse.Namespace):
                 data,
                 dd.read_csv(join_path)
                 if not join_path.lower().endswith(".parquet")
-                   or join_path.lower().endswith(".pq")
+                or join_path.lower().endswith(".pq")
                 else dd.read_parquet(join_path),
                 join_fields,
             )
@@ -423,7 +433,7 @@ def run_rank_features(arguments: argparse.Namespace):
     iqr_multiplier = arguments.iqr_multiplier
 
     if not rank_output.lower().endswith(
-            ".parquet"
+        ".parquet"
     ) and not rank_output.lower().endswith(".pq"):
         rank_output = rank_output + ".parquet"
 
@@ -449,7 +459,7 @@ def run_rank_features(arguments: argparse.Namespace):
                 data,
                 dd.read_csv(join_path)
                 if not join_path.lower().endswith(".parquet")
-                   or join_path.lower().endswith(".pq")
+                or join_path.lower().endswith(".pq")
                 else dd.read_parquet(join_path),
                 join_fields,
             )
@@ -570,7 +580,7 @@ def run_norm_features(arguments: argparse.Namespace):
                 data,
                 dd.read_csv(join_path)
                 if not join_path.lower().endswith(".parquet")
-                   or join_path.lower().endswith(".pq")
+                or join_path.lower().endswith(".pq")
                 else dd.read_parquet(join_path),
                 join_fields,
             )
@@ -593,7 +603,8 @@ def run_norm_features(arguments: argparse.Namespace):
                 scaling=scaling,
                 max_value=max_value,
                 batch_size=batch_size,
-                centroid_column_names=centroid_column_names)
+                centroid_column_names=centroid_column_names,
+            )
         else:
             logger.info("No normalization")
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
@@ -641,10 +652,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     )
     output = arguments.output
 
-    if (
-            not force
-            and is_anndata(output)
-    ):
+    if not force and is_anndata(output):
         logger.info(f"Skipping {output}")
         return
 
@@ -672,7 +680,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
                 data,
                 dd.read_csv(join_path)
                 if not join_path.lower().endswith(".parquet")
-                   or join_path.lower().endswith(".pq")
+                or join_path.lower().endswith(".pq")
                 else dd.read_parquet(join_path),
                 join_fields,
             )
@@ -684,7 +692,9 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             max_variance=max_feature_variance,
             by=by,
         )
-        logger.info(f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+        logger.info(
+            f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}"
+        )
         fs, output_label_ids = fsspec.url_to_fs(output)
         fs.makedirs(os.path.basename(output), exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)

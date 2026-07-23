@@ -17,10 +17,10 @@ def _weighted_median(x, weights):
 
 
 def agg_features(
-        data: anndata.AnnData,
-        by: str | Sequence[str],
-        weights_col: str | None = None,
-        agg_func: Literal["mean", "median"] = "mean",
+    data: anndata.AnnData,
+    by: str | Sequence[str],
+    weights_col: str | None = None,
+    agg_func: Literal["mean", "median"] = "mean",
 ):
     """Aggregate features
 
@@ -87,9 +87,9 @@ def agg_features(
     else:
         kwargs = dict()
         if (
-                isinstance(xdata.data, da.Array)
-                and agg_func == "mean"
-                and len(grouped.groups) > 100_000
+            isinstance(xdata.data, da.Array)
+            and agg_func == "mean"
+            and len(grouped.groups) > 100_000
         ):
             kwargs["method"] = "map-reduce"
         result = grouped.mean(**kwargs) if agg_func == "mean" else grouped.median()
