@@ -624,10 +624,10 @@ def run_norm_features(arguments: argparse.Namespace):
                     **table.schema.metadata,
                 }
             )
-            fs, output_file = fsspec.url_to_fs(norm_output)
+            fs, output_file = fsspec.url_to_fs(output)
             pq.write_table(
                 table,
-                norm_output,
+                output,
                 filesystem=fs,
             )
 
