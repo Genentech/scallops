@@ -286,7 +286,7 @@ def _create_normalize_parser(
 ) -> None:
     parser = subparsers.add_parser(
         "normalize",
-        help="Normalize features from output of `merge` command",
+        help="Normalize features",
         formatter_class=(
             argparse.ArgumentDefaultsHelpFormatter
             if default_help

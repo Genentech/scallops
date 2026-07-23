@@ -92,15 +92,6 @@ def _read_data(
     return data
 
 
-def rechunk_for_zarr(data: anndata.AnnData):
-    if not da.core._check_regular_chunks(data.X.chunks):
-        # need uniform chunks to save to zarr
-        chunks = list(data.X.chunksize)
-        chunks[0] = "auto"
-        data.X = data.X.rechunk(tuple(chunks))
-    return data
-
-
 def rechunk(
         data: anndata.AnnData, rechunk_label_size: str, rechunk_feature_size: str
 ) -> anndata.AnnData:
@@ -212,7 +203,7 @@ def run_similarity_matrix(arguments: argparse.Namespace):
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
-            data = rechunk_for_zarr(data)
+
             data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
@@ -276,7 +267,7 @@ def run_aggregate(arguments: argparse.Namespace):
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
-            data = rechunk_for_zarr(data)
+
             data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
@@ -336,7 +327,7 @@ def run_tvn(arguments: argparse.Namespace):
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
-            data = rechunk_for_zarr(data)
+
             data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
@@ -399,7 +390,7 @@ def run_pca(arguments: argparse.Namespace):
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
         if output.lower().endswith(".zarr"):
-            data = rechunk_for_zarr(data)
+
             data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
@@ -619,7 +610,7 @@ def run_norm_features(arguments: argparse.Namespace):
         fs, output_basename = fsspec.url_to_fs(os.path.basename(norm_output))
         fs.makedirs(output_basename, exist_ok=True)
         if output_format == "zarr":
-            data = rechunk_for_zarr(data)
+
             data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(norm_output, convert_strings_to_categoricals=False)
         elif output_format == "h5ad":
@@ -710,7 +701,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         fs, output_label_ids = fsspec.url_to_fs(output)
         fs.makedirs(os.path.basename(output), exist_ok=True)
         if output.lower().endswith(".zarr"):
-            data = rechunk_for_zarr(data)
+
             data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
