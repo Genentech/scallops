@@ -409,6 +409,7 @@ def _read_map_inputs(
     valid_channels: "set[str] | None" = None,
     obs_captures: "dict[str, dict[str, str]] | None" = None,
     include_measurement_types: "set[str] | None" = None,
+    obs_force: "set[str] | None" = None,
 ) -> anndata.AnnData:
     """Read parquet/zarr inputs for the map pipeline.
 
@@ -488,12 +489,26 @@ def _read_map_inputs(
         # Apply channel filter (e.g. restrict to IF channels 4-13)
         _feat_cols = _keep_channels(_feat_cols, valid_channels,
                                     include_measurement_types)
+        # Force label-filter columns into obs so the null guard never triggers
+        # a full feature-matrix materialisation (CellProfiler filter columns
+        # like Cells_Location_* / Nuclei_Correlation_* have compartment prefixes
+        # and would otherwise be classified as lazy feature columns).
+        if obs_force:
+            _feat_cols = [c for c in _feat_cols if c not in obs_force]
         _feat_set = set(_feat_cols)
+        # All compartment-prefix columns not selected as features should be
+        # DROPPED (not loaded into obs).  With channel selection active,
+        # ~3,000 excluded FISH/other-channel columns would otherwise fall into
+        # obs and inflate the obs DataFrame by hundreds of GB.
+        _all_compartment_cols = {
+            c for c in _all_cols if c.split("_")[0] in _COMPARTMENTS
+        }
 
-        # Obs: skip list/struct typed columns (e.g. barcode_Q_0)
+        # Obs: skip list/struct typed columns AND dropped compartment columns
         _obs_cols = [
             c for c in _all_cols
             if c not in _feat_set
+            and c not in (_all_compartment_cols - set(obs_force or []))
             and not _pa.types.is_list(_schema.field(c).type)
             and not _pa.types.is_large_list(_schema.field(c).type)
             and not _pa.types.is_struct(_schema.field(c).type)
