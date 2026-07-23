@@ -326,7 +326,9 @@ def test_agg_features(by, weighted, agg_func, use_dask):
         agg_d.X = agg_d.X.compute()
     assert agg_d.shape == (2, 2)
     agg_df = agg_d.to_df().join(agg_d.obs).sort_values("pert").drop("count", axis=1)
-    pd.testing.assert_frame_equal(result_df[agg_df.columns].reset_index(drop=True), agg_df.reset_index(drop=True))
+    pd.testing.assert_frame_equal(
+        result_df[agg_df.columns].reset_index(drop=True), agg_df.reset_index(drop=True)
+    )
 
 
 @pytest.mark.features
