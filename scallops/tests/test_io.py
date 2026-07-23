@@ -186,24 +186,75 @@ def test_read_tif(use_dask):
     assert len(data.shape) == 5
 
 
+@pytest.mark.parametrize("zarr_format", ["ome_zarr", "zarr"])
+@pytest.mark.parametrize("use_dask", [True, False])
 @pytest.mark.io
-def test_write_ome_zarr_image_dask(tmp_path):
-    data = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=True
+def test_write_zarr_attrs_coords_spacing(tmp_path, zarr_format, use_dask):
+    data = xr.DataArray(
+        np.arange(120, dtype=np.uint8).reshape((2, 3, 5, 4)),
+        dims=["t", "c", "y", "x"],
+        coords={"t": [3, 5], "c": ["foo1", "foo2", "foo3"]},
+        attrs={
+            "foo": "bar",
+            "physical_pixel_sizes": (1.3, 1.2),
+            "physical_pixel_units": ("angstrom", "mm"),
+        },
     )
-    data.attrs.clear()
+    if use_dask:
+        data.data = da.from_array(data.data)
     zarr_path = str(tmp_path / "test.zarr")
-    _write_zarr_image("foo", open_ome_zarr(zarr_path), data)
-    data2 = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif", dask=False
-    )
-    np.testing.assert_array_equal(
-        data2.values, data.values, err_msg="Dask and non dask images are not equal"
-    )
-    data3 = read_image(f"{zarr_path}/images/foo", dask=False)
-    np.testing.assert_array_equal(
-        data2.values, data3.values, err_msg="Saved image not equal"
-    )
+    _write_zarr_image("foo", open_ome_zarr(zarr_path), data, zarr_format=zarr_format)
+    img = read_image(f"{zarr_path}/images/foo", dask=False)
+    assert img.attrs.pop("t") == [3, 5]
+    xr.testing.assert_identical(data, img)
+    assert get_image_spacing(img.attrs) == (1.3, 1.2)
+    assert img.attrs["foo"] == "bar"
+    assert img.attrs["physical_pixel_units"] == ("angstrom", "mm")
+    assert img.coords["t"].values.tolist() == [3, 5]
+    assert img.coords["c"].values.tolist() == ["foo1", "foo2", "foo3"]
+    g = zarr.open(f"{zarr_path}/images/foo", mode="r")
+    assert list(g.keys()) == ["s0"]
+    assert {
+        "channels": [
+            {
+                "label": "foo1",
+                "color": "00FFFF",
+                "window": {"min": 0, "max": 255, "start": 0, "end": 255},
+            },
+            {
+                "label": "foo2",
+                "color": "FFFF00",
+                "window": {"min": 0, "max": 255, "start": 0, "end": 255},
+            },
+            {
+                "label": "foo3",
+                "color": "FF00FF",
+                "window": {"min": 0, "max": 255, "start": 0, "end": 255},
+            },
+        ]
+    } == g.attrs["omero"]
+    assert [
+        {
+            "datasets": [
+                {
+                    "path": "s0",
+                    "coordinateTransformations": [
+                        {"type": "scale", "scale": [1.0, 1.0, 1.3, 1.2]},
+                        {"type": "translation", "translation": [0.0, 0.0, 0.0, 0.0]},
+                    ],
+                }
+            ],
+            "name": "/images/foo",
+            "metadata": {"foo": "bar", "t": [3, 5]},
+            "axes": [
+                {"name": "t", "type": "time"},
+                {"name": "c", "type": "channel"},
+                {"name": "y", "type": "space", "unit": "angstrom"},
+                {"name": "x", "type": "space", "unit": "mm"},
+            ],
+            "version": "0.4",
+        }
+    ] == g.attrs["multiscales"]
 
 
 @pytest.mark.io
@@ -225,13 +276,16 @@ def test_write_non_ome_zarr_image(tmp_path, use_dask):
     image.attrs = {"test": "1"}
     image.attrs["physical_pixel_sizes"] = (1, 1, 1)
     image.attrs["physical_pixel_units"] = ("mm", "mm", "mm")
-    zarr_path = str(tmp_path / "test.zarr")
-    _write_zarr_image("foo", open_ome_zarr(zarr_path), image, zarr_format="zarr")
-    _write_zarr_image("foo2", open_ome_zarr(zarr_path), image)
+    image.name = None
+    zarr_path = str(tmp_path / "test1.zarr")
+    _write_zarr_image("image1", open_ome_zarr(zarr_path), image, zarr_format="zarr")
+    data_zarr = read_image(f"{zarr_path}/images/image1", dask=False)
+    xr.testing.assert_identical(data_zarr, image)
 
-    data_zarr = read_image(f"{zarr_path}/images/foo", dask=False)
-    data_ome_zarr = read_image(f"{zarr_path}/images/foo2", dask=False)
-    xr.testing.assert_equal(data_zarr, data_ome_zarr)
+    ome_zarr_path = str(tmp_path / "test2.zarr")
+    _write_zarr_image("image1", open_ome_zarr(ome_zarr_path), image)
+    data_ome_zarr = read_image(f"{ome_zarr_path}/images/image1", dask=False)
+    xr.testing.assert_identical(data_ome_zarr, image)
 
 
 @pytest.mark.io
@@ -374,19 +428,30 @@ def test_read_write_experiment(experiment_c, tmp_path):
     np.testing.assert_equal(
         exp.images["A1-102"].coords["c"].data,
         ["Channel:0:0", "Channel:0:1", "Channel:0:2", "Channel:0:3", "Channel:0:4"],
+        err_msg="c not equal",
     )
     np.testing.assert_equal(
-        exp.images["A1-102"].coords["t"].data, [1, 2, 3, 4, 5, 7, 8, 9, 10]
+        exp.images["A1-102"].coords["t"].data,
+        [1, 2, 3, 4, 5, 7, 8, 9, 10],
+        err_msg="t not equal",
     )
 
     np.testing.assert_equal(
-        exp.images["A1-102"].values, experiment_c.images["A1-102"].values
+        exp.images["A1-102"].values,
+        experiment_c.images["A1-102"].values,
+        err_msg="102 not equal",
     )
     np.testing.assert_equal(
-        exp.images["A1-103"].values, experiment_c.images["A1-103"].values
+        exp.images["A1-103"].values,
+        experiment_c.images["A1-103"].values,
+        err_msg="103 not equal",
     )
-    assert exp.images["A1-102"].attrs["common_src"] == "10X_c-SBS_*_A1_Tile-102.sbs"
-    assert exp.images["A1-102"].attrs["group"] == dict(tile="102", well="A1")
+    assert exp.images["A1-102"].attrs["common_src"] == "10X_c-SBS_*_A1_Tile-102.sbs", (
+        "common_src not equal"
+    )
+    assert exp.images["A1-102"].attrs["group"] == dict(tile="102", well="A1"), (
+        "group not equal"
+    )
 
 
 @pytest.mark.io

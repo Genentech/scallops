@@ -121,6 +121,39 @@ def _create_dd_metadata(
     ).fillna(0)
 
 
+def _rewrite_channels(
+    funcs, all_required_channels: np.ndarray, channel_names: list[str]
+) -> np.ndarray:
+    channel_names_subset = []
+    channel_map = dict()
+    for i in range(len(all_required_channels)):
+        original_channel_index = all_required_channels[i]
+        channel_map[original_channel_index] = i
+        channel_names_subset.append(channel_names[original_channel_index])
+    for f in funcs:
+        for key in f.keywords:
+            if key in ["c", "c1", "c2"]:
+                val = f.keywords[key]
+                if isinstance(val, int):
+                    f.keywords[key] = channel_map[val]
+                elif isinstance(val, (list, tuple)):
+                    new_val = []
+
+                    for v in val:
+                        if isinstance(v, int):
+                            new_val.append(channel_map[v])
+                        elif isinstance(v, tuple):
+                            new_val.append((channel_map[v[0]], channel_map[v[1]]))
+                        else:
+                            raise ValueError()
+                    if isinstance(val, tuple):
+                        new_val = tuple(new_val)
+                    f.keywords[key] = new_val
+                else:
+                    raise ValueError(f"{val} is not a valid type.")
+    return channel_names_subset
+
+
 def label_features(
     objects_df: pd.DataFrame,
     label_image: da.Array | zarr.Array,
@@ -158,7 +191,8 @@ def label_features(
             assert intensity_image.shape[:-1] == label_shape, (
                 f"{intensity_image.shape} != {label_shape}"
             )
-            label_image = label_image.rechunk(intensity_image.chunksize[:-1])
+            if intensity_image.chunksize[:-1] != label_image.chunksize:
+                label_image = label_image.rechunk(intensity_image.chunksize[:-1])
 
         else:
             if isinstance(intensity_image, zarr.Array):
@@ -199,10 +233,17 @@ def label_features(
             if channel_index < 0 or channel_index >= nchannels:
                 raise ValueError("Channel index out of range")
             channel_names_[channel_index] = channel_name
-    funcs, requires_intensity_image = _create_funcs(
+    funcs, all_required_channels = _create_funcs(
         features=features, n_channels=len(channel_names_)
     )
-    if not requires_intensity_image:  # Don't pass intensity image if not needed
+    if is_dask_array and len(all_required_channels) != len(channel_names_):
+        channel_names_ = _rewrite_channels(
+            funcs,
+            all_required_channels=all_required_channels,
+            channel_names=channel_names_,
+        )
+        intensity_image = intensity_image[..., all_required_channels]
+    if len(all_required_channels) == 0:  # Don't pass intensity image if not needed
         intensity_image = None
     intensity_image_delayed = (
         delayed(intensity_image) if not isinstance(intensity_image, da.Array) else None
@@ -384,19 +425,17 @@ def normalize_features(features: Iterable[str]) -> set[str]:
 def _create_funcs(
     features: Iterable[str],
     n_channels: Sequence[str],
-) -> tuple[list[Callable], bool]:
+) -> tuple[list[Callable], np.ndarray[int]]:
     """Create feature functionss.
 
     :param features: Iterable of feature names to be processed.
     :param n_channels: Number of channels in image
     :return: A tuple containing:
              - list of partial functions corresponding to the provided features.
-             - boolean indicating whether any feature requires intensity image
+             - set of required intensity image channel indices.
     """
 
     funcs = []
-
-    requires_intensity_image = False
 
     features_dict = _features.copy()
     func_tuple_to_params = defaultdict(lambda: [])
@@ -412,7 +451,7 @@ def _create_funcs(
             if param_name not in ("c", "c1", "c2"):
                 key.append(params[param_name])
         func_tuple_to_params[tuple(key)].append(params)
-
+    all_required_channels = set()
     for func_tuple, params_list in func_tuple_to_params.items():
         func_name = func_tuple[0]
         if "c" in params_list[0]:
@@ -420,7 +459,7 @@ def _create_funcs(
             for params in params_list:
                 for val in params["c"]:
                     channels.add(val)
-            requires_intensity_image = True
+            all_required_channels.update(channels)
             new_params = dict(c=tuple(sorted(channels)))
             for p in params_list[0]:
                 if p != "c":
@@ -428,7 +467,6 @@ def _create_funcs(
             f = partial(features_dict[func_name], **new_params)
             funcs.append(f)
         elif "c1" in params_list[0]:
-            requires_intensity_image = True
             seen_symmetric = set()  # c1 always < c2
 
             for params in params_list:
@@ -447,6 +485,9 @@ def _create_funcs(
                     additional_params[p] = params_list[0][p]
             rewrite_func = _features_rewrite.get(func_name)
             if len(seen_symmetric) > 0:
+                for c1, c2 in seen_symmetric:
+                    all_required_channels.add(c1)
+                    all_required_channels.add(c2)
                 if rewrite_func is not None:
                     new_params = dict(c=list(seen_symmetric))
                     new_params.update(additional_params)
@@ -462,8 +503,9 @@ def _create_funcs(
             for params in params_list:
                 f = partial(features_dict[func_name], **params)
                 funcs.append(f)
-
-    return funcs, requires_intensity_image
+    all_required_channels = np.array(list(all_required_channels))
+    all_required_channels.sort()
+    return funcs, all_required_channels
 
 
 def _get_params(

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import shapely
+import xarray as xr
 import zarr
 from skimage.measure import regionprops
 
@@ -23,7 +24,7 @@ from scallops.features.constants import (
     _other_features_single_channel,
 )
 from scallops.features.find_objects import find_objects
-from scallops.features.generate import _create_funcs, label_features
+from scallops.features.generate import _create_funcs, _rewrite_channels, label_features
 from scallops.features.spots import spot_count
 from scallops.features.texture import pftas
 from scallops.io import read_image, to_label_crops
@@ -112,12 +113,14 @@ def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     assert len(result_df) == 1 and result_df.index.values[0] == 2603
 
     group = zarr.group()
-    intensity_image_zarr = group.create_dataset(
-        name="image", shape=intensity_image.shape
+    intensity_image_zarr = group.create_array(
+        name="image", shape=intensity_image.shape, dtype=intensity_image.dtype
     )
     intensity_image_zarr[:] = intensity_image.compute()
 
-    label_image_zarr = group.create_dataset(name="label", shape=label_image.shape)
+    label_image_zarr = group.create_array(
+        name="label", shape=label_image.shape, dtype=label_image.dtype
+    )
     label_image_zarr[:] = label_image.compute()
 
     to_label_crops(
@@ -407,18 +410,59 @@ def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
 
 
 @pytest.mark.features
+def test_rewrite_channels():
+    funcs, all_required_channels = _create_funcs(["colocalization_1_5"], 10)
+    assert funcs[0].keywords["c"] == [(1, 5)]
+    channel_names = _rewrite_channels(
+        funcs,
+        all_required_channels=all_required_channels,
+        channel_names=np.arange(10).astype(str),
+    )
+    assert channel_names == ["1", "5"]
+    assert funcs[0].keywords["c"] == [(0, 1)]
+
+    funcs, all_required_channels = _create_funcs(["intensity_5,6"], 10)
+    assert funcs[0].keywords["c"] == (5, 6)
+    channel_names = _rewrite_channels(
+        funcs,
+        all_required_channels=all_required_channels,
+        channel_names=np.arange(10).astype(str),
+    )
+    assert channel_names == ["5", "6"]
+    assert funcs[0].keywords["c"] == (0, 1)
+
+    funcs, all_required_channels = _create_funcs(["correlationpearsonbox_5_6,8"], 10)
+    assert len(funcs) == 2
+    assert funcs[0].keywords["c1"] == 5
+    assert funcs[0].keywords["c2"] == 6
+    assert funcs[1].keywords["c1"] == 5
+    assert funcs[1].keywords["c2"] == 8
+    channel_names = _rewrite_channels(
+        funcs,
+        all_required_channels=all_required_channels,
+        channel_names=np.arange(10).astype(str),
+    )
+
+    assert channel_names == ["5", "6", "8"]
+    assert funcs[0].keywords["c1"] == 0
+    assert funcs[0].keywords["c2"] == 1
+    assert funcs[1].keywords["c1"] == 0
+    assert funcs[1].keywords["c2"] == 2
+
+
+@pytest.mark.features
 def test_create_funcs():
-    funcs, requires_intensity = _create_funcs(["colocalization_*_*"], 3)
-    assert requires_intensity
+    funcs, all_required_channels = _create_funcs(["colocalization_*_*"], 3)
+    assert len(all_required_channels) > 0
     assert len(funcs) == 1
     assert funcs[0].keywords["c"] == [(0, 1), (0, 2), (1, 2)]
-    funcs, requires_intensity = _create_funcs(["haralick_*_3", "haralick_*_5"], 3)
-    assert requires_intensity
+    funcs, all_required_channels = _create_funcs(["haralick_*_3", "haralick_*_5"], 3)
+    assert len(all_required_channels) > 0
     assert len(funcs) == 2
 
-    funcs, requires_intensity = _create_funcs(["intensitydistribution_*_4"], 3)
+    funcs, all_required_channels = _create_funcs(["intensitydistribution_*_4"], 3)
     assert funcs[0].keywords == {"c": (0, 1, 2), "bin_count": 4}
-    assert requires_intensity
+    assert len(all_required_channels) > 0
     assert len(funcs) == 1
 
     funcs, _ = _create_funcs(["colocalization_0_0"], 3)
@@ -504,19 +548,16 @@ def test_features_cli_multi_images(tmp_path, array_A1_102_cells, array_A1_102_al
 
 
 @pytest.mark.features
-def test_features_cli(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    # test that all features run, can be saved to disk, and diff with known good output
-    image = (
-        array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x")).rename(
-            {"z": "t", "t": "z"}
-        )
-    ).isel(t=0, z=0)  # ops swaps z and t in saved tif
-
+def test_features_cli(tmp_path, array_A1_102_cells):
     labels = array_A1_102_cells.squeeze().copy()
     labels.values[labels.values != 17] = 0
+    rng = np.random.default_rng(1)
+    image = xr.DataArray(
+        rng.integers(low=10, high=50, size=(4,) + labels.shape), dims=["c", "y", "x"]
+    )
     zarr_path = str(tmp_path / "test.zarr")
     features_output_path = str(tmp_path / "features-out")
+    features2_output_path = str(tmp_path / "features2-out")
     objects_output_path = str(tmp_path / "objects-out")
     exp = Experiment()
     exp.images["test"] = image
@@ -553,6 +594,24 @@ def test_features_cli(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
     ]
 
     check_call(cmd)
+    result_df = pd.read_parquet(features_output_path)
+    cmd = [
+        "scallops",
+        "features",
+        "--images",
+        zarr_path,
+        "--labels",
+        zarr_path,
+        "--output",
+        features2_output_path,
+        "--features-cell",
+        "intensity_2,0",
+        "--objects",
+        objects_output_path,
+    ]
+    result2_df = pd.read_parquet(features_output_path)
+    check_call(cmd)
+    pd.testing.assert_frame_equal(result_df[result2_df.columns], result2_df)
 
 
 @pytest.mark.features

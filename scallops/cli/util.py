@@ -26,6 +26,7 @@ import fsspec
 import numpy as np
 import xarray as xr
 import zarr
+from dask.delayed import Delayed
 from distributed import Client
 
 from scallops.io import save_ome_tiff
@@ -199,11 +200,11 @@ def _write_image(
     root: zarr.Group | str,
     image: np.ndarray | xr.DataArray | da.Array,
     output_format: str,
-    file_separator: str,
+    file_separator: str = "/",
     metadata: dict | None = None,
     compute: bool = True,
     **kwargs,
-) -> None:
+) -> list[Delayed]:
     """Write image data to Zarr or TIFF format.
 
     :param name: Name of the image.
@@ -215,7 +216,7 @@ def _write_image(
     :param compute: Whether to compute the Dask array before saving.
     """
     if output_format == "zarr":
-        _write_zarr_image(
+        return _write_zarr_image(
             name=name,
             root=root,
             image=image,

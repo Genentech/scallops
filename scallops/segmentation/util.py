@@ -164,7 +164,7 @@ def remove_small_objects_std(labels: np.ndarray, rm_small_std: float) -> np.ndar
 
     counts = np.array(list(Counter(labels[labels > 0]).values()))
     min_size = (-rm_small_std * counts.std()) + counts.mean()
-    rm_small = partial(remove_small_objects, min_size=min_size)
+    rm_small = partial(remove_small_objects, max_size=min_size - 1)
     return rm_small(labels)
 
 

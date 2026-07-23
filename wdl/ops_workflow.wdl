@@ -82,6 +82,7 @@ workflow ops_workflow {
         # merge
         String? merge_extra_arguments
 
+
         # force
         Boolean run_spot_detect = true
         Boolean run_nuclei_segmentation = true
@@ -611,9 +612,6 @@ workflow ops_workflow {
                 call tasks.merge as merge_sbs_metadata {
                     input:
                         iss_reads=select_first([reads.output_url]) + '/labels',
-#                        phenotypes_nuclei=features_nuclei.output_url,
-#                        phenotypes_cell=features_cell.output_url,
-#                        phenotypes_cytosol=features_cytosol.output_url,
                         objects_nuclei=find_objects_nuclei.output_url,
                         objects_cell=find_objects_cell.output_url,
                         objects_cytosol=find_objects_cytosol.output_url,
@@ -626,7 +624,6 @@ workflow ops_workflow {
                         barcode_column=barcode_column,
                         output_directory=merge_meta_directory,
                         subset = group,
-                        extra_arguments=merge_extra_arguments,
                         force = force_merge,
                         docker=docker,
                         zones = zones,

@@ -18,7 +18,7 @@ authors = [
 ]
 dynamic = ["version"]
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
     "License :: OSI Approved :: Apache Software License",
@@ -33,17 +33,19 @@ classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
 dependencies = [
     "adjustText",
     "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
-    "bioio<2",
+    "bioio>=3",
     "bioio-nd2",
+    "bioio-ome-tiff",
+    "bioio-ome-zarr",
     "bioio-tifffile",
     "centrosome",
     "cp-measure>=0.1.16",
     "dask-image",
-    "dask<=2025.11.0",
+    "dask",
     "decorator",
     "filelock",
     "flox",
-    "fsspec!=2023.9.0", # 2023.9.0 causes ome-zarr write image to fail
+    "fsspec",
     "igraph",
     "itk-elastix",
     "itk",
@@ -54,8 +56,8 @@ dependencies = [
     "natsort",
     "numcodecs",
     "numpy",
-    "ome-zarr<0.12.0",
-    "pandas",
+    "ome-zarr",
+    "pandas<3",
     "pint",
     "psutil",
     "pyarrow",
@@ -68,13 +70,13 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile<=2025.5.10",
+    "tifffile",
     "xarray",
-    "zarr<3"
+    "zarr>=3"
 ]
 
 [project.optional-dependencies]
-# Added pysam as an optional extra for Linux/macOS users
+
 dialout = [
     "pysam"
 ]
@@ -86,7 +88,7 @@ dask-ml = [
     "dask-ml"
 ]
 cellpose = [
-    "cellpose<4"
+    "cellpose"
 ]
 ufish = [
     "ufish"
@@ -126,12 +128,11 @@ include = ["scallops*"]
 exclude = ["docs*", "scallops/tests*"]
 
 [tool.setuptools_scm]
-write_to = "scallops/_version.py"
 tag_regex = "^(?P<version>v?[0-9]{1,2}\\.[0-9]+\\.[0-9]+)$"
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 fix = true
 
 [tool.ruff.format]
