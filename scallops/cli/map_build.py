@@ -1295,6 +1295,15 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             "map run [filter]: parquet column-batch mode (%d sources)",
             len(parquet_sources),
         )
+        _budget_gb = getattr(args, "memory_budget_gb", None)
+        _filter_zarr = None
+        _stream_chunk_gb = 2.0
+        if _budget_gb is not None:
+            # Write filter output to zarr; variance computed in budget-sized chunks
+            _stream_chunk_gb = max(0.1, _budget_gb / 6)
+            _filter_zarr = (getattr(args, "output", None) or
+                            getattr(args, "output_dir", "")).rstrip("/") + "_filter.zarr"
+
         _mem_stop = _memory_monitor_start()
         try:
             X_filtered, cell_keep, feat_keep, _feat_report = _col_batch_filter_parquet(
@@ -1307,6 +1316,8 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 max_residual_nan_fraction=max_res_nan_frac,
                 residual_nan_impute=res_nan_impute,
                 perturbation_column=pert_col,
+                output_zarr_path=_filter_zarr,
+                streaming_chunk_gb=_stream_chunk_gb,
             )
         except MemoryError as exc:
             logger.critical(
@@ -1326,12 +1337,28 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             len(obs_all), int(cell_keep.sum()),
             len(data.var), int(feat_keep.sum()),
         )
-        result = anndata.AnnData(
-            X=X_filtered,
-            obs=obs_all.iloc[cell_keep].copy(),
-            var=data.var.iloc[feat_keep].copy(),
-            uns=dict(data.uns),
-        )
+        if X_filtered is None and _filter_zarr:
+            # Phase 3: zarr-backed result — load as dask (0 GB RAM for X)
+            _X_da = da.from_zarr(_filter_zarr, component="X")
+            # The zarr was written with all post-step1/2 features; variance filter
+            # may have further narrowed feat_keep — select the surviving columns
+            _n_zar_cols = _X_da.shape[1]
+            _n_final    = int(feat_keep.sum())
+            if _n_zar_cols > _n_final:
+                _X_da = _X_da[:, :_n_final]   # zarr cols already ordered correctly
+            result = anndata.AnnData(
+                X=_X_da,
+                obs=obs_all.iloc[cell_keep].copy(),
+                var=data.var.iloc[feat_keep].copy(),
+                uns=dict(data.uns),
+            )
+        else:
+            result = anndata.AnnData(
+                X=X_filtered,
+                obs=obs_all.iloc[cell_keep].copy(),
+                var=data.var.iloc[feat_keep].copy(),
+                uns=dict(data.uns),
+            )
         _merge_uns(data, result)
 
         # Stash the feature-drop report in uns so callers can retrieve and write it

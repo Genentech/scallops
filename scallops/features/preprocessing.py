@@ -837,7 +837,18 @@ def _col_batch_filter_parquet(
     max_residual_nan_fraction: float | None = 0.0,
     residual_nan_impute: "str | None" = "zero",
     perturbation_column: "str | None" = None,
-) -> "tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]":
+    output_zarr_path: "str | None" = None,
+    streaming_chunk_gb: float = 2.0,
+) -> "tuple[np.ndarray | None, np.ndarray, np.ndarray, pd.DataFrame]":
+    """Two-pass streaming filter.
+
+    When *output_zarr_path* is provided, pass 2 writes filtered rows
+    directly to a zarr store (no ``np.empty`` pre-allocation) and steps
+    3+4 (variance + residual-NaN) are computed from that zarr in
+    ``streaming_chunk_gb``-sized row-chunks.  Return value is the same
+    except the first element is ``None``; the caller reads the result
+    from the zarr as a dask-backed AnnData.
+    """
     """Two-pass sequential streaming filter for parquet files (local or S3).
 
     Works for both parquet AND any format accepted by the PyArrow dataset API.
@@ -1007,9 +1018,19 @@ def _col_batch_filter_parquet(
         f"{n_cells_out:,}", f"{n_cells:,}", f"{n_feat_out:,}", f"{n_feat:,}",
     )
 
-    # ── Pass 2: materialise filtered matrix ───────────────────────────────────
+    # ── Pass 2: write filtered matrix (to zarr or numpy) ─────────────────────
     kept_feat_cols = [feat_cols[i] for i, k in enumerate(feat_keep) if k]
-    result      = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
+    if output_zarr_path is not None:
+        import zarr as _zarr
+        _zg  = _zarr.open_group(output_zarr_path, mode="a")
+        _zX  = _zg.require_dataset(
+            "X", shape=(n_cells_out, n_feat_out), dtype="float32",
+            chunks=(min(50_000, n_cells_out), n_feat_out), overwrite=True,
+        )
+        result = None   # no pre-allocation; write chunk-by-chunk to zarr
+    else:
+        result = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
+        _zX = None
     out_row     = 0
     row_offset  = 0
 
@@ -1036,7 +1057,10 @@ def _col_batch_filter_parquet(
         if cell_b.any():
             X_b = batch.to_pandas().values.astype(np.float32)
             X_f = X_b[cell_b]
-            result[out_row : out_row + X_f.shape[0]] = X_f
+            if _zX is not None:
+                _zX[out_row : out_row + X_f.shape[0]] = X_f
+            else:
+                result[out_row : out_row + X_f.shape[0]] = X_f
             out_row += X_f.shape[0]
             del X_b, X_f
         n_done += 1
@@ -1045,19 +1069,84 @@ def _col_batch_filter_parquet(
             logger.info("  [pass 2/2] %.0f%% — ETA: %.0f min",
                         row_offset / n_cells * 100, eta)
 
-    logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
-
-    # ── Steps 3 + 4: residual-NaN handling + variance filter (shared helper) ─────
     obs_kept = obs_df.iloc[cell_keep].reset_index(drop=True)
-    result, feat_keep, feat_var = _apply_filter_post_materialise(
-        result, feat_keep, obs_kept,
-        by=by,
-        min_variance=min_variance,
-        max_variance=max_variance,
-        max_residual_nan_fraction=max_residual_nan_fraction,
-        residual_nan_impute=residual_nan_impute,
-        perturbation_column=perturbation_column,
-    )
+
+    if _zX is not None:
+        # ── Steps 3+4 from zarr: streaming sum/sum_sq variance, no full load ─
+        logger.info("  [pass 2/2 done] streamed to zarr — computing variance "
+                    "from zarr in %.0f GB chunks", streaming_chunk_gb)
+        chunk_rows = max(1, int(streaming_chunk_gb * 1e9 / (n_feat_out * 8)))
+
+        # Accumulators per group: sum, sum_sq, count (all of shape n_feat_out)
+        _gsum:  "dict[str, np.ndarray]" = {}
+        _gsq:   "dict[str, np.ndarray]" = {}
+        _gcnt:  "dict[str, np.ndarray]" = {}
+        _by_list = ([by] if isinstance(by, str) else list(by)) if by else []
+
+        for _r0 in range(0, n_cells_out, chunk_rows):
+            _r1   = min(_r0 + chunk_rows, n_cells_out)
+            _Xc   = np.asarray(_zX[_r0:_r1], dtype=np.float64)   # one chunk
+            _obsc = obs_kept.iloc[_r0:_r1]
+            _keys = (_obsc[_by_list].astype(str).agg("-".join, axis=1).values
+                     if _by_list else np.full(_r1 - _r0, "__all__"))
+            for _g in np.unique(_keys):
+                _m  = _keys == _g
+                _Xg = _Xc[_m]
+                _fm = np.isfinite(_Xg)
+                _gsum[_g] = _gsum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xg,    axis=0)
+                _gsq[_g]  = _gsq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xg**2, axis=0)
+                _gcnt[_g] = _gcnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0)
+            del _Xc
+
+        _gvars = []
+        for _g in _gsum:
+            _n  = _gcnt[_g]
+            _mu = np.where(_n > 0, _gsum[_g] / np.maximum(_n, 1), np.nan)
+            _v  = np.where(_n > 1, _gsq[_g] / np.maximum(_n, 1) - _mu**2, np.nan)
+            _gvars.append(_v)
+        feat_var = np.nanmedian(np.stack(_gvars), axis=0) if _gvars else np.zeros(n_feat_out)
+
+        # Variance filter
+        _mv = min_variance if min_variance is not None else 0.0
+        _vk = np.isfinite(feat_var) & (feat_var >= _mv)
+        if max_variance is not None:
+            _vk &= feat_var <= max_variance
+        if not _vk.all():
+            logger.info("  [variance filter] dropped %d features → %d remain",
+                        int((~_vk).sum()), int(_vk.sum()))
+        # Map back to original feat_keep indices (feat_keep is indexed over full feat_cols)
+        _fk_idx   = np.where(feat_keep)[0]
+        feat_keep[_fk_idx[~_vk]] = False
+        feat_var   = feat_var[_vk]
+
+        # Residual NaN: scan each kept feature column from zarr
+        _kept_idx = np.where(_vk)[0]      # indices within n_feat_out space
+        _nan_feat = np.zeros(len(_kept_idx), dtype=bool)
+        for _r0 in range(0, n_cells_out, chunk_rows):
+            _r1  = min(_r0 + chunk_rows, n_cells_out)
+            _Xc  = np.asarray(_zX[_r0:_r1][:, _kept_idx], dtype=np.float32)
+            _nan_feat |= ~np.isfinite(_Xc).all(axis=0)
+            del _Xc
+        if _nan_feat.any() and max_residual_nan_fraction == 0.0:
+            _drop_n = int(_nan_feat.sum())
+            logger.info("  [residual NaN] zero-tolerance: dropped %d features", _drop_n)
+            _fk2 = np.where(feat_keep)[0]
+            feat_keep[_fk2[_nan_feat]] = False
+            _kept_idx = _kept_idx[~_nan_feat]
+
+        # result stays None; caller builds dask AnnData from zarr
+        result = None
+    else:
+        logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
+        result, feat_keep, feat_var = _apply_filter_post_materialise(
+            result, feat_keep, obs_kept,
+            by=by,
+            min_variance=min_variance,
+            max_variance=max_variance,
+            max_residual_nan_fraction=max_residual_nan_fraction,
+            residual_nan_impute=residual_nan_impute,
+            perturbation_column=perturbation_column,
+        )
 
     # ── Build the feature-drop report ─────────────────────────────────────────
     _feat_names = list(feat_cols) if feat_cols else [f"feat_{i}" for i in range(n_feat)]
