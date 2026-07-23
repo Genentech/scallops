@@ -264,6 +264,22 @@ def _create_map_filter_parser(
         metavar="CHANNEL",
     )
     parser.add_argument(
+        "--include-measurement-type",
+        help="Include features of these measurement types regardless of channel.  "
+             "Overrides --feature-channels for matching features.  "
+             "The type is the second underscore-delimited token in the column name "
+             "(e.g. 'Spots_Count' from 'Cells_Spots_Count_Channel0').  "
+             "Use this to add FISH spot-count features when --feature-channels "
+             "selects only IF channels: "
+             "--feature-channels 4 5 6 7 8 9 10 11 12 13 "
+             "--include-measurement-type Spots_Count",
+        nargs="+",
+        type=str,
+        default=None,
+        dest="include_measurement_types",
+        metavar="TYPE",
+    )
+    parser.add_argument(
         "--label-filter",
         help="Pandas query expression to filter cells before feature filtering.",
     )
@@ -301,15 +317,15 @@ def _create_map_filter_parser(
     )
     parser.add_argument(
         "--max-residual-nan-fraction",
-        help="Step 3 residual-NaN tolerance.  "
-             "None (default): recommended (per-well median) — skip explicit step-3; "
-             "per-well variance with NaN propagation lets isfinite(median_var) "
-             "drop only features whose majority of wells have NaN; surviving NaN "
-             "cells are imputed to 0 after step-4.  "
-             "0.0: zero-tolerance — drop any feature with even one NaN cell.  "
-             "> 0: drop features above this NaN fraction, impute survivors.",
+        help="Residual-NaN cleanup tolerance (applied after variance selection).  "
+             "0.0 (default): zero-tolerance — drop any feature with ≥1 NaN cell "
+             "remaining after the cell filter.  Features whose NaN cells were all "
+             "in 'bad' cells (already removed by cell filter) survive cleanly.  "
+             "Produces a fully finite matrix without imputation.  "
+             "None: no-op — NaN cells remain in output.  "
+             "> 0: drop features above this NaN fraction, impute survivors to 0.",
         type=lambda x: None if x is None or str(x).lower() == "none" else float(x),
-        default=None,
+        default=0.0,
         dest="max_residual_nan_fraction",
     )
     parser.add_argument(
@@ -1829,6 +1845,15 @@ def _create_run_parser(
              "Features with no Channel<N> token are always kept. "
              "When omitted all channels are included.",
     )
+    filt.add_argument(
+        "--include-measurement-type", nargs="+", type=str, default=None,
+        dest="include_measurement_types", metavar="TYPE",
+        help="Include features of these measurement types regardless of channel. "
+             "Overrides --feature-channels for matching features. "
+             "Example: --feature-channels 4 5 6 7 8 9 10 11 12 13 "
+             "--include-measurement-type Spots_Count  adds FISH spot-count "
+             "features even though channels 0–3 are excluded by --feature-channels.",
+    )
     filt.add_argument("--min-variance", type=float, default=0.1, dest="min_variance")
     filt.add_argument("--max-variance", type=float, default=5.0, dest="max_variance")
     filt.add_argument("--max-feature-nan-fraction", type=float, default=0.50,
@@ -1840,13 +1865,13 @@ def _create_run_parser(
     filt.add_argument(
         "--max-residual-nan-fraction",
         type=lambda x: None if x is None or str(x).lower() == "none" else float(x),
-        default=None,
+        default=0.0,
         dest="max_residual_nan_fraction",
-        help="Step-3 residual-NaN tolerance. None (default): per-well-median mode — "
-             "NaN cells are imputed per well; only features whose majority of wells "
-             "are NaN get dropped by the variance filter. "
-             "0.0: zero-tolerance — drop any feature with even one NaN cell. "
-             ">0: keep features with NaN fraction ≤ this value and impute survivors.",
+        help="Residual-NaN cleanup tolerance (applied after variance selection). "
+             "0.0 (default): zero-tolerance — drop features with ≥1 NaN cell after "
+             "the cell filter; produces a fully finite matrix without imputation. "
+             "None: no-op, NaN cells remain. "
+             ">0: drop features above this fraction, impute survivors to 0.",
     )
     filt.add_argument(
         "--residual-nan-impute", choices=["zero", "perturbation"], default="zero",

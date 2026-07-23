@@ -572,15 +572,18 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        features = arguments.features
-        _raw_chs   = getattr(arguments, "feature_channels", None)
-        _valid_ch  = set(str(c) for c in _raw_chs) if _raw_chs else None
+        features  = arguments.features
+        _raw_chs  = getattr(arguments, "feature_channels", None)
+        _valid_ch = set(str(c) for c in _raw_chs) if _raw_chs else None
+        _raw_mts  = getattr(arguments, "include_measurement_types", None)
+        _meas_types = set(_raw_mts) if _raw_mts else None
         _pattern   = getattr(arguments, "input_pattern", None)
         _path_caps = _expand_pattern_inputs(paths, _pattern)
         _obs_caps  = {p: c for p, c in _path_caps if c}
         _exp_paths = [p for p, _ in _path_caps]
         data = _read_map_inputs(_exp_paths, valid_channels=_valid_ch,
-                                obs_captures=_obs_caps or None) if all(
+                                obs_captures=_obs_caps or None,
+                                include_measurement_types=_meas_types) if all(
             p.lower().endswith((".parquet", ".pq")) for p in _exp_paths
         ) else _read_data(_exp_paths, features)
 
@@ -1228,7 +1231,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     max_fnf           = getattr(args, "max_fraction_not_finite", 0.25)
     min_var           = getattr(args, "min_variance", 0.1)
     max_var           = getattr(args, "max_variance", None)
-    max_res_nan_frac  = getattr(args, "max_residual_nan_fraction", None)
+    max_res_nan_frac  = getattr(args, "max_residual_nan_fraction", 0.0)
     res_nan_impute    = getattr(args, "residual_nan_impute", "zero") or "zero"
     pert_col          = getattr(args, "perturbation", "gene_symbol")
 
@@ -2276,14 +2279,17 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             if isinstance(cells.X, da.Array):
                 cells.X = cells.X.compute()
         else:
-            _raw_chs2  = getattr(arguments, "feature_channels", None)
-            _valid_ch2 = set(str(c) for c in _raw_chs2) if _raw_chs2 else None
-            _pattern2  = getattr(arguments, "input_pattern", None)
+            _raw_chs2   = getattr(arguments, "feature_channels", None)
+            _valid_ch2  = set(str(c) for c in _raw_chs2) if _raw_chs2 else None
+            _raw_mts2   = getattr(arguments, "include_measurement_types", None)
+            _meas_types2 = set(_raw_mts2) if _raw_mts2 else None
+            _pattern2   = getattr(arguments, "input_pattern", None)
             _path_caps2 = _expand_pattern_inputs(list(arguments.input), _pattern2)
             _obs_caps2  = {p: c for p, c in _path_caps2 if c}
             _exp_paths2 = [p for p, _ in _path_caps2]
             cells = _read_map_inputs(_exp_paths2, valid_channels=_valid_ch2,
-                                     obs_captures=_obs_caps2 or None)
+                                     obs_captures=_obs_caps2 or None,
+                                     include_measurement_types=_meas_types2)
             # ── DO NOT call cells.X.compute() here. ─────────────────────────────
             # Raw parquet files contain ~9,000 columns × float64. Materialising
             # all of them at once requires (n_cells × n_cols × 8) bytes — easily

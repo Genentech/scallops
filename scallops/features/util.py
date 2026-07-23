@@ -242,37 +242,67 @@ def _is_obs_col(column: str) -> bool:
 def _keep_channels(
     columns: Sequence[str],
     valid_channels: "set[str] | None",
+    include_measurement_types: "set[str] | None" = None,
 ) -> list[str]:
-    """Filter feature column names to those whose channel references are all in
-    *valid_channels*.
+    """Filter feature column names by channel and/or measurement type.
 
-    A column is kept when **every** ``Channel<N>`` token in its name has
-    ``<N>`` in *valid_channels*.  Columns with *no* channel token (e.g. purely
-    morphological shape features) are kept unconditionally — they are not
-    channel-specific measurements.
+    A column is kept when **either** of the following is true:
 
-    When *valid_channels* is ``None`` (default) all columns are returned
-    unchanged, so existing code paths that do not use channel selection are
-    unaffected.
+    1. **Channel rule** — every ``Channel<N>`` token in its name has ``<N>``
+       in *valid_channels* (or the column has no channel tokens at all).
+    2. **Measurement-type override** — the second ``_``-separated token of the
+       column name (the measurement type, e.g. ``"Spots_Count"``) matches any
+       value in *include_measurement_types*.  This lets you pull in specific
+       feature families from channels that are otherwise excluded — for example,
+       adding ``Spots_Count`` features from FISH channels (0–3) while keeping
+       only IF channels (4–13) for everything else.
+
+    When both *valid_channels* and *include_measurement_types* are ``None``
+    all columns are returned unchanged.
 
     :param columns: Iterable of feature column names to filter.
-    :param valid_channels: Set of channel-number strings to keep
-        (e.g. ``{"4","5","6","7","8","9","10","11","12","13"}`` for IF
-        channels 4–13 in a typical OPS screen).  ``None`` = keep all.
+    :param valid_channels: Set of channel-number strings to keep for the
+        channel rule.  ``None`` = keep all channels.
+    :param include_measurement_types: Set of measurement-type strings
+        (e.g. ``{"Spots_Count"}``).  Features whose type matches are kept
+        regardless of their channel.  ``None`` = no type-based override.
     :return: Filtered list of column names.
 
     Example::
 
-        # Keep only IF channels 4–13
-        if_feats = _keep_channels(all_feats, {str(i) for i in range(4, 14)})
+        # IF channels 4–13 + Spots_Count from all channels (incl. FISH 0–3)
+        feats = _keep_channels(all_feats,
+                               valid_channels={str(i) for i in range(4, 14)},
+                               include_measurement_types={"Spots_Count"})
     """
-    if valid_channels is None:
+    if valid_channels is None and not include_measurement_types:
         return list(columns)
     import re
+    _chan_pat = re.compile(r'Channel(\d+)')
     out = []
-    _pat = re.compile(r'Channel(\d+)')
     for col in columns:
-        refs = _pat.findall(col)
+        # Measurement-type override: second token of underscore-separated name
+        # e.g. "Cells_Spots_Count_Channel0" → type token = "Spots_Count"
+        # (join tokens 1 onward until we hit a Channel token or end)
+        if include_measurement_types:
+            parts = col.split("_")
+            # Reconstruct measurement type: everything between compartment and
+            # first Channel/numeric-looking token.
+            mtype_parts = []
+            for p in parts[1:]:
+                if _chan_pat.match(p) or (p.isdigit()):
+                    break
+                mtype_parts.append(p)
+            mtype = "_".join(mtype_parts)
+            if mtype in include_measurement_types:
+                out.append(col)
+                continue
+
+        if valid_channels is None:
+            out.append(col)
+            continue
+
+        refs = _chan_pat.findall(col)
         if all(r in valid_channels for r in refs):   # vacuously True when refs=[]
             out.append(col)
     return out
@@ -378,13 +408,16 @@ def _read_map_inputs(
     features: Sequence[str] | None = None,
     valid_channels: "set[str] | None" = None,
     obs_captures: "dict[str, dict[str, str]] | None" = None,
+    include_measurement_types: "set[str] | None" = None,
 ) -> anndata.AnnData:
     """Read parquet/zarr inputs for the map pipeline.
 
     :param obs_captures: Optional mapping ``path → {col: value}`` returned by
         :func:`_expand_pattern_inputs`.  For each file, columns in the capture
-        dict are injected into ``obs`` if they are not already present.  This is
-        how ``--input-pattern`` metadata (e.g. plate, well) is propagated.
+        dict are injected into ``obs`` if they are not already present.
+    :param include_measurement_types: Measurement-type names (e.g.
+        ``{"Spots_Count"}``) to include regardless of channel.  Passed through
+        to :func:`_keep_channels`.
     """
     """Read parquet files for the map pipeline.
 
@@ -419,7 +452,8 @@ def _read_map_inputs(
             if features is not None and len(features) > 0:
                 d = d[:, features]
             elif valid_channels is not None:
-                _keep = _keep_channels(list(d.var.index), valid_channels)
+                _keep = _keep_channels(list(d.var.index), valid_channels,
+                                       include_measurement_types)
                 d = d[:, _keep]
             d = _inject_captures(d, path)
             data_arrays.append(d)
@@ -432,7 +466,8 @@ def _read_map_inputs(
             if features is not None and len(features) > 0:
                 d = d[:, features]
             elif valid_channels is not None:
-                _keep = _keep_channels(list(d.var.index), valid_channels)
+                _keep = _keep_channels(list(d.var.index), valid_channels,
+                                       include_measurement_types)
                 d = d[:, _keep]
             d = _inject_captures(d, path)
             data_arrays.append(d)
@@ -451,7 +486,8 @@ def _read_map_inputs(
             if c.split("_")[0] in _COMPARTMENTS and not _is_obs_col(c)
         ]
         # Apply channel filter (e.g. restrict to IF channels 4-13)
-        _feat_cols = _keep_channels(_feat_cols, valid_channels)
+        _feat_cols = _keep_channels(_feat_cols, valid_channels,
+                                    include_measurement_types)
         _feat_set = set(_feat_cols)
 
         # Obs: skip list/struct typed columns (e.g. barcode_Q_0)

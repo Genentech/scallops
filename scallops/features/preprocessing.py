@@ -541,11 +541,15 @@ def _apply_variance_filter(
             for _, grp_idx in obs_kept.groupby(by, observed=True).groups.items():
                 X_grp = result[grp_idx.values].astype(np.float64)
                 if len(X_grp) > 1:
-                    group_vars.append(np.var(X_grp, axis=0, ddof=0))
+                    # nanvar: ignore NaN cells so a single missing measurement
+                    # in a well doesn't null the entire well's variance.
+                    # nanmedian: aggregate across wells ignoring any well that
+                    # had ALL cells NaN (pure-NaN wells produce nanvar=NaN).
+                    group_vars.append(np.nanvar(X_grp, axis=0, ddof=0))
             if group_vars:
-                feat_var = np.median(np.stack(group_vars), axis=0)
+                feat_var = np.nanmedian(np.stack(group_vars), axis=0)
         else:
-            feat_var = np.var(result.astype(np.float64), axis=0, ddof=0)
+            feat_var = np.nanvar(result.astype(np.float64), axis=0, ddof=0)
 
     feat_var_keep = np.isfinite(feat_var) & (feat_var >= _min_var)
     if max_variance is not None:
@@ -649,34 +653,38 @@ def _apply_filter_post_materialise(
     residual_nan_impute: "str" = "zero",
     perturbation_column: "str | None" = None,
 ) -> "tuple[np.ndarray, np.ndarray]":
-    """Apply steps 3 and 4 in sequence on the materialised filter matrix.
+    """Apply variance selection then NaN cleanup on the materialised filter matrix.
 
     This is the **single entry point** used by both the parquet column-batch
     path and the zarr row-batch path after ``_streaming_materialise``.  Having
     one function guarantees both paths receive identical post-materialisation
     processing and can never diverge.
 
-    Step 3 (``_apply_residual_nan_step``) — residual-NaN handling:
-        * ``max_residual_nan_fraction=None`` (per-well-median mode): no-op passthrough;
-          NaN cells remain so step-4 ``isfinite(median_var)`` handles them.
-        * ``0.0``: zero-tolerance drop — any feature with ≥1 NaN cell removed.
+    **Ordering: variance first, NaN cleanup second.**
+
+    Step 4 (``_apply_variance_filter``) — per-well nanvar + nanmedian + isfinite:
+        Uses ``np.nanvar`` so that a feature with occasional NaN cells still
+        gets a finite within-well variance (NaN cells are ignored, not
+        propagated).  ``np.nanmedian`` across wells means only features that
+        are *entirely* NaN in *most* wells are dropped.  This selects features
+        based on biological signal independently of NaN sparsity.
+
+    Step 3 (``_apply_residual_nan_step``) — residual-NaN cleanup:
+        Applied *after* variance selection so we know which features are worth
+        keeping before deciding how to handle their NaN cells.
+
+        * ``0.0`` *(recommended)*: zero-tolerance — drop any feature with ≥1
+          NaN cell remaining after the cell filter.  Features whose NaN cells
+          were all in "bad" cells (already removed by the cell filter) survive
+          cleanly.  Produces a fully finite matrix without imputation.
+        * ``None``: no-op — NaN cells remain (useful when the caller will
+          impute them externally, e.g. during YJ transform).
         * ``> 0``: fraction-threshold drop + imputation of survivors.
 
-    Step 4 (``_apply_variance_filter``) — per-well variance + isfinite:
-        In per-well-median mode ``np.var`` propagates NaN within a group, so
-        ``isfinite(median_var)`` drops features whose NaN spans a majority of
-        wells — then survivors are imputed to 0.  In other modes the matrix is
-        already NaN-free and ``isfinite`` is a no-op.
-
-    :return: ``(result, feat_keep)`` — clean matrix and updated feature mask.
+    :return: ``(result, feat_keep, feat_var)`` — clean matrix, updated feature
+        mask, and per-feature variance array.
     """
-    result, feat_keep = _apply_residual_nan_step(
-        result, feat_keep,
-        obs_kept=obs_kept,
-        max_residual_nan_fraction=max_residual_nan_fraction,
-        residual_nan_impute=residual_nan_impute,
-        perturbation_column=perturbation_column,
-    )
+    # Step 4 first: variance filter on NaN-containing data (nanvar ignores NaN)
     result, feat_keep, feat_var = _apply_variance_filter(
         result, feat_keep,
         obs_kept=obs_kept,
@@ -684,6 +692,14 @@ def _apply_filter_post_materialise(
         min_variance=min_variance,
         max_variance=max_variance,
         max_residual_nan_fraction=max_residual_nan_fraction,
+    )
+    # Step 3 second: NaN cleanup on variance-selected features
+    result, feat_keep = _apply_residual_nan_step(
+        result, feat_keep,
+        obs_kept=obs_kept,
+        max_residual_nan_fraction=max_residual_nan_fraction,
+        residual_nan_impute=residual_nan_impute,
+        perturbation_column=perturbation_column,
     )
     return result, feat_keep, feat_var
 
