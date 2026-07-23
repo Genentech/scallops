@@ -1299,8 +1299,9 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         _filter_zarr = None
         _stream_chunk_gb = 2.0
         if _budget_gb is not None:
-            # Write filter output to zarr; variance computed in budget-sized chunks
-            _stream_chunk_gb = max(0.1, _budget_gb / 6)
+            # Each step saturates to budget_gb — bigger chunks = fewer passes = faster.
+            # Write-through frees RAM between steps so peak = budget_gb throughout.
+            _stream_chunk_gb = max(0.1, float(_budget_gb))
             _filter_zarr = (getattr(args, "output", None) or
                             getattr(args, "output_dir", "")).rstrip("/") + "_filter.zarr"
 
@@ -2264,8 +2265,9 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
         arguments = argparse.Namespace(**{**vars(arguments),
                                           "streaming_threshold_gb": _auto_thresh})
         logger.info("map run: --memory-budget-gb %.0f → "
-                    "streaming-threshold=%.0f GB, feat-block=%.0f MB",
-                    _budget_gb, _auto_thresh, _budget_gb * 1e9 / 6 / 1e6)
+                    "streaming-threshold=%.0f GB, chunk/feat-block=%.0f GB "
+                    "(each step saturates to budget; fewer passes = faster)",
+                    _budget_gb, _auto_thresh, _budget_gb)
 
     # Create the output directory — works for local paths, S3, GCS, and Azure
     # because anndata/zarr uses fsspec for all I/O.
@@ -2391,7 +2393,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
                 if _budget_gb2 is not None and isinstance(cells.X, da.Array):
                     from scallops.features.preprocessing import transform_features_yj
                     _n_obs2, _n_feat2 = cells.shape
-                    _feat_block_bytes = max(int(_budget_gb2 * 1e9 / 6), 1)
+                    _feat_block_bytes = max(int(_budget_gb2 * 1e9), 1)
                     _yj_zarr = cells_zarr.rstrip("/").rstrip(".zarr") + "_yj_tmp.zarr"
                     _yj_args = argparse.Namespace(**{**vars(arguments)})
                     _by_ex = getattr(arguments, "by", None)
