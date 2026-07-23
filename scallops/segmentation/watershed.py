@@ -46,7 +46,12 @@ def _binarize(image: np.ndarray, radius: int, min_size: float) -> np.ndarray:
     dapi = img_as_ubyte(image)
     mean_filtered = skmean(dapi, disk(radius))
     mask = np.greater(dapi, mean_filtered)
-    mask = remove_small_objects(mask, min_size=min_size)
+    # min_size is deprecated
+    # too_small = component_sizes < min_size
+    # New behavior uses inclusive threshold
+    # too_small = component_sizes <= max_size
+    max_size = min_size - 1
+    mask = remove_small_objects(mask, max_size=max_size)
     return mask
 
 
