@@ -1773,6 +1773,17 @@ def _create_run_parser(
     pipe.add_argument("--no-version", action="store_true", dest="no_version",
                       help="Do not record scallops version in step provenance.")
     pipe.add_argument(
+        "--memory-budget-gb",
+        type=float, default=None, dest="memory_budget_gb",
+        help="Available RAM budget in GB.  When set, enables full streaming "
+             "mode (Phase 2 + Phase 3): the filter writes directly to zarr "
+             "per batch and YJ transforms features in blocks sized to fit "
+             "the budget.  Peak RAM ≈ budget GB regardless of dataset size. "
+             "Also auto-sets --streaming-threshold to budget/3. "
+             "Recommended for shared machines or datasets > 100 GB. "
+             "Example: --memory-budget-gb 64 on a 128 GB shared node.",
+    )
+    pipe.add_argument(
         "--streaming-threshold",
         type=float, default=None, dest="streaming_threshold_gb",
         help="After each cell-level step, if cells.X exceeds this size in GB, "

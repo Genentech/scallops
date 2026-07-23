@@ -1295,6 +1295,17 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             "map run [filter]: parquet column-batch mode (%d sources)",
             len(parquet_sources),
         )
+        # Phase 3: stream filter output directly to zarr when budget is set
+        _budget_gb = getattr(args, "memory_budget_gb", None)
+        _filter_zarr_path = None
+        if _budget_gb is not None:
+            # Use a temp subpath inside cells_zarr for the streaming filter X
+            _filter_zarr_path = getattr(args, "output", None) or \
+                                  getattr(args, "output_dir", None)
+            if _filter_zarr_path:
+                _filter_zarr_path = _filter_zarr_path.rstrip("/").rstrip(".zarr") \
+                                    + "_filter_streaming.zarr"
+
         _mem_stop = _memory_monitor_start()
         try:
             X_filtered, cell_keep, feat_keep, _feat_report = _col_batch_filter_parquet(
@@ -1307,6 +1318,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 max_residual_nan_fraction=max_res_nan_frac,
                 residual_nan_impute=res_nan_impute,
                 perturbation_column=pert_col,
+                output_zarr_path=_filter_zarr_path,
             )
         except MemoryError as exc:
             logger.critical(
@@ -1326,12 +1338,22 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             len(obs_all), int(cell_keep.sum()),
             len(data.var), int(feat_keep.sum()),
         )
-        result = anndata.AnnData(
-            X=X_filtered,
-            obs=obs_all.iloc[cell_keep].copy(),
-            var=data.var.iloc[feat_keep].copy(),
-            uns=dict(data.uns),
-        )
+        if X_filtered is None and _filter_zarr_path is not None:
+            # Phase 3: X already in zarr — build dask-backed AnnData
+            _X_da = da.from_zarr(_filter_zarr_path, component="X")
+            result = anndata.AnnData(
+                X=_X_da,
+                obs=obs_all.iloc[cell_keep].copy(),
+                var=data.var.iloc[feat_keep].copy(),
+                uns=dict(data.uns),
+            )
+        else:
+            result = anndata.AnnData(
+                X=X_filtered,
+                obs=obs_all.iloc[cell_keep].copy(),
+                var=data.var.iloc[feat_keep].copy(),
+                uns=dict(data.uns),
+            )
         _merge_uns(data, result)
 
         # Stash the feature-drop report in uns so callers can retrieve and write it
@@ -2230,6 +2252,16 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
         )
     arguments = argparse.Namespace(**{**vars(arguments), "input": expanded_inputs})
 
+    # Auto-derive streaming-threshold from memory-budget when not explicitly set
+    _budget_gb = getattr(arguments, "memory_budget_gb", None)
+    if _budget_gb is not None and getattr(arguments, "streaming_threshold_gb", None) is None:
+        _auto_thresh = _budget_gb / 3.0
+        arguments = argparse.Namespace(**{**vars(arguments),
+                                          "streaming_threshold_gb": _auto_thresh})
+        logger.info("map run: --memory-budget-gb %.0f → "
+                    "streaming-threshold=%.0f GB, feat-block=%.0f MB",
+                    _budget_gb, _auto_thresh, _budget_gb * 1e9 / 6 / 1e6)
+
     # Create the output directory — works for local paths, S3, GCS, and Azure
     # because anndata/zarr uses fsspec for all I/O.
     import fsspec as _fsspec
@@ -2349,7 +2381,34 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
                     f"{cells.X.nbytes / 1e9:.1f} GB in RAM"
                 )
             elif step == "transform-yj":
-                cells = _apply_transform_yj_inmem(cells, arguments)
+                # Phase 2: if budget set and X is dask, stream YJ output to zarr
+                _budget_gb2 = getattr(arguments, "memory_budget_gb", None)
+                if _budget_gb2 is not None and isinstance(cells.X, da.Array):
+                    from scallops.features.preprocessing import transform_features_yj
+                    _n_obs2, _n_feat2 = cells.shape
+                    _feat_block_bytes = max(int(_budget_gb2 * 1e9 / 6), 1)
+                    _yj_zarr = cells_zarr.rstrip("/").rstrip(".zarr") + "_yj_tmp.zarr"
+                    _yj_args = argparse.Namespace(**{**vars(arguments)})
+                    _by_ex = getattr(arguments, "by", None)
+                    _plate = _by_ex[0] if _by_ex else getattr(arguments, "plate_column", "plate")
+                    _well  = _by_ex[1] if (_by_ex and len(_by_ex) > 1) else getattr(arguments, "well_column", "well")
+                    _by_yj = [c for c in [_plate, _well] if c in cells.obs.columns] or None
+                    logger.info("map run [transform-yj]: Phase-2 streaming → %s "
+                                "(feat_block=%.0f MB)", _yj_zarr,
+                                _feat_block_bytes / 1e6)
+                    cells_new = transform_features_yj(
+                        cells,
+                        by=_by_yj,
+                        standardize=bool(getattr(arguments, "yj_standardize", False)),
+                        n_jobs=getattr(arguments, "max_cpus", -1) or -1,
+                        output_cap=getattr(arguments, "yj_clip_output", None),
+                        output_zarr_path=_yj_zarr,
+                        feat_block_bytes=_feat_block_bytes,
+                    )
+                    cells_new.uns.update(cells.uns)
+                    cells = cells_new
+                else:
+                    cells = _apply_transform_yj_inmem(cells, arguments)
             elif step == "scale":
                 cells = _apply_scale_inmem(cells, arguments)
             elif step == "pca":

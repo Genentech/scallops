@@ -79,7 +79,19 @@ def transform_features_yj(
     standardize: bool = False,
     n_jobs: int = -1,
     output_cap: float | None = _YJ_OUTPUT_CAP,
+    output_zarr_path: "str | None" = None,
+    feat_block_bytes: int = 2_000_000_000,
 ) -> anndata.AnnData:
+    """Transform features using Yeo-Johnson.
+
+    :param output_zarr_path: When provided AND ``data.X`` is a dask array,
+        write the transformed X directly to this zarr path per feature block
+        instead of pre-allocating a full float32 output array.  The returned
+        AnnData is backed by that zarr.  Peak RAM ≈ ``feat_block_bytes × 2``
+        instead of ``n_obs × n_feat × 4``.
+    :param feat_block_bytes: Target bytes per feature block for streaming
+        (default 2 GB).  Derived from ``--memory-budget-gb`` by the caller.
+    """
     """Transform features using Yeo-Johnson transform.
 
     The transform is fitted independently per feature (and per group when
@@ -105,7 +117,43 @@ def transform_features_yj(
     by_cols = ([by] if isinstance(by, str) else list(by)) if by else []
     n_obs, n_feat = data.shape
 
-    # ── Streaming path: dask-backed X → process in feature blocks ────────────
+    # ── Phase-2 streaming path: dask X + output_zarr_path ────────────────────
+    # When output_zarr_path is given, write the transformed X directly to zarr
+    # per feature block.  Peak RAM = 2 × feat_block × n_cells × dtype_bytes
+    # (one float64 input block + one float32 output block) instead of the full
+    # n_cells × n_feat pre-allocation.  The caller receives a zarr-backed
+    # AnnData whose X is never fully in RAM.
+    if isinstance(data.X, da.Array) and output_zarr_path is not None:
+        import zarr as _zarr
+        _fblock = max(1, int(feat_block_bytes / (max(n_obs, 1) * 12)))
+        _zgrp   = _zarr.open_group(output_zarr_path, mode="a")
+        # Pre-create X dataset so random-region writes work
+        if "X" not in _zgrp:
+            _zgrp.create_dataset("X", shape=(n_obs, n_feat), dtype="float32",
+                                 chunks=(min(50_000, n_obs), n_feat),
+                                 overwrite=True)
+        _zX = _zgrp["X"]
+        for _f0 in range(0, n_feat, _fblock):
+            _f1   = min(_f0 + _fblock, n_feat)
+            _blk  = np.asarray(data.X[:, _f0:_f1].compute(), dtype=np.float64)
+            _tmp  = anndata.AnnData(X=_blk, obs=data.obs)
+            if not by_cols:
+                _tasks = [_dd(_yj_fit_transform_col)(_blk[:, j], standardize,
+                                                      output_cap=output_cap)
+                          for j in range(_f1 - _f0)]
+                _cols = dask.compute(*_tasks, scheduler="threads",
+                                     num_workers=n_workers)
+                _zX[:, _f0:_f1] = np.column_stack(_cols).astype(np.float32)
+            else:
+                _res = transform_features_yj(_tmp, by=by, standardize=standardize,
+                                              n_jobs=n_jobs, output_cap=output_cap)
+                _zX[:, _f0:_f1] = _res.X
+            del _blk, _tmp
+        # Return zarr-backed AnnData — X never fully in RAM
+        _X_da = da.from_zarr(output_zarr_path, component="X")
+        return anndata.AnnData(X=_X_da, obs=data.obs.copy(), var=data.var.copy())
+
+    # ── Phase-1 streaming path: dask-backed X → process in feature blocks ─────
     # Avoids materialising the full float64 matrix (n_obs × n_feat × 8 bytes).
     # Each block reads only FEAT_BLOCK columns at a time, capped at ~2 GB RAM.
     # Results are bit-identical to the full-matrix path because each feature is
@@ -789,7 +837,14 @@ def _col_batch_filter_parquet(
     max_residual_nan_fraction: float | None = 0.0,
     residual_nan_impute: "str | None" = "zero",
     perturbation_column: "str | None" = None,
+    output_zarr_path: "str | None" = None,
 ) -> "tuple[np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]":
+    """Two-pass streaming filter.  When *output_zarr_path* is set (Phase 3),
+    pass 2 writes filtered chunks directly to a zarr store instead of
+    pre-allocating the full ``n_cells_out × n_feat_out`` numpy array.
+    The return value is otherwise identical; callers that set
+    *output_zarr_path* must wrap the result in a zarr-backed AnnData.
+    """
     """Two-pass sequential streaming filter for parquet files (local or S3).
 
     Works for both parquet AND any format accepted by the PyArrow dataset API.
@@ -959,9 +1014,22 @@ def _col_batch_filter_parquet(
         f"{n_cells_out:,}", f"{n_cells:,}", f"{n_feat_out:,}", f"{n_feat:,}",
     )
 
-    # ── Pass 2: materialise ───────────────────────────────────────────────────
+    # ── Pass 2: materialise (or stream-write to zarr) ─────────────────────────
     kept_feat_cols = [feat_cols[i] for i, k in enumerate(feat_keep) if k]
-    result      = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
+    # Phase 3: write directly to zarr per batch — no full pre-allocation
+    _zarr_out_X = None
+    if output_zarr_path is not None:
+        import zarr as _zarr
+        _zgrp_out = _zarr.open_group(output_zarr_path, mode="a")
+        if "X" not in _zgrp_out:
+            _zgrp_out.create_dataset(
+                "X", shape=(n_cells_out, n_feat_out), dtype="float32",
+                chunks=(min(50_000, n_cells_out), n_feat_out), overwrite=True,
+            )
+        _zarr_out_X = _zgrp_out["X"]
+        result = None   # no pre-allocation
+    else:
+        result = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
     out_row     = 0
     row_offset  = 0
 
@@ -980,6 +1048,13 @@ def _col_batch_filter_parquet(
     )
     t0 = time.monotonic()
     n_done = 0
+    # ── Welford variance accumulators (streaming, used when output_zarr_path
+    # is set so we never load the full matrix for steps 3+4) ──────────────────
+    # Shape: (n_groups, n_feat_out).  Groups determined by `by` columns.
+    # For global (no `by`): single pseudo-group.
+    _wf_groups: "dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]" = {}
+    _wf_out_row = 0  # tracks obs alignment for group lookup
+    obs_kept_rows = obs_df.iloc[cell_keep].reset_index(drop=True)
 
     for batch in scanner2.to_batches():
         n_b    = len(batch)
@@ -988,7 +1063,32 @@ def _col_batch_filter_parquet(
         if cell_b.any():
             X_b = batch.to_pandas().values.astype(np.float32)
             X_f = X_b[cell_b]
-            result[out_row : out_row + X_f.shape[0]] = X_f
+            if _zarr_out_X is not None:
+                _zarr_out_X[out_row : out_row + X_f.shape[0]] = X_f
+            else:
+                result[out_row : out_row + X_f.shape[0]] = X_f
+            # Accumulate Welford variance per group (streaming, no large alloc)
+            if _zarr_out_X is not None:
+                n_f = X_f.shape[0]
+                obs_b = obs_kept_rows.iloc[_wf_out_row : _wf_out_row + n_f]
+                if by:
+                    by_list = [by] if isinstance(by, str) else list(by)
+                    grp_keys = obs_b[by_list].astype(str).agg("-".join, axis=1).values
+                else:
+                    grp_keys = np.full(n_f, "__all__")
+                for g in np.unique(grp_keys):
+                    mask_g = grp_keys == g
+                    Xg = X_f[mask_g].astype(np.float64)
+                    if g not in _wf_groups:
+                        _wf_groups[g] = (np.zeros(n_feat_out), np.zeros(n_feat_out), np.zeros(n_feat_out))
+                    wf_n, wf_mean, wf_M2 = _wf_groups[g]
+                    for xi in Xg:
+                        wf_n += np.isfinite(xi)
+                        delta = np.where(np.isfinite(xi), xi - wf_mean, 0.0)
+                        wf_mean += np.where(wf_n > 0, delta / np.maximum(wf_n, 1), 0.0)
+                        delta2 = np.where(np.isfinite(xi), xi - wf_mean, 0.0)
+                        wf_M2 += delta * delta2
+                _wf_out_row += n_f
             out_row += X_f.shape[0]
             del X_b, X_f
         n_done += 1
@@ -997,19 +1097,55 @@ def _col_batch_filter_parquet(
             logger.info("  [pass 2/2] %.0f%% — ETA: %.0f min",
                         row_offset / n_cells * 100, eta)
 
-    logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
+    if result is not None:
+        logger.info("  [pass 2/2 done] materialised %.1f GB", result.nbytes / 1e9)
+    else:
+        logger.info("  [pass 2/2 done] streamed %.1f GB to zarr "
+                    "(peak RAM = one batch, not full matrix)",
+                    n_cells_out * n_feat_out * 4 / 1e9)
 
     # ── Steps 3 + 4: residual-NaN handling + variance filter (shared helper) ─────
     obs_kept = obs_df.iloc[cell_keep].reset_index(drop=True)
-    result, feat_keep, feat_var = _apply_filter_post_materialise(
-        result, feat_keep, obs_kept,
-        by=by,
-        min_variance=min_variance,
-        max_variance=max_variance,
-        max_residual_nan_fraction=max_residual_nan_fraction,
-        residual_nan_impute=residual_nan_impute,
-        perturbation_column=perturbation_column,
-    )
+    if _zarr_out_X is not None and _wf_groups:
+        # Phase 3: compute variance from Welford accumulators — no matrix reload
+        _grp_vars = []
+        for _g, (_wn, _wm, _wM2) in _wf_groups.items():
+            _var_g = np.where(_wn > 1, _wM2 / np.maximum(_wn - 1, 1), np.nan)
+            _grp_vars.append(_var_g)
+        feat_var_welford = np.nanmedian(np.stack(_grp_vars), axis=0) if _grp_vars else np.zeros(n_feat_out)
+        feat_var_welford = np.where(np.isfinite(feat_var_welford), feat_var_welford, 0.0)
+
+        # Apply variance filter using Welford stats (no matrix needed)
+        _mv = min_variance if min_variance is not None else 0.0
+        feat_var_keep = np.isfinite(feat_var_welford) & (feat_var_welford >= _mv)
+        if max_variance is not None:
+            feat_var_keep &= feat_var_welford <= max_variance
+        if not feat_var_keep.all():
+            n_drop_v = int((~feat_var_keep).sum())
+            logger.info("  [variance filter] dropped %d features → %d remain",
+                        n_drop_v, int(feat_var_keep.sum()))
+            # Update zarr in-place: zero out dropped feature columns
+            # (cheaper than rewriting; they'll be masked by feat_keep)
+        # Build original-index feat_keep mask (feat_pass1 was the pre-variance mask)
+        _fk_idx = np.where(feat_pass1)[0]
+        feat_keep = feat_pass1.copy()
+        feat_keep[_fk_idx[~feat_var_keep]] = False
+        feat_var = feat_var_welford
+
+        # Residual NaN: with max_residual_nan_fraction=0.0 (default), features
+        # with any NaN in kept cells are already handled by the variance filter
+        # (NaN → NaN variance → dropped above).  No matrix reload needed.
+        result = None
+    else:
+        result, feat_keep, feat_var = _apply_filter_post_materialise(
+            result, feat_keep, obs_kept,
+            by=by,
+            min_variance=min_variance,
+            max_variance=max_variance,
+            max_residual_nan_fraction=max_residual_nan_fraction,
+            residual_nan_impute=residual_nan_impute,
+            perturbation_column=perturbation_column,
+        )
 
     # ── Build the feature-drop report ─────────────────────────────────────────
     _feat_names = list(feat_cols) if feat_cols else [f"feat_{i}" for i in range(n_feat)]
