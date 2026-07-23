@@ -16,7 +16,6 @@ from typing import get_type_hints
 import dask.array
 import dask.array as da
 import fsspec
-import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -52,7 +51,6 @@ from scallops.io import (
     pluralize,
     read_anndata_zarr,
 )
-from scallops.zarr_io import _read_ome_zarr_array
 
 logger = _get_cli_logger()
 
@@ -240,44 +238,17 @@ def single_feature(
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
 
-    zarr_inputs = True
-
-    for f in file_list:
-        if not isinstance(f, (zarr.Group, zarr.Array)):
-            zarr_inputs = False
-            break
-
-    if zarr_inputs and stacked_image_tuple is not None:
-        for f in stacked_file_list:
-            if not isinstance(f, (zarr.Group, zarr.Array)):
-                zarr_inputs = False
-                break
-    if not zarr_inputs:
-        image = _read_image(file_list, metadata)
-    else:
-        image = []
-        for f in file_list:
-            array, _, _, _ = _read_ome_zarr_array(f)
-            image.append(array)
+    image = _read_image(file_list, metadata)
     n_channels1 = None
     if stacked_image_tuple is not None:
-        if not zarr_inputs:
-            stacked_image = _read_image(stacked_file_list, stacked_metadata)
-            n_channels1 = image.sizes["c"]
-            # clear coords to avoid issues with xr.concat
-            for c in list(image.coords.keys()):
-                del image.coords[c]
-            for c in list(stacked_image.coords.keys()):
-                del stacked_image.coords[c]
-            image = xr.concat((image, stacked_image), dim="c")
-        else:
-            n_channels1 = 0
-            for img in image:
-                n_channels1 += np.prod(img.shape[:-2])
-            n_channels1 = int(n_channels1)
-            for f in stacked_file_list:
-                array, _, _, _ = _read_ome_zarr_array(f)
-                image.append(array)
+        stacked_image = _read_image(stacked_file_list, stacked_metadata)
+        n_channels1 = image.sizes["c"]
+        # clear coords to avoid issues with xr.concat
+        for c in list(image.coords.keys()):
+            del image.coords[c]
+        for c in list(stacked_image.coords.keys()):
+            del stacked_image.coords[c]
+        image = xr.concat((image, stacked_image), dim="c")
 
     for label_name in label_name_to_features:
         features = label_name_to_features[label_name]
@@ -297,6 +268,7 @@ def single_feature(
         if zarr_labels is None:
             logger.info(f"Unable to read {label_name} labels for {image_key}.")
             continue
+        label_image = da.from_zarr(zarr_labels)
         label_prefix = _label_name_to_prefix[label_name]
         merged_df = None
         if objects_dir is not None:
@@ -308,9 +280,12 @@ def single_feature(
                 label_filter=label_filter,
             )
 
+        if image.data.chunksize[:-1] != label_image.chunksize:
+            label_image = label_image.rechunk(image.data.chunksize[:-1])
         if merged_df is None:
             logger.info(f"Find {label_name} objects for {image_key}.")
-            merged_df = find_objects(zarr_labels)
+
+            merged_df = find_objects(label_image)
             objects_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
             merged_df.index.name = "label"
             merged_df.columns = f"{label_prefix}_" + merged_df.columns
@@ -398,8 +373,8 @@ def single_feature(
             merged_df[c] = merged_df[c].astype(int)
         df = label_features(
             objects_df=merged_df,
-            label_image=zarr_labels if zarr_inputs else da.from_zarr(zarr_labels),
-            intensity_image=image if zarr_inputs else image.data,
+            label_image=label_image,
+            intensity_image=image.data,
             features=features,
             normalize=normalize,
             bounding_box_columns=[
@@ -510,9 +485,18 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
     if features_plot is None:
         features_plot = []
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads(
-            threads_per_worker=4 if "sizeshape" in unique_features else 1
-        )
+        if dask_server_url is None and arguments.dask_cluster is None:
+            threads_per_worker = 1
+            if "sizeshape" in unique_features:
+                threads_per_worker = 4
+            else:
+                for feature in unique_features:
+                    if feature.startswith("correlationpearsonbox"):
+                        threads_per_worker = 2
+                        break
+            dask_cluster_parameters = _dask_workers_threads(
+                threads_per_worker=threads_per_worker
+            )
 
     objects_dir_sep = None
     if objects_dir is not None:

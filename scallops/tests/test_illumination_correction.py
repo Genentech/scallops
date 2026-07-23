@@ -4,7 +4,7 @@ import subprocess
 import numpy as np
 import pytest
 import zarr
-from zarr import ZipStore
+from zarr.storage import ZipStore
 
 from scallops.io import read_image
 

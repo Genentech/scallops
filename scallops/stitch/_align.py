@@ -386,7 +386,7 @@ def stitch_align(
         original_tile_shape,
         crop_width,
     )
-    logger.info(f"Crop for writing: {fuse_crop_width}.")
+    logger.info(f"Crop for writing: {fuse_crop_width[0], fuse_crop_width[1]}.")
     if evaluate_stitching:
         # Global evaluation
         logger.info(

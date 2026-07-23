@@ -179,8 +179,7 @@ def _peaks_to_bases(
 def spot_detection_pipeline(
     image_tuple: tuple[tuple[str, ...], list[str], dict],
     iss_channels: list[int],
-    file_separator: str,
-    root: zarr.Group | str,
+    output: str,
     max_filter_width: int,
     sigma_log: float | list[float],
     z_index: int | str,
@@ -226,17 +225,20 @@ def spot_detection_pipeline(
     """
     _, file_list, metadata = image_tuple
     image_key = metadata["id"]
+    output_fs = fsspec.url_to_fs(output)[0]
+    output_sep = output_fs.sep
+    output = output.rstrip(output_sep)
+    points_path = f"{output}{output_sep}points"
+    points_protocol = _get_fs_protocol(output_fs)
+    if points_protocol != "file":
+        points_path = f"{points_protocol}://{points_path}"
+    peaks_path = f"{points_path}{output_sep}{image_key}-peaks.parquet"
+
     if not force:
-        points_path = (
-            f"{_get_store_path(root).rstrip(_get_sep(root))}{_get_sep(root)}points"
-        )
-        points_protocol = _get_fs_protocol(_get_fs(root))
-        if points_protocol != "file":
-            points_path = f"{points_protocol}://{points_path}"
-        peaks_path = f"{points_path}{_get_sep(root)}{image_key}-peaks.parquet"
         if is_parquet_file(peaks_path):
             logger.info(f"Skipping spot detection for {image_key}")
             return []
+    root = open_ome_zarr(output, mode="a")
     image = _images2fov(file_list, metadata, dask=True)
     image = _z_projection(image, z_index)
     if expected_cycles is not None:
@@ -325,7 +327,6 @@ def spot_detection_pipeline(
                 root=root,
                 image=loged,
                 output_format=output_image_format,
-                file_separator=file_separator,
                 zarr_format="zarr",
                 compute=compute,
             )
@@ -340,7 +341,6 @@ def spot_detection_pipeline(
                 root=root,
                 image=std_arr,
                 output_format=output_image_format,
-                file_separator=file_separator,
                 metadata=dict(parent=image_key),
                 compute=compute,
             )
@@ -355,7 +355,6 @@ def spot_detection_pipeline(
                 root=root,
                 image=maxed,
                 output_format=output_image_format,
-                file_separator=file_separator,
                 zarr_format="zarr",
                 compute=compute,
             )
@@ -363,16 +362,10 @@ def spot_detection_pipeline(
     else:
         del maxed
     if "peaks" in save_keys:
-        points_path = (
-            f"{_get_store_path(root).rstrip(_get_sep(root))}{_get_sep(root)}points"
-        )
-        protocol = _get_fs_protocol(_get_fs(root))
-        if protocol != "file":
-            points_path = f"{protocol}://{points_path}"
-        _get_fs(root).makedirs(points_path, exist_ok=True)
-        peaks_path = f"{points_path}{_get_sep(root)}{image_key}-peaks.parquet"
-        if _get_fs(root).exists(peaks_path):
-            _get_fs(root).rm(peaks_path, recursive=True)
+        output_fs.makedirs(points_path, exist_ok=True)
+
+        if output_fs.exists(peaks_path):
+            output_fs.rm(peaks_path, recursive=True)
 
         dask_delayed.append(
             _to_parquet(
@@ -863,7 +856,6 @@ def spot_detect_main(arguments: argparse.Namespace):
         chunks = (chunks, chunks)
 
     output = _add_suffix(output, ".zarr")
-    root = open_ome_zarr(output, mode="a")
     exp_gen = _set_up_experiment(images, image_pattern, group_by, subset=subset)
     with (
         _create_default_dask_config(),
@@ -874,8 +866,7 @@ def spot_detect_main(arguments: argparse.Namespace):
             delayed_results += spot_detection_pipeline(
                 img,
                 iss_channels=channels,
-                file_separator=None,
-                root=root,
+                output=output,
                 z_index=z_index,
                 output_image_format="zarr",
                 max_filter_width=max_filter_width,
@@ -1291,7 +1282,7 @@ def reads_main(arguments: argparse.Namespace):
         for key in image_keys:
             reads_pipeline(
                 key,
-                spots_root=zarr.open(spots, "r"),
+                spots_root=zarr.open(spots, mode="r"),
                 labels_root=zarr.open(labels + labels_fs.sep + "labels", mode="r"),
                 barcodes_file=barcodes_file,
                 file_separator=output_fs.sep,

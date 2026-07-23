@@ -301,7 +301,7 @@ def test_stitch_cli(tmp_path):
         z_index=0,
         group=fuse_result,
     )
-    no_blend_array = fuse_result["0"][...].squeeze()
+    no_blend_array = fuse_result["s0"][...].squeeze()
     np.testing.assert_array_equal(
         no_blend_array,
         expected_value,
@@ -350,7 +350,7 @@ def test_stitch_cli(tmp_path):
 
     np.testing.assert_array_equal(
         blending_img_cli.squeeze(),
-        blend_fuse_result["0"][...].squeeze(),
+        blend_fuse_result["s0"][...].squeeze(),
         err_msg="Blending images differ",
     )
 

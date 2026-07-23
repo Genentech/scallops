@@ -32,6 +32,7 @@ from scallops.io import (
     pluralize,
 )
 from scallops.registration.itk import (
+    _get_chunk_size,
     _itk_align_reference_time_zarr,
     _itk_transform_image_zarr,
     _load_itk_parameters,
@@ -393,6 +394,7 @@ def single_registration(
                 output_root=label_output_root,
                 flip_y=flip_moving_y,
                 flip_x=flip_moving_x,
+                chunksize=chunksize,
             )
 
     else:  # align to t=reference_timepoint
@@ -439,8 +441,8 @@ def single_registration(
             parameter_object_across_channels=parameter_object_across_channels,
         )
         moving_image_attrs = moving_image[0].attrs.copy()
+        chunk_size = _get_chunk_size(moving_image[reference_timepoint])
         del moving_image
-
         if len(moving_label_keys) > 0:
             _transform_labels_t(
                 image_key=image_key,
@@ -450,6 +452,7 @@ def single_registration(
                 moving_image_attrs=moving_image_attrs,
                 moving_image_spacing=moving_image_spacing,
                 label_output_root=label_output_root,
+                chunksize=chunk_size,
             )
 
     return image_key
@@ -463,6 +466,7 @@ def _transform_labels_t(
     moving_image_attrs,
     moving_image_spacing,
     label_output_root,
+    chunksize: tuple[int, int] | None = (1024, 1024),
 ):
     # transform_dest structure is image_key/t=1
     # assume labels are named image_key-t-suffix
@@ -495,6 +499,7 @@ def _transform_labels_t(
                             output_names=output_names,
                             moving_image_spacing=moving_image_spacing,
                             output_root=label_output_root,
+                            chunksize=chunksize,
                         )
 
 
@@ -588,6 +593,7 @@ def _transform_labels(
     attrs: None | dict,
     flip_y: bool = False,
     flip_x: bool = False,
+    chunksize: tuple[int, int] = (1024, 1024),
 ):
     """Transform and save labels.
 
@@ -622,12 +628,13 @@ def _transform_labels(
             image_spacing=moving_image_spacing,
         )
         del array
-
+        # match chunk size of fixed image
         _write_zarr_image(
             name=output_names[i],
             root=output_root,
             image=transformed_array,
             group="labels",
+            storage_options=dict(chunks=chunksize) if chunksize is not None else None,
         )
 
 
