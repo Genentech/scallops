@@ -278,11 +278,114 @@ def _keep_channels(
     return out
 
 
+def _expand_pattern_inputs(
+    paths: Sequence[str],
+    pattern: "str | None" = None,
+) -> "list[tuple[str, dict[str, str]]]":
+    """Expand inputs that contain ``{name}`` capture groups.
+
+    Supports two calling styles:
+
+    1. **Inline pattern** — the ``{name}`` groups are embedded in the path
+       itself::
+
+           _expand_pattern_inputs(["s3://bucket/ER-{plate}-{well}.zarr"])
+           # → [("s3://bucket/ER-A-1.zarr", {"plate": "A", "well": "1"}), …]
+
+    2. **Separate pattern** — paths are directories and *pattern* is the
+       filename template::
+
+           _expand_pattern_inputs(["s3://bucket/ER/"], pattern="ER-{plate}-{well}.zarr")
+
+    For paths without ``{name}`` groups (and no *pattern*), the function
+    behaves like a passthrough that returns ``(path, {})`` pairs.
+
+    :param paths: Input paths or glob patterns.
+    :param pattern: Optional filename pattern with ``{name}`` capture groups.
+        When given, each path is treated as a directory to search.
+    :return: List of ``(resolved_path, captures_dict)`` pairs.
+    """
+    import re as _re
+    import fsspec as _fsspec
+    from scallops.io import _create_file_regex
+
+    _CAPTURE_RE = _re.compile(r'\{(\w+)[^}]*\}')
+
+    def _has_captures(s: str) -> bool:
+        return bool(_CAPTURE_RE.search(s))
+
+    def _list_dir(dir_url: str) -> list[str]:
+        """List immediate children of a directory (local or cloud)."""
+        _fs, _path = _fsspec.url_to_fs(dir_url)
+        try:
+            children = _fs.ls(_path, detail=False)
+        except Exception:
+            return []
+        return [_fs.unstrip_protocol(c) for c in children]
+
+    def _match_entries(dir_url: str, pat: str) -> "list[tuple[str, dict]]":
+        """List dir, match each entry against pat, return (path, captures) pairs."""
+        regex, _suffix, _keys = _create_file_regex(pat)
+        results = []
+        for entry in sorted(_list_dir(dir_url)):
+            basename = entry.rstrip("/").rsplit("/", 1)[-1]
+            m = regex.fullmatch(basename)
+            if m:
+                results.append((entry, m.groupdict()))
+        return results
+
+    result: list[tuple[str, dict]] = []
+
+    for path in paths:
+        if pattern is not None:
+            # Directory + separate pattern
+            entries = _match_entries(path.rstrip("/") + "/", pattern)
+            if not entries:
+                raise FileNotFoundError(
+                    f"--input-pattern {pattern!r} matched no files in {path!r}"
+                )
+            result.extend(entries)
+        elif _has_captures(path):
+            # Inline pattern: split at first {, use prefix as directory
+            prefix_end = _CAPTURE_RE.search(path).start()
+            dir_url    = path[:prefix_end].rstrip("/") + "/"
+            pat        = path[prefix_end - len(path.rsplit("/", 1)[-1].split("{")[0]):]
+            # Extract just the filename template portion
+            _last_slash = path[:prefix_end].rfind("/")
+            dir_url  = path[:_last_slash + 1] if _last_slash >= 0 else "./"
+            filename_pat = path[_last_slash + 1:]
+            entries = _match_entries(dir_url, filename_pat)
+            if not entries:
+                raise FileNotFoundError(
+                    f"Pattern {path!r} matched no files in {dir_url!r}"
+                )
+            result.extend(entries)
+        else:
+            # Plain path — no expansion, no captures
+            result.append((path, {}))
+
+    if any(captures for _, captures in result):
+        logger.info(
+            "pattern input: expanded %d path(s) → %d file(s) with captures: %s",
+            len(paths), len(result),
+            sorted({k for _, c in result for k in c}),
+        )
+    return result
+
+
 def _read_map_inputs(
     paths: Sequence[str],
     features: Sequence[str] | None = None,
     valid_channels: "set[str] | None" = None,
+    obs_captures: "dict[str, dict[str, str]] | None" = None,
 ) -> anndata.AnnData:
+    """Read parquet/zarr inputs for the map pipeline.
+
+    :param obs_captures: Optional mapping ``path → {col: value}`` returned by
+        :func:`_expand_pattern_inputs`.  For each file, columns in the capture
+        dict are injected into ``obs`` if they are not already present.  This is
+        how ``--input-pattern`` metadata (e.g. plate, well) is propagated.
+    """
     """Read parquet files for the map pipeline.
 
     Reads obs columns eagerly (needed for label filtering and groupby) and
@@ -300,6 +403,15 @@ def _read_map_inputs(
     zarr_is_remote:  bool | None = None
     data_arrays: list = []
 
+    def _inject_captures(d: anndata.AnnData, path: str) -> anndata.AnnData:
+        """Inject obs_captures metadata for *path* into *d* (missing columns only)."""
+        if not obs_captures:
+            return d
+        for col, val in (obs_captures.get(path) or {}).items():
+            if col not in d.obs.columns:
+                d.obs[col] = val
+        return d
+
     for path in paths:
         if path.lower().endswith(".h5ad"):
             # h5ad is HDF5 — load fully into memory (numpy X → in-memory filter path)
@@ -309,6 +421,7 @@ def _read_map_inputs(
             elif valid_channels is not None:
                 _keep = _keep_channels(list(d.var.index), valid_channels)
                 d = d[:, _keep]
+            d = _inject_captures(d, path)
             data_arrays.append(d)
             continue
 
@@ -321,6 +434,7 @@ def _read_map_inputs(
             elif valid_channels is not None:
                 _keep = _keep_channels(list(d.var.index), valid_channels)
                 d = d[:, _keep]
+            d = _inject_captures(d, path)
             data_arrays.append(d)
             continue
 
@@ -407,6 +521,7 @@ def _read_map_inputs(
             "row_group_sizes": [_pq_meta.row_group(i).num_rows
                                 for i in range(_pq_meta.num_row_groups)],
         })
+        d = _inject_captures(d, path)
         data_arrays.append(d)
 
     if len(data_arrays) == 0:

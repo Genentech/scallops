@@ -36,6 +36,37 @@ def _reference_query_arg(
 
 
 # ---------------------------------------------------------------------------
+# Shared input helpers
+# ---------------------------------------------------------------------------
+
+
+def _add_input_pattern_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--input-pattern`` to *parser*.
+
+    Allows ``-i`` arguments to be directories; files matching the pattern
+    are expanded automatically and ``{name}`` capture groups are injected
+    as obs columns.  Works for local paths and cloud storage (s3://, gs://).
+    Alternatively, embed the pattern directly in ``-i`` paths::
+
+        -i "s3://bucket/ER-{plate}-{well}.zarr"
+    """
+    parser.add_argument(
+        "--input-pattern",
+        default=None, dest="input_pattern",
+        help=(
+            "Filename pattern with {name} capture groups "
+            "(e.g. 'ER-{plate}-{well}.zarr'). "
+            "When set, each -i path is treated as a directory and all files "
+            "matching the pattern are loaded; the captured values are injected "
+            "as obs columns automatically. "
+            "You can also embed the pattern directly in the -i path: "
+            "-i 's3://bucket/ER-{plate}-{well}.zarr'. "
+            "Works for local and cloud paths."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Shared step-arg helpers
 #
 # Each helper registers exactly the args consumed by the corresponding
@@ -411,6 +442,7 @@ def _create_map_filter_parser(
         default="kruskal",
     )
 
+    _add_input_pattern_arg(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
     force_arg(parser)
@@ -1958,4 +1990,5 @@ def _create_run_parser(
     rec.add_argument("--min-genes", type=int, default=5, dest="min_genes")
     rec.add_argument("--min-pairs", type=int, default=10, dest="min_pairs")
 
+    _add_input_pattern_arg(parser)
     parser.set_defaults(func=_run_map_run)

@@ -315,3 +315,86 @@ def test_feature_channels_filter(tmp_path):
     assert "Cells_Intensity_Channel4" in kept
     assert "Nuclei_AreaShape_Area" in kept
     assert "Cells_Granularity_1_Channel0_Channel4" not in kept
+
+
+# ---------------------------------------------------------------------------
+# _expand_pattern_inputs tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_expand_pattern_inputs_local_inline(tmp_path):
+    """Inline {name} patterns in a path expand and inject obs captures."""
+    from scallops.features.util import _expand_pattern_inputs, _read_map_inputs
+    import pyarrow as _pa, pyarrow.parquet as _pq
+
+    # Write two minimal parquets WITHOUT plate/well columns
+    for plate, well in [("A", "1"), ("B", "2")]:
+        df = pd.DataFrame({
+            "Cells_AreaShape_Area": [1.0, 2.0],
+            "gene_symbol": ["NTC", "geneA"],
+        })
+        _pq.write_table(_pa.Table.from_pandas(df),
+                        str(tmp_path / f"ER-{plate}-{well}.parquet"))
+
+    pattern_path = str(tmp_path / "ER-{plate}-{well}.parquet")
+    pairs = _expand_pattern_inputs([pattern_path])
+    assert len(pairs) == 2
+    paths  = {p for p, _ in pairs}
+    caps   = {p: c for p, c in pairs}
+    assert any(c == {"plate": "A", "well": "1"} for c in caps.values())
+    assert any(c == {"plate": "B", "well": "2"} for c in caps.values())
+
+    # Read with captures → plate and well injected into obs
+    obs_caps = {p: c for p, c in pairs if c}
+    data = _read_map_inputs([p for p, _ in pairs], obs_captures=obs_caps)
+    assert "plate" in data.obs.columns, "plate not injected from pattern"
+    assert "well"  in data.obs.columns, "well not injected from pattern"
+    assert set(data.obs["plate"].unique()) == {"A", "B"}
+
+
+@pytest.mark.features
+def test_expand_pattern_inputs_no_pattern_passthrough(tmp_path):
+    """Paths without {name} groups are returned unchanged with empty captures."""
+    from scallops.features.util import _expand_pattern_inputs
+    import pyarrow as _pa, pyarrow.parquet as _pq
+
+    p = str(tmp_path / "data.parquet")
+    _pq.write_table(_pa.Table.from_pandas(pd.DataFrame({"Cells_Area": [1.0]})), p)
+
+    pairs = _expand_pattern_inputs([p])
+    assert pairs == [(p, {})]
+
+
+@pytest.mark.features
+def test_ensure_obs_columns_guard(tmp_path):
+    """_ensure_obs_columns raises ValueError with --input-pattern hint when column missing."""
+    import argparse
+    from scallops.cli.map_build import _ensure_obs_columns
+
+    data = anndata.AnnData(
+        X=np.ones((5, 3)),
+        obs=pd.DataFrame({"gene_symbol": list("abcde")}),
+        var=pd.DataFrame(index=["f1", "f2", "f3"]),
+    )
+    args = argparse.Namespace(input_pattern=None)
+
+    # Should not raise — gene_symbol is present
+    _ensure_obs_columns(data, "agg", ["gene_symbol"], args)
+
+    # Should raise — plate is missing
+    with pytest.raises(ValueError, match="Step 'scale' requires obs column\\(s\\) \\['plate'\\]"):
+        _ensure_obs_columns(data, "scale", ["plate"], args)
+
+    # Error message should mention --input-pattern
+    try:
+        _ensure_obs_columns(data, "scale", ["plate"], args)
+    except ValueError as e:
+        assert "--input-pattern" in str(e)
+
+    # With pattern set — different hint in error
+    args_with_pattern = argparse.Namespace(input_pattern="ER-{plate}-{well}.zarr")
+    try:
+        _ensure_obs_columns(data, "scale", ["plate"], args_with_pattern)
+    except ValueError as e:
+        assert "ER-{plate}-{well}.zarr" in str(e)

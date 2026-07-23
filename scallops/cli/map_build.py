@@ -49,7 +49,7 @@ from scallops.features.preprocessing import (
     transform_features_yj,
 )
 from scallops.features.util import (
-    _query_anndata, _read_data, _read_map_inputs, _slice_anndata,
+    _expand_pattern_inputs, _query_anndata, _read_data, _read_map_inputs, _slice_anndata,
 )
 from scallops.io import is_parquet_file
 from scallops.utils import _fix_json
@@ -62,6 +62,48 @@ _SCALLOPS_UNS_KEY = "scallops"
 
 
 _INTERNAL_UNS_KEYS = ("_parquet_sources", "_zarr_is_remote")
+
+
+def _ensure_obs_columns(
+    data: anndata.AnnData,
+    step: str,
+    required_cols: list[str],
+    args: argparse.Namespace,
+) -> None:
+    """Raise a clear error if *required_cols* are missing from *data.obs*.
+
+    Only fires after pattern-based rescue has already been attempted at load
+    time (via ``--input-pattern`` / ``{name}`` inline captures).  The error
+    message tells the user exactly which columns are missing and how to supply
+    them via ``--input-pattern``.
+
+    :param data: AnnData being processed.
+    :param step: Step name for the error message (e.g. ``"scale"``).
+    :param required_cols: Columns that must be present in ``obs``.
+    :param args: Parsed CLI namespace (used to read ``input_pattern``).
+    """
+    missing = [c for c in required_cols if c and c not in data.obs.columns]
+    if not missing:
+        return
+    pattern_hint = getattr(args, "input_pattern", None)
+    if pattern_hint:
+        tip = (
+            f"--input-pattern is '{pattern_hint}' but did not produce "
+            f"column(s) {missing}. Check that capture group names match the "
+            f"required column names."
+        )
+    else:
+        example = "-".join(f"{{{c}}}" for c in missing)
+        tip = (
+            f"Use --input-pattern (e.g. 'prefix-{example}.zarr') to inject "
+            f"missing obs columns from filenames automatically, OR ensure the "
+            f"input files already contain these columns."
+        )
+    raise ValueError(
+        f"Step '{step}' requires obs column(s) {missing} which are absent.\n"
+        f"Present obs columns (first 15): {sorted(data.obs.columns)[:15]}\n"
+        f"{tip}"
+    )
 
 
 # In-process attrition ledger — accumulated by _log_attrition, printed at exit.
@@ -531,11 +573,16 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         features = arguments.features
-        _raw_chs  = getattr(arguments, "feature_channels", None)
-        _valid_ch = set(str(c) for c in _raw_chs) if _raw_chs else None
-        data = _read_map_inputs(paths, valid_channels=_valid_ch) if all(
-            p.lower().endswith((".parquet", ".pq")) for p in paths
-        ) else _read_data(paths, features)
+        _raw_chs   = getattr(arguments, "feature_channels", None)
+        _valid_ch  = set(str(c) for c in _raw_chs) if _raw_chs else None
+        _pattern   = getattr(arguments, "input_pattern", None)
+        _path_caps = _expand_pattern_inputs(paths, _pattern)
+        _obs_caps  = {p: c for p, c in _path_caps if c}
+        _exp_paths = [p for p, _ in _path_caps]
+        data = _read_map_inputs(_exp_paths, valid_channels=_valid_ch,
+                                obs_captures=_obs_caps or None) if all(
+            p.lower().endswith((".parquet", ".pq")) for p in _exp_paths
+        ) else _read_data(_exp_paths, features)
 
         # Optionally derive a condition obs column from well→condition mapping
         data = _apply_condition_column(data, arguments)
@@ -1656,6 +1703,7 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
     plate  = getattr(args, "plate_column", "plate")
     well   = getattr(args, "well_column",  "well")
     method = getattr(args, "scale_method", "global")
+    _ensure_obs_columns(data, "scale", [plate, well], args)
 
     if method == "local":
         cy = getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y")
@@ -1875,6 +1923,8 @@ def _apply_tvn_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     from scallops.features.normalize import typical_variation_normalization
     ref_q  = getattr(args, "reference_query", "gene_symbol=='NTC'")
     by_col = getattr(args, "tvn_by", None)
+    if by_col:
+        _ensure_obs_columns(data, "tvn", list(by_col), args)
 
     if "X_pca" not in data.obsm:
         # Legacy path: TVN directly on X (no prior PCA step).
@@ -1956,6 +2006,7 @@ def _apply_agg_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     from scallops.features.agg import agg_features
     pert           = getattr(args, "perturbation", "gene_symbol")
     by_col         = getattr(args, "agg_by", None) or [pert]
+    _ensure_obs_columns(data, "agg", list(by_col), args)
     mc             = getattr(args, "min_cells", None)
     agg_func       = getattr(args, "agg_method", "mean")
     barcode_column = getattr(args, "barcode", "barcode_0")
@@ -1996,11 +2047,17 @@ def _apply_agg_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
 def _apply_center_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
     """Center profiles (subtract reference mean); operates on X = TVN profiles."""
     from scallops.features.normalize import normalize_features
+    import re as _re
     if isinstance(data.X, da.Array):
         data.X = data.X.compute()
     ref_q  = getattr(args, "reference_query", "gene_symbol=='NTC'")
     by     = getattr(args, "center_by", None) or None
     robust = bool(getattr(args, "center_robust", False))
+    # Guard: the reference column used in ref_q must exist in obs
+    if ref_q:
+        _ref_col_m = _re.search(r'`?(\w+)`?\s*==', ref_q)
+        if _ref_col_m:
+            _ensure_obs_columns(data, "center", [_ref_col_m.group(1)], args)
     result = normalize_features(data, reference_query=ref_q,
                                 by=by, centering=True, scaling=False, robust=robust)
     _merge_uns(data, result)
@@ -2024,6 +2081,7 @@ def _apply_similarity_inmem(
     pert          = getattr(args, "perturbation", "gene_symbol")
     metric        = getattr(args, "metric", "cosine")
     output_format = getattr(args, "output_format", "matrix")
+    _ensure_obs_columns(data, "similarity", [pert], args)
 
     if excl_q:
         ref_idx = _query_anndata(data, excl_q).index
@@ -2218,9 +2276,14 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             if isinstance(cells.X, da.Array):
                 cells.X = cells.X.compute()
         else:
-            _raw_chs2 = getattr(arguments, "feature_channels", None)
+            _raw_chs2  = getattr(arguments, "feature_channels", None)
             _valid_ch2 = set(str(c) for c in _raw_chs2) if _raw_chs2 else None
-            cells = _read_map_inputs(list(arguments.input), valid_channels=_valid_ch2)
+            _pattern2  = getattr(arguments, "input_pattern", None)
+            _path_caps2 = _expand_pattern_inputs(list(arguments.input), _pattern2)
+            _obs_caps2  = {p: c for p, c in _path_caps2 if c}
+            _exp_paths2 = [p for p, _ in _path_caps2]
+            cells = _read_map_inputs(_exp_paths2, valid_channels=_valid_ch2,
+                                     obs_captures=_obs_caps2 or None)
             # ── DO NOT call cells.X.compute() here. ─────────────────────────────
             # Raw parquet files contain ~9,000 columns × float64. Materialising
             # all of them at once requires (n_cells × n_cols × 8) bytes — easily
