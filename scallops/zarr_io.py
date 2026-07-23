@@ -75,17 +75,6 @@ def _get_store_path(group: zarr.Group):
     return ""
 
 
-def is_anndata_zarr(store: StoreLike) -> bool:
-    """Determines whether store is an AnnData Zarr .
-
-    :param store: Zarr store
-    """
-    try:
-        return isinstance(zarr.open(store, mode="r", path="layers"), zarr.Group)
-    except:  # noqa: E722
-        return False
-
-
 def is_ome_zarr_array(node: zarr.Group) -> bool:
     """Check if a Zarr node is an OME-Zarr array.
 
