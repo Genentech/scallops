@@ -18,7 +18,7 @@ authors = [
 ]
 dynamic = ["version"]
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 classifiers = [# https://pypi.python.org/pypi?%3Aaction=list_classifiers
     "License :: OSI Approved :: Apache Software License",
@@ -128,12 +128,11 @@ include = ["scallops*"]
 exclude = ["docs*", "scallops/tests*"]
 
 [tool.setuptools_scm]
-write_to = "scallops/_version.py"
 tag_regex = "^(?P<version>v?[0-9]{1,2}\\.[0-9]+\\.[0-9]+)$"
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 fix = true
 
 [tool.ruff.format]
