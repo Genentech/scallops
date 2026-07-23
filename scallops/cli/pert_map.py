@@ -167,8 +167,8 @@ def run_recall(arguments: argparse.Namespace):
 
         df = pd.concat(results)
         df["threshold"] = df["threshold"].astype(str)
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
-        fs.makedirs(output_basename, exist_ok=True)
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+        fs.makedirs(output_dir, exist_ok=True)
         _to_parquet(
             df,
             output,
@@ -205,8 +205,8 @@ def run_similarity_matrix(arguments: argparse.Namespace):
         data = anndata.AnnData(
             X=pairwise_similarities(data), obs=data.obs, var=data.obs
         )
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
-        fs.makedirs(output_basename, exist_ok=True)
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+        fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
             data.write_zarr(output, convert_strings_to_categoricals=False)
@@ -272,8 +272,8 @@ def run_aggregate(arguments: argparse.Namespace):
             by=by,
             agg_func="mean",
         )
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
-        fs.makedirs(output_basename, exist_ok=True)
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+        fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
             data.write_zarr(output, convert_strings_to_categoricals=False)
@@ -330,8 +330,8 @@ def run_tvn(arguments: argparse.Namespace):
             reference_query=reference_query,
             by=by,
         )
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
-        fs.makedirs(output_basename, exist_ok=True)
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+        fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
             data.write_zarr(output, convert_strings_to_categoricals=False)
@@ -391,8 +391,8 @@ def run_pca(arguments: argparse.Namespace):
             standardize_by=None,
             whiten=whiten,
         )
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
-        fs.makedirs(output_basename, exist_ok=True)
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+        fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
             data.write_zarr(output, convert_strings_to_categoricals=False)
@@ -483,8 +483,10 @@ def run_rank_features(arguments: argparse.Namespace):
             min_labels=min_labels,
             iqr_multiplier=iqr_multiplier,
         )
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(rank_output))
-        fs.makedirs(output_basename, exist_ok=True)
+
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(rank_output))
+        fs.makedirs(output_dir, exist_ok=True)
+
         if isinstance(rank_df, dd.DataFrame):
             _to_parquet(
                 rank_df,
@@ -605,8 +607,8 @@ def run_norm_features(arguments: argparse.Namespace):
             )
         else:
             logger.info("No normalization")
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
-        fs.makedirs(output_basename, exist_ok=True)
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+        fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output_format == "zarr":
             data.write_zarr(output, convert_strings_to_categoricals=False)
@@ -693,8 +695,8 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         logger.info(
             f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}"
         )
-        fs, output_label_ids = fsspec.url_to_fs(output)
-        fs.makedirs(os.path.basename(output), exist_ok=True)
+        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+        fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
             data.write_zarr(output, convert_strings_to_categoricals=False)
