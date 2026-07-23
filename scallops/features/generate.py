@@ -191,7 +191,8 @@ def label_features(
             assert intensity_image.shape[:-1] == label_shape, (
                 f"{intensity_image.shape} != {label_shape}"
             )
-            label_image = label_image.rechunk(intensity_image.chunksize[:-1])
+            if intensity_image.chunksize[:-1] != label_image.chunksize:
+                label_image = label_image.rechunk(intensity_image.chunksize[:-1])
 
         else:
             if isinstance(intensity_image, zarr.Array):

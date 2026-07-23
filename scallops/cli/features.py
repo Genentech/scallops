@@ -280,8 +280,11 @@ def single_feature(
                 label_filter=label_filter,
             )
 
+        if image.data.chunksize[:-1] != label_image.chunksize:
+            label_image = label_image.rechunk(image.data.chunksize[:-1])
         if merged_df is None:
             logger.info(f"Find {label_name} objects for {image_key}.")
+
             merged_df = find_objects(label_image)
             objects_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
             merged_df.index.name = "label"
