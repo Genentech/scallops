@@ -452,7 +452,7 @@ def single_registration(
                 moving_image_attrs=moving_image_attrs,
                 moving_image_spacing=moving_image_spacing,
                 label_output_root=label_output_root,
-                chunk_size=chunk_size,
+                chunksize=chunk_size,
             )
 
     return image_key
@@ -466,7 +466,7 @@ def _transform_labels_t(
     moving_image_attrs,
     moving_image_spacing,
     label_output_root,
-    chunk_size: tuple[int, int] | None = (1024, 1024),
+    chunksize: tuple[int, int] | None = (1024, 1024),
 ):
     # transform_dest structure is image_key/t=1
     # assume labels are named image_key-t-suffix
@@ -499,7 +499,7 @@ def _transform_labels_t(
                             output_names=output_names,
                             moving_image_spacing=moving_image_spacing,
                             output_root=label_output_root,
-                            chunk_size=chunk_size,
+                            chunksize=chunksize,
                         )
 
 
