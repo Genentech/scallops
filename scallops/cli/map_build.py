@@ -106,6 +106,20 @@ def _ensure_obs_columns(
     )
 
 
+def _label_filter_columns(label_filter: "str | None") -> "set[str]":
+    """Extract column names from a pandas query label-filter string.
+
+    These columns must be loaded as obs (not lazy feature columns) so the
+    null guard can access them without materialising the full feature matrix.
+    Uses the same tokeniser as ``_get_names_from_pd_query``.
+    """
+    if not label_filter:
+        return set()
+    from scallops.features.util import _get_names_from_pd_query
+    # Filter to names that look like CellProfiler columns (contain underscore)
+    return {n for n in _get_names_from_pd_query(label_filter) if "_" in n}
+
+
 # In-process attrition ledger — accumulated by _log_attrition, printed at exit.
 _ATTRITION_LEDGER: list[dict] = []
 
@@ -581,9 +595,11 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         _path_caps = _expand_pattern_inputs(paths, _pattern)
         _obs_caps  = {p: c for p, c in _path_caps if c}
         _exp_paths = [p for p, _ in _path_caps]
+        _obs_force = _label_filter_columns(getattr(arguments, "label_filter", None))
         data = _read_map_inputs(_exp_paths, valid_channels=_valid_ch,
                                 obs_captures=_obs_caps or None,
-                                include_measurement_types=_meas_types) if all(
+                                include_measurement_types=_meas_types,
+                                obs_force=_obs_force or None) if all(
             p.lower().endswith((".parquet", ".pq")) for p in _exp_paths
         ) else _read_data(_exp_paths, features)
 
@@ -1374,14 +1390,17 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             # variance filter) use the same shared helpers as the parquet path so
             # both paths are guaranteed identical behaviour.
             from scallops.features.preprocessing import (
-                _streaming_cell_and_variance_filter,
+                _dask_nan_scan, _dask_materialise,
                 _apply_filter_steps_1_2,
                 _apply_filter_post_materialise,
             )
-            bad_counts, nan_per_feat = _streaming_cell_and_variance_filter(
-                X_orig, obs_all, label_mask, by_cols, max_fnf,
-                n_prefetch=n_prefetch,
+            logger.info(
+                "map run [filter]: zarr dask-native scan — "
+                "%d chunks across %d dimension(s)",
+                X_orig.npartitions if hasattr(X_orig, "npartitions")
+                else int(np.prod(X_orig.numblocks)), X_orig.ndim,
             )
+            bad_counts, nan_per_feat = _dask_nan_scan(X_orig)
             _n_cells_z = X_orig.shape[0]
             _n_feat_z  = X_orig.shape[1]
             feat_pass1, cell_keep = _apply_filter_steps_1_2(
@@ -1393,15 +1412,14 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 "map run [filter]: pass 1/2 done — %s cells kept, %s / %s features",
                 f"{cell_keep.sum():,}", f"{feat_pass1.sum():,}", f"{_n_feat_z:,}",
             )
-            feat_keep = feat_pass1   # materialise only step-1-surviving features
+            feat_keep = feat_pass1
 
             out_gb = int(cell_keep.sum()) * int(feat_keep.sum()) * 4 / 1e9
             logger.info(
                 "map run [filter]: pass 2/2 — materialising %s × %s (%.1f GB) …",
                 f"{cell_keep.sum():,}", f"{feat_keep.sum():,}", out_gb,
             )
-            X_filtered = _streaming_materialise(X_orig, cell_keep, feat_keep,
-                                                n_prefetch=n_prefetch)
+            X_filtered = _dask_materialise(X_orig, cell_keep, feat_keep)
             logger.info(
                 "map run [filter]: materialised %.1f GB", X_filtered.nbytes / 1e9
             )
@@ -1807,7 +1825,11 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     # 0 / None / negative → non-incremental (full-dataset) PCA
     if not batch_size or batch_size < 0:
         batch_size = None
-    if isinstance(data.X, da.Array):
+    # Leave dask arrays lazy — pca_embed uses IncrementalPCA.partial_fit which
+    # reads one batch at a time, and the projection loop also reads batches.
+    # Only materialise if batch_size is None (full-dataset fit) to avoid
+    # issues with non-incremental PCA on dask arrays.
+    if isinstance(data.X, da.Array) and batch_size is None:
         data.X = data.X.compute()
     # Clamp components to avoid IncrementalPCA crash when n_comp > n_features
     n_comp = min(n_comp, data.shape[1])
@@ -2287,9 +2309,11 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             _path_caps2 = _expand_pattern_inputs(list(arguments.input), _pattern2)
             _obs_caps2  = {p: c for p, c in _path_caps2 if c}
             _exp_paths2 = [p for p, _ in _path_caps2]
+            _obs_force2 = _label_filter_columns(getattr(arguments, "label_filter", None))
             cells = _read_map_inputs(_exp_paths2, valid_channels=_valid_ch2,
                                      obs_captures=_obs_caps2 or None,
-                                     include_measurement_types=_meas_types2)
+                                     include_measurement_types=_meas_types2,
+                                     obs_force=_obs_force2 or None)
             # ── DO NOT call cells.X.compute() here. ─────────────────────────────
             # Raw parquet files contain ~9,000 columns × float64. Materialising
             # all of them at once requires (n_cells × n_cols × 8) bytes — easily
@@ -2341,6 +2365,28 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             # provenance chain reflects the progress and we can resume here.
             _save_step(cells, cells_zarr, step, no_version)
             logger.info(f"map run [{step}]: done ({timings[step]:.1f}s) — cells.zarr updated")
+
+            # ── Streaming write-through ───────────────────────────────────────
+            # When the cell matrix exceeds --streaming-threshold GB, free it
+            # from RAM and reload lazily from cells.zarr.  This caps peak memory
+            # at O(batch × n_feats) instead of O(n_cells × n_feats), at the
+            # cost of one extra zarr read per step boundary.
+            _stream_gb = getattr(arguments, "streaming_threshold_gb", None)
+            if _stream_gb is not None and isinstance(cells.X, np.ndarray):
+                _x_gb = cells.X.nbytes / 1e9
+                if _x_gb >= _stream_gb:
+                    logger.info(
+                        "map run [%s]: streaming mode — X is %.0f GB ≥ threshold %.0f GB; "
+                        "reloading cells.zarr as lazy dask to free RAM",
+                        step, _x_gb, _stream_gb,
+                    )
+                    _saved_obsm = {k: v for k, v in cells.obsm.items()}
+                    from scallops.io import read_anndata_zarr as _razarr
+                    cells = _razarr(cells_zarr, dask=True)
+                    # Restore obsm entries that may not round-trip through zarr
+                    for _k, _v in _saved_obsm.items():
+                        if _k not in cells.obsm:
+                            cells.obsm[_k] = _v
 
     # ============================================================
     # PHASE 2 — aggregate → profiles.zarr

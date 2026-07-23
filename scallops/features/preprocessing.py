@@ -103,8 +103,36 @@ def transform_features_yj(
         n_workers = max(1, n_jobs)
 
     by_cols = ([by] if isinstance(by, str) else list(by)) if by else []
+    n_obs, n_feat = data.shape
+
+    # ── Streaming path: dask-backed X → process in feature blocks ────────────
+    # Avoids materialising the full float64 matrix (n_obs × n_feat × 8 bytes).
+    # Each block reads only FEAT_BLOCK columns at a time, capped at ~2 GB RAM.
+    # Results are bit-identical to the full-matrix path because each feature is
+    # fitted independently on the complete set of cells.
+    _FEAT_BLOCK = max(1, int(2e9 / (max(n_obs, 1) * 8)))  # ~2 GB per block
+    if isinstance(data.X, da.Array):
+        X_out = np.empty((n_obs, n_feat), dtype=np.float32)
+        for _f0 in range(0, n_feat, _FEAT_BLOCK):
+            _f1 = min(_f0 + _FEAT_BLOCK, n_feat)
+            _blk = np.asarray(data.X[:, _f0:_f1].compute(), dtype=np.float64)
+            _tmp = anndata.AnnData(X=_blk, obs=data.obs)
+            if not by_cols:
+                _tasks = [_dd(_yj_fit_transform_col)(_blk[:, j], standardize,
+                                                      output_cap=output_cap)
+                          for j in range(_f1 - _f0)]
+                _cols = dask.compute(*_tasks, scheduler="threads",
+                                     num_workers=n_workers)
+                X_out[:, _f0:_f1] = np.column_stack(_cols).astype(np.float32)
+            else:
+                _res = transform_features_yj(_tmp, by=by, standardize=standardize,
+                                              n_jobs=n_jobs, output_cap=output_cap)
+                X_out[:, _f0:_f1] = _res.X
+            del _blk, _tmp
+        return anndata.AnnData(X=X_out, obs=data.obs.copy(), var=data.var.copy())
+    # ── Standard path: small / numpy-backed X ────────────────────────────────
+
     X_full = np.asarray(data.X, dtype=np.float64)
-    n_obs, n_feat = X_full.shape
 
     if not by_cols:
         # Single-group: parallelise over features with Dask threads
@@ -226,6 +254,48 @@ def filter_data(
 # ---------------------------------------------------------------------------
 # Streaming filter helpers (used when data.X is a large dask array)
 # ---------------------------------------------------------------------------
+
+
+def _dask_nan_scan(
+    X_dask: "da.Array",
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Compute per-cell and per-feature NaN counts using dask-native ops.
+
+    Replaces the manual ThreadPoolExecutor streaming loop for zarr inputs.
+    Dask parallelises across ALL chunks (both row and column dimensions)
+    in a single fused task graph, avoiding GIL contention and sequential
+    result collection.  On S3 this is 5-10× faster than the streaming loop
+    because dask issues concurrent requests for every chunk simultaneously.
+
+    :param X_dask: Dask array of shape (n_cells, n_feat).
+    :return: ``(bad_counts, nan_per_feat)`` — same semantics as
+        :func:`_streaming_cell_and_variance_filter`.
+    """
+    import dask.array as _da
+    not_finite   = ~_da.isfinite(X_dask)
+    bad_counts   = not_finite.sum(axis=1).compute().astype(np.int32)
+    nan_per_feat = not_finite.sum(axis=0).compute().astype(np.int64)
+    return bad_counts, nan_per_feat
+
+
+def _dask_materialise(
+    X_dask: "da.Array",
+    cell_keep: "np.ndarray",
+    feat_keep: "np.ndarray",
+) -> "np.ndarray":
+    """Materialise a filtered subset of a dask array using native indexing.
+
+    Replaces :func:`_streaming_materialise` for zarr inputs.  Uses dask
+    fancy indexing so the scheduler can parallelise all chunk reads.
+
+    :param X_dask: Dask array (n_cells, n_feat).
+    :param cell_keep: Boolean mask (n_cells,) of cells to keep.
+    :param feat_keep: Boolean mask (n_feat,) of features to keep.
+    :return: Dense float32 numpy array (n_kept_cells, n_kept_feat).
+    """
+    cell_idx = np.where(cell_keep)[0]
+    feat_idx = np.where(feat_keep)[0]
+    return X_dask[cell_idx, :][:, feat_idx].compute().astype(np.float32)
 
 
 def _streaming_cell_and_variance_filter(

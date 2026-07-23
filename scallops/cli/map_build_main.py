@@ -1772,6 +1772,17 @@ def _create_run_parser(
                       help="Re-run all steps even if their output exists.")
     pipe.add_argument("--no-version", action="store_true", dest="no_version",
                       help="Do not record scallops version in step provenance.")
+    pipe.add_argument(
+        "--streaming-threshold",
+        type=float, default=None, dest="streaming_threshold_gb",
+        help="After each cell-level step, if cells.X exceeds this size in GB, "
+             "write cells.zarr and reload it as a lazy dask array. "
+             "This caps peak RAM at O(batch × n_feats) instead of "
+             "O(n_cells × n_feats), at the cost of one extra zarr read per "
+             "step boundary.  Recommended for datasets >10 GB (e.g. 14 M cells "
+             "× 6 K features ≈ 344 GB): set --streaming-threshold 10. "
+             "Default: None (disabled — keep cells.X in RAM between steps).",
+    )
 
     # ── Condition column (derived from a well / obs mapping) ─────────────────
     cond = parser.add_argument_group(
