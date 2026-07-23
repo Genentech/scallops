@@ -237,7 +237,7 @@ def _create_map_filter_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -496,7 +496,7 @@ def _create_map_transform_yj_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -577,7 +577,7 @@ def _create_map_scale_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -674,7 +674,7 @@ def _create_map_pca_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -726,7 +726,7 @@ def _create_map_tvn_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -779,7 +779,7 @@ def _create_map_agg_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -830,7 +830,7 @@ def _create_map_center_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -880,7 +880,7 @@ def _create_map_similarity_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s) containing aggregated profiles",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -929,7 +929,7 @@ def _create_map_recall_parser(
         "--input",
         help="Path to pairwise similarity matrix Zarr produced by map-similarity",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -1071,7 +1071,7 @@ def _create_map_sphere_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -1128,7 +1128,7 @@ def _create_map_pca_select_parser(
         "--input",
         help="Path to input Zarr or Parquet file(s) from map-pca",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -1367,7 +1367,7 @@ def _create_map_cluster_parser(
         "--input",
         help="Similarity AnnData Zarr from map-similarity (matrix or anndata format)",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -1507,7 +1507,7 @@ def _create_map_backproject_parser(
         "-i", "--input",
         help="Path to TVN/aggregated AnnData Zarr (e.g. profiles.zarr from map agg).",
         required=True,
-        nargs="+",
+        nargs="+", action="extend",
     )
     required.add_argument(
         "--output",
@@ -1625,7 +1625,7 @@ def _create_map_shap_cosine_parser(
         ),
     )
     required = parser.add_argument_group("required arguments")
-    required.add_argument("-i", "--input", required=True, nargs="+",
+    required.add_argument("-i", "--input", required=True, nargs="+", action="extend",
                           help="Aggregated/centered AnnData Zarr (output of map agg / map center).")
     required.add_argument("--output", required=True,
                           help="Output Parquet path for the SHAP feature table.")
@@ -1747,7 +1747,7 @@ def _create_run_parser(
     req.add_argument(
         "-i", "--input",
         help="Input AnnData Zarr or Parquet file (output of pooled-sbs merge).",
-        required=True, nargs="+",
+        required=True, nargs="+", action="extend",
     )
     req.add_argument(
         "-o", "--output-dir",
