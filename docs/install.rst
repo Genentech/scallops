@@ -67,42 +67,53 @@ current version::
 GPU support
 -----------
 
-The default image uses ``tensorflow/tensorflow:2.21.0`` (CPU variant) as its
-base.  The table below summarises which libraries use the GPU and which
-commands are affected:
+Both the CPU and GPU images use ``python:${PYTHON_VERSION}-slim-bookworm``
+(default ``3.12``) as their base.  All CUDA libraries are installed from pip
+wheels — no ``nvidia/cuda`` base image is needed.  The table below summarises
+GPU availability per library:
 
 .. list-table::
    :header-rows: 1
    :widths: 20 20 35 25
 
    * - Library
-     - GPU in default image
+     - GPU in default (CPU) image
      - Affected commands
      - Notes
    * - PyTorch
-     - **Yes** (auto-detected)
+     - No (CPU-only wheel)
      - ``segment`` (cellpose backend), ``dialout`` (U-FISH)
-     - PyPI wheels are CUDA-capable; GPU is used automatically when available
+     - CPU image installs the ``cpu`` wheel explicitly; GPU image installs the
+       CUDA wheel (``cu126`` by default)
    * - TensorFlow
      - No (CPU only)
      - ``segment`` (StarDist backend)
-     - Requires the GPU image (see below)
+     - GPU image installs ``tensorflow[and-cuda]``, which bundles CUDA via pip
    * - RAPIDS
      - No (CPU only)
      - All commands using pandas / scikit-learn / dask internally
-     - Requires the GPU image (see below)
+     - GPU image only; requires RAPIDS ≥ 25.12 for scikit-learn 1.9 compatibility
 
-**GPU image** — enables TensorFlow GPU and installs `RAPIDS`_ (cuDF, cuML,
-dask-cudf), which accelerate the data-science operations used throughout the
-pipeline.  ``RAPIDS_VERSION`` must match a `current RAPIDS release`_::
+**GPU image** — installs ``tensorflow[and-cuda]``, RAPIDS (cuDF, cuML,
+dask-cudf), and a CUDA-enabled PyTorch wheel.  ``RAPIDS_VERSION`` must be a
+`current RAPIDS release`_ and ≥ 25.12::
 
-    make -f docker.mk docker-gpu RAPIDS_VERSION=25.06
+    make -f docker.mk docker-gpu RAPIDS_VERSION=26.6.0
+
+A single ``CUDA_VERSION`` knob (default ``12.6``) drives the RAPIDS package
+suffix and the PyTorch wheel index.  Override it if your driver requires a
+different minor version::
+
+    make -f docker.mk docker-gpu RAPIDS_VERSION=26.6.0 CUDA_VERSION=12.4
+
+The Python version is independently configurable for both images::
+
+    make -f docker.mk docker PYTHON_VERSION=3.11
 
 The build automatically sets the ``IS_GPU`` environment variable to ``1``
-inside the container.  You can inspect it at runtime to confirm GPU support
-was compiled in::
+inside the container.  You can inspect it at runtime to confirm GPU support::
 
-    docker run --rm ghcr.io/genentech/scallops:latest printenv IS_GPU
+    docker run --rm <gpu-image> printenv IS_GPU
 
 At runtime, pass ``--gpus all`` (Docker) or the equivalent Podman flag and
 ensure the `NVIDIA Container Toolkit`_ is installed on the host::
@@ -112,9 +123,9 @@ ensure the `NVIDIA Container Toolkit`_ is installed on the host::
 .. note::
 
    NVIDIA drivers must be installed on the host — the container image itself
-   does not include drivers.  PyTorch selects the GPU backend automatically;
-   TensorFlow and RAPIDS require the GPU image built with
-   ``TF_VERSION=2.21.0-gpu``.
+   does not include drivers.  All CUDA runtime libraries (``nvidia-cuda-runtime``,
+   ``nvidia-cudnn``, etc.) are installed as pip wheels inside the image and do
+   not require a matching system CUDA toolkit.
 
 .. _Mamba: https://mamba.readthedocs.io/en/latest/installation.html
 .. _Conda: https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
