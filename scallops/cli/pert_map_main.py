@@ -39,12 +39,16 @@ def dataset_arg(parser: argparse.ArgumentParser):
         type=str,
         nargs="+",
         help="Path to one or more zarr, h5ad, or Parquet files or a "
-             "pattern to match files (e.g. s3://foo/*.zarr).",
+        "pattern to match files (e.g. s3://foo/*.zarr).",
     )
 
 
-def common_args(parser: argparse.ArgumentParser, metadata: bool = True, rechunk: bool = True,
-                dask_client_value: str | None = None):
+def common_args(
+    parser: argparse.ArgumentParser,
+    metadata: bool = True,
+    rechunk: bool = True,
+    dask_client_value: str | None = None,
+):
     if metadata:
         metadata_args(parser)
     if rechunk:
@@ -85,20 +89,24 @@ def _run_recall(arguments: argparse.Namespace):
     run_recall(arguments)
 
 
-def filter_args(parser: argparse.ArgumentParser, label_filter: bool = True, feature_filter: bool = True):
+def filter_args(
+    parser: argparse.ArgumentParser,
+    label_filter: bool = True,
+    feature_filter: bool = True,
+):
     if label_filter:
         parser.add_argument(
             "--label-filter",
             type=str,
             help="Query string to filter dataset before processing (e.g. gene_symbol!='foo') or path to "
-                 "Parquet file containing label identifiers.",
+            "Parquet file containing label identifiers.",
         )
     if feature_filter:
         parser.add_argument(
             "--feature-filter",
             type=str,
             help="Query string to filter dataset before processing (e.g. gene_symbol!='foo') or path to "
-                 "Parquet file containing label identifiers.",
+            "Parquet file containing label identifiers.",
         )
 
 
@@ -115,7 +123,7 @@ def metadata_args(parser: argparse.ArgumentParser):
 
 
 def _create_similarity_matrix_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
+    subparsers: argparse.ArgumentParser, default_help: bool
 ) -> None:
     parser = subparsers.add_parser(
         "similarity-matrix",
@@ -146,7 +154,7 @@ def _create_similarity_matrix_parser(
 
 
 def _create_aggregate_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
+    subparsers: argparse.ArgumentParser, default_help: bool
 ) -> None:
     parser = subparsers.add_parser(
         "aggregate",
@@ -174,7 +182,6 @@ def _create_aggregate_parser(
     parser.add_argument(
         "--center-query",
         help="Center the data to a reference before aggregating (e.g. gene_symbol=='NTC')",
-
     )
     filter_args(parser)
 
@@ -182,9 +189,7 @@ def _create_aggregate_parser(
     parser.set_defaults(func=_run_aggregate)
 
 
-def _create_tvn_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
-) -> None:
+def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "tvn",
         help="Run TNV",
@@ -202,12 +207,15 @@ def _create_tvn_parser(
         help="Path to save result in zarr or h5ad format",
         required=True,
     )
-    required.add_argument("--reference-query", help="Query to extract reference observations (e.g. gene_symbol=='NTC')")
+    required.add_argument(
+        "--reference-query",
+        help="Query to extract reference observations (e.g. gene_symbol=='NTC')",
+    )
     parser.add_argument(
         "--by",
         help="Further align control and treatments in each group, using the covariance matrix of all negative "
-             "(reference) controls as the target and the covariance matrix of each group of negative controls "
-             "as the source.",
+        "(reference) controls as the target and the covariance matrix of each group of negative controls "
+        "as the source.",
         nargs="*",
     )
     filter_args(parser)
@@ -217,7 +225,7 @@ def _create_tvn_parser(
 
 
 def _create_recall_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
+    subparsers: argparse.ArgumentParser, default_help: bool
 ) -> None:
     parser = subparsers.add_parser(
         "recall",
@@ -236,17 +244,22 @@ def _create_recall_parser(
         help="Path to save result in Parquet format",
         required=True,
     )
-    required.add_argument("--ground-truth", help="Path(s) to ground truth datasets from CORUM", nargs="+")
-    required.add_argument("--threshold", help="Recall threshold", nargs="+", type=float,
-                          default=[0.99, 0.95, 0.01, 0.05])
+    required.add_argument(
+        "--ground-truth", help="Path(s) to ground truth datasets from CORUM", nargs="+"
+    )
+    required.add_argument(
+        "--threshold",
+        help="Recall threshold",
+        nargs="+",
+        type=float,
+        default=[0.99, 0.95, 0.01, 0.05],
+    )
 
-    common_args(parser, metadata=False, rechunk=False, dask_client_value='none')
+    common_args(parser, metadata=False, rechunk=False, dask_client_value="none")
     parser.set_defaults(func=_run_recall)
 
 
-def _create_pca_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
-) -> None:
+def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "pca",
         help="Run PCA",
@@ -270,9 +283,9 @@ def _create_pca_parser(
         "--whiten",
         action="store_true",
         help="When True the components_ vectors are multiplied by the "
-             "square root of n_samples and then divided by the singular "
-             "values to ensure uncorrelated outputs with unit "
-             "component-wise variances.",
+        "square root of n_samples and then divided by the singular "
+        "values to ensure uncorrelated outputs with unit "
+        "component-wise variances.",
     )
     parser.add_argument(
         "--components", type=int, default=128, help="Number of principal components"
@@ -282,7 +295,7 @@ def _create_pca_parser(
 
 
 def _create_normalize_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
+    subparsers: argparse.ArgumentParser, default_help: bool
 ) -> None:
     parser = subparsers.add_parser(
         "normalize",
@@ -345,32 +358,33 @@ def _create_normalize_parser(
     parser.add_argument(
         "--mad-scale-factor",
         help="Numerical scale factor to divide median absolute deviation. "
-             "The string “normal” is also accepted, and results in scale being the"
-             " inverse of the standard normal quantile function at 0.75",
+        "The string “normal” is also accepted, and results in scale being the"
+        " inverse of the standard normal quantile function at 0.75",
         default="normal",
         type=str,
     )
     parser.add_argument(
-        "--max-value",
-        help="Truncate to this value after scaling",
-        type=float)
+        "--max-value", help="Truncate to this value after scaling", type=float
+    )
     parser.add_argument(
         "--batch-size",
         help="Batch size to use for local z-score scaling to conserve memory",
         default=25000,
-        type=int)
+        type=int,
+    )
     parser.add_argument(
         "--centroid-columns",
         help="Columns for y and x centroids to use for local zscore.",
         default=["Nuclei_AreaShape_Center_Y", "Nuclei_AreaShape_Center_X"],
-        nargs=2)
+        nargs=2,
+    )
 
     common_args(parser)
     parser.set_defaults(func=_run_norm_features)
 
 
 def _create_filter_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
+    subparsers: argparse.ArgumentParser, default_help: bool
 ) -> None:
     parser = subparsers.add_parser(
         "filter",
@@ -395,12 +409,12 @@ def _create_filter_parser(
         default=0.1,
         type=float,
         help="Maximum median feature variance across `by` to retain a feature. "
-             "Set to -1 to disable.",
+        "Set to -1 to disable.",
     )
     parser.add_argument(
         "--max-feature-variance",
         type=float,
-        help="Maximum median feature variance across `by` to retain a feature."
+        help="Maximum median feature variance across `by` to retain a feature.",
     )
     parser.add_argument(
         "--max-cell-fraction-not-finite",
@@ -427,7 +441,7 @@ def _run_rank_features(arguments: argparse.Namespace):
 
 
 def _create_rank_parser(
-        subparsers: argparse.ArgumentParser, default_help: bool
+    subparsers: argparse.ArgumentParser, default_help: bool
 ) -> None:
     parser = subparsers.add_parser(
         "rank",
