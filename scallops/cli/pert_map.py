@@ -202,12 +202,10 @@ def run_similarity_matrix(arguments: argparse.Namespace):
         data = anndata.AnnData(X=pairwise_similarities(data), obs=data.obs, var=data.obs)
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
+        data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
-
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_h5ad(output, convert_strings_to_categoricals=False)
 
 
@@ -266,12 +264,10 @@ def run_aggregate(arguments: argparse.Namespace):
         )
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
+        data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
-
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_h5ad(output, convert_strings_to_categoricals=False)
 
 
@@ -326,12 +322,10 @@ def run_tvn(arguments: argparse.Namespace):
         )
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
+        data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
-
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_h5ad(output, convert_strings_to_categoricals=False)
 
 
@@ -389,12 +383,10 @@ def run_pca(arguments: argparse.Namespace):
         )
         fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
+        data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
-
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_h5ad(output, convert_strings_to_categoricals=False)
 
 
@@ -609,12 +601,10 @@ def run_norm_features(arguments: argparse.Namespace):
             logger.info("No normalization")
         fs, output_basename = fsspec.url_to_fs(os.path.basename(norm_output))
         fs.makedirs(output_basename, exist_ok=True)
+        data.uns["scallops"] = _fix_json(metadata)
         if output_format == "zarr":
-
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(norm_output, convert_strings_to_categoricals=False)
         elif output_format == "h5ad":
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_h5ad(norm_output, convert_strings_to_categoricals=False)
         else:
             data.X = data.X.compute()
@@ -700,10 +690,8 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         logger.info(f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         fs, output_label_ids = fsspec.url_to_fs(output)
         fs.makedirs(os.path.basename(output), exist_ok=True)
+        data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
-
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_zarr(output, convert_strings_to_categoricals=False)
         else:
-            data.uns["scallops"] = _fix_json(metadata)
             data.write_h5ad(output, convert_strings_to_categoricals=False)
