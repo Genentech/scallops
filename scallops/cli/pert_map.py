@@ -561,9 +561,7 @@ def run_norm_features(arguments: argparse.Namespace):
         elif output_format == "parquet" and is_parquet_file(output):
             skip = True
         if skip:
-            logger.info(
-                f"{output} already exists, skipping. Use --force to overwrite."
-            )
+            logger.info(f"{output} already exists, skipping. Use --force to overwrite.")
             return
 
     metadata = {}

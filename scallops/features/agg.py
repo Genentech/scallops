@@ -117,9 +117,9 @@ def agg_features(
     obs = obs.join(group_counts, rsuffix="_1")
     # both index and column set
     if group_by_multi:
-        obs[by] = obs['obs'].apply(pd.Series)
-        obs.index = obs['obs'].map(lambda x: '-'.join(map(str, x)))
-        obs = obs.drop('obs', axis=1)
+        obs[by] = obs["obs"].apply(pd.Series)
+        obs.index = obs["obs"].map(lambda x: "-".join(map(str, x)))
+        obs = obs.drop("obs", axis=1)
     else:
         obs = obs.rename({"obs": by}, axis=1)
 
