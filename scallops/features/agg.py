@@ -120,9 +120,7 @@ def agg_features(
         obs[by] = obs['obs'].apply(pd.Series)
         obs.index = obs['obs'].map(lambda x: '-'.join(map(str, x)))
         obs = obs.drop('obs', axis=1)
-        obs.index.name = '-'.join(by)
     else:
-        obs.index.name = by
         obs = obs.rename({"obs": by}, axis=1)
 
     return anndata.AnnData(

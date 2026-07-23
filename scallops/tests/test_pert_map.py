@@ -9,8 +9,8 @@ from scallops.features.util import pandas_to_anndata
 @pytest.mark.features
 def test_map_filter(tmp_path, test_feature_table, input_format):
     dataset_path = str(tmp_path / f"dataset_test.{input_format}")
-    label_path = tmp_path / "labels.parquet"
-    feature_path = tmp_path / "features.parquet"
+    output_path = tmp_path / "labels.zarr"
+
     if input_format == "parquet":
         test_feature_table.to_parquet(dataset_path)
     else:
@@ -25,14 +25,11 @@ def test_map_filter(tmp_path, test_feature_table, input_format):
         "filter",
         "--dataset",
         dataset_path,
-        "--output-label-ids",
-        str(label_path),
-        "--output-feature-ids",
-        str(feature_path),
+        "--output",
+        str(output_path),
     ]
     check_call(cmd)
-    assert feature_path.exists()
-    assert label_path.exists()
+    assert output_path.exists()
 
 
 @pytest.mark.parametrize("outut_format", ["zarr", "parquet"])

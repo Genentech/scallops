@@ -518,7 +518,7 @@ def run_norm_features(arguments: argparse.Namespace):
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
     reference = arguments.reference
-    norm_output = arguments.output
+    output = arguments.output
 
     normalize = arguments.method
     n_neighbors = arguments.neighbors
@@ -536,10 +536,7 @@ def run_norm_features(arguments: argparse.Namespace):
     centroid_column_names = arguments.centroid_columns
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
-    suffix = os.path.splitext(norm_output.lower())[1]
-    if suffix not in {".zarr", ".parquet", ".pq"}:
-        norm_output = norm_output + ".zarr"
-    output_ext = os.path.split(norm_output.lower())[1]
+    output_ext = os.path.split(output.lower())[1]
     if output_ext == ".zarr":
         output_format = "zarr"
     elif output_ext == ".h5ad":
@@ -548,14 +545,14 @@ def run_norm_features(arguments: argparse.Namespace):
         output_format = "parquet"
     if not force:
         skip = False
-        if output_format in ("zarr", "h5ad") and is_anndata(norm_output):
+        if output_format in ("zarr", "h5ad") and is_anndata(output):
             skip = True
 
-        elif output_format == "parquet" and is_parquet_file(norm_output):
+        elif output_format == "parquet" and is_parquet_file(output):
             skip = True
         if skip:
             logger.info(
-                f"{norm_output} already exists, skipping. Use --force to overwrite."
+                f"{output} already exists, skipping. Use --force to overwrite."
             )
             return
 
@@ -599,13 +596,13 @@ def run_norm_features(arguments: argparse.Namespace):
                 centroid_column_names=centroid_column_names)
         else:
             logger.info("No normalization")
-        fs, output_basename = fsspec.url_to_fs(os.path.basename(norm_output))
+        fs, output_basename = fsspec.url_to_fs(os.path.basename(output))
         fs.makedirs(output_basename, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output_format == "zarr":
-            data.write_zarr(norm_output, convert_strings_to_categoricals=False)
+            data.write_zarr(output, convert_strings_to_categoricals=False)
         elif output_format == "h5ad":
-            data.write_h5ad(norm_output, convert_strings_to_categoricals=False)
+            data.write_h5ad(output, convert_strings_to_categoricals=False)
         else:
             data.X = data.X.compute()
             df = data.to_df().join(data.obs)
