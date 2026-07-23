@@ -38,7 +38,7 @@ scallops/
 ## Getting Started
 
 ### Prerequisites
-SCALLOPS requires Python 3.11 or newer.
+SCALLOPS requires Python 3.11 or newer (3.12 is the default in the Docker image).
 
 ### 1. Environment Setup (Recommended)
 We recommend using **uv** for high-performance Python environment management. You will need uv installed on your system. Installation instructions can be found here: https://docs.astral.sh/uv/
