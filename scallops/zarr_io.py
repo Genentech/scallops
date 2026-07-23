@@ -497,7 +497,10 @@ def write_zarr(
         elif not isinstance(data, zarr.Array):
             create_kwds = _create_array_kwargs(fmt)
 
-            if storage_options.get("chunks") is not None:
+            if (
+                storage_options is not None
+                and storage_options.get("chunks") is not None
+            ):
                 create_kwds["chunks"] = storage_options["chunks"]
             grp.create_array("s0", data=data, overwrite=True, **create_kwds)
 
