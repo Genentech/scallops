@@ -466,7 +466,7 @@ def _transform_labels_t(
     moving_image_attrs,
     moving_image_spacing,
     label_output_root,
-    chunk_size,
+    chunk_size: tuple[int, int] | None = (1024, 1024),
 ):
     # transform_dest structure is image_key/t=1
     # assume labels are named image_key-t-suffix
@@ -593,7 +593,7 @@ def _transform_labels(
     attrs: None | dict,
     flip_y: bool = False,
     flip_x: bool = False,
-    chunksize: tuple[int, int] | None = None,
+    chunksize: tuple[int, int] = (1024, 1024),
 ):
     """Transform and save labels.
 
@@ -700,7 +700,6 @@ def single_transformix(
             output_root=output_root,
             moving_image_spacing=image_spacing,
             attrs=None,
-            chunksize=None,
         )
     else:
         # see if transform dir has subdirectory describing channel transformation
