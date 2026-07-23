@@ -548,8 +548,7 @@ def run_norm_features(arguments: argparse.Namespace):
     centroid_column_names = arguments.centroid_columns
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
-    output_ext = os.path.split(os.path.basename(output.lower()))[1]
-
+    output_ext = os.path.splitext(os.path.basename(output.lower()))[1]
     if output_ext == ".zarr":
         output_format = "zarr"
     elif output_ext == ".h5ad":
