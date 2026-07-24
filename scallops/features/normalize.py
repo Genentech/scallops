@@ -107,8 +107,8 @@ def _normalize_features_array(
         stds[stds == 0] = 1.0
         values = values / stds
         if max_value is not None:
-            values[values > max_value] = max_value
-            values[values < -max_value] = -max_value
+            values = xp.clip(values, -max_value, max_value)
+
     return values
 
 
