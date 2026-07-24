@@ -545,6 +545,8 @@ def run_norm_features(arguments: argparse.Namespace):
     robust = arguments.robust
     max_value = arguments.max_value
     batch_size = arguments.batch_size
+    if batch_size < 0:
+        batch_size = None
     centroid_column_names = arguments.centroid_columns
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
