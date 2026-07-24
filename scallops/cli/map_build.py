@@ -1215,7 +1215,7 @@ def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0,
                         "(%.0f%% of %.0f GB budget) — %.0f GB remaining !!!",
                         used_gb, total_gb, budget_pct, budget_gb, avail_gb,
                     )
-                elif budget_pct >= 80:
+                elif budget_pct >= 94:
                     logger.info(
                         "Approaching budget limit: %.0f / %.0f GB "
                         "(%.0f%% of %.0f GB budget)",
