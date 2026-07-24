@@ -1176,7 +1176,16 @@ def _corum_to_gene_sets(path: str) -> dict[str, list[str]]:
 def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0,
                           interval_sec: int = 20,
                           budget_gb: float | None = None):
-    """Start a daemon thread that logs loud warnings as RAM fills up.
+    """Start a daemon thread that monitors RAM usage.
+
+    **With --memory-budget-gb:**
+      - Under 80 % of budget: silent.
+      - 80–100 % of budget: "Approaching budget limit" info.
+      - Over budget: loud warning.
+      - System RAM > 95 %: OOM warning regardless of budget.
+
+    **Without budget:** classic OOM warnings at warn_pct / critical_pct
+    of total system RAM.
 
     Returns a stop-event; call ``stop_event.set()`` to shut it down.
     """
@@ -1189,39 +1198,51 @@ def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0,
 
     stop = threading.Event()
 
-    # When a budget is given, rebase warn/critical as fractions of budget
-    # so alerts fire relative to the user's allocation, not total system RAM.
-    _budget_pct_warn = None
-    _budget_pct_crit = None
-    if budget_gb is not None:
-        try:
-            _total_gb = psutil.virtual_memory().total / 1e9
-            _budget_pct_warn = 100 * (budget_gb * 0.80) / _total_gb
-            _budget_pct_crit = 100 * (budget_gb * 0.90) / _total_gb
-        except Exception:
-            pass
-
     def _watch():
-        _w = _budget_pct_warn if _budget_pct_warn is not None else warn_pct
-        _c = _budget_pct_crit if _budget_pct_crit is not None else critical_pct
         while not stop.is_set():
-            mem = psutil.virtual_memory()
+            mem      = psutil.virtual_memory()
             used_gb  = mem.used   / 1e9
             total_gb = mem.total  / 1e9
             avail_gb = mem.available / 1e9
-            pct = mem.percent
-            if pct >= _c:
-                logger.critical(
-                    "!!! CRITICAL MEMORY: %.0f / %.0f GB used (%.0f%%) — "
-                    "%.0f GB remaining — OOM KILL IMMINENT !!!",
-                    used_gb, total_gb, pct, avail_gb,
-                )
-            elif pct >= _w:
-                logger.warning(
-                    "Memory pressure: %.0f / %.0f GB used (%.0f%%) — "
-                    "%.0f GB remaining",
-                    used_gb, total_gb, pct, avail_gb,
-                )
+            pct      = mem.percent
+
+            if budget_gb is not None:
+                # ── Budget-aware mode ─────────────────────────────────────
+                budget_pct = 100 * used_gb / budget_gb  # % of user's budget
+                if used_gb > budget_gb:
+                    logger.warning(
+                        "!!! OVER BUDGET: %.0f / %.0f GB used "
+                        "(%.0f%% of %.0f GB budget) — %.0f GB remaining !!!",
+                        used_gb, total_gb, budget_pct, budget_gb, avail_gb,
+                    )
+                elif budget_pct >= 80:
+                    logger.info(
+                        "Approaching budget limit: %.0f / %.0f GB "
+                        "(%.0f%% of %.0f GB budget)",
+                        used_gb, total_gb, budget_pct, budget_gb,
+                    )
+                # Always warn if system RAM itself is critically low
+                if pct >= 95:
+                    logger.critical(
+                        "!!! SYSTEM RAM CRITICAL: %.0f / %.0f GB (%.0f%%) — "
+                        "OOM KILL IMMINENT regardless of budget !!!",
+                        used_gb, total_gb, pct,
+                    )
+            else:
+                # ── No budget: classic OOM warnings ───────────────────────
+                if pct >= critical_pct:
+                    logger.critical(
+                        "!!! CRITICAL MEMORY: %.0f / %.0f GB used (%.0f%%) — "
+                        "%.0f GB remaining — OOM KILL IMMINENT !!!",
+                        used_gb, total_gb, pct, avail_gb,
+                    )
+                elif pct >= warn_pct:
+                    logger.warning(
+                        "Memory pressure: %.0f / %.0f GB used (%.0f%%) — "
+                        "%.0f GB remaining",
+                        used_gb, total_gb, pct, avail_gb,
+                    )
+
             stop.wait(timeout=interval_sec)
 
     t = threading.Thread(target=_watch, daemon=True, name="scallops-mem-monitor")
