@@ -1173,7 +1173,9 @@ def _corum_to_gene_sets(path: str) -> dict[str, list[str]]:
     return {k: list(v) for k, v in result.items()}
 
 
-def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0, interval_sec: int = 20):
+def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0,
+                          interval_sec: int = 20,
+                          budget_gb: float | None = None):
     """Start a daemon thread that logs loud warnings as RAM fills up.
 
     Returns a stop-event; call ``stop_event.set()`` to shut it down.
@@ -1187,20 +1189,34 @@ def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0, in
 
     stop = threading.Event()
 
+    # When a budget is given, rebase warn/critical as fractions of budget
+    # so alerts fire relative to the user's allocation, not total system RAM.
+    _budget_pct_warn = None
+    _budget_pct_crit = None
+    if budget_gb is not None:
+        try:
+            _total_gb = psutil.virtual_memory().total / 1e9
+            _budget_pct_warn = 100 * (budget_gb * 0.80) / _total_gb
+            _budget_pct_crit = 100 * (budget_gb * 0.90) / _total_gb
+        except Exception:
+            pass
+
     def _watch():
+        _w = _budget_pct_warn if _budget_pct_warn is not None else warn_pct
+        _c = _budget_pct_crit if _budget_pct_crit is not None else critical_pct
         while not stop.is_set():
             mem = psutil.virtual_memory()
             used_gb  = mem.used   / 1e9
             total_gb = mem.total  / 1e9
             avail_gb = mem.available / 1e9
             pct = mem.percent
-            if pct >= critical_pct:
+            if pct >= _c:
                 logger.critical(
                     "!!! CRITICAL MEMORY: %.0f / %.0f GB used (%.0f%%) — "
                     "%.0f GB remaining — OOM KILL IMMINENT !!!",
                     used_gb, total_gb, pct, avail_gb,
                 )
-            elif pct >= warn_pct:
+            elif pct >= _w:
                 logger.warning(
                     "Memory pressure: %.0f / %.0f GB used (%.0f%%) — "
                     "%.0f GB remaining",
@@ -1250,6 +1266,16 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     max_res_nan_frac  = getattr(args, "max_residual_nan_fraction", 0.0)
     res_nan_impute    = getattr(args, "residual_nan_impute", "zero") or "zero"
     pert_col          = getattr(args, "perturbation", "gene_symbol")
+    _budget_gb        = getattr(args, "memory_budget_gb", None)
+
+    # Derive batch/prefetch sizes from budget when given.
+    # formula: rows_per_batch = budget / (n_feats × bytes_per_element)
+    _n_feats = data.shape[1]
+    if _budget_gb is not None and _n_feats > 0:
+        _batch_from_budget = max(10_000, int(_budget_gb * 1e9 / (_n_feats * 8)))
+        if not getattr(args, "filter_batch_size", None):
+            args = argparse.Namespace(**{**vars(args),
+                                         "filter_batch_size": _batch_from_budget})
 
     obs_all = data.obs
 
@@ -1305,7 +1331,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             _filter_zarr = (getattr(args, "output", None) or
                             getattr(args, "output_dir", "")).rstrip("/") + "_filter.zarr"
 
-        _mem_stop = _memory_monitor_start()
+        _mem_stop = _memory_monitor_start(budget_gb=getattr(args, "memory_budget_gb", None))
         try:
             X_filtered, cell_keep, feat_keep, _feat_report = _col_batch_filter_parquet(
                 parquet_sources, obs_all, label_mask, by_cols,
@@ -1397,7 +1423,6 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     elif isinstance(data.X, da.Array):
         # ── Zarr row-batch path ────────────────────────────────────────────
         zarr_is_remote = data.uns.get("_zarr_is_remote", False)
-        n_prefetch = 50 if zarr_is_remote else 16
         X_orig = data.X
 
         n_chunks = X_orig.numblocks[0]
@@ -1406,13 +1431,20 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         except Exception:
             chunk_gb = float("nan")
 
+        # Derive n_prefetch from budget: load as many concurrent chunks as
+        # budget allows, capped at 64 to avoid too many S3 connections.
+        if _budget_gb is not None and chunk_gb > 0:
+            n_prefetch = min(64, max(2, int(_budget_gb / chunk_gb)))
+        else:
+            n_prefetch = 50 if zarr_is_remote else 16
+
         logger.info(
             "map run [filter]: zarr row-batch mode (n_prefetch=%d, remote=%s) — "
             "%d chunks × %.1f GB each",
             n_prefetch, zarr_is_remote, n_chunks, chunk_gb,
         )
 
-        _mem_stop = _memory_monitor_start()
+        _mem_stop = _memory_monitor_start(budget_gb=getattr(args, "memory_budget_gb", None))
         try:
             # Pass 1: scan NaN counts; pass 2: materialise filtered matrix.
             # Steps 1+2 (feature/cell NaN filter) and steps 3+4 (residual-NaN +
@@ -1849,8 +1881,16 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     """
     ref_q      = getattr(args, "reference_query", None)
     n_comp     = getattr(args, "pca_components", 128)
-    batch_size = getattr(args, "pca_batch_size", 200_000)
     whiten     = bool(getattr(args, "pca_whiten", False))
+    # Derive PCA batch size from budget when set: rows that fit in budget (float32)
+    _pca_budget = getattr(args, "memory_budget_gb", None)
+    _pca_n_feat = data.shape[1]
+    if _pca_budget is not None and _pca_n_feat > 0:
+        # float64 inside sklearn: budget / (n_feats × 8 bytes)
+        batch_size = max(max(128, n_comp * 2),
+                         int(_pca_budget * 1e9 / (_pca_n_feat * 8)))
+    else:
+        batch_size = getattr(args, "pca_batch_size", 200_000)
     # 0 / None / negative → non-incremental (full-dataset) PCA
     if not batch_size or batch_size < 0:
         batch_size = None

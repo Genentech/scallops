@@ -158,7 +158,7 @@ def transform_features_yj(
     # Each block reads only FEAT_BLOCK columns at a time, capped at ~2 GB RAM.
     # Results are bit-identical to the full-matrix path because each feature is
     # fitted independently on the complete set of cells.
-    _FEAT_BLOCK = max(1, int(2e9 / (max(n_obs, 1) * 8)))  # ~2 GB per block
+    _FEAT_BLOCK = max(1, int(feat_block_bytes / (max(n_obs, 1) * 8)))
     if isinstance(data.X, da.Array):
         X_out = np.empty((n_obs, n_feat), dtype=np.float32)
         for _f0 in range(0, n_feat, _FEAT_BLOCK):
@@ -1036,7 +1036,8 @@ def _col_batch_filter_parquet(
 
     # Pass 2 reads only surviving columns — re-derive readahead with smaller batch
     _batch_gb2 = batch_size * n_feat_out * 8 / 1e9
-    _budget2   = max(2, int(_avail_gb * 0.40 / max(_batch_gb2, 0.1)))
+    _budget_src2 = max_memory_gb if max_memory_gb is not None else _avail_gb * 0.40
+    _budget2   = max(2, int(_budget_src2 / max(_batch_gb2, 0.1)))
     _frag_ra2  = max(1, min(len(sources), _budget2 // 3))
     _batch_ra2 = max(2, min(8, _budget2 // max(1, _frag_ra2)))
 
