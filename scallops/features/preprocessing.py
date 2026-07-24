@@ -839,15 +839,13 @@ def _col_batch_filter_parquet(
     perturbation_column: "str | None" = None,
     output_zarr_path: "str | None" = None,
     streaming_chunk_gb: float = 2.0,
+    label_filter_expr: "str | None" = None,
 ) -> "tuple[np.ndarray | None, np.ndarray, np.ndarray, pd.DataFrame]":
     """Two-pass streaming filter.
 
-    When *output_zarr_path* is provided, pass 2 writes filtered rows
-    directly to a zarr store (no ``np.empty`` pre-allocation) and steps
-    3+4 (variance + residual-NaN) are computed from that zarr in
-    ``streaming_chunk_gb``-sized row-chunks.  Return value is the same
-    except the first element is ``None``; the caller reads the result
-    from the zarr as a dask-backed AnnData.
+    When ``sources[i]["obs_cols"]`` is populated (skip_obs=True loading),
+    obs is loaded per-file here and freed after each file.  Combined with
+    budget-sized feature batches, peak RAM = one file obs + one batch.
     """
     """Two-pass sequential streaming filter for parquet files (local or S3).
 
@@ -938,10 +936,55 @@ def _col_batch_filter_parquet(
         _budget_gb, _batch_ra, _batch_gb,
     )
 
+    # ── Determine if obs should be loaded per-file (lazy) ────────────────────
+    # When sources[i]["obs_cols"] is set, _read_map_inputs was called with
+    # skip_obs=True: obs_df is an empty placeholder and label_mask is all-True.
+    # We load obs per-file here, compute label_mask per-file, and free it.
+    _lazy_obs = bool(sources[0].get("obs_cols"))
+    if _lazy_obs:
+        import pyarrow.parquet as _pq_lazy
+        # Subtract per-file obs RAM from budget so obs + batch ≤ budget
+        _obs_cols_lazy   = sources[0]["obs_cols"]
+        _avg_rows        = n_cells / max(len(sources), 1)
+        _obs_file_gb     = _avg_rows * len(_obs_cols_lazy) * 8 / 1e9
+        _feat_budget_gb  = max(0.1, (_budget_gb or 8.0) - _obs_file_gb)
+        batch_size       = max(10_000, int(_feat_budget_gb * 1e9 / (n_feat * 8)))
+        _batch_gb        = batch_size * n_feat * 8 / 1e9
+        _batch_ra        = max(1, min(32, int(_feat_budget_gb / max(_batch_gb, 0.1))))
+        logger.info(
+            "  [lazy obs] per-file obs ≈%.1f GB → feat batch %.1f GB × %d ra",
+            _obs_file_gb, _batch_gb, _batch_ra,
+        )
+
     t0 = time.monotonic()
     total_batches_done = 0
 
     for _fi, _src in enumerate(sources):
+        # ── Load obs for this file only, compute label mask, then free ────────
+        if _lazy_obs:
+            _obs_fi   = _pq_lazy.read_table(
+                _src["path"], columns=_src["obs_cols"],
+            ).to_pandas()
+            _file_n   = sum(_src["row_group_sizes"])
+            _lm_fi    = np.ones(_file_n, dtype=bool)
+            # Null guard
+            for _gc in (_src["obs_cols"]):
+                if _gc in _obs_fi.columns and _obs_fi[_gc].isna().any():
+                    _lm_fi &= ~_obs_fi[_gc].isna().to_numpy()
+            # Label filter
+            if label_filter_expr:
+                try:
+                    _lm_fi &= _obs_fi.eval(label_filter_expr).to_numpy().astype(bool)
+                except Exception:
+                    pass
+            _slice = slice(_file_offsets[_fi], _file_offsets[_fi + 1])
+            label_mask[_slice] = _lm_fi
+            # Copy obs into the global obs_df (needed for group-by in variance)
+            for _oc in _obs_fi.columns:
+                if _oc in obs_df.columns:
+                    obs_df.iloc[_slice, obs_df.columns.get_loc(_oc)] = _obs_fi[_oc].values
+            del _obs_fi, _lm_fi
+
         _pa_fs_i, _pa_path_i = _pafs.FileSystem.from_uri(_src["path"])
         _ds_i    = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
         _scan_i  = _ds_i.scanner(
