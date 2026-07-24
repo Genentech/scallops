@@ -239,10 +239,7 @@ def normalize_features(
         ).indices
         result_obs = []
         result_arrays = []
-        is_dask = isinstance(data.X, da.Array)
-        _normalize_group_func = (
-            delayed(_normalize_group) if is_dask else _normalize_group
-        )
+
         for key in group_indices.keys():
             indices = group_indices[key]
             data_slice = data.X[indices]
@@ -256,7 +253,7 @@ def normalize_features(
                 reference_data_slice = data_slice[ref_indices]
                 reference_data_obs = data_obs_slice.iloc[ref_indices]
 
-            result = _normalize_group_func(
+            result = _normalize_group(
                 data_slice,
                 obs=data_obs_slice[centroid_column_names]
                 if normalize == "local-zscore"
@@ -277,10 +274,6 @@ def normalize_features(
                 centroid_column_names=centroid_column_names,
             )
 
-            if is_dask:
-                result = da.from_delayed(
-                    result, shape=data_slice.shape, dtype=np.float64
-                )
             result_arrays.append(result)
             result_obs.append(data_obs_slice)
 
