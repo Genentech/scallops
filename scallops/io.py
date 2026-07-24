@@ -1541,7 +1541,7 @@ def is_anndata(store: StoreLike) -> bool:
             f = store
         else:
             f = h5py.File(store, mode="r")
-        return f["uns"] is not None
+        return f.get("layers") is not None
     except:  # noqa: E722
         return False
 
