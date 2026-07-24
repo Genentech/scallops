@@ -9,7 +9,6 @@ import pandas as pd
 import scipy
 from anndata._core.index import _normalize_index
 from array_api_compat import get_namespace
-from dask.delayed import delayed
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
@@ -48,48 +47,64 @@ def _normalize_features_array(
      :return: Array of normalized values
 
     """
-    if isinstance(values, da.Array):
-        chunks = list(values.chunksize)
-        if chunks[0] != values.shape[0]:
-            chunks[0] = -1
-        chunks = tuple(chunks)
-        if chunks != values.chunksize:
-            values = values.rechunk(chunks)
-        if reference_values is not None:
-            ref_chunks = list(reference_values.chunksize)
-            if ref_chunks[0] != reference_values.shape[0]:
-                ref_chunks[0] = -1
-            if ref_chunks[1] != chunks[1]:
-                ref_chunks[1] = chunks[1]
-            ref_chunks = tuple(ref_chunks)
-            if ref_chunks != reference_values.chunksize:
-                reference_values = reference_values.rechunk(ref_chunks)
-        arrays = (
-            (values, reference_values) if reference_values is not None else (values,)
-        )
 
-        return da.map_blocks(
-            _normalize_features_np,
-            *arrays,
-            indices=delayed(indices),
-            robust=robust,
-            mad_scale=mad_scale,
-            scaling=scaling,
-            centering=centering,
-            max_value=max_value,
-            meta=values._meta,
+    mad_scale = _convert_scale(mad_scale)
+    xp = get_namespace(values)
+    if reference_values is None:
+        reference_values = values
+    means = None
+    stds = None
+    if indices is None:
+        if robust:
+            if centering:
+                means = xp.nanmedian(reference_values, axis=0)
+            if scaling:
+                stds = (
+                    xp.nanmedian(xp.abs(reference_values - means), axis=0) / mad_scale
+                )
+        else:
+            if centering:
+                means = xp.nanmean(reference_values, axis=0)
+            if scaling:
+                stds = xp.nanstd(reference_values, axis=0)
+        if centering:
+            means = xp.expand_dims(means, 0)
+        if scaling:
+            stds = xp.expand_dims(stds, 0)
+    else:
+        reference_values = (
+            reference_values.vindex[indices]
+            if isinstance(reference_values, da.Array)
+            else reference_values[indices]
         )
+        # reference_values dims are (labels,neighbors,features)
+        if robust:
+            means = xp.nanmedian(reference_values, axis=1)
 
-    return _normalize_features_np(
-        values=values,
-        ref_values=reference_values,
-        indices=indices,
-        robust=robust,
-        mad_scale=mad_scale,
-        scaling=scaling,
-        max_value=max_value,
-        centering=centering,
-    )
+            if scaling:
+                stds = (
+                    xp.nanmedian(
+                        xp.abs(reference_values - xp.expand_dims(means, axis=1)),
+                        axis=1,
+                    )
+                    / mad_scale
+                )
+
+        else:
+            if centering:
+                means = xp.nanmean(reference_values, axis=1)
+            if scaling:
+                stds = xp.nanstd(reference_values, axis=1)
+
+    if centering:
+        values = values - means
+    if scaling:
+        stds[stds == 0] = 1.0
+        values = values / stds
+        if max_value is not None:
+            values[values > max_value] = max_value
+            values[values < -max_value] = -max_value
+    return values
 
 
 def typical_variation_normalization(
@@ -372,11 +387,12 @@ def _normalize_group(
         indices = _nearest_neighbors_indices(
             nn_ref, nn_query, n_neighbors=n_neighbors, metric=neighbors_metric
         )
+
     if batch_size is not None and indices is not None and indices.shape[0] > batch_size:
         value_list = []
         if reference_data is None:
             reference_data = data
-
+        xp = get_namespace(data)
         for i in range(0, indices.shape[0], batch_size):
             sl = slice(i, i + batch_size)
             values = _normalize_features_array(
@@ -390,7 +406,7 @@ def _normalize_group(
                 max_value=max_value,
             )
             value_list.append(values)
-        values = np.concatenate(value_list)
+        values = xp.concatenate(value_list)
     else:
         values = _normalize_features_array(
             data,
@@ -418,66 +434,3 @@ def _nearest_neighbors_indices(
         .fit(reference)
         .kneighbors(query, return_distance=False)
     )
-
-
-def _normalize_features_np(
-    values: np.ndarray,
-    ref_values: np.ndarray | None = None,
-    indices: np.ndarray | None = None,
-    mad_scale: float | str = "normal",
-    centering: bool = True,
-    scaling: bool = True,
-    robust: bool = True,
-    max_value: float | None = None,
-) -> np.ndarray:
-    mad_scale = _convert_scale(mad_scale)
-
-    if ref_values is None:
-        ref_values = values
-    means = None
-    stds = None
-    if indices is None:
-        if robust:
-            if centering:
-                means = np.nanmedian(ref_values, axis=0)
-            if scaling:
-                stds = np.nanmedian(np.abs(ref_values - means), axis=0) / mad_scale
-        else:
-            if centering:
-                means = np.nanmean(ref_values, axis=0)
-            if scaling:
-                stds = np.nanstd(ref_values, axis=0)
-        if centering:
-            means = np.expand_dims(means, 0)
-        if scaling:
-            stds = np.expand_dims(stds, 0)
-    else:
-        ref_values = ref_values[indices]
-        # ref_values dims are (labels,neighbors,features)
-        if robust:
-            means = np.nanmedian(ref_values, axis=1)
-
-            if scaling:
-                stds = (
-                    np.nanmedian(
-                        np.abs(ref_values - np.expand_dims(means, axis=1)),
-                        axis=1,
-                    )
-                    / mad_scale
-                )
-
-        else:
-            if centering:
-                means = np.nanmean(ref_values, axis=1)
-            if scaling:
-                stds = np.nanstd(ref_values, axis=1)
-
-    if centering:
-        values = values - means
-    if scaling:
-        stds[stds == 0] = 1.0
-        values = values / stds
-        if max_value is not None:
-            values[values > max_value] = max_value
-            values[values < -max_value] = -max_value
-    return values
