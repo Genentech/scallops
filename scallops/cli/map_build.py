@@ -1349,7 +1349,9 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         if _budget_gb is not None:
             # Each step saturates to budget_gb — bigger chunks = fewer passes = faster.
             # Write-through frees RAM between steps so peak = budget_gb throughout.
-            _stream_chunk_gb = max(0.1, float(_budget_gb))
+            # Cap variance chunk at budget/4 so overhead (obs + Python) fits.
+            # Full budget would read all cells × all features in one float64 chunk.
+            _stream_chunk_gb = max(0.1, float(_budget_gb) / 4)
             _filter_zarr = (getattr(args, "output", None) or
                             getattr(args, "output_dir", "")).rstrip("/") + "_filter.zarr"
 
