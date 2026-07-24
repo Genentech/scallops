@@ -99,14 +99,14 @@ def rechunk(
     data: anndata.AnnData, rechunk_label_size: str, rechunk_feature_size: str
 ) -> anndata.AnnData:
     if rechunk_label_size is not None or rechunk_feature_size is not None:
-        if rechunk_label_size is None:
-            rechunk_label_size = "auto"
-        if rechunk_feature_size is None:
-            rechunk_feature_size = "auto"
-        if rechunk_label_size.isdigit():
+        if rechunk_label_size is not None and rechunk_label_size.isdigit():
             rechunk_label_size = int(rechunk_label_size)
-        if rechunk_feature_size.isdigit():
+        if rechunk_feature_size is not None and rechunk_feature_size.isdigit():
             rechunk_feature_size = int(rechunk_feature_size)
+        if rechunk_label_size is None:
+            rechunk_label_size = data.X.chunksize[0]
+        if rechunk_feature_size is None:
+            rechunk_feature_size = data.X.chunksize[1]
         data.X = data.X.rechunk((rechunk_label_size, rechunk_feature_size))
     return data
 
@@ -697,6 +697,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         logger.info(
             f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}"
         )
+        data.X = data.X.rechunk(("auto", "auto"))
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
         fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
