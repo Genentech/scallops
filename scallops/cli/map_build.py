@@ -595,15 +595,11 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
         _path_caps = _expand_pattern_inputs(paths, _pattern)
         _obs_caps  = {p: c for p, c in _path_caps if c}
         _exp_paths = [p for p, _ in _path_caps]
-        _obs_force   = _label_filter_columns(getattr(arguments, "label_filter", None))
-        _budget_rmi  = getattr(arguments, "memory_budget_gb", None)
-        _skip_obs    = _budget_rmi is not None and all(
-            p.lower().endswith((".parquet", ".pq")) for p in _exp_paths)
+        _obs_force = _label_filter_columns(getattr(arguments, "label_filter", None))
         data = _read_map_inputs(_exp_paths, valid_channels=_valid_ch,
                                 obs_captures=_obs_caps or None,
                                 include_measurement_types=_meas_types,
-                                obs_force=_obs_force or None,
-                                skip_obs=_skip_obs) if all(
+                                obs_force=_obs_force or None) if all(
             p.lower().endswith((".parquet", ".pq")) for p in _exp_paths
         ) else _read_data(_exp_paths, features)
 
@@ -1372,7 +1368,6 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 perturbation_column=pert_col,
                 output_zarr_path=_filter_zarr,
                 streaming_chunk_gb=_stream_chunk_gb,
-                label_filter_expr=getattr(args, "label_filter", None),
             )
         except MemoryError as exc:
             logger.critical(
@@ -2433,14 +2428,11 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             _path_caps2 = _expand_pattern_inputs(list(arguments.input), _pattern2)
             _obs_caps2  = {p: c for p, c in _path_caps2 if c}
             _exp_paths2 = [p for p, _ in _path_caps2]
-            _obs_force2  = _label_filter_columns(getattr(arguments, "label_filter", None))
-            _skip_obs2   = (_budget_gb is not None and all(
-                p.lower().endswith((".parquet", ".pq")) for p in _exp_paths2))
+            _obs_force2 = _label_filter_columns(getattr(arguments, "label_filter", None))
             cells = _read_map_inputs(_exp_paths2, valid_channels=_valid_ch2,
                                      obs_captures=_obs_caps2 or None,
                                      include_measurement_types=_meas_types2,
-                                     obs_force=_obs_force2 or None,
-                                     skip_obs=_skip_obs2)
+                                     obs_force=_obs_force2 or None)
             # ── DO NOT call cells.X.compute() here. ─────────────────────────────
             # Raw parquet files contain ~9,000 columns × float64. Materialising
             # all of them at once requires (n_cells × n_cols × 8) bytes — easily

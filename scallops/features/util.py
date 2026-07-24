@@ -410,7 +410,6 @@ def _read_map_inputs(
     obs_captures: "dict[str, dict[str, str]] | None" = None,
     include_measurement_types: "set[str] | None" = None,
     obs_force: "set[str] | None" = None,
-    skip_obs: bool = False,
 ) -> anndata.AnnData:
     """Read parquet/zarr inputs for the map pipeline.
 
@@ -515,43 +514,27 @@ def _read_map_inputs(
             and not _pa.types.is_struct(_schema.field(c).type)
         ]
 
-        # ── Obs: eager read OR empty placeholder (skip_obs=True) ─────────────
-        if skip_obs:
-            # Lazy mode: don't load obs now. The filter will load obs per-file.
-            # Create a zero-row placeholder with the right columns so downstream
-            # code that inspects obs.columns still works.
-            _n_rows = sum(
-                _pq_meta.row_group(i).num_rows
-                for i in range(_pq_meta.num_row_groups)
-            )
-            _obs_df = pd.DataFrame(
-                index=pd.RangeIndex(_n_rows),
-                columns=_obs_cols,
-                dtype=object,
-            )
-            # Store obs_cols in uns so the filter can load them per-file
-            _obs_cols_for_filter = _obs_cols
-        else:
-            _obs_df = _pq.read_table(
-                _pa_fpath, columns=_obs_cols, filesystem=_pa_fs, pre_buffer=True,
-            ).to_pandas()
-            _obs_cols_for_filter = None
+        # ── Obs: eager read, restores named RangeIndex from parquet footer ─
+        _obs_df = _pq.read_table(
+            _pa_fpath, columns=_obs_cols, filesystem=_pa_fs, pre_buffer=True,
+        ).to_pandas()
 
-        if not skip_obs:
-            if _obs_df.index.name in (None, "__index_level_0__"):
-                _obs_df.index.name = (
-                    "label" if "label" not in _obs_df.columns else "__cell_id__"
-                )
-            _obs_df.index = _obs_df.index.astype(str)
-            for _c in _obs_df.columns:
-                if pd.api.types.is_object_dtype(_obs_df[_c]):
-                    _non_null = _obs_df[_c].dropna()
-                    if len(_non_null) and _non_null.apply(
-                        lambda x: isinstance(x, (bool, np.bool_))
-                    ).all():
-                        pass
-                    else:
-                        _obs_df[_c] = _obs_df[_c].astype(str)
+        if _obs_df.index.name in (None, "__index_level_0__"):
+            _obs_df.index.name = (
+                "label" if "label" not in _obs_df.columns else "__cell_id__"
+            )
+        _obs_df.index = _obs_df.index.astype(str)
+        for _c in _obs_df.columns:
+            if pd.api.types.is_object_dtype(_obs_df[_c]):
+                # Keep Python bool values as bool so label filters like
+                # ``== False`` work correctly.  Convert everything else to str.
+                _non_null = _obs_df[_c].dropna()
+                if len(_non_null) and _non_null.apply(
+                    lambda x: isinstance(x, (bool, np.bool_))
+                ).all():
+                    pass  # leave as nullable-bool object dtype
+                else:
+                    _obs_df[_c] = _obs_df[_c].astype(str)
 
         # ── X: placeholder dask array (never computed; scanner reads directly) ─
         import dask
@@ -588,7 +571,6 @@ def _read_map_inputs(
             "n_row_groups":    _pq_meta.num_row_groups,
             "row_group_sizes": [_pq_meta.row_group(i).num_rows
                                 for i in range(_pq_meta.num_row_groups)],
-            "obs_cols":        _obs_cols_for_filter,  # None unless skip_obs=True
         })
         d = _inject_captures(d, path)
         data_arrays.append(d)
