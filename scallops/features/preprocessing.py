@@ -936,123 +936,87 @@ def _col_batch_filter_parquet(
         _budget_gb, _batch_ra, _batch_gb,
     )
 
-    # ── Determine lazy obs and concurrent-file strategy ──────────────────────
-    # When sources[i]["obs_cols"] is set (skip_obs=True loading), obs is
-    # loaded per-file here instead of from the pre-loaded obs_df.
-    #
-    # Concurrency: fit as many files in parallel as budget allows.
-    #   n_concurrent = floor(budget / file_size_gb)
-    #   - n_concurrent >= 1: process that many files simultaneously (faster)
-    #   - n_concurrent < 1:  one file in multiple sub-file batches (less RAM)
-    # Works identically for zarr and parquet since granularity is per-file.
+    # ── Determine if obs should be loaded per-file (lazy) ────────────────────
+    # When sources[i]["obs_cols"] is set, _read_map_inputs was called with
+    # skip_obs=True: obs_df is an empty placeholder and label_mask is all-True.
+    # We load obs per-file here, compute label_mask per-file, and free it.
     _lazy_obs = bool(sources[0].get("obs_cols"))
     if _lazy_obs:
         import pyarrow.parquet as _pq_lazy
-        _obs_cols_lazy  = sources[0]["obs_cols"]
-        _avg_rows       = n_cells / max(len(sources), 1)
-        _obs_file_gb    = _avg_rows * len(_obs_cols_lazy) * 8 / 1e9
-        _feat_budget_gb = max(0.1, (_budget_gb or 8.0) - _obs_file_gb)
-    else:
-        _obs_file_gb    = 0.0
-        _feat_budget_gb = _budget_gb or 8.0
-
-    # File size in GB (float32 features)
-    _file_size_gb = (_avg_rows if _lazy_obs else n_cells / max(len(sources), 1)) \
-                    * n_feat * 4 / 1e9
-    # Concurrent files that fit in budget (at least 1; sub-file batching handles >1)
-    _n_concurrent = max(1, int(_feat_budget_gb / max(_file_size_gb, 0.1)))
-    # batch_size within one file (covers full file if budget allows it)
-    batch_size    = max(10_000, int(_feat_budget_gb * 1e9 / (_n_concurrent * n_feat * 8)))
-    _batch_gb     = batch_size * n_feat * 8 / 1e9
-    _batch_ra     = max(1, min(32, int(_feat_budget_gb / max(_batch_gb, 0.1))))
-    logger.info(
-        "  [budget] %.0f GB → %d file(s) concurrent, %.1f GB/batch × %d ra",
-        _budget_gb or 0, _n_concurrent, _batch_gb, _batch_ra,
-    )
+        # Subtract per-file obs RAM from budget so obs + batch ≤ budget
+        _obs_cols_lazy   = sources[0]["obs_cols"]
+        _avg_rows        = n_cells / max(len(sources), 1)
+        _obs_file_gb     = _avg_rows * len(_obs_cols_lazy) * 8 / 1e9
+        _feat_budget_gb  = max(0.1, (_budget_gb or 8.0) - _obs_file_gb)
+        batch_size       = max(10_000, int(_feat_budget_gb * 1e9 / (n_feat * 8)))
+        _batch_gb        = batch_size * n_feat * 8 / 1e9
+        _batch_ra        = max(1, min(32, int(_feat_budget_gb / max(_batch_gb, 0.1))))
+        logger.info(
+            "  [lazy obs] per-file obs ≈%.1f GB → feat batch %.1f GB × %d ra",
+            _obs_file_gb, _batch_gb, _batch_ra,
+        )
 
     t0 = time.monotonic()
-    import dask as _dask_p1
+    total_batches_done = 0
 
-    def _scan_one_file(fi_src):
-        """Scan one file: load obs (lazy), count NaN, return per-file arrays."""
-        _fi, _src = fi_src
-        _file_n = sum(_src["row_group_sizes"])
-        _bc_fi  = np.zeros(_file_n, dtype=np.int32)
-        _np_fi  = np.zeros(n_feat,  dtype=np.int64)
-        _npb_fi = np.zeros(n_feat,  dtype=np.int64)
-
-        # Lazy obs: load per-file, compute label mask
+    for _fi, _src in enumerate(sources):
+        # ── Load obs for this file only, compute label mask, then free ────────
         if _lazy_obs:
-            _obs_fi  = _pq_lazy.read_table(
-                _src["path"], columns=_src["obs_cols"]).to_pandas()
-            _lm_fi   = np.ones(_file_n, dtype=bool)
-            for _gc in _src["obs_cols"]:
+            _obs_fi   = _pq_lazy.read_table(
+                _src["path"], columns=_src["obs_cols"],
+            ).to_pandas()
+            _file_n   = sum(_src["row_group_sizes"])
+            _lm_fi    = np.ones(_file_n, dtype=bool)
+            # Null guard
+            for _gc in (_src["obs_cols"]):
                 if _gc in _obs_fi.columns and _obs_fi[_gc].isna().any():
                     _lm_fi &= ~_obs_fi[_gc].isna().to_numpy()
+            # Label filter
             if label_filter_expr:
                 try:
                     _lm_fi &= _obs_fi.eval(label_filter_expr).to_numpy().astype(bool)
                 except Exception:
                     pass
-            _obs_ret = (_obs_fi, _lm_fi)
-            del _obs_fi
-        else:
-            _fi_slice = slice(_file_offsets[_fi], _file_offsets[_fi + 1])
-            _lm_fi   = label_mask[_fi_slice]
-            _obs_ret  = None
+            _slice = slice(_file_offsets[_fi], _file_offsets[_fi + 1])
+            label_mask[_slice] = _lm_fi
+            # Copy obs into the global obs_df (needed for group-by in variance)
+            for _oc in _obs_fi.columns:
+                if _oc in obs_df.columns:
+                    obs_df.iloc[_slice, obs_df.columns.get_loc(_oc)] = _obs_fi[_oc].values
+            del _obs_fi, _lm_fi
 
-        # Feature NaN scan
         _pa_fs_i, _pa_path_i = _pafs.FileSystem.from_uri(_src["path"])
-        _ds_i  = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
-        _sc_i  = _ds_i.scanner(columns=feat_cols, batch_size=batch_size,
-                                use_threads=True, batch_readahead=_batch_ra,
-                                fragment_readahead=1)
-        _row   = 0
-        for _b in _sc_i.to_batches():
-            _nb  = len(_b)
-            _X   = _b.to_pandas().to_numpy(np.float32); del _b
-            _nf  = ~np.isfinite(_X)
-            _bc_fi[_row:_row+_nb] = _nf.sum(axis=1).astype(np.int32)
-            _np_fi += _nf.sum(axis=0).astype(np.int64)
-            _bad   = _bc_fi[_row:_row+_nb] > max_bad
-            if _bad.any():
-                _npb_fi += _nf[_bad].sum(axis=0).astype(np.int64)
-            del _X, _nf
-            _row += _nb
-        return _fi, _bc_fi, _np_fi, _npb_fi, _obs_ret
+        _ds_i    = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
+        _scan_i  = _ds_i.scanner(
+            columns=feat_cols,
+            batch_size=batch_size,
+            use_threads=True,
+            batch_readahead=_batch_ra,
+            fragment_readahead=_frag_ra,
+        )
+        row_offset = _file_offsets[_fi]
+        for batch in _scan_i.to_batches():
+            n_b  = len(batch)
+            X_b  = batch.to_pandas().to_numpy(np.float32)
+            del batch
+            row_end = row_offset + n_b
 
-    # ── Pass 1: process _n_concurrent files at a time ─────────────────────
-    for _g0 in range(0, len(sources), _n_concurrent):
-        _group = list(enumerate(sources))[_g0 : _g0 + _n_concurrent]
-        if _n_concurrent == 1:
-            _results = [_scan_one_file(_group[0])]
-        else:
-            _tasks   = [_dask_p1.delayed(_scan_one_file)(item) for item in _group]
-            _results = list(_dask_p1.compute(*_tasks,
-                                             scheduler="threads",
-                                             num_workers=_n_concurrent))
+            not_finite_b = ~np.isfinite(X_b)
+            per_cell_nan = not_finite_b.sum(axis=1).astype(np.int32)
+            bad_counts[row_offset:row_end] = per_cell_nan
+            nan_per_feat += not_finite_b.sum(axis=0).astype(np.int64)
+            bad_mask = per_cell_nan > max_bad
+            if bad_mask.any():
+                nan_per_feat_bad += not_finite_b[bad_mask].sum(axis=0).astype(np.int64)
+            del X_b
+            row_offset = row_end
+            total_batches_done += 1
 
-        for _fi, _bc_fi, _np_fi, _npb_fi, _obs_ret in _results:
-            _fi_slice = slice(_file_offsets[_fi], _file_offsets[_fi + 1])
-            bad_counts[_fi_slice]    = _bc_fi
-            nan_per_feat            += _np_fi
-            nan_per_feat_bad        += _npb_fi
-            if _lazy_obs and _obs_ret is not None:
-                _obs_fi_data, _lm_fi = _obs_ret
-                label_mask[_fi_slice] = _lm_fi
-                for _oc in _obs_fi_data.columns:
-                    if _oc in obs_df.columns:
-                        obs_df.iloc[_fi_slice, obs_df.columns.get_loc(_oc)] = \
-                            _obs_fi_data[_oc].values
-                del _obs_fi_data, _lm_fi
-            del _bc_fi, _np_fi, _npb_fi
-
-        _done = _file_offsets[min(_g0 + _n_concurrent, len(sources))]
-        eta = (time.monotonic() - t0) / max(_done, 1) * max(n_cells - _done, 0) / 60
-        logger.info("  [pass 1/2] files %d–%d/%d done — %.0f%% — ETA: %.0f min",
-                    _g0 + 1, min(_g0 + _n_concurrent, len(sources)), len(sources),
-                    _done / n_cells * 100, eta)
-
+        elapsed = time.monotonic() - t0
+        cells_done = _file_offsets[_fi + 1]
+        eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
+        logger.info("  [pass 1/2] file %d/%d done — %.0f%% — ETA: %.0f min",
+                    _fi + 1, len(sources), cells_done / n_cells * 100, eta)
 
     # ── Steps 1 + 2: shared filter logic (identical to zarr path) ────────────────
     feat_pass1, cell_keep = _apply_filter_steps_1_2(
@@ -1087,58 +1051,38 @@ def _col_batch_filter_parquet(
     _budget_src2 = max_memory_gb if max_memory_gb is not None else _avail_gb * 0.40
     _batch_ra2 = max(1, min(32, int(_budget_src2 / max(_batch_gb2, 0.1))))
 
-    def _write_one_file(fi_src_outrow):
-        """Write filtered rows for one file to result/zarr. Returns n_rows_written."""
-        _fi2, _src2, _out_start = fi_src_outrow
-        _pa_fs2, _pa_path2 = _pafs.FileSystem.from_uri(_src2["path"])
-        _ds2   = _ds.dataset(_pa_path2, filesystem=_pa_fs2, format="parquet")
-        _scan2 = _ds2.scanner(columns=kept_feat_cols, batch_size=batch_size,
-                               use_threads=True, batch_readahead=_batch_ra2,
-                               fragment_readahead=1)
-        _row2 = _file_offsets[_fi2]
-        _rows_written = 0
-        _buf: list[np.ndarray] = []
-        for _b2 in _scan2.to_batches():
-            _nb2   = len(_b2)
-            _cb2   = cell_keep[_row2 : _row2 + _nb2]
-            _row2 += _nb2
-            if _cb2.any():
-                _Xb2 = _b2.to_pandas().values.astype(np.float32)
-                _buf.append(_Xb2[_cb2]); del _Xb2
-            del _b2
-        if _buf:
-            _Xall = np.concatenate(_buf, axis=0)
-            _n = _Xall.shape[0]
-            if _zX is not None:
-                _zX[_out_start : _out_start + _n] = _Xall
-            else:
-                result[_out_start : _out_start + _n] = _Xall
-            _rows_written = _n
-            del _Xall
-        return _rows_written
-
-    # Compute output row offsets per file (needed for concurrent writes)
-    _file_cell_counts = [int(cell_keep[_file_offsets[i]:_file_offsets[i+1]].sum())
-                         for i in range(len(sources))]
-    _file_out_offsets = [0]
-    for _c in _file_cell_counts:
-        _file_out_offsets.append(_file_out_offsets[-1] + _c)
-
     t0 = time.monotonic()
-    for _g0 in range(0, len(sources), _n_concurrent):
-        _grp2 = [(i, sources[i], _file_out_offsets[i])
-                 for i in range(_g0, min(_g0 + _n_concurrent, len(sources)))]
-        if _n_concurrent == 1:
-            for _item in _grp2:
-                _write_one_file(_item)
-        else:
-            _tasks2 = [_dask_p1.delayed(_write_one_file)(item) for item in _grp2]
-            _dask_p1.compute(*_tasks2, scheduler="threads", num_workers=_n_concurrent)
-        _done2 = _file_offsets[min(_g0 + _n_concurrent, len(sources))]
-        eta2 = (time.monotonic() - t0) / max(_done2, 1) * max(n_cells - _done2, 0) / 60
-        logger.info("  [pass 2/2] files %d–%d/%d — %.0f%% — ETA: %.0f min",
-                    _g0 + 1, min(_g0 + _n_concurrent, len(sources)), len(sources),
-                    _done2 / n_cells * 100, eta2)
+    for _fi, _src in enumerate(sources):
+        _pa_fs_i, _pa_path_i = _pafs.FileSystem.from_uri(_src["path"])
+        _ds_i   = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
+        _scan2  = _ds_i.scanner(
+            columns=kept_feat_cols,
+            batch_size=batch_size,
+            use_threads=True,
+            batch_readahead=_batch_ra2,
+            fragment_readahead=1,
+        )
+        row_offset = _file_offsets[_fi]
+        for batch in _scan2.to_batches():
+            n_b    = len(batch)
+            cell_b = cell_keep[row_offset : row_offset + n_b]
+            row_offset += n_b
+            if cell_b.any():
+                X_b = batch.to_pandas().values.astype(np.float32)
+                X_f = X_b[cell_b]
+                if _zX is not None:
+                    _zX[out_row : out_row + X_f.shape[0]] = X_f
+                else:
+                    result[out_row : out_row + X_f.shape[0]] = X_f
+                out_row += X_f.shape[0]
+                del X_b, X_f
+            del batch
+
+        elapsed = time.monotonic() - t0
+        cells_done = _file_offsets[_fi + 1]
+        eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
+        logger.info("  [pass 2/2] file %d/%d — %.0f%% — ETA: %.0f min",
+                    _fi + 1, len(sources), cells_done / n_cells * 100, eta)
 
     obs_kept = obs_df.iloc[cell_keep].reset_index(drop=True)
 
