@@ -72,11 +72,16 @@ def _normalize_features_array(
         if scaling:
             stds = xp.expand_dims(stds, 0)
     else:
-        reference_values = (
-            reference_values.vindex[indices]
-            if isinstance(reference_values, da.Array)
-            else reference_values[indices]
-        )
+        if isinstance(reference_values, da.Array):
+            neighbors = indices.shape[1]
+            features = reference_values.shape[1]
+            labels = indices.shape[0]
+            reference_values = reference_values[indices.flatten()].reshape(
+                (labels, neighbors, features)
+            )
+            # reference_values = reference_values.vindex[indices]
+        else:
+            reference_values = reference_values[indices]
         # reference_values dims are (labels,neighbors,features)
         if robust:
             means = xp.nanmedian(reference_values, axis=1)
@@ -392,7 +397,12 @@ def _normalize_group(
             nn_ref, nn_query, n_neighbors=n_neighbors, metric=neighbors_metric
         )
 
-    if batch_size is not None and indices is not None and indices.shape[0] > batch_size:
+    if (
+        batch_size is not None
+        and not isinstance(data, da.Array)
+        and indices is not None
+        and indices.shape[0] > batch_size
+    ):
         value_list = []
         if reference_data is None:
             reference_data = data
@@ -433,6 +443,7 @@ def _nearest_neighbors_indices(
 ) -> np.ndarray:
     if n_neighbors > len(reference):
         raise ValueError(f"n_neighbors: {n_neighbors}, n points: {len(reference)}")
+    # shape is reference.shape[0], n_neighbors
     return (
         NearestNeighbors(n_neighbors=n_neighbors, metric=metric)
         .fit(reference)
