@@ -2296,6 +2296,23 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     force      = arguments.force
     no_version = arguments.no_version
 
+    # ── Enforce memory budget as a hard virtual-memory limit ─────────────────
+    # Sets RLIMIT_AS for this process so the kernel kills it cleanly (SIGKILL)
+    # if it exceeds budget + 10 % headroom, rather than freezing the machine.
+    _budget_rlimit = getattr(arguments, "memory_budget_gb", None)
+    if _budget_rlimit is not None:
+        try:
+            import resource as _res
+            _limit_bytes = int(_budget_rlimit * 1.10 * 1024 ** 3)
+            _res.setrlimit(_res.RLIMIT_AS, (_limit_bytes, _limit_bytes))
+            logger.info(
+                "map run: virtual memory limit set to %.0f GB "
+                "(budget %.0f GB + 10%% headroom)",
+                _budget_rlimit * 1.10, _budget_rlimit,
+            )
+        except Exception as _e:
+            logger.debug("map run: could not set RLIMIT_AS: %s", _e)
+
     # ── Expand glob patterns in --input (e.g. "s3://bucket/50p/*.parquet") ───
     # Scallops itself does not rely on the shell for expansion, so S3 globs and
     # local globs both work here via fsspec.

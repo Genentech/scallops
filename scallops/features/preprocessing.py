@@ -904,104 +904,75 @@ def _col_batch_filter_parquet(
     n_cells = len(obs_df)
     max_bad = int(n_feat * max_fraction_not_finite) if max_fraction_not_finite is not None else n_feat
 
-    # ── Build a single multi-file dataset ────────────────────────────────────
-    # The dataset scanner reads files sequentially (one HTTP GET per S3 object,
-    # not one range request per column chunk), handles schema differences across
-    # files automatically, and uses internal threading for decompression.
-    _pa_fs, _ = _pafs.FileSystem.from_uri(sources[0]["path"])
-    _pa_paths  = [_pafs.FileSystem.from_uri(src["path"])[1] for src in sources]
-    dataset    = _ds.dataset(_pa_paths, filesystem=_pa_fs, format="parquet")
+    # ── Per-file row offsets (no I/O — derived from row_group_sizes) ─────────
+    # Process one source file at a time so peak RAM = one file, not all files.
+    # Peak for 12 × 1.4M-cell parquets: ~50 GB instead of ~700 GB.
+    _file_offsets = [0]
+    for _src in sources:
+        _file_offsets.append(_file_offsets[-1] + sum(_src["row_group_sizes"]))
 
     logger.info(
-        "  [dataset filter] %d files, %d features, sequential streaming …",
+        "  [dataset filter] %d files, %d features, per-file streaming …",
         len(sources), n_feat,
     )
 
-    # Precompute label-filtered obs once (in RAM, no I/O)
-    obs_label  = obs_df.iloc[label_mask]
-
-    # ── Pass 1: count NaN per cell and per feature (no Welford — variance computed
-    # in step 4 on the already-clean materialised matrix, which is more accurate).
+    # ── Pass 1: count NaN per cell and per feature, one file at a time ───────
     bad_counts        = np.zeros(n_cells, dtype=np.int32)
     nan_per_feat      = np.zeros(n_feat,  dtype=np.int64)
     nan_per_feat_bad  = np.zeros(n_feat,  dtype=np.int64)
-    row_offset  = 0
 
-    # Compute batch_readahead / fragment_readahead from the memory budget.
-    #
-    # max_memory_gb (explicit):  Use this many GB for the read-ahead buffer.
-    #   Pass a value ≤ available physical RAM for dedicated machines, or a
-    #   smaller fraction for shared/cluster environments (e.g. --max-memory 32
-    #   on a 256 GB node with 8 concurrent jobs).
-    #
-    # max_memory_gb is None (auto):  Use 70 % of currently available RAM.
-    #   This is the right default for dedicated compute nodes; if you share the
-    #   node set --max-memory explicitly.
-    #
-    # float64 parquet → worst-case 8 bytes/element per batch.
+    # Per-file scanner budget: read-ahead bounded to budget / n_files
     _batch_gb = batch_size * n_feat * 8 / 1e9
-    # _avail_gb is always computed so it can be logged regardless of whether
-    # max_memory_gb was supplied explicitly.
     try:
         import psutil as _psutil
         _avail_gb = _psutil.virtual_memory().available / 1e9
     except Exception:
-        _avail_gb = 64.0   # conservative fallback
-
-    if max_memory_gb is not None:
-        _budget_gb = float(max_memory_gb)
-    else:
-        # 40% keeps the pre-fetch buffer small enough that PyArrow yields the
-        # first batch quickly. Larger fractions stall the scan waiting to fill
-        # hundreds of GB before the first batch is delivered to Python.
-        _budget_gb = _avail_gb * 0.40
+        _avail_gb = 64.0
+    _budget_gb      = float(max_memory_gb) if max_memory_gb is not None else _avail_gb * 0.40
     _budget_batches = max(2, int(_budget_gb / max(_batch_gb, 0.1)))
-    # Hard cap frag_ra at 4: beyond 4 concurrent S3 streams the combined
-    # buffer (frag_ra × batch_ra × batch_gb) can exceed available RAM even
-    # when each term looks safe on paper.
-    _frag_ra   = max(1, min(min(len(sources), 4), _budget_batches // 3))
-    _batch_ra  = max(2, min(8, _budget_batches // max(1, _frag_ra)))
+    _frag_ra        = 1   # one file at a time — no cross-file read-ahead
+    _batch_ra       = max(2, min(8, _budget_batches))
     logger.info(
-        "  [scanner] available=%.0f GB → fragment_readahead=%d, batch_readahead=%d"
-        " (budget ≈%.0f GB)",
-        _avail_gb, _frag_ra, _batch_ra, _frag_ra * _batch_ra * _batch_gb,
+        "  [scanner] budget=%.0f GB → batch_readahead=%d (%.1f GB/batch)",
+        _budget_gb, _batch_ra, _batch_gb,
     )
 
-    scanner1 = dataset.scanner(
-        columns=feat_cols,
-        batch_size=batch_size,
-        use_threads=True,
-        batch_readahead=_batch_ra,
-        fragment_readahead=_frag_ra,
-    )
     t0 = time.monotonic()
-    n_done = 0
+    total_batches_done = 0
 
-    for batch in scanner1.to_batches():
-        n_b = len(batch)
-        X_b = batch.to_pandas().to_numpy(np.float32)
-        del batch
-        label_b = label_mask[row_offset : row_offset + n_b]
-        row_offset += n_b
+    for _fi, _src in enumerate(sources):
+        _pa_fs_i, _pa_path_i = _pafs.FileSystem.from_uri(_src["path"])
+        _ds_i    = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
+        _scan_i  = _ds_i.scanner(
+            columns=feat_cols,
+            batch_size=batch_size,
+            use_threads=True,
+            batch_readahead=_batch_ra,
+            fragment_readahead=_frag_ra,
+        )
+        row_offset = _file_offsets[_fi]
+        for batch in _scan_i.to_batches():
+            n_b  = len(batch)
+            X_b  = batch.to_pandas().to_numpy(np.float32)
+            del batch
+            row_end = row_offset + n_b
 
-        not_finite_b = ~np.isfinite(X_b)
-        per_cell_nan = not_finite_b.sum(axis=1).astype(np.int32)
-        bad_counts[row_offset - n_b : row_offset] = per_cell_nan
-        nan_per_feat += not_finite_b.sum(axis=0).astype(np.int64)
-        # Track NaN in cells that will be dropped (>max_bad NaN) — identifies
-        # which features are causing cell attrition.
-        bad_mask = per_cell_nan > max_bad
-        if bad_mask.any():
-            nan_per_feat_bad += not_finite_b[bad_mask].sum(axis=0).astype(np.int64)
+            not_finite_b = ~np.isfinite(X_b)
+            per_cell_nan = not_finite_b.sum(axis=1).astype(np.int32)
+            bad_counts[row_offset:row_end] = per_cell_nan
+            nan_per_feat += not_finite_b.sum(axis=0).astype(np.int64)
+            bad_mask = per_cell_nan > max_bad
+            if bad_mask.any():
+                nan_per_feat_bad += not_finite_b[bad_mask].sum(axis=0).astype(np.int64)
+            del X_b
+            row_offset = row_end
+            total_batches_done += 1
 
-        # No Welford streaming needed — variance computed on the clean matrix after
-        # materialisation (step 4), which is more accurate and avoids nanvar bias.
-        del X_b
-        n_done += 1
-        if n_done % 5 == 0:
-            eta = (time.monotonic() - t0) / row_offset * max(n_cells - row_offset, 0) / 60
-            logger.info("  [pass 1/2] %.0f%% — ETA: %.0f min",
-                        row_offset / n_cells * 100, eta)
+        elapsed = time.monotonic() - t0
+        cells_done = _file_offsets[_fi + 1]
+        eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
+        logger.info("  [pass 1/2] file %d/%d done — %.0f%% — ETA: %.0f min",
+                    _fi + 1, len(sources), cells_done / n_cells * 100, eta)
 
     # ── Steps 1 + 2: shared filter logic (identical to zarr path) ────────────────
     feat_pass1, cell_keep = _apply_filter_steps_1_2(
@@ -1018,7 +989,7 @@ def _col_batch_filter_parquet(
         f"{n_cells_out:,}", f"{n_cells:,}", f"{n_feat_out:,}", f"{n_feat:,}",
     )
 
-    # ── Pass 2: write filtered matrix (to zarr or numpy) ─────────────────────
+    # ── Pass 2: write filtered matrix per file (one file in memory at a time) ──
     kept_feat_cols = [feat_cols[i] for i, k in enumerate(feat_keep) if k]
     if output_zarr_path is not None:
         import zarr as _zarr
@@ -1027,48 +998,47 @@ def _col_batch_filter_parquet(
             "X", shape=(n_cells_out, n_feat_out), dtype="float32",
             chunks=(min(50_000, n_cells_out), n_feat_out), overwrite=True,
         )
-        result = None   # no pre-allocation; write chunk-by-chunk to zarr
+        result = None
     else:
         result = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
         _zX = None
-    out_row     = 0
-    row_offset  = 0
-
-    # Pass 2 reads only surviving columns — re-derive readahead with smaller batch
+    out_row    = 0
     _batch_gb2 = batch_size * n_feat_out * 8 / 1e9
     _budget_src2 = max_memory_gb if max_memory_gb is not None else _avail_gb * 0.40
-    _budget2   = max(2, int(_budget_src2 / max(_batch_gb2, 0.1)))
-    _frag_ra2  = max(1, min(len(sources), _budget2 // 3))
-    _batch_ra2 = max(2, min(8, _budget2 // max(1, _frag_ra2)))
+    _batch_ra2 = max(2, min(8, int(_budget_src2 / max(_batch_gb2, 0.1))))
 
-    scanner2 = dataset.scanner(
-        columns=kept_feat_cols,
-        batch_size=batch_size,
-        use_threads=True,
-        batch_readahead=_batch_ra2,
-        fragment_readahead=_frag_ra2,
-    )
     t0 = time.monotonic()
-    n_done = 0
+    for _fi, _src in enumerate(sources):
+        _pa_fs_i, _pa_path_i = _pafs.FileSystem.from_uri(_src["path"])
+        _ds_i   = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
+        _scan2  = _ds_i.scanner(
+            columns=kept_feat_cols,
+            batch_size=batch_size,
+            use_threads=True,
+            batch_readahead=_batch_ra2,
+            fragment_readahead=1,
+        )
+        row_offset = _file_offsets[_fi]
+        for batch in _scan2.to_batches():
+            n_b    = len(batch)
+            cell_b = cell_keep[row_offset : row_offset + n_b]
+            row_offset += n_b
+            if cell_b.any():
+                X_b = batch.to_pandas().values.astype(np.float32)
+                X_f = X_b[cell_b]
+                if _zX is not None:
+                    _zX[out_row : out_row + X_f.shape[0]] = X_f
+                else:
+                    result[out_row : out_row + X_f.shape[0]] = X_f
+                out_row += X_f.shape[0]
+                del X_b, X_f
+            del batch
 
-    for batch in scanner2.to_batches():
-        n_b    = len(batch)
-        cell_b = cell_keep[row_offset : row_offset + n_b]
-        row_offset += n_b
-        if cell_b.any():
-            X_b = batch.to_pandas().values.astype(np.float32)
-            X_f = X_b[cell_b]
-            if _zX is not None:
-                _zX[out_row : out_row + X_f.shape[0]] = X_f
-            else:
-                result[out_row : out_row + X_f.shape[0]] = X_f
-            out_row += X_f.shape[0]
-            del X_b, X_f
-        n_done += 1
-        if n_done % 5 == 0:
-            eta = (time.monotonic() - t0) / row_offset * max(n_cells - row_offset, 0) / 60
-            logger.info("  [pass 2/2] %.0f%% — ETA: %.0f min",
-                        row_offset / n_cells * 100, eta)
+        elapsed = time.monotonic() - t0
+        cells_done = _file_offsets[_fi + 1]
+        eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
+        logger.info("  [pass 2/2] file %d/%d — %.0f%% — ETA: %.0f min",
+                    _fi + 1, len(sources), cells_done / n_cells * 100, eta)
 
     obs_kept = obs_df.iloc[cell_keep].reset_index(drop=True)
 
