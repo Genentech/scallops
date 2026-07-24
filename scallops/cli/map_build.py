@@ -1293,10 +1293,11 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     # formula: rows_per_batch = budget / (n_feats × bytes_per_element)
     _n_feats = data.shape[1]
     if _budget_gb is not None and _n_feats > 0:
+        # Always override batch_size from budget — the CLI default (500K) must
+        # not silently block budget enforcement.
         _batch_from_budget = max(10_000, int(_budget_gb * 1e9 / (_n_feats * 8)))
-        if not getattr(args, "filter_batch_size", None):
-            args = argparse.Namespace(**{**vars(args),
-                                         "filter_batch_size": _batch_from_budget})
+        args = argparse.Namespace(**{**vars(args),
+                                     "filter_batch_size": _batch_from_budget})
 
     obs_all = data.obs
 

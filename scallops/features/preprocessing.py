@@ -929,9 +929,10 @@ def _col_batch_filter_parquet(
     except Exception:
         _avail_gb = 64.0
     _budget_gb      = float(max_memory_gb) if max_memory_gb is not None else _avail_gb * 0.40
-    _budget_batches = max(2, int(_budget_gb / max(_batch_gb, 0.1)))
-    _frag_ra        = 1   # one file at a time — no cross-file read-ahead
-    _batch_ra       = max(2, min(8, _budget_batches))
+    # batch_ra = how many batches from one file are in memory simultaneously.
+    # Capped so that batch_ra × batch_gb ≤ budget_gb.
+    _batch_ra = max(1, min(32, int(_budget_gb / max(_batch_gb, 0.1))))
+    _frag_ra  = 1   # one file at a time — no cross-file read-ahead
     logger.info(
         "  [scanner] budget=%.0f GB → batch_readahead=%d (%.1f GB/batch)",
         _budget_gb, _batch_ra, _batch_gb,
@@ -1005,7 +1006,7 @@ def _col_batch_filter_parquet(
     out_row    = 0
     _batch_gb2 = batch_size * n_feat_out * 8 / 1e9
     _budget_src2 = max_memory_gb if max_memory_gb is not None else _avail_gb * 0.40
-    _batch_ra2 = max(2, min(8, int(_budget_src2 / max(_batch_gb2, 0.1))))
+    _batch_ra2 = max(1, min(32, int(_budget_src2 / max(_batch_gb2, 0.1))))
 
     t0 = time.monotonic()
     for _fi, _src in enumerate(sources):
