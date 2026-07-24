@@ -158,7 +158,9 @@ def transform_features_yj(
     # Each block reads only FEAT_BLOCK columns at a time, capped at ~2 GB RAM.
     # Results are bit-identical to the full-matrix path because each feature is
     # fitted independently on the complete set of cells.
-    _FEAT_BLOCK = max(1, int(feat_block_bytes / (max(n_obs, 1) * 8)))
+    # 12 bytes/cell/feature: 8 (float64 input) + 4 (float32 output).
+    # Using 8 would over-allocate by 1.5× and exceed budget.
+    _FEAT_BLOCK = max(1, int(feat_block_bytes / (max(n_obs, 1) * 12)))
     if isinstance(data.X, da.Array):
         X_out = np.empty((n_obs, n_feat), dtype=np.float32)
         for _f0 in range(0, n_feat, _FEAT_BLOCK):
