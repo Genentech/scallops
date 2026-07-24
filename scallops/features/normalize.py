@@ -257,7 +257,11 @@ def normalize_features(
 
         for key in group_indices.keys():
             indices = group_indices[key]
-            data_slice = data.X[indices]
+            sl = indices
+
+            if np.all(np.diff(indices) == 1):
+                sl = slice(indices[0], indices[-1] + 1)
+            data_slice = data.X[sl]
             data_obs_slice = data.obs.iloc[indices]
             reference_data_slice = None
             reference_data_obs = None
