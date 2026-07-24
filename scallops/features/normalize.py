@@ -5,13 +5,13 @@ from typing import Literal
 import anndata
 import dask.array as da
 import numpy as np
+import pandas as pd
 import scipy
-import xarray as xr
+from anndata._core.index import _normalize_index
+from array_api_compat import get_namespace
 from dask.delayed import delayed
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
-
-from scallops.features.util import _anndata_to_xr
 
 logger = logging.getLogger("scallops")
 
@@ -232,12 +232,39 @@ def normalize_features(
     """
 
     mad_scale = _convert_scale(mad_scale)
-    xdata = _anndata_to_xr(data)
+    centroid_column_names = list(centroid_column_names)
     if by is not None:
-        group_result = xdata.groupby(by).map(
-            lambda x: _normalize_group(
-                x,
-                reference_query=reference_query,
+        group_indices = data.obs.groupby(
+            by, as_index=False, sort=False, group_keys=True, observed=True, dropna=False
+        ).indices
+        result_obs = []
+        result_arrays = []
+        is_dask = isinstance(data.X, da.Array)
+        _normalize_group_func = (
+            delayed(_normalize_group) if is_dask else _normalize_group
+        )
+        for key in group_indices.keys():
+            indices = group_indices[key]
+            data_slice = data.X[indices]
+            data_obs_slice = data.obs.iloc[indices]
+            reference_data_slice = None
+            reference_data_obs = None
+            if reference_query is not None:
+                ref_indices = _normalize_index(
+                    data_obs_slice.query(reference_query).index, data_obs_slice.index
+                )
+                reference_data_slice = data_slice[ref_indices]
+                reference_data_obs = data_obs_slice.iloc[ref_indices]
+
+            result = _normalize_group_func(
+                data_slice,
+                obs=data_obs_slice[centroid_column_names]
+                if normalize == "local-zscore"
+                else None,
+                reference_data=reference_data_slice,
+                reference_data_obs=reference_data_obs[centroid_column_names]
+                if reference_data_obs is not None and normalize == "local-zscore"
+                else None,
                 normalize=normalize,
                 n_neighbors=n_neighbors,
                 neighbors_metric=neighbors_metric,
@@ -249,17 +276,39 @@ def normalize_features(
                 batch_size=batch_size,
                 centroid_column_names=centroid_column_names,
             )
-        )
+
+            if is_dask:
+                result = da.from_delayed(
+                    result, shape=data_slice.shape, dtype=np.float64
+                )
+            result_arrays.append(result)
+            result_obs.append(data_obs_slice)
 
         return anndata.AnnData(
-            X=group_result.data,
-            obs=data.obs.loc[group_result.coords["obs"].values],
+            X=get_namespace(data.X).vstack(result_arrays),
+            obs=pd.concat(result_obs),
             var=data.var.copy(),
+            uns=data.uns.copy(),
         )
-
+    reference_data_slice = None
+    data_slice = data.X
+    data_obs_slice = data.obs
+    reference_data_obs = None
+    if reference_query is not None:
+        ref_indices = _normalize_index(
+            data_obs_slice.query(reference_query).index, data_obs_slice.index
+        )
+        reference_data_slice = data_slice[ref_indices]
+        reference_data_obs = data_obs_slice.iloc[ref_indices]
     result = _normalize_group(
-        xdata,
-        reference_query=reference_query,
+        data_slice,
+        obs=data_obs_slice[centroid_column_names]
+        if normalize == "local-zscore"
+        else None,
+        reference_data=reference_data_slice,
+        reference_data_obs=reference_data_obs[centroid_column_names]
+        if reference_data_obs is not None and normalize == "local-zscore"
+        else None,
         normalize=normalize,
         n_neighbors=n_neighbors,
         neighbors_metric=neighbors_metric,
@@ -271,12 +320,19 @@ def normalize_features(
         batch_size=batch_size,
         centroid_column_names=centroid_column_names,
     )
-    return anndata.AnnData(X=result.data, obs=data.obs.copy(), var=data.var.copy())
+    return anndata.AnnData(
+        X=result,
+        obs=data.obs.copy(),
+        var=data.var.copy(),
+        uns=data.uns.copy(),
+    )
 
 
 def _normalize_group(
-    data: xr.DataArray,
-    reference_query: str | None,
+    data: np.ndarray | da.Array,
+    obs: pd.DataFrame,
+    reference_data: np.ndarray | da.Array | None,
+    reference_data_obs: pd.DataFrame | None,
     normalize: Literal["zscore", "local-zscore", "nn-zscore"],
     n_neighbors: int | None,
     neighbors_metric: str,
@@ -290,38 +346,32 @@ def _normalize_group(
         "Nuclei_AreaShape_Center_Y",
         "Nuclei_AreaShape_Center_X",
     ),
-) -> xr.DataArray:
+) -> np.ndarray | da.Array:
     indices = None
-    reference_data = (
-        data.query(dict(obs=reference_query)) if reference_query is not None else None
-    )
-
-    if reference_data is not None:
-        if reference_data.shape[0] == 0:
-            raise ValueError("No reference data found.")
     if normalize == "nn-zscore":
         # nearest neighbors in PCA space
-        nn_query = data.data
+        nn_query = data
         nn_ref = nn_query
         if reference_data is not None:
-            nn_ref = reference_data.data
+            nn_ref = reference_data
         indices = _nearest_neighbors_indices(
             nn_ref, nn_query, n_neighbors=n_neighbors, metric=neighbors_metric
         )
     elif normalize == "local-zscore":
         nn_query = np.stack(
             (
-                data.coords[centroid_column_names[0]].values,
-                data.coords[centroid_column_names[1]].values,
+                obs[centroid_column_names[0]].values,
+                obs[centroid_column_names[1]].values,
             ),
             axis=1,
         )
+
         nn_ref = nn_query
         if reference_data is not None:
             nn_ref = np.stack(
                 (
-                    reference_data.coords[centroid_column_names[0]].values,
-                    reference_data.coords[centroid_column_names[1]].values,
+                    reference_data_obs[centroid_column_names[0]].values,
+                    reference_data_obs[centroid_column_names[1]].values,
                 ),
                 axis=1,
             )
@@ -337,8 +387,8 @@ def _normalize_group(
         for i in range(0, indices.shape[0], batch_size):
             sl = slice(i, i + batch_size)
             values = _normalize_features_array(
-                data.data[sl],
-                reference_data.data,
+                data[sl],
+                reference_data,
                 indices=indices[sl],
                 robust=robust,
                 mad_scale=mad_scale,
@@ -350,8 +400,8 @@ def _normalize_group(
         values = np.concatenate(value_list)
     else:
         values = _normalize_features_array(
-            data.data,
-            reference_data.data if reference_data is not None else None,
+            data,
+            reference_data if reference_data is not None else None,
             indices=indices,
             robust=robust,
             mad_scale=mad_scale,
@@ -359,7 +409,7 @@ def _normalize_group(
             scaling=scaling,
             max_value=max_value,
         )
-    return data.copy(data=values, deep=False)
+    return values
 
 
 def _nearest_neighbors_indices(
