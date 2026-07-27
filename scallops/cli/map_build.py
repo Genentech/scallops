@@ -2300,8 +2300,8 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     no_version = arguments.no_version
 
     # ── Enforce memory budget as a hard virtual-memory limit ─────────────────
-    # Sets RLIMIT_AS for this process so the kernel kills it cleanly (SIGKILL)
-    # if it exceeds budget + 10 % headroom, rather than freezing the machine.
+    # Sets RLIMIT_AS so the kernel kills the process (SIGKILL) if it exceeds
+    # budget + 10 % headroom, rather than freezing the machine.
     _budget_rlimit = getattr(arguments, "memory_budget_gb", None)
     if _budget_rlimit is not None:
         try:
@@ -2315,6 +2315,16 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             )
         except Exception as _e:
             logger.debug("map run: could not set RLIMIT_AS: %s", _e)
+
+    # ── Cap BLAS/OpenMP threads from --max-cpus ───────────────────────────────
+    # PCA (sklearn), TVN (scipy LAPACK), similarity (numpy matmul) use BLAS
+    # threads with no cap by default.  Setting these env vars before the step
+    # loop constrains all steps uniformly.
+    _max_cpus = getattr(arguments, "max_cpus", None)
+    if _max_cpus:
+        for _blas_var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+            os.environ.setdefault(_blas_var, str(_max_cpus))
+        logger.info("map run: BLAS/OMP threads capped at %d (--max-cpus)", _max_cpus)
 
     # ── Expand glob patterns in --input (e.g. "s3://bucket/50p/*.parquet") ───
     # Scallops itself does not rely on the shell for expansion, so S3 globs and
@@ -2385,6 +2395,11 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     logger.info(f"map run: steps = {', '.join(s for s in all_steps if s in steps)}")
 
     timings: dict[str, float] = {}
+
+    # ── Memory monitor: covers the entire step loop ───────────────────────────
+    _global_mem_stop = _memory_monitor_start(
+        budget_gb=getattr(arguments, "memory_budget_gb", None)
+    )
 
     # ── Helper: which steps already ran (from provenance chain) ───────────────
     def _completed(zarr_path: str) -> set[str]:
@@ -2633,6 +2648,10 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             timings["recall"] = _time.perf_counter() - t0
     elif "recall" in steps:
         logger.info("map run [recall]: skipped (no --corum / --gmt / --string-fetch)")
+
+    # Stop global memory monitor
+    if _global_mem_stop is not None:
+        _global_mem_stop.set()
 
     # ── Summary ───────────────────────────────────────────────────────────────
     total = sum(timings.values())

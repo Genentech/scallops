@@ -435,7 +435,7 @@ def test_col_batch_matches_row_batch(tmp_path):
     X_row, feat_keep_row, _ = _apply_filter_post_materialise(
         X_row_raw, feat_keep_b, obs_kept_row,
         by=by_cols, min_variance=min_var, max_variance=None,
-        max_residual_nan_fraction=None,
+        max_residual_nan_fraction=0.0,
     )
 
     # ── Align feature order: both paths use the same feat_cols from uns ───
@@ -510,6 +510,83 @@ def test_col_batch_report_has_variance(tmp_path):
     assert np.isfinite(feat3_row["median_variance"].iloc[0]), (
         "feat3 median_variance is not finite despite being dropped by variance filter"
     )
+
+
+# ---------------------------------------------------------------------------
+# Parquet vs zarr input parity — regression guard for unified filter path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_filter_parquet_zarr_input_parity(tmp_path):
+    """Same data written to parquet and zarr must produce identical filter output.
+
+    This is the primary regression guard for the unified two-pass filter path.
+    If parquet and zarr inputs diverge at any point, this test catches it.
+    """
+    import pyarrow as _pa
+    import pyarrow.parquet as _pq
+    from scallops.features.util import _read_map_inputs as _read_data
+    from scallops.cli.map_build import _apply_filter_inmem
+    import argparse
+
+    np.random.seed(55)
+    n_obs, n_feat = 80, 10
+    X = np.random.randn(n_obs, n_feat).astype(np.float32)
+    X[:, 2] = 0.0          # constant → dropped by variance filter
+    X[0, :3] = np.nan      # row 0 has NaN → dropped by cell filter
+    feat_names = [f"Cells_Intensity_feat{i}" for i in range(n_feat)]
+    plates = ["p1"] * 40 + ["p2"] * 40
+    wells  = ["1" if i < 40 else "2" for i in range(n_obs)]
+    obs = pd.DataFrame({"plate": plates, "well": wells},
+                       index=pd.RangeIndex(n_obs).astype(str))
+
+    # ── Write parquet ──────────────────────────────────────────────────────
+    pq_path = str(tmp_path / "data.parquet")
+    df = pd.concat([pd.DataFrame(X, columns=feat_names, index=obs.index), obs], axis=1)
+    _pq.write_table(_pa.Table.from_pandas(df), pq_path)
+
+    # ── Write zarr ────────────────────────────────────────────────────────
+    import anndata
+    zarr_path = str(tmp_path / "data.zarr")
+    adata = anndata.AnnData(X=X, obs=obs, var=pd.DataFrame(index=feat_names))
+    adata.write_zarr(zarr_path)
+
+    common_args = argparse.Namespace(
+        plate_column="plate", well_column="well",
+        label_filter=None, features=None,
+        max_fraction_not_finite=0.25, max_feature_nan_fraction=0.5,
+        min_variance=0.001, max_variance=None,
+        max_residual_nan_fraction=0.0, residual_nan_impute="zero",
+        perturbation="gene_symbol", memory_budget_gb=None,
+        streaming_threshold_gb=None, filter_batch_size=500_000,
+        filter_max_memory_gb=None, force=True, no_version=True,
+        client="none", dask_cluster=None,
+        include_measurement_types=None, feature_channels=None,
+        obs_force=None, condition_column=None, condition_source_column=None,
+        condition_map=None,
+    )
+
+    # Filter via parquet input
+    data_pq = _read_data([pq_path])
+    result_pq = _apply_filter_inmem(data_pq, common_args)
+
+    # Filter via zarr input
+    data_zarr = _read_data([zarr_path])
+    result_zarr = _apply_filter_inmem(data_zarr, common_args)
+
+    assert result_pq.shape == result_zarr.shape, (
+        f"Shape mismatch: parquet={result_pq.shape} zarr={result_zarr.shape}"
+    )
+    np.testing.assert_array_equal(
+        np.sort(result_pq.var.index),
+        np.sort(result_zarr.var.index),
+        err_msg="Surviving features differ between parquet and zarr paths",
+    )
+    X_pq   = result_pq.X   if isinstance(result_pq.X,   np.ndarray) else result_pq.X.compute()
+    X_zarr = result_zarr.X if isinstance(result_zarr.X, np.ndarray) else result_zarr.X.compute()
+    np.testing.assert_allclose(X_pq, X_zarr, rtol=1e-5, atol=1e-5,
+        err_msg="X values differ between parquet and zarr filter paths")
 
 
 # ---------------------------------------------------------------------------

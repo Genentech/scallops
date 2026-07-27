@@ -948,6 +948,7 @@ def _col_batch_filter_parquet(
         and ``median_variance``.
     """
     import time
+    import os
     import pyarrow.dataset as _ds
     import pyarrow.fs    as _pafs
 
@@ -969,66 +970,124 @@ def _col_batch_filter_parquet(
         len(sources), n_feat,
     )
 
-    # ── Pass 1: count NaN per cell and per feature, one file at a time ───────
-    bad_counts        = np.zeros(n_cells, dtype=np.int32)
-    nan_per_feat      = np.zeros(n_feat,  dtype=np.int64)
-    nan_per_feat_bad  = np.zeros(n_feat,  dtype=np.int64)
-
-    # Per-file scanner budget: read-ahead bounded to budget / n_files
-    _batch_gb = batch_size * n_feat * 8 / 1e9
+    # ── Memory budget → batch_size + n_workers ───────────────────────────────
+    # Safety factor 3: one batch being read + one being processed + zarr buffer.
+    # batch_readahead=1 means ONE extra batch pre-fetched → always ≤ 2 batches
+    # in PyArrow's internal buffers.  Total peak = 2×batch + to_pandas copy =
+    # 3×batch ≤ budget_gb.
     try:
         import psutil as _psutil
         _avail_gb = _psutil.virtual_memory().available / 1e9
     except Exception:
         _avail_gb = 64.0
-    _budget_gb      = float(max_memory_gb) if max_memory_gb is not None else _avail_gb * 0.40
-    # batch_ra = how many batches from one file are in memory simultaneously.
-    # Capped so that batch_ra × batch_gb ≤ budget_gb.
-    _batch_ra = max(1, min(32, int(_budget_gb / max(_batch_gb, 0.1))))
-    _frag_ra  = 1   # one file at a time — no cross-file read-ahead
+    _budget_gb = float(max_memory_gb) if max_memory_gb is not None else _avail_gb * 0.40
+    n_workers = min(
+        max(1, int(os.cpu_count() or 4)),
+        len(sources),
+        max(1, int(_budget_gb / max(0.1, n_feat * 4 * 3 / 1e9))),
+    )
+    # batch_size: each worker gets an equal share of the budget
+    _bytes_per_row = n_feat * 4   # float32
+    _safety        = 3            # read + process + write buffer
+    batch_size = max(10_000, min(2_000_000, int(_budget_gb * 1e9 / (n_workers * _bytes_per_row * _safety))))
+    _batch_ra  = 1   # one pre-fetched batch; more would violate budget
+    _frag_ra   = 1   # one file at a time — no cross-file read-ahead
     logger.info(
-        "  [scanner] budget=%.0f GB → batch_readahead=%d (%.1f GB/batch)",
-        _budget_gb, _batch_ra, _batch_gb,
+        "  [scanner] budget=%.0f GB  n_workers=%d  batch_size=%s  "
+        "peak_per_worker≈%.1f GB",
+        _budget_gb, n_workers, f"{batch_size:,}",
+        n_workers * batch_size * _bytes_per_row * _safety / 1e9,
     )
 
-    t0 = time.monotonic()
-    total_batches_done = 0
+    # ── Group-key helper (used in both passes) ───────────────────────────────
+    _by_list = ([by] if isinstance(by, str) else list(by)) if by else []
 
-    for _fi, _src in enumerate(sources):
-        _pa_fs_i, _pa_path_i = _pafs.FileSystem.from_uri(_src["path"])
-        _ds_i    = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
-        _scan_i  = _ds_i.scanner(
-            columns=feat_cols,
-            batch_size=batch_size,
-            use_threads=True,
-            batch_readahead=_batch_ra,
-            fragment_readahead=_frag_ra,
+    def _group_keys_for(obs_slice: "pd.DataFrame") -> "np.ndarray":
+        return (obs_slice[_by_list].astype(str).agg("-".join, axis=1).values
+                if _by_list else np.full(len(obs_slice), "__all__"))
+
+    # ── Pass 1: NaN scan + raw stats for clip bounds ──────────────────────────
+    # Each file is processed by one worker thread; stats merged afterwards.
+    # n_workers files read in parallel → saturates S3 bandwidth.
+    bad_counts        = np.zeros(n_cells, dtype=np.int32)
+    nan_per_feat      = np.zeros(n_feat,  dtype=np.int64)
+    nan_per_feat_bad  = np.zeros(n_feat,  dtype=np.int64)
+    # Per-group raw stats for clip bound computation (shared helpers used later)
+    _raw_sum: "dict[str, np.ndarray]" = {}
+    _raw_sq:  "dict[str, np.ndarray]" = {}
+    _raw_cnt: "dict[str, np.ndarray]" = {}
+
+    import threading, concurrent.futures as _cf
+    _lock = threading.Lock()
+
+    def _pass1_file(fi: int, src: dict) -> None:
+        """Process one file in pass 1: accumulate NaN counts + raw stats."""
+        _pa_fs, _pa_path = _pafs.FileSystem.from_uri(src["path"])
+        _ds_fi  = _ds.dataset(_pa_path, filesystem=_pa_fs, format="parquet")
+        _scan   = _ds_fi.scanner(
+            columns=feat_cols, batch_size=batch_size,
+            use_threads=True, batch_readahead=_batch_ra, fragment_readahead=1,
         )
-        row_offset = _file_offsets[_fi]
-        for batch in _scan_i.to_batches():
-            n_b  = len(batch)
-            X_b  = batch.to_pandas().to_numpy(np.float32)
-            del batch
-            row_end = row_offset + n_b
+        _file_bad   = np.zeros(_file_offsets[fi + 1] - _file_offsets[fi], dtype=np.int32)
+        _file_nf    = np.zeros(n_feat, dtype=np.int64)
+        _file_nfb   = np.zeros(n_feat, dtype=np.int64)
+        _file_rsum:  "dict[str, np.ndarray]" = {}
+        _file_rsq:   "dict[str, np.ndarray]" = {}
+        _file_rcnt:  "dict[str, np.ndarray]" = {}
+        _local_off   = 0
+        _global_off  = _file_offsets[fi]
 
-            not_finite_b = ~np.isfinite(X_b)
-            per_cell_nan = not_finite_b.sum(axis=1).astype(np.int32)
-            bad_counts[row_offset:row_end] = per_cell_nan
-            nan_per_feat += not_finite_b.sum(axis=0).astype(np.int64)
-            bad_mask = per_cell_nan > max_bad
-            if bad_mask.any():
-                nan_per_feat_bad += not_finite_b[bad_mask].sum(axis=0).astype(np.int64)
-            del X_b
-            row_offset = row_end
-            total_batches_done += 1
+        for _batch in _scan.to_batches():
+            _n_b = len(_batch)
+            _X_b = _batch.to_pandas().to_numpy(np.float32)
+            del _batch
+            _nf_b   = ~np.isfinite(_X_b)
+            _pc_nan = _nf_b.sum(axis=1).astype(np.int32)
+            _file_bad[_local_off:_local_off + _n_b] = _pc_nan
+            _file_nf  += _nf_b.sum(axis=0).astype(np.int64)
+            _bad_m     = _pc_nan > max_bad
+            if _bad_m.any():
+                _file_nfb += _nf_b[_bad_m].sum(axis=0).astype(np.int64)
 
-        elapsed = time.monotonic() - t0
-        cells_done = _file_offsets[_fi + 1]
-        eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
-        logger.info("  [pass 1/2] file %d/%d done — %.0f%% — ETA: %.0f min",
-                    _fi + 1, len(sources), cells_done / n_cells * 100, eta)
+            # Per-group raw stats for clip bounds
+            _obs_b = obs_df.iloc[_global_off:_global_off + _n_b]
+            _keys  = _group_keys_for(_obs_b)
+            for _g in np.unique(_keys):
+                _Xg = _X_b[_keys == _g].astype(np.float64)
+                _fm = np.isfinite(_Xg)
+                _n  = np.zeros(n_feat)
+                _file_rsum[_g] = _file_rsum.get(_g, np.zeros(n_feat)) + np.nansum(_Xg, axis=0)
+                _file_rsq[_g]  = _file_rsq.get(_g,  np.zeros(n_feat)) + np.nansum(_Xg ** 2, axis=0)
+                _file_rcnt[_g] = _file_rcnt.get(_g, np.zeros(n_feat)) + _fm.sum(axis=0).astype(np.float64)
 
-    # ── Steps 1 + 2: shared filter logic (identical to zarr path) ────────────────
+            del _X_b
+            _local_off  += _n_b
+            _global_off += _n_b
+
+        # Merge into shared accumulators (lock protects concurrent writes).
+        # Use slice assignment (__setitem__) instead of += so Python does not
+        # mark nan_per_feat as a local variable in the nested function scope.
+        with _lock:
+            bad_counts[_file_offsets[fi]:_file_offsets[fi + 1]] = _file_bad
+            nan_per_feat[:]     += _file_nf
+            nan_per_feat_bad[:] += _file_nfb
+            for _g, _s in _file_rsum.items():
+                _raw_sum[_g] = _raw_sum.get(_g, np.zeros(n_feat)) + _s
+                _raw_sq[_g]  = _raw_sq.get(_g,  np.zeros(n_feat)) + _file_rsq[_g]
+                _raw_cnt[_g] = _raw_cnt.get(_g, np.zeros(n_feat)) + _file_rcnt[_g]
+
+    t0 = time.monotonic()
+    with _cf.ThreadPoolExecutor(max_workers=n_workers) as _exe:
+        _futs = [_exe.submit(_pass1_file, fi, src) for fi, src in enumerate(sources)]
+        for fi, _fut in enumerate(_futs):
+            _fut.result()   # re-raise any exception from the worker
+            elapsed = time.monotonic() - t0
+            cells_done = _file_offsets[fi + 1]
+            eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
+            logger.info("  [pass 1/2] file %d/%d done — %.0f%% — ETA: %.0f min",
+                        fi + 1, len(sources), cells_done / n_cells * 100, eta)
+
+    # ── Steps 1 + 2: shared filter logic ─────────────────────────────────────
     feat_pass1, cell_keep = _apply_filter_steps_1_2(
         bad_counts, nan_per_feat, label_mask, n_cells, n_feat,
         max_feature_nan_fraction, max_fraction_not_finite,
@@ -1043,128 +1102,135 @@ def _col_batch_filter_parquet(
         f"{n_cells_out:,}", f"{n_cells:,}", f"{n_feat_out:,}", f"{n_feat:,}",
     )
 
-    # ── Pass 2: write filtered matrix per file (one file in memory at a time) ──
+    # ── Clip bounds from pass-1 raw stats (feat_keep subset) ─────────────────
+    # Computed once here; shared by both the zarr and in-memory pass-2 paths.
+    _gclip_full = {
+        _g: _clip_bounds_mean3sd(
+            _raw_sum[_g],
+            _raw_sq[_g],
+            _raw_cnt[_g],
+        )
+        for _g in _raw_sum
+    }
+    # Slice to feat_keep columns so pass 2 can use them directly
+    _gclip = {
+        _g: (lo[feat_keep], hi[feat_keep])
+        for _g, (lo, hi) in _gclip_full.items()
+    }
+
+    # ── Pass 2: materialise + scaled variance in one combined pass ────────────
+    # Reads each source file once (parallel across files).  For each batch:
+    #   • writes filtered rows to the output zarr (or numpy array)
+    #   • accumulates per-group scaled variance stats using clip bounds from pass 1
+    #   • tracks residual NaN presence
+    # Eliminates the old separate zarr passes A and B (~65 min on 12-well S3 run).
     kept_feat_cols = [feat_cols[i] for i, k in enumerate(feat_keep) if k]
     if output_zarr_path is not None:
         import zarr as _zarr
-        _zg  = _zarr.open_group(output_zarr_path, mode="a")
-        _zX  = _zg.require_dataset(
+        _zg = _zarr.open_group(output_zarr_path, mode="a")
+        _zX = _zg.require_dataset(
             "X", shape=(n_cells_out, n_feat_out), dtype="float32",
             chunks=(min(50_000, n_cells_out), n_feat_out), overwrite=True,
         )
         result = None
     else:
         result = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
-        _zX = None
-    out_row    = 0
-    _batch_gb2 = batch_size * n_feat_out * 8 / 1e9
-    _budget_src2 = max_memory_gb if max_memory_gb is not None else _avail_gb * 0.40
-    _batch_ra2 = max(1, min(32, int(_budget_src2 / max(_batch_gb2, 0.1))))
+        _zX    = None
+
+    # Shared scaled-variance accumulators (written by worker threads, merged after)
+    _sc_sum:  "dict[str, np.ndarray]" = {}
+    _sc_sq:   "dict[str, np.ndarray]" = {}
+    _sc_cnt:  "dict[str, np.ndarray]" = {}
+    _nan_feat_all = np.zeros(n_feat_out, dtype=bool)
+
+    # Pre-compute per-file output-row offsets (safe: no file in more than one thread)
+    _n_out_per_file = [int(cell_keep[_file_offsets[fi]:_file_offsets[fi + 1]].sum())
+                       for fi in range(len(sources))]
+    _out_offsets = [0]
+    for _n in _n_out_per_file:
+        _out_offsets.append(_out_offsets[-1] + _n)
+
+    _out_lock = threading.Lock()
+
+    def _pass2_file(fi: int, src: dict) -> None:
+        _pa_fs, _pa_path = _pafs.FileSystem.from_uri(src["path"])
+        _ds_fi = _ds.dataset(_pa_path, filesystem=_pa_fs, format="parquet")
+        _scan  = _ds_fi.scanner(
+            columns=kept_feat_cols, batch_size=batch_size,
+            use_threads=True, batch_readahead=_batch_ra, fragment_readahead=1,
+        )
+        _global_off = _file_offsets[fi]
+        _out_row    = _out_offsets[fi]
+        _file_sc_sum: "dict[str, np.ndarray]" = {}
+        _file_sc_sq:  "dict[str, np.ndarray]" = {}
+        _file_sc_cnt: "dict[str, np.ndarray]" = {}
+        _file_nan    = np.zeros(n_feat_out, dtype=bool)
+
+        for _batch in _scan.to_batches():
+            _n_b   = len(_batch)
+            _cell_b = cell_keep[_global_off:_global_off + _n_b]
+            _global_off += _n_b
+            if not _cell_b.any():
+                del _batch
+                continue
+            _X_b = _batch.to_pandas().values.astype(np.float32)
+            del _batch
+            _X_f = _X_b[_cell_b]
+            del _X_b
+
+            # Write filtered rows to output (zarr or numpy)
+            _n_f = _X_f.shape[0]
+            if _zX is not None:
+                _zX[_out_row:_out_row + _n_f] = _X_f
+            else:
+                result[_out_row:_out_row + _n_f] = _X_f
+            _out_row += _n_f
+
+            # Scaled variance accumulation using shared helpers
+            # (_global_off already advanced past this batch; roll back to get obs)
+            _obs_b = obs_df.iloc[_global_off - _n_b:_global_off]
+            _obs_f = _obs_b[_cell_b]
+            _keys  = _group_keys_for(_obs_f)
+            _file_nan |= ~np.isfinite(_X_f.astype(np.float64)).all(axis=0)
+            for _g in np.unique(_keys):
+                _Xg = _X_f[_keys == _g].astype(np.float64)
+                _fm = np.isfinite(_Xg)
+                _lo, _hi = _gclip.get(_g, _gclip.get("__all__", (np.full(n_feat_out, -np.inf),
+                                                                   np.full(n_feat_out,  np.inf))))
+                _Xs = np.where(_fm, _scale_to_01(_Xg, _lo, _hi), np.nan)
+                _file_sc_sum[_g] = _file_sc_sum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xs,      axis=0)
+                _file_sc_sq[_g]  = _file_sc_sq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xs ** 2, axis=0)
+                _file_sc_cnt[_g] = _file_sc_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
+            del _X_f
+
+        with _out_lock:
+            _nan_feat_all[:] |= _file_nan
+            for _g in _file_sc_sum:
+                _sc_sum[_g] = _sc_sum.get(_g, np.zeros(n_feat_out)) + _file_sc_sum[_g]
+                _sc_sq[_g]  = _sc_sq.get(_g,  np.zeros(n_feat_out)) + _file_sc_sq[_g]
+                _sc_cnt[_g] = _sc_cnt.get(_g, np.zeros(n_feat_out)) + _file_sc_cnt[_g]
 
     t0 = time.monotonic()
-    for _fi, _src in enumerate(sources):
-        _pa_fs_i, _pa_path_i = _pafs.FileSystem.from_uri(_src["path"])
-        _ds_i   = _ds.dataset(_pa_path_i, filesystem=_pa_fs_i, format="parquet")
-        _scan2  = _ds_i.scanner(
-            columns=kept_feat_cols,
-            batch_size=batch_size,
-            use_threads=True,
-            batch_readahead=_batch_ra2,
-            fragment_readahead=1,
-        )
-        row_offset = _file_offsets[_fi]
-        for batch in _scan2.to_batches():
-            n_b    = len(batch)
-            cell_b = cell_keep[row_offset : row_offset + n_b]
-            row_offset += n_b
-            if cell_b.any():
-                X_b = batch.to_pandas().values.astype(np.float32)
-                X_f = X_b[cell_b]
-                if _zX is not None:
-                    _zX[out_row : out_row + X_f.shape[0]] = X_f
-                else:
-                    result[out_row : out_row + X_f.shape[0]] = X_f
-                out_row += X_f.shape[0]
-                del X_b, X_f
-            del batch
-
-        elapsed = time.monotonic() - t0
-        cells_done = _file_offsets[_fi + 1]
-        eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
-        logger.info("  [pass 2/2] file %d/%d — %.0f%% — ETA: %.0f min",
-                    _fi + 1, len(sources), cells_done / n_cells * 100, eta)
+    with _cf.ThreadPoolExecutor(max_workers=n_workers) as _exe:
+        _futs2 = [_exe.submit(_pass2_file, fi, src) for fi, src in enumerate(sources)]
+        for fi, _fut in enumerate(_futs2):
+            _fut.result()
+            elapsed = time.monotonic() - t0
+            cells_done = _file_offsets[fi + 1]
+            eta = elapsed / max(cells_done, 1) * max(n_cells - cells_done, 0) / 60
+            logger.info("  [pass 2/2] file %d/%d — %.0f%% — ETA: %.0f min",
+                        fi + 1, len(sources), cells_done / n_cells * 100, eta)
 
     obs_kept = obs_df.iloc[cell_keep].reset_index(drop=True)
 
     if _zX is not None:
-        # ── Steps 3+4 from zarr: streaming sum/sum_sq variance, no full load ─
-        logger.info("  [pass 2/2 done] streamed to zarr — computing variance "
-                    "from zarr in %.0f GB chunks", streaming_chunk_gb)
-        chunk_rows = max(1, int(streaming_chunk_gb * 1e9 / (n_feat_out * 8)))
-
-        # ── Steps 3+4 from zarr: two streaming passes using shared helpers ───
-        # Both passes call the same _clip_bounds_mean3sd / _scale_to_01 /
-        # _nanvar_from_accum functions as the in-memory path so logic is
-        # guaranteed identical.  Only the reading differs (chunked zarr vs
-        # full numpy array).
-        _by_list = ([by] if isinstance(by, str) else list(by)) if by else []
-
-        def _keys_for(obs_slice):
-            return (obs_slice[_by_list].astype(str).agg("-".join, axis=1).values
-                    if _by_list else np.full(len(obs_slice), "__all__"))
-
-        # Pass A — accumulate raw stats per group to compute clip bounds
-        _raw_sum:  "dict[str, np.ndarray]" = {}
-        _raw_sq:   "dict[str, np.ndarray]" = {}
-        _raw_cnt:  "dict[str, np.ndarray]" = {}
-
-        for _r0 in range(0, n_cells_out, chunk_rows):
-            _r1  = min(_r0 + chunk_rows, n_cells_out)
-            _Xc  = np.asarray(_zX[_r0:_r1], dtype=np.float64)
-            _keys = _keys_for(obs_kept.iloc[_r0:_r1])
-            for _g in np.unique(_keys):
-                _Xg = _Xc[_keys == _g]
-                _fm = np.isfinite(_Xg)
-                _raw_sum[_g] = _raw_sum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xg,      axis=0)
-                _raw_sq[_g]  = _raw_sq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xg ** 2, axis=0)
-                _raw_cnt[_g] = _raw_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
-            del _Xc
-
-        # Shared helper: compute clip bounds per group
-        _gclip = {
-            _g: _clip_bounds_mean3sd(_raw_sum[_g], _raw_sq[_g], _raw_cnt[_g])
-            for _g in _raw_sum
-        }
-
-        # Pass B — accumulate scaled stats per group + residual NaN flag
-        _sc_sum:  "dict[str, np.ndarray]" = {}
-        _sc_sq:   "dict[str, np.ndarray]" = {}
-        _sc_cnt:  "dict[str, np.ndarray]" = {}
-        _nan_feat_all = np.zeros(n_feat_out, dtype=bool)
-
-        for _r0 in range(0, n_cells_out, chunk_rows):
-            _r1  = min(_r0 + chunk_rows, n_cells_out)
-            _Xc  = np.asarray(_zX[_r0:_r1], dtype=np.float64)
-            _nan_feat_all |= ~np.isfinite(_Xc).all(axis=0)
-            _keys = _keys_for(obs_kept.iloc[_r0:_r1])
-            for _g in np.unique(_keys):
-                _Xg = _Xc[_keys == _g]
-                _fm = np.isfinite(_Xg)
-                # Shared helper: clip + scale to [0,1]
-                _Xs = np.where(_fm, _scale_to_01(_Xg, *_gclip[_g]), np.nan)
-                _sc_sum[_g] = _sc_sum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xs,      axis=0)
-                _sc_sq[_g]  = _sc_sq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xs ** 2, axis=0)
-                _sc_cnt[_g] = _sc_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
-            del _Xc
-
-        # Shared helper: variance from accumulators → nanmedian across groups
+        # ── Variance + residual NaN from in-flight stats (no zarr re-read) ───
+        logger.info("  [pass 2/2 done] streamed to zarr — variance computed in-flight")
         _gvars = [_nanvar_from_accum(_sc_sum[_g], _sc_sq[_g], _sc_cnt[_g])
                   for _g in _sc_sum]
-        feat_var = np.nanmedian(np.stack(_gvars), axis=0) if _gvars else np.zeros(n_feat_out)
-
-        # Shared threshold logic (mirrors _apply_variance_filter)
-        _min_var = min_variance if min_variance is not None else 0.0
-        _vk = np.isfinite(feat_var) & (feat_var >= _min_var)
+        feat_var  = np.nanmedian(np.stack(_gvars), axis=0) if _gvars else np.zeros(n_feat_out)
+        _min_var  = min_variance if min_variance is not None else 0.0
+        _vk       = np.isfinite(feat_var) & (feat_var >= _min_var)
         if max_variance is not None:
             _vk &= feat_var <= max_variance
         if not _vk.all():
@@ -1172,17 +1238,14 @@ def _col_batch_filter_parquet(
                 "  [variance filter] dropped %d features (scaled var < %.4g) → %d remain",
                 int((~_vk).sum()), _min_var, int(_vk.sum()),
             )
-        # Map back to original feat_keep indices (feat_keep is indexed over full feat_cols)
-        _fk_idx   = np.where(feat_keep)[0]
+        _fk_idx = np.where(feat_keep)[0]
         feat_keep[_fk_idx[~_vk]] = False
-        feat_var   = feat_var[_vk]
+        feat_var  = feat_var[_vk]
 
-        # Residual NaN: reuse _nan_feat_all from pass B (no extra zarr read)
-        _kept_idx = np.where(_vk)[0]      # indices within n_feat_out space
+        _kept_idx = np.where(_vk)[0]
         _nan_feat = _nan_feat_all[_kept_idx]
         if _nan_feat.any() and max_residual_nan_fraction == 0.0:
-            _drop_n = int(_nan_feat.sum())
-            logger.info("  [residual NaN] zero-tolerance: dropped %d features", _drop_n)
+            logger.info("  [residual NaN] zero-tolerance: dropped %d features", int(_nan_feat.sum()))
             _fk2 = np.where(feat_keep)[0]
             feat_keep[_fk2[_nan_feat]] = False
             _kept_idx = _kept_idx[~_nan_feat]

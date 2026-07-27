@@ -2564,3 +2564,91 @@ def test_backproject_tvn_nan_in_x_warns(tvn_data):
         "Must warn when input X contains NaN"
     assert result["score"].apply(np.isfinite).all(), \
         "Scores must be finite even when X has NaN (nanmean used)"
+
+
+# ---------------------------------------------------------------------------
+# Parquet E2E map run — regression guard for the full pipeline via parquet input
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_map_run_parquet_full_pipeline(tmp_path):
+    """run_pipeline_map_run with a parquet input must complete all steps and
+    produce finite zarr outputs of the expected shapes.
+
+    This exercises the production code path (parquet → unified filter →
+    YJ → scale → PCA → TVN → agg → center → similarity) that is NOT covered
+    by any other integration test (all existing tests use zarr inputs).
+    """
+    import argparse
+    import pyarrow as _pa
+    import pyarrow.parquet as _pq
+    from scallops.cli.map_build import run_pipeline_map_run
+    from scallops.io import read_anndata_zarr
+
+    np.random.seed(77)
+    n_ntc, n_pert = 20, 8
+    n_obs = n_ntc + n_pert * 2
+    n_feat = 8
+    feat_names = [f"Cells_Intensity_feat{i}" for i in range(n_feat)]
+
+    genes = ["NTC"] * n_ntc + ["gene_A"] * n_pert + ["gene_B"] * n_pert
+    wells = ["1" if i < n_obs // 2 else "2" for i in range(n_obs)]
+    plates = ["p1"] * n_obs
+    X = np.random.randn(n_obs, n_feat).astype(np.float32)
+
+    pq_path = str(tmp_path / "input.parquet")
+    df = pd.DataFrame(X, columns=feat_names)
+    df["plate"] = plates
+    df["well"] = wells
+    df["gene_symbol"] = genes
+    _pq.write_table(_pa.Table.from_pandas(df), pq_path)
+
+    out_dir = str(tmp_path / "map_out")
+    args = argparse.Namespace(
+        input=[pq_path],
+        input_pattern=None,
+        output_dir=out_dir,
+        steps="filter,transform-yj,scale,pca,tvn,agg,center,similarity",
+        force=True, no_version=True, client="none", dask_cluster=None,
+        features=None, feature_channels=None, include_measurement_types=None,
+        label_filter=None, perturbation="gene_symbol",
+        plate_column="plate", well_column="well",
+        condition_column="condition", condition_source_column="well",
+        condition_map={"1": "treated", "2": "control"},
+        reference_query="gene_symbol == 'NTC'",
+        exclude_reference_query="gene_symbol == 'NTC'",
+        max_fraction_not_finite=0.25, max_feature_nan_fraction=0.5,
+        min_variance=0.0, max_variance=None,
+        max_residual_nan_fraction=None, residual_nan_impute="zero",
+        yj_clip_percentile=99.9, yj_standardize=False, yj_clip_output=None,
+        scale_method="global", scale_max_value=5.0,
+        pca_components=4, pca_batch_size=0, pca_whiten=False,
+        pca_select_method="components", min_variance_fraction=0.95,
+        tvn_by=None,
+        agg_by=["gene_symbol"], agg_method="median",
+        center_by=None, center_robust=False,
+        metric="cosine", output_format="anndata",
+        leaf_ordering="none",
+        memory_budget_gb=None, streaming_threshold_gb=None,
+        filter_batch_size=500_000, filter_max_memory_gb=None,
+        max_cpus=None, obs_force=None,
+    )
+
+    run_pipeline_map_run(args)
+
+    # Verify outputs exist and have correct shapes / finite values
+    cells = read_anndata_zarr(out_dir + "/cells.zarr", dask=False)
+    profiles = read_anndata_zarr(out_dir + "/profiles.zarr", dask=False)
+    sim = read_anndata_zarr(out_dir + "/similarity.zarr", dask=False)
+
+    assert cells.shape[0] > 0, "cells.zarr is empty"
+    assert cells.shape[1] > 0, "no features survived filter"
+    assert "X_pca" in cells.obsm or "X_tvn" in cells.obsm, "missing PCA/TVN embedding"
+
+    assert profiles.shape[0] > 0, "no gene profiles produced"
+
+    S = sim.obsp["similarity"]
+    assert S.shape[0] == S.shape[1], "similarity matrix is not square"
+    S_arr = np.asarray(S.todense() if hasattr(S, "todense") else S)
+    assert np.all(np.isfinite(S_arr)), "similarity matrix contains non-finite values"
