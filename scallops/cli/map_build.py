@@ -1282,7 +1282,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     by_cols = [c for c in [plate, well] if c in data.obs.columns] or None
 
     max_fnf           = getattr(args, "max_fraction_not_finite", 0.25)
-    min_var           = getattr(args, "min_variance", 0.1)
+    min_var           = getattr(args, "min_variance", 0.001)
     max_var           = getattr(args, "max_variance", None)
     max_res_nan_frac  = getattr(args, "max_residual_nan_fraction", 0.0)
     res_nan_impute    = getattr(args, "residual_nan_impute", "zero") or "zero"

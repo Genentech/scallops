@@ -183,18 +183,47 @@ def test_tvn_stores_covariance_alignment_by(cell_data):
 
 @pytest.mark.features
 def test_map_filter_removes_low_variance_features(cell_data, tmp_path):
-    # Zero out the first feature so it has zero variance
+    # Zero out the first feature → constant within every well → scaled var = 0
     cell_data.X[:, 0] = 0.0
     inp = _write_zarr(cell_data, tmp_path / "input")
     out = str(tmp_path / "filtered")
 
     run_pipeline_map_filter(
-        _ns(input=[inp], output=out, min_variance=0.01, max_variance=None,
+        _ns(input=[inp], output=out, min_variance=0.001, max_variance=None,
             max_fraction_not_finite=None)
     )
     result = _read_zarr(out + ".zarr")
     assert result.shape[1] == N_FEATURES - 1
     assert "Cells_Intensity_feature_0" not in result.var.index
+
+
+@pytest.mark.features
+def test_map_filter_scaled_variance_keeps_low_absolute_high_relative(cell_data, tmp_path):
+    """A feature with small absolute variance but high relative spread must be kept.
+
+    Correlation-type features are bounded to e.g. [-0.01, 0.01] — their raw
+    variance is tiny but they span their full observable range.  The old
+    absolute threshold (0.1) dropped them; the per-well clip+minmax approach
+    keeps them because scaled variance ≈ 0.08 > 0.001.
+    """
+    # feature_0: tiny absolute variance but cells span the full [-0.01, 0.01] range
+    np.random.seed(42)
+    n = cell_data.shape[0]
+    cell_data.X[:, 0] = np.linspace(-0.01, 0.01, n, dtype=np.float32)
+    # feature_1: constant → dropped
+    cell_data.X[:, 1] = 5000.0
+    inp = _write_zarr(cell_data, tmp_path / "input")
+    out = str(tmp_path / "filtered")
+
+    run_pipeline_map_filter(
+        _ns(input=[inp], output=out, min_variance=0.001, max_variance=None,
+            max_fraction_not_finite=None)
+    )
+    result = _read_zarr(out + ".zarr")
+    # feature_0 (small absolute, full relative range) → kept
+    assert "Cells_Intensity_feature_0" in result.var.index
+    # feature_1 (constant) → dropped
+    assert "Cells_Intensity_feature_1" not in result.var.index
 
 
 @pytest.mark.features

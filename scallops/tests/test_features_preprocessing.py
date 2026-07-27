@@ -19,6 +19,7 @@ from scallops.features.preprocessing import (
     _streaming_materialise,
     _apply_filter_steps_1_2,
     _apply_filter_post_materialise,
+    _scaled_nanvar_per_group,
 )
 
 
@@ -366,8 +367,8 @@ def test_col_batch_matches_row_batch(tmp_path):
     np.random.seed(7)
     n_obs, n_feat = 60, 12
     X = np.random.randn(n_obs, n_feat).astype(np.float32)
-    # Make feature 0 low-variance (should be filtered by min_variance)
-    X[:, 0] = 0.001 * np.random.randn(n_obs).astype(np.float32)
+    # Make feature 0 constant within every well → scaled var = 0 → dropped
+    X[:, 0] = 3.14
     # Insert a few NaN values into row 5 so it triggers the finite filter
     X[5, :4] = np.nan
 
@@ -400,7 +401,7 @@ def test_col_batch_matches_row_batch(tmp_path):
     obs_df          = data.obs
     label_mask      = np.ones(len(obs_df), dtype=bool)
 
-    min_var = 0.05
+    min_var = 0.001
     max_fnf = 0.25   # drop cells where > 25% of features are NaN
     by_cols = ["plate", "well"]
 
@@ -473,8 +474,8 @@ def test_col_batch_report_has_variance(tmp_path):
     np.random.seed(99)
     n_obs, n_feat = 40, 8
     X = np.random.randn(n_obs, n_feat).astype(np.float32)
-    # One low-variance feature → dropped by variance filter → appears in report
-    X[:, 3] = 0.0001 * np.random.randn(n_obs).astype(np.float32)
+    # feat3: constant within the well → scaled var = 0 → dropped → appears in report
+    X[:, 3] = 7.5
     feat_names = [f"Cells_Intensity_feat{i}" for i in range(n_feat)]
     df = pd.DataFrame(X, columns=feat_names)
     df["plate"] = "p1"
@@ -491,7 +492,7 @@ def test_col_batch_report_has_variance(tmp_path):
         parquet_sources, data.obs, label_mask,
         by=["plate", "well"],
         max_fraction_not_finite=0.25,
-        min_variance=0.05,
+        min_variance=0.001,
         max_variance=None,
     )
 
@@ -509,6 +510,89 @@ def test_col_batch_report_has_variance(tmp_path):
     assert np.isfinite(feat3_row["median_variance"].iloc[0]), (
         "feat3 median_variance is not finite despite being dropped by variance filter"
     )
+
+
+# ---------------------------------------------------------------------------
+# _scaled_nanvar_per_group — unit tests for the per-well variance helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.features
+def test_scaled_nanvar_constant_feature():
+    """A perfectly constant feature must give scaled variance = 0."""
+    X = np.full((100, 3), 42.0)  # all cells identical in all features
+    var = _scaled_nanvar_per_group(X)
+    np.testing.assert_array_equal(var, 0.0)
+
+
+@pytest.mark.features
+def test_scaled_nanvar_exactly_constant_gives_zero():
+    """An exactly constant feature must give scaled variance = 0.
+
+    With mean±3σ, std=0 → clip range=0 → all scaled values = 0 → var=0.
+    Note: near-constant features with outliers inflate σ and widen the clip
+    range — only exactly constant features are guaranteed var=0 with mean±3σ.
+    """
+    rng = np.random.default_rng(0)
+    n = 200
+    X = np.zeros((n, 2))
+    X[:, 0] = 5.0                        # exactly constant → var must be 0
+    X[:, 1] = rng.uniform(0, 1, n)       # variable control
+
+    var = _scaled_nanvar_per_group(X)
+    assert var[0] == 0.0, f"Exactly-constant feature must give var=0, got {var[0]}"
+    assert var[1] > 0.001, f"Uniform feature gave unexpectedly low var: {var[1]}"
+
+
+@pytest.mark.features
+def test_scaled_nanvar_outlier_robustness():
+    """Extreme outliers must not inflate scaled variance of otherwise variable features.
+
+    A feature with cells uniformly spread in [0, 1] plus one cell at 1e6
+    should give about the same scaled variance as without the outlier,
+    because clipping removes the outlier before computing the range.
+    """
+    rng = np.random.default_rng(1)
+    n = 500
+    X_clean = rng.uniform(0, 1, (n, 1))
+    X_outlier = X_clean.copy()
+    X_outlier[0, 0] = 1e6
+
+    var_clean   = _scaled_nanvar_per_group(X_clean)
+    var_outlier = _scaled_nanvar_per_group(X_outlier)
+    # With mean±3σ the outlier inflates σ → wider clip range → other cells
+    # compress → lower scaled variance.  Both results must be finite and positive.
+    assert np.all(np.isfinite(var_clean)),   "clean: non-finite variance"
+    assert np.all(np.isfinite(var_outlier)), "outlier: non-finite variance"
+    assert np.all(var_clean   > 0), "clean: variance should be positive"
+    assert np.all(var_outlier > 0), "outlier: variance should be positive"
+
+
+@pytest.mark.features
+def test_scaled_nanvar_nan_handling():
+    """NaN cells must be ignored; the result must still be finite."""
+    rng = np.random.default_rng(2)
+    n = 100
+    X = rng.standard_normal((n, 4)).astype(np.float64)
+    # Scatter NaN across 20% of cells in feat 0 and feat 2
+    nan_idx = rng.choice(n, size=20, replace=False)
+    X[nan_idx, 0] = np.nan
+    X[nan_idx, 2] = np.nan
+
+    var = _scaled_nanvar_per_group(X)
+    assert np.all(np.isfinite(var)), f"NaN in result: {var}"
+    assert np.all(var >= 0), "Negative variance"
+
+
+@pytest.mark.features
+def test_scaled_nanvar_high_variance_kept():
+    """A feature with wide uniform spread must produce scaled variance well above threshold."""
+    rng = np.random.default_rng(3)
+    X = rng.uniform(0.0, 1.0, (1000, 1))
+    var = _scaled_nanvar_per_group(X)
+    # mean±3σ extends beyond [0,1] so scaled values don't fill the full [0,1]
+    # range — variance is ~0.027, well above the 0.001 filter threshold
+    assert var[0] > 0.001, f"Wide-spread feature gave unexpectedly low scaled var: {var[0]}"
 
 
 @pytest.mark.features

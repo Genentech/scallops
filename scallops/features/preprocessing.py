@@ -610,48 +610,102 @@ def _apply_residual_nan_step(
 # ---------------------------------------------------------------------------
 
 
+# ── Shared variance building blocks (used by both parquet and zarr paths) ────
+
+def _clip_bounds_mean3sd(
+    sum_: "np.ndarray",
+    sq: "np.ndarray",
+    cnt: "np.ndarray",
+) -> "tuple[np.ndarray, np.ndarray]":
+    """Mean ± 3σ clip bounds from online sum / sum-of-squares / count.
+
+    O(1) in memory — no sorting required.  For near-normal features this
+    approximates the [0.15th, 99.85th] percentile interval; for skewed
+    features it is somewhat looser, which is acceptable for clipping purposes.
+    """
+    mu  = np.where(cnt > 0, sum_ / np.maximum(cnt, 1.0), np.nan)
+    var = np.where(cnt > 1, sq   / np.maximum(cnt, 1.0) - mu ** 2, 0.0)
+    sd  = np.sqrt(np.maximum(var, 0.0))
+    return mu - 3.0 * sd, mu + 3.0 * sd
+
+
+def _scale_to_01(
+    X: "np.ndarray",
+    lo: "np.ndarray",
+    hi: "np.ndarray",
+) -> "np.ndarray":
+    """Clip X to [lo, hi] and minmax-scale to [0, 1].
+
+    Features where lo == hi (zero range, i.e. constant) are set to 0.
+    NaN propagation: NaN in X → NaN in output (caller must mask separately).
+    """
+    rng   = hi - lo
+    valid = rng > 0.0
+    return np.where(
+        valid,
+        (np.clip(X, lo, hi) - lo) / np.where(valid, rng, 1.0),
+        0.0,
+    )
+
+
+def _nanvar_from_accum(
+    sum_: "np.ndarray",
+    sq: "np.ndarray",
+    cnt: "np.ndarray",
+) -> "np.ndarray":
+    """Variance from online sum / sum-of-squares / count accumulators.
+
+    Returns NaN for groups with ≤ 1 finite observation.
+    """
+    mu = np.where(cnt > 0, sum_ / np.maximum(cnt, 1.0), np.nan)
+    return np.where(cnt > 1, sq / np.maximum(cnt, 1.0) - mu ** 2, np.nan)
+
+
+def _scaled_nanvar_per_group(X_grp: "np.ndarray") -> "np.ndarray":
+    """Per-well clip-and-scale nanvar for the in-memory variance filter path.
+
+    Uses the same mean ± 3σ clip bounds and _scale_to_01 helper as the zarr
+    streaming path so both paths are guaranteed to produce identical results.
+
+    :param X_grp: float64 array (n_cells, n_feat) for one group (well).
+    :return: float64 array (n_feat,) of scaled within-well nanvar values.
+    """
+    fm   = np.isfinite(X_grp)
+    cnt  = fm.sum(axis=0).astype(np.float64)
+    sum_ = np.nansum(X_grp,      axis=0)
+    sq   = np.nansum(X_grp ** 2, axis=0)
+    lo, hi = _clip_bounds_mean3sd(sum_, sq, cnt)
+    Xs = _scale_to_01(X_grp, lo, hi)
+    Xs = np.where(fm, Xs, np.nan)          # restore NaN positions
+    return np.nanvar(Xs, axis=0, ddof=0)
+
+
 def _apply_variance_filter(
     result: "np.ndarray",
     feat_keep: "np.ndarray",
     obs_kept: "pd.DataFrame | None",
     by: "list | None" = None,
-    min_variance: "float | None" = 0.1,
+    min_variance: "float | None" = 0.001,
     max_variance: "float | None" = None,
     max_residual_nan_fraction: "float | None" = None,
-) -> "tuple[np.ndarray, np.ndarray]":
-    """Step-4 variance filter — single source of truth for parquet AND zarr paths.
+) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+    """Step-4 variance filter — in-memory path (parquet + zarr after materialise).
 
-    Computes per-group variance with ``np.var`` (NaN-propagating, ``ddof=0``),
-    takes the median across groups, then applies ``isfinite`` + threshold filters.
+    Calls _scaled_nanvar_per_group (mean±3σ clip → [0,1] scale → nanvar) per
+    group, takes nanmedian across groups, applies threshold.  The zarr streaming
+    path uses the same _clip_bounds_mean3sd / _scale_to_01 / _nanvar_from_accum
+    helpers so both paths are identical in logic, differing only in how data is
+    read (full array vs chunked zarr).
 
-    In per-well-median mode (``max_residual_nan_fraction=None``) the matrix may
-    still contain NaN cells.  ``np.var`` propagates NaN within a group → that
-    group's variance is NaN.  ``np.median`` across groups is finite when fewer
-    than half the groups have NaN variance, so ``isfinite(median_var)`` drops
-    only features whose NaN is concentrated in a majority of groups — identical
-    to ``feature_variance(skipna=False)``.  After filtering, surviving NaN cells
-    are imputed to 0.
-
-    In zero-tolerance mode (``max_residual_nan_fraction=0.0``) the matrix is
-    already NaN-free, so ``np.var`` never produces NaN and ``isfinite`` is a
-    no-op.
-
-    :param result: Float32 array ``(n_cells, n_feat)``, modified in place for
-        per-well-median-mode imputation.
-    :param feat_keep: Boolean mask over original features; updated when features
-        are dropped.
-    :param obs_kept: DataFrame of kept cells for groupby; may be ``None`` for
-        global (non-stratified) variance.
-    :param by: obs columns to stratify by (e.g. ``['plate','well']``).
-    :param min_variance: Minimum variance threshold (``None`` treated as 0).
-    :param max_variance: Maximum variance threshold (``None`` = disabled).
-    :param max_residual_nan_fraction: Passed through only to decide whether to
-        apply per-well-median post-filter imputation; the value itself is not used
-        in the variance computation.
-    :return: ``(result, feat_keep)`` — matrix (possibly NaN-imputed) and
-        updated keep mask.
+    :param result: Float32 array (n_cells, n_feat).
+    :param feat_keep: Boolean mask over original features; updated on drop.
+    :param obs_kept: DataFrame of kept cells for groupby; None = no grouping.
+    :param by: obs columns to stratify by (e.g. ['plate', 'well']).
+    :param min_variance: Threshold on [0,1]-scaled variance. None = disabled.
+    :param max_variance: Upper threshold. None = disabled.
+    :param max_residual_nan_fraction: Controls post-filter NaN imputation.
+    :return: (result, feat_keep, feat_var).
     """
-    _min_var = min_variance if min_variance is not None else 0.0
     n_feat = result.shape[1]
     feat_var = np.zeros(n_feat, dtype=np.float64)
 
@@ -661,16 +715,13 @@ def _apply_variance_filter(
             for _, grp_idx in obs_kept.groupby(by, observed=True).groups.items():
                 X_grp = result[grp_idx.values].astype(np.float64)
                 if len(X_grp) > 1:
-                    # nanvar: ignore NaN cells so a single missing measurement
-                    # in a well doesn't null the entire well's variance.
-                    # nanmedian: aggregate across wells ignoring any well that
-                    # had ALL cells NaN (pure-NaN wells produce nanvar=NaN).
-                    group_vars.append(np.nanvar(X_grp, axis=0, ddof=0))
+                    group_vars.append(_scaled_nanvar_per_group(X_grp))
             if group_vars:
                 feat_var = np.nanmedian(np.stack(group_vars), axis=0)
         else:
-            feat_var = np.nanvar(result.astype(np.float64), axis=0, ddof=0)
+            feat_var = _scaled_nanvar_per_group(result.astype(np.float64))
 
+    _min_var = min_variance if min_variance is not None else 0.0
     feat_var_keep = np.isfinite(feat_var) & (feat_var >= _min_var)
     if max_variance is not None:
         feat_var_keep &= feat_var <= max_variance
@@ -678,7 +729,7 @@ def _apply_variance_filter(
     if not feat_var_keep.all():
         n_drop = int((~feat_var_keep).sum())
         logger.info(
-            "  [variance filter] dropped %d features (var<%.3f or not finite)"
+            "  [variance filter] dropped %d features (scaled var < %.4g or not finite)"
             " → %d remain",
             n_drop, _min_var, int(feat_var_keep.sum()),
         )
@@ -767,7 +818,7 @@ def _apply_filter_post_materialise(
     feat_keep: "np.ndarray",
     obs_kept: "pd.DataFrame | None",
     by: "list | None" = None,
-    min_variance: "float | None" = 0.1,
+    min_variance: "float | None" = 0.001,
     max_variance: "float | None" = None,
     max_residual_nan_fraction: "float | None" = None,
     residual_nan_impute: "str" = "zero",
@@ -1051,56 +1102,84 @@ def _col_batch_filter_parquet(
                     "from zarr in %.0f GB chunks", streaming_chunk_gb)
         chunk_rows = max(1, int(streaming_chunk_gb * 1e9 / (n_feat_out * 8)))
 
-        # Accumulators per group: sum, sum_sq, count (all of shape n_feat_out)
-        _gsum:  "dict[str, np.ndarray]" = {}
-        _gsq:   "dict[str, np.ndarray]" = {}
-        _gcnt:  "dict[str, np.ndarray]" = {}
+        # ── Steps 3+4 from zarr: two streaming passes using shared helpers ───
+        # Both passes call the same _clip_bounds_mean3sd / _scale_to_01 /
+        # _nanvar_from_accum functions as the in-memory path so logic is
+        # guaranteed identical.  Only the reading differs (chunked zarr vs
+        # full numpy array).
         _by_list = ([by] if isinstance(by, str) else list(by)) if by else []
 
+        def _keys_for(obs_slice):
+            return (obs_slice[_by_list].astype(str).agg("-".join, axis=1).values
+                    if _by_list else np.full(len(obs_slice), "__all__"))
+
+        # Pass A — accumulate raw stats per group to compute clip bounds
+        _raw_sum:  "dict[str, np.ndarray]" = {}
+        _raw_sq:   "dict[str, np.ndarray]" = {}
+        _raw_cnt:  "dict[str, np.ndarray]" = {}
+
         for _r0 in range(0, n_cells_out, chunk_rows):
-            _r1   = min(_r0 + chunk_rows, n_cells_out)
-            _Xc   = np.asarray(_zX[_r0:_r1], dtype=np.float64)   # one chunk
-            _obsc = obs_kept.iloc[_r0:_r1]
-            _keys = (_obsc[_by_list].astype(str).agg("-".join, axis=1).values
-                     if _by_list else np.full(_r1 - _r0, "__all__"))
+            _r1  = min(_r0 + chunk_rows, n_cells_out)
+            _Xc  = np.asarray(_zX[_r0:_r1], dtype=np.float64)
+            _keys = _keys_for(obs_kept.iloc[_r0:_r1])
             for _g in np.unique(_keys):
-                _m  = _keys == _g
-                _Xg = _Xc[_m]
+                _Xg = _Xc[_keys == _g]
                 _fm = np.isfinite(_Xg)
-                _gsum[_g] = _gsum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xg,    axis=0)
-                _gsq[_g]  = _gsq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xg**2, axis=0)
-                _gcnt[_g] = _gcnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0)
+                _raw_sum[_g] = _raw_sum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xg,      axis=0)
+                _raw_sq[_g]  = _raw_sq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xg ** 2, axis=0)
+                _raw_cnt[_g] = _raw_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
             del _Xc
 
-        _gvars = []
-        for _g in _gsum:
-            _n  = _gcnt[_g]
-            _mu = np.where(_n > 0, _gsum[_g] / np.maximum(_n, 1), np.nan)
-            _v  = np.where(_n > 1, _gsq[_g] / np.maximum(_n, 1) - _mu**2, np.nan)
-            _gvars.append(_v)
+        # Shared helper: compute clip bounds per group
+        _gclip = {
+            _g: _clip_bounds_mean3sd(_raw_sum[_g], _raw_sq[_g], _raw_cnt[_g])
+            for _g in _raw_sum
+        }
+
+        # Pass B — accumulate scaled stats per group + residual NaN flag
+        _sc_sum:  "dict[str, np.ndarray]" = {}
+        _sc_sq:   "dict[str, np.ndarray]" = {}
+        _sc_cnt:  "dict[str, np.ndarray]" = {}
+        _nan_feat_all = np.zeros(n_feat_out, dtype=bool)
+
+        for _r0 in range(0, n_cells_out, chunk_rows):
+            _r1  = min(_r0 + chunk_rows, n_cells_out)
+            _Xc  = np.asarray(_zX[_r0:_r1], dtype=np.float64)
+            _nan_feat_all |= ~np.isfinite(_Xc).all(axis=0)
+            _keys = _keys_for(obs_kept.iloc[_r0:_r1])
+            for _g in np.unique(_keys):
+                _Xg = _Xc[_keys == _g]
+                _fm = np.isfinite(_Xg)
+                # Shared helper: clip + scale to [0,1]
+                _Xs = np.where(_fm, _scale_to_01(_Xg, *_gclip[_g]), np.nan)
+                _sc_sum[_g] = _sc_sum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xs,      axis=0)
+                _sc_sq[_g]  = _sc_sq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xs ** 2, axis=0)
+                _sc_cnt[_g] = _sc_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
+            del _Xc
+
+        # Shared helper: variance from accumulators → nanmedian across groups
+        _gvars = [_nanvar_from_accum(_sc_sum[_g], _sc_sq[_g], _sc_cnt[_g])
+                  for _g in _sc_sum]
         feat_var = np.nanmedian(np.stack(_gvars), axis=0) if _gvars else np.zeros(n_feat_out)
 
-        # Variance filter
-        _mv = min_variance if min_variance is not None else 0.0
-        _vk = np.isfinite(feat_var) & (feat_var >= _mv)
+        # Shared threshold logic (mirrors _apply_variance_filter)
+        _min_var = min_variance if min_variance is not None else 0.0
+        _vk = np.isfinite(feat_var) & (feat_var >= _min_var)
         if max_variance is not None:
             _vk &= feat_var <= max_variance
         if not _vk.all():
-            logger.info("  [variance filter] dropped %d features → %d remain",
-                        int((~_vk).sum()), int(_vk.sum()))
+            logger.info(
+                "  [variance filter] dropped %d features (scaled var < %.4g) → %d remain",
+                int((~_vk).sum()), _min_var, int(_vk.sum()),
+            )
         # Map back to original feat_keep indices (feat_keep is indexed over full feat_cols)
         _fk_idx   = np.where(feat_keep)[0]
         feat_keep[_fk_idx[~_vk]] = False
         feat_var   = feat_var[_vk]
 
-        # Residual NaN: scan each kept feature column from zarr
+        # Residual NaN: reuse _nan_feat_all from pass B (no extra zarr read)
         _kept_idx = np.where(_vk)[0]      # indices within n_feat_out space
-        _nan_feat = np.zeros(len(_kept_idx), dtype=bool)
-        for _r0 in range(0, n_cells_out, chunk_rows):
-            _r1  = min(_r0 + chunk_rows, n_cells_out)
-            _Xc  = np.asarray(_zX[_r0:_r1][:, _kept_idx], dtype=np.float32)
-            _nan_feat |= ~np.isfinite(_Xc).all(axis=0)
-            del _Xc
+        _nan_feat = _nan_feat_all[_kept_idx]
         if _nan_feat.any() and max_residual_nan_fraction == 0.0:
             _drop_n = int(_nan_feat.sum())
             logger.info("  [residual NaN] zero-tolerance: dropped %d features", _drop_n)

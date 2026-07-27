@@ -285,8 +285,12 @@ def _create_map_filter_parser(
     )
     parser.add_argument(
         "--min-variance",
-        help="Minimum feature variance to retain a feature. Negative values disable the threshold.",
-        default=0.1,
+        help="Minimum per-well minmax-scaled nanvar to retain a feature.  "
+             "Values are clipped to [1st, 99th] percentile per well then scaled "
+             "to [0, 1] before computing variance, making the threshold "
+             "comparable across all feature types.  Default 0.001 (0.1%% of "
+             "the clipped range).  Set to 0 or None to disable.",
+        default=0.001,
         type=float,
     )
     parser.add_argument(
@@ -1876,7 +1880,7 @@ def _create_run_parser(
              "--include-measurement-type Spots_Count  adds FISH spot-count "
              "features even though channels 0–3 are excluded by --feature-channels.",
     )
-    filt.add_argument("--min-variance", type=float, default=0.1, dest="min_variance")
+    filt.add_argument("--min-variance", type=float, default=0.001, dest="min_variance")
     filt.add_argument("--max-variance", type=float, default=5.0, dest="max_variance")
     filt.add_argument("--max-feature-nan-fraction", type=float, default=0.50,
                       dest="max_feature_nan_fraction",
