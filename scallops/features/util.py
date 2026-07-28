@@ -644,3 +644,185 @@ def infer_feature_columns(df: dd.DataFrame | dd.DataFrame) -> Sequence[str]:
         ):
             features.append(columns[i])
     return features
+
+
+# ---------------------------------------------------------------------------
+# Smart zarr rechunking
+# ---------------------------------------------------------------------------
+
+def optimal_rechunk_shape(
+    n_rows: int,
+    n_cols: int,
+    dtype: "np.dtype",
+    budget_gb: float,
+    n_workers: int | None = None,
+    target_chunk_mb: float = 256.0,
+) -> tuple[int, int]:
+    """Compute the optimal (row, col) chunk shape for a rechunked zarr.
+
+    Strategy:
+    - Column chunk = all n_cols (one wide slab) so a full-feature row read is
+      always a single HTTP request, not ceil(n_cols / col_chunk) requests.
+    - Row chunk = maximum rows that fit within the per-worker memory allocation
+      and remain below *target_chunk_mb* (S3 efficiency ceiling).
+    - Safety factor of 3 covers: chunk being read + rechunker intermediate
+      buffer + chunk being written simultaneously.
+
+    :param n_rows: Total rows in the array.
+    :param n_cols: Total columns in the array.
+    :param dtype: Array dtype (used for bytes-per-element).
+    :param budget_gb: Total memory budget in GB.
+    :param n_workers: Number of parallel workers. Defaults to CPU count // 2.
+    :param target_chunk_mb: Upper bound on chunk size in MB (S3 efficiency).
+    :return: (row_chunk, col_chunk) tuple.
+    """
+    import os, math
+
+    if n_workers is None:
+        n_workers = max(1, (os.cpu_count() or 4) // 2)
+
+    bytes_per_elem = np.dtype(dtype).itemsize
+    safety        = 3   # read + intermediate + write buffers
+
+    # Memory available per worker for one chunk
+    budget_per_worker = budget_gb * 1e9 / n_workers / safety
+
+    # Row chunk from memory budget
+    row_from_budget = int(budget_per_worker / (n_cols * bytes_per_elem))
+
+    # Row chunk from S3 efficiency ceiling (target_chunk_mb per chunk)
+    row_from_s3 = int(target_chunk_mb * 1e6 / (n_cols * bytes_per_elem))
+
+    # Row chunk: min of the two ceilings, at least 1 row, at most all rows
+    row_chunk = max(1, min(row_from_budget, row_from_s3, n_rows))
+
+    # Round to nearest 10K for clean alignment (unless very small)
+    if row_chunk >= 10_000:
+        row_chunk = int(math.floor(row_chunk / 10_000) * 10_000)
+        row_chunk = max(row_chunk, 10_000)
+
+    col_chunk = n_cols   # always one wide slab
+
+    return row_chunk, col_chunk
+
+
+def rechunk_zarr(
+    source_store,
+    target_path: str,
+    feat_indices: "np.ndarray | None" = None,
+    budget_gb: float = 16.0,
+    n_workers: int | None = None,
+    target_chunk_mb: float = 256.0,
+    temp_path: str | None = None,
+    array_key: str = "X",
+    overwrite: bool = False,
+) -> "zarr.Array":
+    """Rechunk a zarr array with budget-aware chunk sizes.
+
+    Reads source in its original (possibly narrow) chunk shape, rechunks to
+    wide row slabs (one column chunk = all features) so that downstream
+    row-scan operations (NaN filter, variance) issue one HTTP request per
+    row slab instead of ceil(n_cols / source_col_chunk) requests.
+
+    Uses ``rechunker`` (two-phase intermediate) to guarantee the memory cap
+    is never exceeded regardless of source/target chunk shape mismatch.
+
+    :param source_store: Zarr store or mapping already opened (e.g. S3Map).
+    :param target_path: Local or S3 path for the rechunked output zarr.
+    :param feat_indices: Column indices to select before rechunking. If None,
+        all columns are kept. Selecting only needed features reduces data
+        volume significantly before any data is transferred.
+    :param budget_gb: Total memory budget in GB (shared across all workers).
+    :param n_workers: Parallel workers for rechunker execution. Defaults to
+        CPU count // 2, capped so each worker gets ≥ 1 GB.
+    :param target_chunk_mb: S3-efficiency ceiling for chunk size (MB).
+    :param temp_path: Scratch zarr path for rechunker intermediate. Defaults
+        to ``target_path + "_tmp"``.
+    :param array_key: Key of the X array inside the zarr group (default "X").
+    :param overwrite: Overwrite existing target zarr.
+    :return: Opened zarr.Array pointing at the rechunked output.
+    """
+    import os, math, tempfile
+    import zarr
+    import dask.array as _da
+    import rechunker as _rechunker
+
+    if temp_path is None:
+        temp_path = target_path.rstrip("/") + "_rechunk_tmp.zarr"
+
+    # ── Open source ───────────────────────────────────────────────────────────
+    grp = zarr.open(source_store, mode="r")
+    src = grp[array_key]
+    n_rows_full, n_cols_full = src.shape
+    dtype = src.dtype
+
+    # ── Column selection ───────────────────────────────────────────────────────
+    if feat_indices is not None:
+        # Use dask for lazy column selection — avoids loading all columns
+        X_dask = _da.from_zarr(src)[:, feat_indices]
+        n_cols = len(feat_indices)
+    else:
+        X_dask = _da.from_zarr(src)
+        n_cols = n_cols_full
+    n_rows = n_rows_full
+
+    # ── Compute optimal chunk shape ───────────────────────────────────────────
+    if n_workers is None:
+        n_workers = max(1, min((os.cpu_count() or 4) // 2,
+                               int(budget_gb)))   # cap: 1 GB min per worker
+
+    row_chunk, col_chunk = optimal_rechunk_shape(
+        n_rows, n_cols, dtype, budget_gb, n_workers, target_chunk_mb,
+    )
+
+    # rechunker max_mem = budget per worker / safety (it manages two phases)
+    max_mem_bytes = int(budget_gb * 1e9 / n_workers / 2)
+
+    logger.info(
+        "rechunk_zarr: (%d, %d) %s  source_chunks=%s → target_chunks=(%d, %d)  "
+        "max_mem=%.1f GB/worker  n_workers=%d",
+        n_rows, n_cols, dtype, src.chunks,
+        row_chunk, col_chunk,
+        max_mem_bytes / 1e9, n_workers,
+    )
+
+    # ── Open / create target + temp stores ────────────────────────────────────
+    mode = "w" if overwrite else "w-"
+    target_store = zarr.open(target_path, mode="w")
+    temp_store   = zarr.open(temp_path,   mode="w")
+
+    # ── Execute rechunking ────────────────────────────────────────────────────
+    if feat_indices is not None:
+        # Column selection forces a full read → write directly with target chunks
+        # using dask.  Peak RAM = one output chunk (row_chunk × n_cols × bytes)
+        # which the budget calculation already accounts for.
+        logger.info("rechunk_zarr: column-select path — writing via dask.to_zarr …")
+        X_rechunked = X_dask.rechunk((row_chunk, col_chunk))
+        _da.to_zarr(X_rechunked, target_path, overwrite=overwrite)
+    else:
+        # Pure rechunk (shape only) — use rechunker's two-phase guarantee
+        logger.info("rechunk_zarr: pure-rechunk path — executing rechunker plan …")
+        plan = _rechunker.rechunk(
+            src,
+            target_chunks=(row_chunk, col_chunk),
+            max_mem=max_mem_bytes,
+            target_store=target_store,
+            temp_store=temp_store,
+        )
+        plan.execute()
+
+    # ── Cleanup temp ──────────────────────────────────────────────────────────
+    import shutil
+    for path in [temp_path]:
+        try:
+            if os.path.exists(path):
+                shutil.rmtree(path)
+        except Exception:
+            pass
+
+    result = zarr.open(target_path, mode="r")
+    logger.info(
+        "rechunk_zarr: done → shape=%s chunks=%s  %.1f GB  path=%s",
+        result.shape, result.chunks, result.nbytes / 1e9, target_path,
+    )
+    return result
