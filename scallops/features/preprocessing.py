@@ -986,11 +986,22 @@ def _col_batch_filter_parquet(
         len(sources),
         max(1, int(_budget_gb / max(0.1, n_feat * 4 * 3 / 1e9))),
     )
-    # batch_size: each worker gets an equal share of the budget
+    # batch_size: each worker gets a budget-bounded share.
+    # Safety factor 10: accounts for PyArrow internal buffer (×1) + numpy copy
+    # (×1) + Python virtual-memory baseline for heavy libraries (×8 headroom).
+    # Without this headroom, even a 200 GB RLIMIT_AS budget can be exhausted by
+    # Python's own mmap'd libraries before any data is allocated.
+    # Hard cap at 500K rows: efficient for S3 (one HTTP GET per batch) without
+    # allocating excessively large contiguous buffers.
     _bytes_per_row = n_feat * 4   # float32
-    _safety        = 3            # read + process + write buffer
-    batch_size = max(10_000, min(2_000_000, int(_budget_gb * 1e9 / (n_workers * _bytes_per_row * _safety))))
-    _batch_ra  = 1   # one pre-fetched batch; more would violate budget
+    _safety        = 10
+    batch_size = max(10_000, min(500_000, int(_budget_gb * 1e9 / (n_workers * _bytes_per_row * _safety))))
+    # batch_readahead=0: no pre-fetching.  With large parquet files (76+ GB),
+    # PyArrow column decompressors consume ~80–160 GB VmSize per batch.
+    # With readahead=1, two batches are decompressed simultaneously, which can
+    # double VmSize and hit the RLIMIT_AS limit.  Sequential read is slightly
+    # slower for S3 (no pipelining) but critical for local large files.
+    _batch_ra  = 0
     _frag_ra   = 1   # one file at a time — no cross-file read-ahead
     logger.info(
         "  [scanner] budget=%.0f GB  n_workers=%d  batch_size=%s  "
@@ -1012,16 +1023,16 @@ def _col_batch_filter_parquet(
     bad_counts        = np.zeros(n_cells, dtype=np.int32)
     nan_per_feat      = np.zeros(n_feat,  dtype=np.int64)
     nan_per_feat_bad  = np.zeros(n_feat,  dtype=np.int64)
-    # Per-group raw stats for clip bound computation (shared helpers used later)
-    _raw_sum: "dict[str, np.ndarray]" = {}
-    _raw_sq:  "dict[str, np.ndarray]" = {}
-    _raw_cnt: "dict[str, np.ndarray]" = {}
-
     import threading, concurrent.futures as _cf
     _lock = threading.Lock()
 
     def _pass1_file(fi: int, src: dict) -> None:
-        """Process one file in pass 1: accumulate NaN counts + raw stats."""
+        """Pass 1: NaN scan only.  No group stats — avoids 24+ GB peak allocation
+        when PyArrow's internal column-page buffers already consume ~196 GB of
+        virtual memory for large local parquet files (per VmSize measurement).
+        Clip bounds for the variance filter are computed from the materialised
+        zarr in passes A+B after pass 2.
+        """
         _pa_fs, _pa_path = _pafs.FileSystem.from_uri(src["path"])
         _ds_fi  = _ds.dataset(_pa_path, filesystem=_pa_fs, format="parquet")
         _scan   = _ds_fi.scanner(
@@ -1031,11 +1042,7 @@ def _col_batch_filter_parquet(
         _file_bad   = np.zeros(_file_offsets[fi + 1] - _file_offsets[fi], dtype=np.int32)
         _file_nf    = np.zeros(n_feat, dtype=np.int64)
         _file_nfb   = np.zeros(n_feat, dtype=np.int64)
-        _file_rsum:  "dict[str, np.ndarray]" = {}
-        _file_rsq:   "dict[str, np.ndarray]" = {}
-        _file_rcnt:  "dict[str, np.ndarray]" = {}
-        _local_off   = 0
-        _global_off  = _file_offsets[fi]
+        _local_off  = 0
 
         for _batch in _scan.to_batches():
             _n_b = len(_batch)
@@ -1048,21 +1055,8 @@ def _col_batch_filter_parquet(
             _bad_m     = _pc_nan > max_bad
             if _bad_m.any():
                 _file_nfb += _nf_b[_bad_m].sum(axis=0).astype(np.int64)
-
-            # Per-group raw stats for clip bounds
-            _obs_b = obs_df.iloc[_global_off:_global_off + _n_b]
-            _keys  = _group_keys_for(_obs_b)
-            for _g in np.unique(_keys):
-                _Xg = _X_b[_keys == _g].astype(np.float64)
-                _fm = np.isfinite(_Xg)
-                _n  = np.zeros(n_feat)
-                _file_rsum[_g] = _file_rsum.get(_g, np.zeros(n_feat)) + np.nansum(_Xg, axis=0)
-                _file_rsq[_g]  = _file_rsq.get(_g,  np.zeros(n_feat)) + np.nansum(_Xg ** 2, axis=0)
-                _file_rcnt[_g] = _file_rcnt.get(_g, np.zeros(n_feat)) + _fm.sum(axis=0).astype(np.float64)
-
-            del _X_b
-            _local_off  += _n_b
-            _global_off += _n_b
+            del _X_b, _nf_b
+            _local_off += _n_b
 
         # Merge into shared accumulators (lock protects concurrent writes).
         # Use slice assignment (__setitem__) instead of += so Python does not
@@ -1071,10 +1065,6 @@ def _col_batch_filter_parquet(
             bad_counts[_file_offsets[fi]:_file_offsets[fi + 1]] = _file_bad
             nan_per_feat[:]     += _file_nf
             nan_per_feat_bad[:] += _file_nfb
-            for _g, _s in _file_rsum.items():
-                _raw_sum[_g] = _raw_sum.get(_g, np.zeros(n_feat)) + _s
-                _raw_sq[_g]  = _raw_sq.get(_g,  np.zeros(n_feat)) + _file_rsq[_g]
-                _raw_cnt[_g] = _raw_cnt.get(_g, np.zeros(n_feat)) + _file_rcnt[_g]
 
     t0 = time.monotonic()
     with _cf.ThreadPoolExecutor(max_workers=n_workers) as _exe:
@@ -1102,28 +1092,11 @@ def _col_batch_filter_parquet(
         f"{n_cells_out:,}", f"{n_cells:,}", f"{n_feat_out:,}", f"{n_feat:,}",
     )
 
-    # ── Clip bounds from pass-1 raw stats (feat_keep subset) ─────────────────
-    # Computed once here; shared by both the zarr and in-memory pass-2 paths.
-    _gclip_full = {
-        _g: _clip_bounds_mean3sd(
-            _raw_sum[_g],
-            _raw_sq[_g],
-            _raw_cnt[_g],
-        )
-        for _g in _raw_sum
-    }
-    # Slice to feat_keep columns so pass 2 can use them directly
-    _gclip = {
-        _g: (lo[feat_keep], hi[feat_keep])
-        for _g, (lo, hi) in _gclip_full.items()
-    }
-
-    # ── Pass 2: materialise + scaled variance in one combined pass ────────────
-    # Reads each source file once (parallel across files).  For each batch:
-    #   • writes filtered rows to the output zarr (or numpy array)
-    #   • accumulates per-group scaled variance stats using clip bounds from pass 1
-    #   • tracks residual NaN presence
-    # Eliminates the old separate zarr passes A and B (~65 min on 12-well S3 run).
+    # ── Pass 2: parallel materialise to local zarr or numpy ──────────────────
+    # Each worker thread reads its assigned file, filters rows/cols, and writes
+    # the result to a pre-allocated output store (zarr slab or numpy slice).
+    # Scaled-variance and residual-NaN computation happen in passes A+B below
+    # (reading the already-local zarr) — keeps pass-2 peak memory small.
     kept_feat_cols = [feat_cols[i] for i, k in enumerate(feat_keep) if k]
     if output_zarr_path is not None:
         import zarr as _zarr
@@ -1137,20 +1110,12 @@ def _col_batch_filter_parquet(
         result = np.empty((n_cells_out, n_feat_out), dtype=np.float32)
         _zX    = None
 
-    # Shared scaled-variance accumulators (written by worker threads, merged after)
-    _sc_sum:  "dict[str, np.ndarray]" = {}
-    _sc_sq:   "dict[str, np.ndarray]" = {}
-    _sc_cnt:  "dict[str, np.ndarray]" = {}
-    _nan_feat_all = np.zeros(n_feat_out, dtype=bool)
-
-    # Pre-compute per-file output-row offsets (safe: no file in more than one thread)
+    # Pre-compute per-file output-row offsets (disjoint slabs, thread-safe)
     _n_out_per_file = [int(cell_keep[_file_offsets[fi]:_file_offsets[fi + 1]].sum())
                        for fi in range(len(sources))]
     _out_offsets = [0]
     for _n in _n_out_per_file:
         _out_offsets.append(_out_offsets[-1] + _n)
-
-    _out_lock = threading.Lock()
 
     def _pass2_file(fi: int, src: dict) -> None:
         _pa_fs, _pa_path = _pafs.FileSystem.from_uri(src["path"])
@@ -1161,13 +1126,9 @@ def _col_batch_filter_parquet(
         )
         _global_off = _file_offsets[fi]
         _out_row    = _out_offsets[fi]
-        _file_sc_sum: "dict[str, np.ndarray]" = {}
-        _file_sc_sq:  "dict[str, np.ndarray]" = {}
-        _file_sc_cnt: "dict[str, np.ndarray]" = {}
-        _file_nan    = np.zeros(n_feat_out, dtype=bool)
 
         for _batch in _scan.to_batches():
-            _n_b   = len(_batch)
+            _n_b    = len(_batch)
             _cell_b = cell_keep[_global_off:_global_off + _n_b]
             _global_off += _n_b
             if not _cell_b.any():
@@ -1177,38 +1138,13 @@ def _col_batch_filter_parquet(
             del _batch
             _X_f = _X_b[_cell_b]
             del _X_b
-
-            # Write filtered rows to output (zarr or numpy)
             _n_f = _X_f.shape[0]
             if _zX is not None:
                 _zX[_out_row:_out_row + _n_f] = _X_f
             else:
                 result[_out_row:_out_row + _n_f] = _X_f
             _out_row += _n_f
-
-            # Scaled variance accumulation using shared helpers
-            # (_global_off already advanced past this batch; roll back to get obs)
-            _obs_b = obs_df.iloc[_global_off - _n_b:_global_off]
-            _obs_f = _obs_b[_cell_b]
-            _keys  = _group_keys_for(_obs_f)
-            _file_nan |= ~np.isfinite(_X_f.astype(np.float64)).all(axis=0)
-            for _g in np.unique(_keys):
-                _Xg = _X_f[_keys == _g].astype(np.float64)
-                _fm = np.isfinite(_Xg)
-                _lo, _hi = _gclip.get(_g, _gclip.get("__all__", (np.full(n_feat_out, -np.inf),
-                                                                   np.full(n_feat_out,  np.inf))))
-                _Xs = np.where(_fm, _scale_to_01(_Xg, _lo, _hi), np.nan)
-                _file_sc_sum[_g] = _file_sc_sum.get(_g, np.zeros(n_feat_out)) + np.nansum(_Xs,      axis=0)
-                _file_sc_sq[_g]  = _file_sc_sq.get(_g,  np.zeros(n_feat_out)) + np.nansum(_Xs ** 2, axis=0)
-                _file_sc_cnt[_g] = _file_sc_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
             del _X_f
-
-        with _out_lock:
-            _nan_feat_all[:] |= _file_nan
-            for _g in _file_sc_sum:
-                _sc_sum[_g] = _sc_sum.get(_g, np.zeros(n_feat_out)) + _file_sc_sum[_g]
-                _sc_sq[_g]  = _sc_sq.get(_g,  np.zeros(n_feat_out)) + _file_sc_sq[_g]
-                _sc_cnt[_g] = _sc_cnt.get(_g, np.zeros(n_feat_out)) + _file_sc_cnt[_g]
 
     t0 = time.monotonic()
     with _cf.ThreadPoolExecutor(max_workers=n_workers) as _exe:
@@ -1223,11 +1159,75 @@ def _col_batch_filter_parquet(
 
     obs_kept = obs_df.iloc[cell_keep].reset_index(drop=True)
 
+    # Index of surviving zarr columns (used to select correct cols from zarr)
+    _zarr_col_idx: "np.ndarray | None" = None
+
     if _zX is not None:
-        # ── Variance + residual NaN from in-flight stats (no zarr re-read) ───
-        logger.info("  [pass 2/2 done] streamed to zarr — variance computed in-flight")
-        _gvars = [_nanvar_from_accum(_sc_sum[_g], _sc_sq[_g], _sc_cnt[_g])
-                  for _g in _sc_sum]
+        # ── Steps 3+4 from zarr: two streaming passes using shared helpers ─────
+        # Pass A: raw stats per group → clip bounds.
+        # Pass B: scaled stats per group → variance + residual NaN.
+        # Both read the LOCAL zarr written in pass 2 — much faster than reading
+        # the S3 zarr that the old code used for this.
+        logger.info("  [pass 2/2 done] streamed to zarr — computing variance "
+                    "from zarr in %.0f GB chunks", streaming_chunk_gb)
+        # Cap the variance chunk at 2 GB of float64 regardless of budget.
+        # Each chunk requires ~4× its size in temporary arrays (_Xg copy,
+        # _Xg² copy, nansum copy) and PyArrow column decompressors may still
+        # hold ~180 GB VmSize from passes 1+2 — small chunks keep total under
+        # the RLIMIT_AS ceiling.
+        _var_chunk_gb = min(streaming_chunk_gb, 2.0)
+        chunk_rows = max(1, int(_var_chunk_gb * 1e9 / (n_feat_out * 8)))
+
+        def _zkeys_for(obs_slice: "pd.DataFrame") -> "np.ndarray":
+            return (_keys_for_obs := (_by_list and obs_slice[_by_list].astype(str).agg("-".join, axis=1).values)
+                    or np.full(len(obs_slice), "__all__"))
+
+        # Helper that avoids the walrus-assignment; just call group_keys_for
+        def _zk(obs_sl):
+            return _group_keys_for(obs_sl)
+
+        # Pass A — accumulate raw stats per group for clip bounds
+        _raw_sum:  "dict[str, np.ndarray]" = {}
+        _raw_sq:   "dict[str, np.ndarray]" = {}
+        _raw_cnt:  "dict[str, np.ndarray]" = {}
+        for _r0 in range(0, n_cells_out, chunk_rows):
+            _r1  = min(_r0 + chunk_rows, n_cells_out)
+            _Xc  = np.asarray(_zX[_r0:_r1], dtype=np.float64)
+            _keys = _zk(obs_kept.iloc[_r0:_r1])
+            for _g in np.unique(_keys):
+                _Xg = _Xc[_keys == _g]
+                _fm = np.isfinite(_Xg)
+                _Xgc = np.where(_fm, _Xg, 0.0)       # float64, NaN→0, no nansum copy
+                _raw_sum[_g] = _raw_sum.get(_g, np.zeros(n_feat_out)) + _Xgc.sum(axis=0)
+                _raw_sq[_g]  = _raw_sq.get(_g,  np.zeros(n_feat_out)) + (_Xgc * _Xgc).sum(axis=0)
+                _raw_cnt[_g] = _raw_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
+                del _Xgc
+            del _Xc
+
+        _gclip = {_g: _clip_bounds_mean3sd(_raw_sum[_g], _raw_sq[_g], _raw_cnt[_g])
+                  for _g in _raw_sum}
+
+        # Pass B — scaled stats per group + residual NaN flag
+        _sc_sum:  "dict[str, np.ndarray]" = {}
+        _sc_sq:   "dict[str, np.ndarray]" = {}
+        _sc_cnt:  "dict[str, np.ndarray]" = {}
+        _nan_feat_all = np.zeros(n_feat_out, dtype=bool)
+        for _r0 in range(0, n_cells_out, chunk_rows):
+            _r1  = min(_r0 + chunk_rows, n_cells_out)
+            _Xc  = np.asarray(_zX[_r0:_r1], dtype=np.float64)
+            _nan_feat_all |= ~np.isfinite(_Xc).all(axis=0)
+            _keys = _zk(obs_kept.iloc[_r0:_r1])
+            for _g in np.unique(_keys):
+                _Xg = _Xc[_keys == _g]
+                _fm = np.isfinite(_Xg)
+                _Xs = np.where(_fm, _scale_to_01(_Xg, *_gclip[_g]), 0.0)   # NaN→0
+                _sc_sum[_g] = _sc_sum.get(_g, np.zeros(n_feat_out)) + _Xs.sum(axis=0)
+                _sc_sq[_g]  = _sc_sq.get(_g,  np.zeros(n_feat_out)) + (_Xs * _Xs).sum(axis=0)
+                _sc_cnt[_g] = _sc_cnt.get(_g, np.zeros(n_feat_out)) + _fm.sum(axis=0).astype(np.float64)
+                del _Xs
+            del _Xc
+
+        _gvars = [_nanvar_from_accum(_sc_sum[_g], _sc_sq[_g], _sc_cnt[_g]) for _g in _sc_sum]
         feat_var  = np.nanmedian(np.stack(_gvars), axis=0) if _gvars else np.zeros(n_feat_out)
         _min_var  = min_variance if min_variance is not None else 0.0
         _vk       = np.isfinite(feat_var) & (feat_var >= _min_var)
@@ -1249,6 +1249,11 @@ def _col_batch_filter_parquet(
             _fk2 = np.where(feat_keep)[0]
             feat_keep[_fk2[_nan_feat]] = False
             _kept_idx = _kept_idx[~_nan_feat]
+
+        # Record surviving zarr column indices so the caller selects the correct
+        # columns (not simply the first _n_final cols, which would be wrong if
+        # the variance filter dropped non-contiguous columns).
+        _zarr_col_idx = _kept_idx
 
         # result stays None; caller builds dask AnnData from zarr
         result = None
@@ -1338,7 +1343,7 @@ def _col_batch_filter_parquet(
             logger.info("  Top features driving cell dropout:\n%s",
                         top_culprits.to_string(index=False))
 
-    return result, cell_keep, feat_keep, report_df
+    return result, cell_keep, feat_keep, report_df, _zarr_col_idx
 
 
 # ---------------------------------------------------------------------------

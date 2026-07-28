@@ -1357,7 +1357,7 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
 
         _mem_stop = _memory_monitor_start(budget_gb=getattr(args, "memory_budget_gb", None))
         try:
-            X_filtered, cell_keep, feat_keep, _feat_report = _col_batch_filter_parquet(
+            X_filtered, cell_keep, feat_keep, _feat_report, _zarr_col_idx = _col_batch_filter_parquet(
                 parquet_sources, obs_all, label_mask, by_cols,
                 max_fnf, min_var, max_var,
                 feat_cols=list(data.var.index),
@@ -1392,12 +1392,11 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         if X_filtered is None and _filter_zarr:
             # Phase 3: zarr-backed result — load as dask (0 GB RAM for X)
             _X_da = da.from_zarr(_filter_zarr, component="X")
-            # The zarr was written with all post-step1/2 features; variance filter
-            # may have further narrowed feat_keep — select the surviving columns
-            _n_zar_cols = _X_da.shape[1]
-            _n_final    = int(feat_keep.sum())
-            if _n_zar_cols > _n_final:
-                _X_da = _X_da[:, :_n_final]   # zarr cols already ordered correctly
+            # Select the correct surviving columns using the exact zarr column
+            # indices returned by _col_batch_filter_parquet.  Simple [:, :n]
+            # would be wrong if variance filter dropped non-contiguous columns.
+            if _zarr_col_idx is not None and len(_zarr_col_idx) < _X_da.shape[1]:
+                _X_da = _X_da[:, _zarr_col_idx]
             result = anndata.AnnData(
                 X=_X_da,
                 obs=obs_all.iloc[cell_keep].copy(),
@@ -2306,12 +2305,19 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
     if _budget_rlimit is not None:
         try:
             import resource as _res
-            _limit_bytes = int(_budget_rlimit * 1.10 * 1024 ** 3)
+            # Add 200 GB fixed headroom on top of the budget to accommodate
+            # PyArrow's virtual address space footprint when reading large local
+            # parquet files (file mmap + per-column reader state can consume
+            # 150-200 GB VmSize regardless of physical RAM usage).  RLIMIT_AS
+            # limits VIRTUAL memory, not physical RAM; the 200 GB headroom lets
+            # PyArrow's lazy mmaps proceed without triggering ArrowMemoryError.
+            _headroom_gb = max(_budget_rlimit * 0.10, 200.0)
+            _limit_bytes = int((_budget_rlimit + _headroom_gb) * 1024 ** 3)
             _res.setrlimit(_res.RLIMIT_AS, (_limit_bytes, _limit_bytes))
             logger.info(
                 "map run: virtual memory limit set to %.0f GB "
-                "(budget %.0f GB + 10%% headroom)",
-                _budget_rlimit * 1.10, _budget_rlimit,
+                "(budget %.0f GB + %.0f GB PyArrow headroom)",
+                _budget_rlimit + _headroom_gb, _budget_rlimit, _headroom_gb,
             )
         except Exception as _e:
             logger.debug("map run: could not set RLIMIT_AS: %s", _e)

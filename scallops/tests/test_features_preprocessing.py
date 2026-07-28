@@ -406,7 +406,7 @@ def test_col_batch_matches_row_batch(tmp_path):
     by_cols = ["plate", "well"]
 
     # ── Path A: column-batch (parquet) ────────────────────────────────────
-    X_col, cell_keep_col, feat_keep_col, _report = _col_batch_filter_parquet(
+    X_col, cell_keep_col, feat_keep_col, _report, _ = _col_batch_filter_parquet(
         parquet_sources, obs_df, label_mask,
         by=by_cols,
         max_fraction_not_finite=max_fnf,
@@ -488,7 +488,7 @@ def test_col_batch_report_has_variance(tmp_path):
     parquet_sources = data.uns["_parquet_sources"]
     label_mask = np.ones(len(data.obs), dtype=bool)
 
-    _, _, _, report = _col_batch_filter_parquet(
+    _, _, _, report, _ = _col_batch_filter_parquet(
         parquet_sources, data.obs, label_mask,
         by=["plate", "well"],
         max_fraction_not_finite=0.25,
