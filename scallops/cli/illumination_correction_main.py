@@ -109,6 +109,14 @@ def _add_agg_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> 
         type=int,
         help="Channel index (0-based) to select best focus z index",
     )
+    parser.add_argument(
+        "--t-index",
+        dest="t_index",
+        default=None,
+        type=int,
+        help="Time index (0-based) to select from images with a time dimension. "
+        "Required when images have more than one timepoint (e.g. live imaging data).",
+    )
     force_arg(parser)
     verbose_arg(parser)
     expected_images_arg(parser)

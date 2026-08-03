@@ -103,6 +103,7 @@ def illumination_correction(
     channel: int = 0,
     agg_method: str = Literal["mean", "median", "min"],
     expected_images: int | None = None,
+    t_index: int | None = None,
 ) -> tuple[xr.DataArray, list[str], str | int | Sequence[int]]:
     """Calculate illumination correction.
 
@@ -112,6 +113,9 @@ def illumination_correction(
     :param z_index: Either 'max', 'focus', or z-index
     :param channel: The channel select the best focus z-index if z_index is `focus`.
     :param agg_method: Method to aggregate images
+    :param t_index: The t-index to select from images with a time dimension. Required
+        when images have more than one timepoint (e.g. live imaging data); if None,
+        the t dimension is expected to have size 1 and is squeezed out.
 
     Equivalent to CellProfiler's CorrectIlluminationCalculate module with option "Regular", "All", "Median Filter"
 
@@ -160,11 +164,18 @@ def illumination_correction(
             dask=True,
             scene_id=i if n_scenes is not None else None,
         )
+        if t_index is not None and "t" in image.dims:
+            image = image.isel(t=t_index)
         image = (
             _z_projection(image, z_index_)
             if not z_tiles_removed
             else image.isel(z=0, missing_dims="ignore")
         )
+        if "t" in image.dims and image.sizes["t"] > 1:
+            raise ValueError(
+                f"Image has {image.sizes['t']} timepoints but illumination correction "
+                "operates on a single timepoint. Pass `t_index` to select one."
+            )
         image = image.squeeze(d for d in ("t", "z") if d in image.dims)
         assert "t" not in image.dims
         images.append(image)
