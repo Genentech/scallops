@@ -31,7 +31,3 @@ requirements.doc.txt
 
 # macOS
 .DS_Store
-
-# _version.py is injected via --build-arg SCM_VERSION by the Makefile (make docker)
-# so it does not need to be in the build context
-scallops/_version.py
