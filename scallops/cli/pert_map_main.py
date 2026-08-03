@@ -220,7 +220,7 @@ def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     )
     filter_args(parser)
 
-    common_args(parser)
+    common_args(parser, dask_client_value="none")
     parser.set_defaults(func=_run_tvn)
 
 

@@ -97,7 +97,7 @@ def _compare_anndata(data1: anndata.AnnData, data2: anndata.AnnData):
     pd.testing.assert_frame_equal(data1.var, data2.var)
 
 
-@pytest.mark.parametrize("normalize", ["zscore", "local-zscore", "nn-zscore"])
+@pytest.mark.parametrize("normalize", ["zscore", "local-zscore"])
 @pytest.mark.parametrize("reference", ["gene_symbol=='NTC'", None])
 @pytest.mark.parametrize("robust", [True, False])
 @pytest.mark.parametrize("by", [["plate", "well"], None])
