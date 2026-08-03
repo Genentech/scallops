@@ -1,6 +1,4 @@
-# syntax=docker/dockerfile:1
-
-# Examples::
+# Examples:
 # CPU build (default):
 #   docker build --arch amd64 -t scallops  .
 # GPU build:
@@ -8,7 +6,6 @@
 #   --build-arg TF_CUDA=1 --build-arg TORCH_CUDA=cu126 -t scallops-gpu  .
 # Custom base image:
 #   docker build --arch amd64 --build-arg BASE_IMAGE=python:3.13-slim-bookworm -t scallops-custom  .
-
 
 ARG BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${BASE_IMAGE}
