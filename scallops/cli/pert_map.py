@@ -672,7 +672,9 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     if not no_version:
         metadata.update(cli_metadata())
     with (
-        _create_default_dask_config(),
+        _create_default_dask_config(
+            {"distributed.scheduler.locks.lease-timeout": "inf"}
+        ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
