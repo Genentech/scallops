@@ -173,7 +173,9 @@ def _fuse(
             x_step_size = fused_x_size
         else:
             cluster = AgglomerativeClustering(
-                n_clusters=None, distance_threshold=tile_shape[1] * 0.1, linkage="single"
+                n_clusters=None,
+                distance_threshold=tile_shape[1] * 0.1,
+                linkage="single",
             )
             cluster.fit_predict(df[["x"]])
             x_step_size = math.ceil(fused_x_size / len(np.unique(cluster.labels_)))
