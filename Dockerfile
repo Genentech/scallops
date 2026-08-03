@@ -75,7 +75,7 @@ RUN uv pip install dask-ml
 
 COPY . .
 
-RUN --mount=source=.git,target=.git,type=bind uv pip install --no-cache-dir .
+RUN uv pip install --no-cache-dir .
 RUN  rm -rf /build
 
 ENV AWS_RETRY_MODE=adaptive \
