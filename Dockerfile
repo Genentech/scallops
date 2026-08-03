@@ -1,6 +1,4 @@
-# syntax=docker/dockerfile:1
-
-# Examples::
+# Examples:
 # CPU build (default):
 #   docker build --arch amd64 -t scallops  .
 # GPU build:
@@ -9,12 +7,11 @@
 # Custom base image:
 #   docker build --arch amd64 --build-arg BASE_IMAGE=python:3.13-slim-bookworm -t scallops-custom  .
 
-
 ARG BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${BASE_IMAGE}
-ARG UV_VERSION=0.11.30
-COPY --from=docker.io/astral/uv:${UV_VERSION} /uv /uvx /bin/
-
+COPY --from=docker.io/astral/uv:0.11.30 /uv /uvx /bin/
+# Delete the PEP 668 marker file
+RUN rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED
 RUN apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive apt-get install -qq --no-install-recommends -y \
     build-essential \
@@ -78,7 +75,7 @@ RUN uv pip install dask-ml
 
 COPY . .
 
-RUN --mount=source=.git,target=.git,type=bind uv pip install --no-cache-dir .
+RUN uv pip install --no-cache-dir .
 RUN  rm -rf /build
 
 ENV AWS_RETRY_MODE=adaptive \
