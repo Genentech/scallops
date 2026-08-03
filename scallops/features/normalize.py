@@ -73,13 +73,13 @@ def _normalize_features_array(
             stds = xp.expand_dims(stds, 0)
     else:
         if isinstance(reference_values, da.Array):
-            neighbors = indices.shape[1]
-            features = reference_values.shape[1]
-            labels = indices.shape[0]
-            reference_values = reference_values[indices.flatten()].reshape(
-                (labels, neighbors, features)
-            )
-            # reference_values = reference_values.vindex[indices]
+            # neighbors = indices.shape[1]
+            # features = reference_values.shape[1]
+            # labels = indices.shape[0]
+            # reference_values = reference_values[indices.flatten()].reshape(
+            #     (labels, neighbors, features)
+            # )
+            reference_values = reference_values.vindex[indices]
         else:
             reference_values = reference_values[indices]
         # reference_values dims are (labels,neighbors,features)
