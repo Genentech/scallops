@@ -48,7 +48,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Determine Version
         shell: bash
@@ -140,7 +140,7 @@ jobs:
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_PROJECT_REQUIRES_PYTHON: ">=3.11"
+          CIBW_PROJECT_REQUIRES_PYTHON: ">=3.12"
           CIBW_SKIP: ${{ env.CIBW_SKIP }}
           CIBW_BUILD_VERBOSITY: 1
           CIBW_ARCHS_MACOS: "x86_64 arm64"
@@ -193,7 +193,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       # Make sure sdist also uses the pretend version if it's struggling on Ubuntu runner (usually fine, but safe to include)
       - name: Build sdist
         run: |
