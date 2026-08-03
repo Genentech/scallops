@@ -134,6 +134,7 @@ def illumination_correction(
         z_index=z_index,
         expected_images=expected_images,
         download_suffixes={".nd2", ".tif", ".tiff"},
+        t_index=t_index,
     )
     z_index = init["z_index"]
     z_index_per_tile = isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(

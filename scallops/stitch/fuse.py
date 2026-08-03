@@ -22,7 +22,7 @@ from scallops.io import _images2fov, _localize_path, pluralize
 from scallops.registration.crosscorrelation import _apply_window, _filter_percentiles
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import calc_best_shift
-from scallops.stitch.utils import _crop_image, dtype_convert
+from scallops.stitch.utils import _crop_image, _select_t_index, dtype_convert
 from scallops.utils import _cpu_count
 from scallops.zarr_io import (
     _attrs_axes_scales,
@@ -52,6 +52,7 @@ def _fuse(
     channel_window: int = 2,
     channel_cross_correlation_upsample: int = 2,
     channel_filter_percentiles: tuple[float, float] | None = None,
+    t_index: int | None = None,
 ):
     """Use stitching coordinates to fuse tiles.
 
@@ -76,6 +77,8 @@ def _fuse(
     :param channel_cross_correlation_upsample: Perform subpixel alignment for registration across channels if greater than one
     :param channel_filter_percentiles: Replace data outside of percentile range [q1, q2] with uniform noise over the range
         [q1,q2] for registration across channels.
+    :param t_index: The t-index to select from images with a time dimension. Required
+        when images have more than one timepoint (e.g. live imaging data).
     """
     assert blend in ["none", "linear"]
     if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
@@ -98,7 +101,7 @@ def _fuse(
 
     n_channels = img.sizes["c"]
     size_z = img.sizes["z"] if "z" in img.dims else 1
-    img = img.isel(t=0, z=0, missing_dims="ignore")
+    img = _select_t_index(img, t_index).isel(z=0, missing_dims="ignore")
     # Capture channel names from the tiles (e.g. from nd2 metadata via bioio) so
     # they can be written to the output OMERO metadata. Skip integer/positional
     # coordinates since those carry no channel name information.
@@ -315,6 +318,7 @@ def _fuse(
                 channel_cross_correlation_upsample=channel_cross_correlation_upsample,
                 channel_window=channel_window,
                 channel_filter_percentiles=channel_filter_percentiles,
+                t_index=t_index,
             )
 
             delayed_results.append(d)
@@ -421,6 +425,7 @@ def _fuse_image(
     channel_cross_correlation_upsample: int = 1,
     channel_window: int = 1,
     channel_filter_percentiles: tuple[float, float] | None = None,
+    t_index: int | None = None,
 ):
     local_image_paths = [_localize_path(path) for path in image_paths]
     image_paths = [
@@ -428,9 +433,8 @@ def _fuse_image(
         for i in range(len(image_paths))
     ]
 
-    img = _images2fov(image_paths, image_attrs, scene_id=scene_id).isel(
-        t=0, missing_dims="ignore"
-    )
+    img = _images2fov(image_paths, image_attrs, scene_id=scene_id)
+    img = _select_t_index(img, t_index)
     [os.remove(path) for path in local_image_paths if path is not None]
     if "z" in img.dims:
         img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)

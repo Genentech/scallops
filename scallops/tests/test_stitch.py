@@ -210,6 +210,56 @@ def test_stitch_channel_names_from_tiles(tmp_path):
 
 
 @pytest.mark.io
+def test_stitch_t_index(tmp_path):
+    # synthetic multi-timepoint tiles: dims (t=2, c=1, y=1024, x=1024), each t offset
+    # by a known amount so the selected timepoint is verifiable from the output.
+    input_path = tmp_path / "input"
+    coords = [(0, 0), (0.5, 1024 - 50.5), (1000, 0.5), (999, 1024 - 49.5)]
+    for i in range(len(coords)):
+        c = coords[i]
+        img = np.ones((2, 1, 1024, 1024), dtype=np.uint16)
+        img[0] = i + 1
+        img[1] = i + 1 + 100
+        _write_image_with_position(
+            input_path / f"test-{i}.zarr",
+            xr.DataArray(img, dims=["t", "c", "y", "x"]),
+            c[0],
+            c[1],
+        )
+
+    def run(t_index, output_name):
+        cmd = [
+            "scallops",
+            "stitch",
+            "--images",
+            str(input_path),
+            "--image-pattern",
+            "{well}-{skip}.zarr",
+            "--groupby",
+            "well",
+            "--image-output",
+            str(tmp_path / output_name),
+            "--report-output",
+            str(tmp_path / f"{output_name}-report"),
+            "--no-evaluate",
+            "--radial-correction-k",
+            "none",
+        ]
+        if t_index is not None:
+            cmd += ["--t-index", str(t_index)]
+        subprocess.check_call(cmd)
+        return read_image(str(tmp_path / output_name)).values
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run(None, "stitch_no_t_index.zarr")
+
+    image_t0 = run(0, "stitch_t0.zarr")
+    image_t1 = run(1, "stitch_t1.zarr")
+    # t=1 has a larger additive offset than t=0, so its mean should be higher.
+    assert image_t0.mean() < image_t1.mean()
+
+
+@pytest.mark.io
 def test_stitch_cli(tmp_path):
     input_path = tmp_path / "input"
 

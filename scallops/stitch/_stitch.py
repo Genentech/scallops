@@ -74,6 +74,7 @@ def _single_stitch(
     channel_cross_correlation_upsample: int | None,
     channel_window: int | None,
     channel_filter_percentiles: tuple[float, float] | None,
+    t_index: int | None = None,
 ):
     """Process a single cycle of images."""
     _, image_filepaths, image_metadata = image_tuple
@@ -123,6 +124,7 @@ def _single_stitch(
         channel=channel,
         z_index=z_index,
         expected_images=expected_images,
+        t_index=t_index,
     )
     z_index = init["z_index"]
 
@@ -190,6 +192,7 @@ def _single_stitch(
         flip_y_axis=flip_y_axis,
         flip_x_axis=flip_x_axis,
         swap_axes=swap_axes,
+        t_index=t_index,
     )
 
     max_shift = stitch_result["max_shift"]
@@ -398,6 +401,7 @@ def _single_stitch(
         channel_cross_correlation_upsample=channel_cross_correlation_upsample,
         channel_window=channel_window,
         channel_filter_percentiles=channel_filter_percentiles,
+        t_index=t_index,
     )
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -425,6 +429,7 @@ def _write_arrays(
     channel_cross_correlation_upsample,
     channel_window,
     channel_filter_percentiles,
+    t_index=None,
 ):
     gc.collect()
     fmt = _current_format()
@@ -537,6 +542,7 @@ def _write_arrays(
             channel_cross_correlation_upsample=channel_cross_correlation_upsample,
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
+            t_index=t_index,
         )
 
     # cleanup

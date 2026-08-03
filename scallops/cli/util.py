@@ -388,6 +388,17 @@ def z_index_tile_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def t_index_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--t-index",
+        dest="t_index",
+        default=None,
+        type=int,
+        help="Time index (0-based) to select from images with a time dimension. "
+        "Required when images have more than one timepoint (e.g. live imaging data).",
+    )
+
+
 def output_dir_arg(parser: argparse.ArgumentParser) -> None:
     """Add the output directory argument to a parser.
 

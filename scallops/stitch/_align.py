@@ -125,6 +125,7 @@ def _get_read_images(
     radial_correction_k: float | None = None,
     crop_width: tuple[int, int] | None = None,
     n_scenes: int | None = None,
+    t_index: int | None = None,
 ):
     n = len(filepaths) if n_scenes is None else n_scenes
     z_index_is_sequence = isinstance(
@@ -140,6 +141,7 @@ def _get_read_images(
             scene_id=i if n_scenes is not None else None,
             radial_correction_k=radial_correction_k,
             z_index=z_index[i] if z_index_is_sequence else z_index,
+            t_index=t_index,
         )
         for i in range(n)
     ]
@@ -165,6 +167,7 @@ def stitch_align(
     flip_y_axis: int | None = None,
     flip_x_axis: int | None = None,
     swap_axes: bool | None = None,
+    t_index: int | None = None,
 ) -> dict:
     """Find optimal tile positions
 
@@ -187,6 +190,8 @@ def stitch_align(
     :param flip_y_axis: Whether to flip y axis and override automatic determination
     :param flip_x_axis: Whether to flip x axis and override automatic determination
     :param swap_axes: Whether to swap y and x axes and override automatic determination
+    :param t_index: The t-index to select from images with a time dimension. Required
+        when images have more than one timepoint (e.g. live imaging data).
     :return: Result dictionary
     """
 
@@ -198,6 +203,7 @@ def stitch_align(
         radial_correction_k=None,  # Do not do radial correction before determine layout
         crop_width=crop_width,
         n_scenes=n_scenes,
+        t_index=t_index,
     )
 
     (
@@ -321,6 +327,7 @@ def stitch_align(
             radial_correction_k=radial_correction_k,
             crop_width=crop_width,
             n_scenes=n_scenes,
+            t_index=t_index,
         )
 
         tile_shape = (
