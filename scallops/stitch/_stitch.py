@@ -287,21 +287,27 @@ def _single_stitch(
         filesystem=fs,
     )
 
-    cluster = AgglomerativeClustering(
-        n_clusters=None,
-        distance_threshold=tile_shape_no_crop[0] * 0.1,
-        linkage="single",
-    )
-    cluster.fit_predict(stitch_positions_df[["y"]])
-    n_partitions_y = len(np.unique(cluster.labels_))
+    # AgglomerativeClustering requires at least 2 samples; a well with a single tile
+    # (e.g. a sparse live-imaging FOV) trivially has one partition.
+    if len(stitch_positions_df) > 1:
+        cluster = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=tile_shape_no_crop[0] * 0.1,
+            linkage="single",
+        )
+        cluster.fit_predict(stitch_positions_df[["y"]])
+        n_partitions_y = len(np.unique(cluster.labels_))
 
-    cluster = AgglomerativeClustering(
-        n_clusters=None,
-        distance_threshold=tile_shape_no_crop[1] * 0.1,
-        linkage="single",
-    )
-    cluster.fit_predict(stitch_positions_df[["x"]])
-    n_partitions_x = len(np.unique(cluster.labels_))
+        cluster = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=tile_shape_no_crop[1] * 0.1,
+            linkage="single",
+        )
+        cluster.fit_predict(stitch_positions_df[["x"]])
+        n_partitions_x = len(np.unique(cluster.labels_))
+    else:
+        n_partitions_y = 1
+        n_partitions_x = 1
 
     # replace source with local source
     stitch_positions_df_local = stitch_positions_df.copy()

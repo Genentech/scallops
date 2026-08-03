@@ -267,6 +267,9 @@ def stitch_align(
         logger.info("No valid edges found. Using stage positions.")
         origin = staged.min(axis=0)
         staged -= origin
+        if radial_correction_k == "auto":
+            # no pairs available to sample for automatic K determination
+            radial_correction_k = None
         return dict(
             swap=swap_axes,
             flip_y=flip_y_axis,

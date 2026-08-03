@@ -156,18 +156,27 @@ def _fuse(
     if channels_per_batch < 0:
         channels_per_batch = len(output_channels)
     channels_per_batch = min(channels_per_batch, len(output_channels))
-    cluster = AgglomerativeClustering(
-        n_clusters=None, distance_threshold=tile_shape[0] * 0.1, linkage="single"
-    )
-    cluster.fit_predict(df[["y"]])
-    y_step_size = math.ceil(fused_y_size / len(np.unique(cluster.labels_)))
+    # AgglomerativeClustering requires at least 2 samples; a well with a single tile
+    # (e.g. a sparse live-imaging FOV) trivially has one partition.
+    single_tile = len(df) <= 1
+    if single_tile:
+        y_step_size = fused_y_size
+    else:
+        cluster = AgglomerativeClustering(
+            n_clusters=None, distance_threshold=tile_shape[0] * 0.1, linkage="single"
+        )
+        cluster.fit_predict(df[["y"]])
+        y_step_size = math.ceil(fused_y_size / len(np.unique(cluster.labels_)))
 
     if chunk_size is None:
-        cluster = AgglomerativeClustering(
-            n_clusters=None, distance_threshold=tile_shape[1] * 0.1, linkage="single"
-        )
-        cluster.fit_predict(df[["x"]])
-        x_step_size = math.ceil(fused_x_size / len(np.unique(cluster.labels_)))
+        if single_tile:
+            x_step_size = fused_x_size
+        else:
+            cluster = AgglomerativeClustering(
+                n_clusters=None, distance_threshold=tile_shape[1] * 0.1, linkage="single"
+            )
+            cluster.fit_predict(df[["x"]])
+            x_step_size = math.ceil(fused_x_size / len(np.unique(cluster.labels_)))
         chunk_size = y_step_size, x_step_size
     partition_tree = None
     locks = None
