@@ -2,7 +2,7 @@
 Workflow Reference
 ********************
 
-Scallops provides two primary end-to-end pipelines written in **WDL 1.0** (Workflow Description Language). These workflows are designed for scalability and reproducibility across various environments, including local machines, cloud infrastructure, and high-performance computing (HPC) clusters.
+Scallops provides two primary end-to-end pipelines written in **WDL** (Workflow Description Language). These workflows are designed for scalability and reproducibility across various environments, including local machines, cloud infrastructure, and high-performance computing (HPC) clusters.
 
 .. contents:: Table of Contents
    :local:
@@ -488,3 +488,5 @@ If the pre-built tasks do not perfectly fit your needs (e.g., you need to change
 
     # In your workflow file
     import "my_modified_tasks.wdl" as tasks
+
+.. _WDL: https://openwdl.org/
