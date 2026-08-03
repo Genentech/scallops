@@ -14,7 +14,8 @@ ARG BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${BASE_IMAGE}
 ARG UV_VERSION=0.11.30
 COPY --from=docker.io/astral/uv:${UV_VERSION} /uv /uvx /bin/
-
+# Delete the PEP 668 marker file
+RUN rm -f /usr/lib/python3.*/EXTERNALLY-MANAGED
 RUN apt-get update -qq && \
     DEBIAN_FRONTEND=noninteractive apt-get install -qq --no-install-recommends -y \
     build-essential \
