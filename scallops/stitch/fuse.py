@@ -101,7 +101,7 @@ def _fuse(
 
     n_channels = img.sizes["c"]
     size_z = img.sizes["z"] if "z" in img.dims else 1
-    img = _select_t_index(img, t_index).isel(z=0, missing_dims="ignore")
+    img = img.isel(z=0, t=_select_t_index(img, t_index), missing_dims="ignore")
     # Capture channel names from the tiles (e.g. from nd2 metadata via bioio) so
     # they can be written to the output OMERO metadata. Skip integer/positional
     # coordinates since those carry no channel name information.
@@ -445,7 +445,7 @@ def _fuse_image(
     ]
 
     img = _images2fov(image_paths, image_attrs, scene_id=scene_id)
-    img = _select_t_index(img, t_index)
+    img = img.isel(t=_select_t_index(img, t_index), missing_dims="ignore")
     [os.remove(path) for path in local_image_paths if path is not None]
     if "z" in img.dims:
         img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)

@@ -37,21 +37,22 @@ ureg = UnitRegistry()
 logger = logging.getLogger("scallops")
 
 
-def _select_t_index(image: xr.DataArray, t_index: int | None) -> xr.DataArray:
+def _select_t_index(image: xr.DataArray, t_index: int | None) -> int:
     """Select a single timepoint from an image with a time dimension.
 
     :param image: Image to select from.
     :param t_index: The t-index to select. Required when the image has more than
         one timepoint; if None, the t dimension is expected to have size 1.
+    :return: The selected timepoint index.
     """
     if "t" not in image.dims:
-        return image
+        return 0
     if image.sizes["t"] > 1 and t_index is None:
         raise ValueError(
             f"Image has {image.sizes['t']} timepoints but stitching operates on a "
             "single timepoint. Pass `t_index` to select one."
         )
-    return image.isel(t=t_index if t_index is not None else 0)
+    return t_index if t_index is not None else 0
 
 
 def _read_tile(
@@ -65,7 +66,7 @@ def _read_tile(
     t_index: int | None = None,
 ) -> np.ndarray:
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
-    img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
+    img = img.isel(c=channel, t=_select_t_index(img, t_index), missing_dims="ignore")
     if img.ndim > 2:
         img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
     img = img.values
@@ -721,7 +722,7 @@ def _best_focus_z_index(img: xr.DataArray):
 @delayed
 def _power_spectrum_delayed(file_list, attrs, scene_id, channel, tmp_dir, t_index=None):
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id, tmp_dir=tmp_dir)
-    img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
+    img = img.isel(c=channel, t=_select_t_index(img, t_index), missing_dims="ignore")
     return _best_focus_z_index(img)
 
 

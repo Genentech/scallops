@@ -175,7 +175,9 @@ def single_stitch_preview(
                 dask=False,
                 scene_id=i if n_scenes is not None else None,
             )
-            img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
+            img = img.isel(
+                c=channel, t=_select_t_index(img, t_index), missing_dims="ignore"
+            )
             z_index_ = z_index[i] if z_index_per_tile else z_index
             img = (
                 _z_projection(img, z_index_)
