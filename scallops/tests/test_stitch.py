@@ -210,6 +210,144 @@ def test_stitch_channel_names_from_tiles(tmp_path):
 
 
 @pytest.mark.io
+def test_stitch_single_tile(tmp_path):
+    # A well with exactly one tile (e.g. a sparse live-imaging FOV that doesn't cover
+    # the whole well) has no other tile to align against, so layout auto-detection
+    # should fall back to placing the tile at its stage position instead of crashing.
+    input_path = tmp_path / "input"
+    img = np.ones((1, 1024, 1024), dtype=np.uint16)
+    _write_image_with_position(
+        input_path / "test-0.zarr",
+        xr.DataArray(img, dims=["c", "y", "x"]),
+        0,
+        0,
+    )
+
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-{skip}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "stitch.zarr"),
+        "--report-output",
+        str(tmp_path / "stitch"),
+        "--no-evaluate",
+        "--radial-correction-k",
+        "none",
+    ]
+    subprocess.check_call(cmd)
+    result = read_image(str(tmp_path / "stitch.zarr"))
+    assert result.shape[-2:] == (1024, 1024)
+
+
+@pytest.mark.io
+def test_stitch_single_tile_auto_radial_with_ffp(tmp_path):
+    # A single-tile well has no pairs to sample for automatic radial-correction-k
+    # determination (the default `--radial-correction-k auto`). It should fall back
+    # to no radial correction instead of leaving the unresolved "auto" sentinel to
+    # reach `radial_correct`, which only accepts a numeric k.
+    input_path = tmp_path / "input"
+    img = np.ones((2, 1024, 1024), dtype=np.uint16)
+    _write_image_with_position(
+        input_path / "test-0.zarr",
+        xr.DataArray(img, dims=["c", "y", "x"]),
+        0,
+        0,
+    )
+
+    illum_args = [
+        "scallops",
+        "illum-corr",
+        "agg",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-{skip}.zarr",
+        "--groupby",
+        "well",
+        "-o",
+        str(tmp_path / "illum"),
+    ]
+    subprocess.check_call(illum_args)
+
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-{skip}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "stitch.zarr"),
+        "--report-output",
+        str(tmp_path / "stitch"),
+        "--no-evaluate",
+        "--ffp",
+        str(tmp_path / "illum" / "test.ome.tiff"),
+    ]
+    subprocess.check_call(cmd)
+    result = read_image(str(tmp_path / "stitch.zarr"))
+    assert result.shape[-2:] == (1024, 1024)
+
+
+@pytest.mark.io
+def test_stitch_t_index(tmp_path):
+    # synthetic multi-timepoint tiles: dims (t=2, c=1, y=1024, x=1024), each t offset
+    # by a known amount so the selected timepoint is verifiable from the output.
+    input_path = tmp_path / "input"
+    coords = [(0, 0), (0.5, 1024 - 50.5), (1000, 0.5), (999, 1024 - 49.5)]
+    for i in range(len(coords)):
+        c = coords[i]
+        img = np.ones((2, 1, 1024, 1024), dtype=np.uint16)
+        img[0] = i + 1
+        img[1] = i + 1 + 100
+        _write_image_with_position(
+            input_path / f"test-{i}.zarr",
+            xr.DataArray(img, dims=["t", "c", "y", "x"]),
+            c[0],
+            c[1],
+        )
+
+    def run(t_index, output_name):
+        cmd = [
+            "scallops",
+            "stitch",
+            "--images",
+            str(input_path),
+            "--image-pattern",
+            "{well}-{skip}.zarr",
+            "--groupby",
+            "well",
+            "--image-output",
+            str(tmp_path / output_name),
+            "--report-output",
+            str(tmp_path / f"{output_name}-report"),
+            "--no-evaluate",
+            "--radial-correction-k",
+            "none",
+        ]
+        if t_index is not None:
+            cmd += ["--t-index", str(t_index)]
+        subprocess.check_call(cmd)
+        return read_image(str(tmp_path / output_name)).values
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run(None, "stitch_no_t_index.zarr")
+
+    image_t0 = run(0, "stitch_t0.zarr")
+    image_t1 = run(1, "stitch_t1.zarr")
+    # t=1 has a larger additive offset than t=0, so its mean should be higher.
+    assert image_t0.mean() < image_t1.mean()
+
+
+@pytest.mark.io
 def test_stitch_cli(tmp_path):
     input_path = tmp_path / "input"
 

@@ -89,4 +89,5 @@ complex biological systems data.
    workflows
    example_notebooks
    faq
+   release_notes
    api

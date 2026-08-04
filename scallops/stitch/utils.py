@@ -37,6 +37,23 @@ ureg = UnitRegistry()
 logger = logging.getLogger("scallops")
 
 
+def _select_t_index(image: xr.DataArray, t_index: int | None) -> xr.DataArray:
+    """Select a single timepoint from an image with a time dimension.
+
+    :param image: Image to select from.
+    :param t_index: The t-index to select. Required when the image has more than
+        one timepoint; if None, the t dimension is expected to have size 1.
+    """
+    if "t" not in image.dims:
+        return image
+    if image.sizes["t"] > 1 and t_index is None:
+        raise ValueError(
+            f"Image has {image.sizes['t']} timepoints but stitching operates on a "
+            "single timepoint. Pass `t_index` to select one."
+        )
+    return image.isel(t=t_index if t_index is not None else 0)
+
+
 def _read_tile(
     file_list: list[str] | zarr.Group,
     attrs: dict[str, str | list[str]],
@@ -45,9 +62,10 @@ def _read_tile(
     crop_width: tuple[int, int] | None = None,
     z_index: int | Literal["max"] = "max",
     scene_id: None | str | int = None,
+    t_index: int | None = None,
 ) -> np.ndarray:
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
-    img = img.isel(t=0, c=channel, missing_dims="ignore")
+    img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     if img.ndim > 2:
         img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
     img = img.values
@@ -701,10 +719,9 @@ def _best_focus_z_index(img: xr.DataArray):
 
 
 @delayed
-def _power_spectrum_delayed(file_list, attrs, scene_id, channel, tmp_dir):
-    img = _images2fov(
-        file_list, attrs, dask=False, scene_id=scene_id, tmp_dir=tmp_dir
-    ).isel(t=0, c=channel, missing_dims="ignore")
+def _power_spectrum_delayed(file_list, attrs, scene_id, channel, tmp_dir, t_index=None):
+    img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id, tmp_dir=tmp_dir)
+    img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     return _best_focus_z_index(img)
 
 
@@ -715,6 +732,7 @@ def _init_tiles(
     z_index: int | Literal["max", "focus"] | str = "max",
     expected_images: int | None = None,
     download_suffixes: set[str] | None = None,
+    t_index: int | None = None,
 ):
     if not isinstance(z_index, int) and z_index not in ("max", "focus"):
         z_index = pd.read_parquet(z_index.format(**image_metadata["file_metadata"][0]))
@@ -775,7 +793,9 @@ def _init_tiles(
             attrs = fileattrs_[i] if fileattrs_ is not None else None
             scene_id = i if n_scenes is not None else None
             results.append(
-                _power_spectrum_delayed(file_list, attrs, scene_id, channel, tmp_dir)
+                _power_spectrum_delayed(
+                    file_list, attrs, scene_id, channel, tmp_dir, t_index=t_index
+                )
             )
         z_index = dask.compute(*results)
         logger.info("Determined best focus z-index for all tiles.")

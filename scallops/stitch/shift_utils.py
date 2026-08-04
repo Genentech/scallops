@@ -449,6 +449,8 @@ def _add_quintet(quintet, seen):
 
 
 def _locate_anchor_quintets(staged_raw):
+    if len(staged_raw) <= 1:
+        return []
     knn = NearestNeighbors(algorithm="kd_tree")
     knn.fit(staged_raw)
 

@@ -18,6 +18,7 @@ from scallops.cli.util import (
     images_arg,
     no_version_arg,
     subset_arg,
+    t_index_arg,
     z_index_tile_arg,
 )
 
@@ -101,6 +102,7 @@ def _create_stitch_preview_parser(
         ),
     )
     z_index_tile_arg(parser)
+    t_index_arg(parser)
     _sort_groups(parser)
     parser.set_defaults(func=_run_stitch_preview)
     return parser
@@ -299,6 +301,7 @@ def _create_stitch_parser(
         help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning across channels.",
     )
     z_index_tile_arg(parser)
+    t_index_arg(parser)
     force_arg(parser)
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
