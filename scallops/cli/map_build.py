@@ -688,8 +688,6 @@ def run_pipeline_map_transform_yj(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(paths)
-        if isinstance(data.X, da.Array):
-            data.X = data.X.compute()
         logger.info("map transform-yj: %s cells × %s features",
                     f"{data.shape[0]:,}", f"{data.shape[1]:,}")
         result = _apply_transform_yj_inmem(data, arguments)
@@ -741,8 +739,6 @@ def run_pipeline_map_scale(arguments: argparse.Namespace) -> None:
 
     with _create_default_dask_config():
         data = _read_data(paths)
-        if isinstance(data.X, da.Array):
-            data.X = data.X.compute()
         logger.info("map scale: %s cells × %s features", f"{data.shape[0]:,}", f"{data.shape[1]:,}")
         result = _apply_scale_inmem(data, arguments)
         _save_zarr(result, output, metadata)
@@ -859,8 +855,6 @@ def run_pipeline_map_tvn(arguments: argparse.Namespace) -> None:
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(paths)
-        if isinstance(data.X, da.Array):
-            data.X = data.X.compute()
         logger.info(f"map tvn: {data.shape[0]:,} cells × {data.shape[1]:,} features")
         result = _apply_tvn_inmem(data, arguments)
         _save_zarr(result, output, metadata)
@@ -1763,13 +1757,32 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
         )
         _output_cap = None   # force-disable the meaningless clip
 
-    result = transform_features_yj(data, by=by_cols, n_jobs=_n_jobs,
-                                   standardize=_standardize,
-                                   output_cap=_output_cap)
+    # ── Call transform_features_yj with Phase-2 zarr write-through ───────────
+    # Phase-2 is activated when output_zarr_path is given AND data.X is dask.
+    # It writes each feature block directly to zarr — no X_out pre-allocation.
+    # Block size is capped at budget/8 so peak RAM per block ≈ budget/8 (float64)
+    # + budget/16 (float32 write buffer) = budget × 3/16 instead of full matrix.
+    _budget_gb  = getattr(args, "memory_budget_gb", None)
+    _output_dir = (getattr(args, "output", None) or
+                   getattr(args, "output_dir", None) or "")
+    _feat_block_bytes = int((_budget_gb or 32) * 1e9 / 8)   # budget/8 per block
 
-    # No post-YJ clip here: input winsorisation (--yj-clip-percentile) prevents
-    # overflow values; output clip (--yj-clip-output) is only meaningful when
-    # --yj-standardize is set and is handled inside _yj_fit_transform_col.
+    if isinstance(data.X, da.Array) and _output_dir:
+        # Phase-2: stream directly to zarr, no pre-allocation
+        _yj_tmp = _output_dir.rstrip("/") + "_yjtmp.zarr"
+        result = transform_features_yj(
+            data, by=by_cols, n_jobs=_n_jobs,
+            standardize=_standardize, output_cap=_output_cap,
+            output_zarr_path=_yj_tmp,
+            feat_block_bytes=_feat_block_bytes,
+        )
+    else:
+        # Phase-1/standard: feature-block streaming without zarr write-through
+        result = transform_features_yj(
+            data, by=by_cols, n_jobs=_n_jobs,
+            standardize=_standardize, output_cap=_output_cap,
+            feat_block_bytes=_feat_block_bytes,
+        )
 
     _merge_uns(data, result)
     return result
@@ -1940,9 +1953,11 @@ def _apply_pca_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
         if var_f32 is not None:
             X_pca[start:end] /= np.sqrt(var_f32)
 
-    # Keep X = scaled features; store PCA coords in obsm
+    # Keep X = scaled features (as dask if possible); store PCA coords in obsm.
+    # Avoid np.asarray which creates a 192 GB copy — keep lazy if dask.
+    _X_out = data.X if isinstance(data.X, da.Array) else np.asarray(data.X, dtype=np.float32)
     result = anndata.AnnData(
-        X=np.asarray(data.X, dtype=np.float32),   # scaled features preserved
+        X=_X_out,
         obs=data.obs.copy(),
         var=data.var.copy(),                        # original feature names preserved
     )
@@ -2031,20 +2046,23 @@ def _apply_tvn_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
 
     if "X_pca" not in data.obsm:
         # Legacy path: TVN directly on X (no prior PCA step).
+        # Compute only if needed — TVN itself is small (PCA space)
         if isinstance(data.X, da.Array):
-            data.X = data.X.compute()
+            data = anndata.AnnData(X=data.X.compute(), obs=data.obs.copy(),
+                                   var=data.var.copy(), uns=dict(data.uns))
         result = typical_variation_normalization(data, reference_query=ref_q, by=by_col)
         result.obsm["X_tvn"] = np.asarray(result.X, dtype=np.float32)
         _merge_uns(data, result)
         return result
 
-    # TVN operates on the PCA embedding, not on the raw scaled features
+    # TVN operates on the PCA embedding, not on the raw scaled features.
+    # Keep data.X as dask — no need to materialise 192 GB for TVN.
     tmp = _pca_view(data)
     tvn_result = typical_variation_normalization(tmp, reference_query=ref_q, by=by_col)
 
-    # Assemble the updated cells AnnData
+    # Assemble result: carry X lazily so downstream steps can also stream
     result = anndata.AnnData(
-        X=np.asarray(data.X, dtype=np.float32),   # scaled features untouched
+        X=data.X,   # keep as dask if it is dask — materialise lazily on write
         obs=data.obs.copy(),
         var=data.var.copy(),                        # original feature names (p columns)
     )
@@ -2484,34 +2502,8 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
                         f"{cells.X.nbytes / 1e9:.1f} GB in RAM"
                     )
             elif step == "transform-yj":
-                # Phase 2: if budget set and X is dask, stream YJ output to zarr
-                _budget_gb2 = getattr(arguments, "memory_budget_gb", None)
-                if _budget_gb2 is not None and isinstance(cells.X, da.Array):
-                    from scallops.features.preprocessing import transform_features_yj
-                    _n_obs2, _n_feat2 = cells.shape
-                    _feat_block_bytes = max(int(_budget_gb2 * 1e9), 1)
-                    _yj_zarr = cells_zarr.rstrip("/").rstrip(".zarr") + "_yj_tmp.zarr"
-                    _yj_args = argparse.Namespace(**{**vars(arguments)})
-                    _by_ex = getattr(arguments, "by", None)
-                    _plate = _by_ex[0] if _by_ex else getattr(arguments, "plate_column", "plate")
-                    _well  = _by_ex[1] if (_by_ex and len(_by_ex) > 1) else getattr(arguments, "well_column", "well")
-                    _by_yj = [c for c in [_plate, _well] if c in cells.obs.columns] or None
-                    logger.info("map run [transform-yj]: Phase-2 streaming → %s "
-                                "(feat_block=%.0f MB)", _yj_zarr,
-                                _feat_block_bytes / 1e6)
-                    cells_new = transform_features_yj(
-                        cells,
-                        by=_by_yj,
-                        standardize=bool(getattr(arguments, "yj_standardize", False)),
-                        n_jobs=getattr(arguments, "max_cpus", -1) or -1,
-                        output_cap=getattr(arguments, "yj_clip_output", None),
-                        output_zarr_path=_yj_zarr,
-                        feat_block_bytes=_feat_block_bytes,
-                    )
-                    cells_new.uns.update(cells.uns)
-                    cells = cells_new
-                else:
-                    cells = _apply_transform_yj_inmem(cells, arguments)
+                # Identical to standalone `map transform-yj` — single shared function
+                cells = _apply_transform_yj_inmem(cells, arguments)
             elif step == "scale":
                 cells = _apply_scale_inmem(cells, arguments)
             elif step == "pca":
