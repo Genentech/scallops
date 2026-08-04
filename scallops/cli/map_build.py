@@ -291,130 +291,9 @@ def _save_zarr(data: anndata.AnnData, output: str, metadata: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers: glob expansion, condition-column, resource estimation
+# Shared helpers: glob expansion, condition-column
 # ---------------------------------------------------------------------------
 
-
-def _available_memory_gb() -> float:
-    """Return the effective memory ceiling in GB, respecting cgroup limits.
-
-    Priority order (largest → smallest restriction wins):
-    1. cgroup v2  ``/sys/fs/cgroup/memory.max``  (set by SLURM, k8s, Docker)
-    2. cgroup v1  ``/sys/fs/cgroup/memory/memory.limit_in_bytes``
-    3. ``psutil.virtual_memory().available``  (currently free on the node)
-    4. Hard-coded 64 GB fallback
-    """
-    for path in ("/sys/fs/cgroup/memory.max",
-                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
-        try:
-            raw = open(path).read().strip()
-            if raw not in ("max", ""):
-                limit = int(raw)
-                if limit < (1 << 62):   # skip the "unlimited" sentinel
-                    return limit / 1e9
-        except (FileNotFoundError, ValueError, PermissionError):
-            pass
-    try:
-        import psutil as _ps
-        return _ps.virtual_memory().available / 1e9
-    except Exception:
-        return 64.0
-
-
-def _step_resource_plan(zarr_path: str, step: str,
-                        max_cpus: int | None = None) -> dict:
-    """Estimate memory and optimal CPU count for the *next* pipeline step.
-
-    Reads the zarr shape and dtype from metadata (no data loaded) and
-    applies step-specific memory formulas to recommend:
-
-    * ``load_gb``     — minimum RAM to hold the working array
-    * ``peak_gb``     — peak RAM during the step (including temporaries)
-    * ``optimal_cpus`` — largest core count that fits within available RAM
-    * ``warning``     — non-empty string if recommended count was clamped
-
-    :param zarr_path: Path to the input AnnData zarr for the next step.
-    :param step: Pipeline step name (``'transform-yj'``, ``'scale-local'``,
-        ``'pca'``, etc.).
-    :param max_cpus: Hard CPU cap (``None`` → ``os.cpu_count()``).
-    :return: Dict with estimation results.
-    """
-    import zarr as _zarr
-    from scallops.zarr_io import is_anndata_zarr
-
-    avail_gb  = _available_memory_gb()
-    n_cpus    = min(max_cpus or os.cpu_count() or 1, os.cpu_count() or 1)
-
-    # Read shape + dtype without loading data
-    try:
-        if zarr_path.startswith(("s3://", "gs://", "az://", "abfs://")):
-            import s3fs as _s3; import s3fs
-            fs  = _s3.S3FileSystem()
-            store = s3fs.S3Map(root=zarr_path, s3=fs)
-        else:
-            store = zarr_path
-        root  = _zarr.open_group(store, mode="r")
-        shape = tuple(root["X"].shape)
-        itemsize = root["X"].dtype.itemsize
-    except Exception:
-        logger.debug("_step_resource_plan: could not read %s", zarr_path)
-        return {"optimal_cpus": n_cpus, "warning": ""}
-
-    n_cells, n_feat = shape
-    raw_gb = n_cells * n_feat * itemsize / 1e9
-
-    # ── Per-step formulas ────────────────────────────────────────────────────
-    if step == "transform-yj":
-        # float32 load + float64 working copy (2×) + float32 output
-        load_gb  = raw_gb
-        peak_gb  = raw_gb * 3.5           # float64 X_full + output + temporaries
-        # Each Dask thread needs: one column slice × one group (6-7 MB per task)
-        per_task_mb = max(1.0, n_cells / 12 * 8 / 1e6 + 20)   # float64 col + scipy
-        # Cores limited by per-task overhead (threads share X_full)
-        mem_limited = int(avail_gb * 1000 / per_task_mb)
-        optimal = min(n_cpus, max(1, mem_limited))
-
-    elif step in ("scale-global", "scale-local"):
-        # Batch of 100K cells × features × float32; kNN coords are small
-        batch_gb = 100_000 * n_feat * 4 / 1e9
-        load_gb  = raw_gb
-        peak_gb  = raw_gb + batch_gb * 4  # data + a few in-flight batches
-        mem_limited = max(1, int(avail_gb / max(batch_gb, 0.1)))
-        optimal = min(n_cpus, mem_limited)
-
-    elif step == "pca":
-        # PCA works on float64; n_components << n_feat so output is small
-        load_gb  = raw_gb
-        peak_gb  = raw_gb * 2.5           # float64 + LAPACK workspace
-        optimal  = n_cpus                  # sklearn PCA uses BLAS threads internally
-
-    else:
-        load_gb = peak_gb = raw_gb
-        optimal = n_cpus
-
-    warning = ""
-    if optimal < n_cpus:
-        warning = (
-            f"RAM limit ({avail_gb:.0f} GB available) constrains cores to "
-            f"{optimal} (requested {n_cpus}).  Use --max-cpus {optimal} "
-            f"or free RAM."
-        )
-
-    msg = (
-        "resource plan [%s]: shape=%s  load=%.1f GB  peak≈%.1f GB  "
-        "avail=%.0f GB  → recommended cores=%d%s"
-    )
-    logger.info(msg, step, shape, load_gb, peak_gb, avail_gb, optimal,
-                f"  ⚠ {warning}" if warning else "")
-
-    return {
-        "shape":        shape,
-        "load_gb":      load_gb,
-        "peak_gb":      peak_gb,
-        "avail_gb":     avail_gb,
-        "optimal_cpus": optimal,
-        "warning":      warning,
-    }
 
 
 def _expand_inputs(paths: list[str]) -> list[str]:
@@ -562,13 +441,7 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
     force = arguments.force
     no_version = arguments.no_version
 
-    # Ensure plate_column / well_column are set (filter uses them for stratification).
-    # The standalone map-filter parser uses --plate-column/--well-column directly.
-    if not hasattr(arguments, "filter_batch_size"):
-        arguments = argparse.Namespace(**{**vars(arguments),
-                                          "filter_batch_size": 500_000})
-    if not hasattr(arguments, "scale_method"):
-        arguments = argparse.Namespace(**{**vars(arguments), "scale_method": "global"})
+    # Defaults now live inside _apply_filter_inmem via getattr — no injection needed.
 
     if _skip_if_exists(output, force):
         return
@@ -635,12 +508,6 @@ def run_pipeline_map_filter(arguments: argparse.Namespace) -> None:
             except Exception as _e:
                 logger.warning("filter: could not write feature report: %s", _e)
 
-        # After writing, estimate resources for the downstream steps so the
-        # user can set --max-cpus / --max-memory appropriately.
-        _out = output if output.endswith(".zarr") else output + ".zarr"
-        for _step in ("transform-yj", "scale-local", "pca"):
-            _step_resource_plan(_out, _step,
-                                max_cpus=getattr(arguments, "max_cpus", None))
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +594,7 @@ def run_pipeline_map_scale(arguments: argparse.Namespace) -> None:
         * ``localz_max_value`` (*float*) — clip value after normalisation.
         * ``force``, ``no_version`` — standard flags.
     """
-    paths      = arguments.input
+    paths      = _expand_inputs(list(arguments.input))
     output     = arguments.output
     force      = arguments.force
     no_version = arguments.no_version
@@ -1023,27 +890,7 @@ def run_pipeline_map_similarity(arguments: argparse.Namespace) -> None:
         logger.info(f"map similarity: {data.shape[0]:,} profiles, {data.shape[1]:,} features")
         sim_adata = _apply_similarity_inmem(data, arguments)
 
-        if cluster_method is not None and cluster_method != "none":
-            logger.info(f"Clustering with method='{cluster_method}'")
-            sim_adata = cluster_similarity(
-                sim_adata,
-                method=cluster_method,
-                auto_params=cluster_auto_params,
-                n_clusters=cluster_n,
-                linkage_method=cluster_linkage,
-                max_n_clusters=cluster_max_n,
-                min_cluster_size=cluster_min_cs,
-                min_samples=cluster_min_samples,
-                resolution=cluster_resolution,
-                similarity_threshold=cluster_threshold,
-                elbow_n_range=cluster_elbow_n,
-                leiden_res_min=cluster_res_min,
-                leiden_res_max=cluster_res_max,
-                random_state=cluster_seed,
-                leaf_ordering=cluster_leaf_ordering,
-            )
-            n_cl = sim_adata.uns["clustering"]["n_clusters"]
-            logger.info(f"Clustering done: {n_cl} clusters, obs['cluster'] populated")
+        sim_adata = _apply_cluster_similarity(sim_adata, arguments)
 
         _save_zarr(sim_adata, output, metadata)
 
@@ -1258,9 +1105,6 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     """
     from scallops.features.preprocessing import (
         filter_data, filter_batch_correlated, remove_correlated_features,
-        _col_batch_filter_parquet,
-        _streaming_cell_and_variance_filter,
-        _streaming_materialise,
     )
 
     plate = getattr(args, "plate_column", "plate")
@@ -2145,37 +1989,6 @@ def _apply_tvn_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata
     return result
 
 
-def _apply_localz_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
-    """Local z-score: normalise each cell relative to its k spatial neighbours.
-
-    Uses :func:`~scallops.features.normalize.normalize_features` with
-    ``normalize="local-zscore"``.  Requires centroid columns in ``obs``
-    (``Nuclei_AreaShape_Center_Y`` / ``_Center_X`` by default).
-
-    This is an *optional* step placed between ``scale`` and ``pca``.  It
-    captures within-well spatial gradients that the global well-level z-score
-    cannot correct.
-    """
-    from scallops.features.normalize import normalize_features
-    ref_q      = getattr(args, "reference_query", None)
-    n_neighbors = int(getattr(args, "localz_neighbors", 75))
-    max_value   = getattr(args, "scale_max_value", getattr(args, "localz_max_value", 5.0))
-    plate_col   = getattr(args, "plate_column", "plate")
-    well_col    = getattr(args, "well_column",  "well")
-    centroid_y  = getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y")
-    centroid_x  = getattr(args, "localz_centroid_x", "Nuclei_AreaShape_Center_X")
-    result = normalize_features(
-        data,
-        reference_query=ref_q,
-        normalize="local-zscore",
-        n_neighbors=n_neighbors,
-        by=[plate_col, well_col],
-        max_value=max_value,
-        centroid_column_names=(centroid_y, centroid_x),
-    )
-    _merge_uns(data, result)
-    return result
-
 
 def _apply_agg_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
     """Aggregate obsm["X_tvn"] (TVN profiles) to perturbation-level means.
@@ -2244,6 +2057,41 @@ def _apply_center_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     result = normalize_features(data, reference_query=ref_q,
                                 by=by, centering=True, scaling=False, robust=robust)
     _merge_uns(data, result)
+    return result
+
+
+def _apply_cluster_similarity(
+    sim_adata: anndata.AnnData, args: argparse.Namespace
+) -> anndata.AnnData:
+    """Apply hierarchical/HDBSCAN/Leiden clustering to a similarity AnnData.
+
+    Single shared implementation called by both the standalone map-similarity
+    runner and the map run step loop — no duplication.
+    """
+    cluster_method = getattr(args, "cluster_method", None)
+    if not cluster_method or cluster_method == "none":
+        return sim_adata
+    from scallops.features.map_cluster import cluster_similarity as _cs
+    logger.info(f"Clustering with method='{cluster_method}'")
+    result = _cs(
+        sim_adata,
+        method=cluster_method,
+        auto_params=getattr(args, "cluster_auto_params", True),
+        n_clusters=getattr(args, "cluster_n_clusters", None),
+        linkage_method=getattr(args, "cluster_linkage", "ward"),
+        max_n_clusters=int(getattr(args, "cluster_max_n_clusters", 50)),
+        min_cluster_size=getattr(args, "cluster_min_cluster_size", None),
+        min_samples=getattr(args, "cluster_min_samples", None),
+        resolution=getattr(args, "cluster_resolution", None),
+        similarity_threshold=float(getattr(args, "cluster_similarity_threshold", 0.3)),
+        elbow_n_range=int(getattr(args, "cluster_elbow_n_range", 20)),
+        leiden_res_min=float(getattr(args, "cluster_leiden_res_min", 0.05)),
+        leiden_res_max=float(getattr(args, "cluster_leiden_res_max", 2.0)),
+        random_state=int(getattr(args, "cluster_random_state", 0)),
+        leaf_ordering=getattr(args, "cluster_leaf_ordering", "fast"),
+    )
+    n_cl = result.uns["clustering"]["n_clusters"]
+    logger.info(f"Clustering done: {n_cl} clusters, obs['cluster'] populated")
     return result
 
 
@@ -2398,26 +2246,11 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             os.environ.setdefault(_blas_var, str(_max_cpus))
         logger.info("map run: BLAS/OMP threads capped at %d (--max-cpus)", _max_cpus)
 
-    # ── Expand glob patterns in --input (e.g. "s3://bucket/50p/*.parquet") ───
-    # Scallops itself does not rely on the shell for expansion, so S3 globs and
-    # local globs both work here via fsspec.
-    import fsspec as _fsspec
-
-    raw_inputs = list(arguments.input)
-    expanded_inputs: list[str] = []
-    for pat in raw_inputs:
-        if any(c in pat for c in ("*", "?", "[")):
-            _fs_pat, _ = _fsspec.url_to_fs(pat)
-            matched = _fs_pat.glob(pat) if hasattr(_fs_pat, "glob") else []
-            matched = [_fs_pat.unstrip_protocol(p) for p in matched]
-            if not matched:
-                raise FileNotFoundError(f"--input pattern matched no files: {pat!r}")
-            expanded_inputs.extend(sorted(matched))
-        else:
-            expanded_inputs.append(pat)
-    if len(expanded_inputs) != len(raw_inputs):
+    # ── Expand glob patterns in --input via shared _expand_inputs ─────────────
+    expanded_inputs = _expand_inputs(list(arguments.input))
+    if len(expanded_inputs) != len(arguments.input):
         logger.info(
-            f"map run: --input expanded {len(raw_inputs)} pattern(s) → "
+            f"map run: --input expanded {len(arguments.input)} pattern(s) → "
             f"{len(expanded_inputs)} file(s)"
         )
     arguments = argparse.Namespace(**{**vars(arguments), "input": expanded_inputs})
@@ -2506,8 +2339,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             logger.info(f"map run [cell-level]: resuming from cells.zarr "
                         f"(completed: {', '.join(sorted(already_done_cells))})")
             cells = _read_data([cells_zarr])
-            if isinstance(cells.X, da.Array):
-                cells.X = cells.X.compute()
+            # Keep X as dask — downstream steps handle both dask and numpy;
         else:
             _raw_chs2   = getattr(arguments, "feature_channels", None)
             _valid_ch2  = set(str(c) for c in _raw_chs2) if _raw_chs2 else None
@@ -2640,25 +2472,7 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             t0 = _time.perf_counter()
             logger.info("map run [similarity]: computing similarity → similarity.zarr")
             sim = _apply_similarity_inmem(profiles, arguments)
-            cluster_meth = getattr(arguments, "cluster_method", "hierarchical")
-            if cluster_meth and cluster_meth != "none":
-                sim = cluster_similarity(
-                    sim,
-                    method=cluster_meth,
-                    auto_params=getattr(arguments, "cluster_auto_params", True),
-                    n_clusters=getattr(arguments, "cluster_n_clusters", None),
-                    linkage_method=getattr(arguments, "cluster_linkage", "ward"),
-                    max_n_clusters=int(getattr(arguments, "cluster_max_n_clusters", 50)),
-                    min_cluster_size=getattr(arguments, "cluster_min_cluster_size", None),
-                    min_samples=getattr(arguments, "cluster_min_samples", None),
-                    resolution=getattr(arguments, "cluster_resolution", None),
-                    similarity_threshold=float(getattr(arguments, "cluster_similarity_threshold", 0.3)),
-                    elbow_n_range=int(getattr(arguments, "cluster_elbow_n_range", 20)),
-                    leiden_res_min=float(getattr(arguments, "cluster_leiden_res_min", 0.05)),
-                    leiden_res_max=float(getattr(arguments, "cluster_leiden_res_max", 2.0)),
-                    random_state=int(getattr(arguments, "cluster_random_state", 0)),
-                    leaf_ordering=getattr(arguments, "cluster_leaf_ordering", "fast"),
-                )
+            sim = _apply_cluster_similarity(sim, arguments)
             # Carry provenance from profiles into the similarity AnnData
             for k, v in profiles.uns.items():
                 if k not in sim.uns:
@@ -3032,8 +2846,6 @@ def run_pipeline_map_pca_select(arguments: argparse.Namespace) -> None:
 
     with _create_default_dask_config():
         data = _read_data(paths)
-        if isinstance(data.X, da.Array):
-            data.X = data.X.compute()
         logger.info(f"map pca-select: {data.shape[0]:,} obs × {data.shape[1]:,} features")
         result = _apply_pca_select_inmem(data, arguments)
         logger.info(f"map pca-select: done — {result.obsm.get('X_pca', result.X).shape[1]:,} PCs retained")

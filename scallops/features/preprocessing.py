@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from array_api_compat import get_namespace
-from sklearn.preprocessing import PowerTransformer
 
 from scallops.features.util import _anndata_to_xr, _query_anndata, _slice_anndata
 
@@ -285,47 +284,6 @@ def filter_data(
 # Streaming filter helpers (used when data.X is a large dask array)
 # ---------------------------------------------------------------------------
 
-
-def _dask_nan_scan(
-    X_dask: "da.Array",
-) -> "tuple[np.ndarray, np.ndarray]":
-    """Compute per-cell and per-feature NaN counts using dask-native ops.
-
-    Replaces the manual ThreadPoolExecutor streaming loop for zarr inputs.
-    Dask parallelises across ALL chunks (both row and column dimensions)
-    in a single fused task graph, avoiding GIL contention and sequential
-    result collection.  On S3 this is 5-10× faster than the streaming loop
-    because dask issues concurrent requests for every chunk simultaneously.
-
-    :param X_dask: Dask array of shape (n_cells, n_feat).
-    :return: ``(bad_counts, nan_per_feat)`` — same semantics as
-        :func:`_streaming_cell_and_variance_filter`.
-    """
-    import dask.array as _da
-    not_finite   = ~_da.isfinite(X_dask)
-    bad_counts   = not_finite.sum(axis=1).compute().astype(np.int32)
-    nan_per_feat = not_finite.sum(axis=0).compute().astype(np.int64)
-    return bad_counts, nan_per_feat
-
-
-def _dask_materialise(
-    X_dask: "da.Array",
-    cell_keep: "np.ndarray",
-    feat_keep: "np.ndarray",
-) -> "np.ndarray":
-    """Materialise a filtered subset of a dask array using native indexing.
-
-    Replaces :func:`_streaming_materialise` for zarr inputs.  Uses dask
-    fancy indexing so the scheduler can parallelise all chunk reads.
-
-    :param X_dask: Dask array (n_cells, n_feat).
-    :param cell_keep: Boolean mask (n_cells,) of cells to keep.
-    :param feat_keep: Boolean mask (n_feat,) of features to keep.
-    :return: Dense float32 numpy array (n_kept_cells, n_kept_feat).
-    """
-    cell_idx = np.where(cell_keep)[0]
-    feat_idx = np.where(feat_keep)[0]
-    return X_dask[cell_idx, :][:, feat_idx].compute().astype(np.float32)
 
 
 def _streaming_cell_and_variance_filter(
