@@ -1532,34 +1532,50 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
         _merge_uns(data, result)
 
     # ── Final NaN safety net (all paths) ────────────────────────────────────
-    # Mirrors the pre-PCA no_nans_per_feature check in decomposition._centerscale.
-    # Regardless of the step-3 mode used above, this guarantees cells.zarr contains
-    # no NaN: features with any residual NaN are dropped (if step-3 ran in
-    # per-well-median mode and missed them) and then any isolated NaN cells in survivors are
-    # imputed to 0.  This is a no-op when the preceding steps already cleaned data.
-    _X_final = result.X if isinstance(result.X, np.ndarray) else np.asarray(result.X)
-    # Use ~isfinite (not isnan) to catch both NaN and Inf — Inf in a minority of
-    # wells can survive step-4 isfinite(median_var) because np.var([…,inf]) = nan
-    # but np.median([finite,…,nan]) is finite when nan is in the minority.
-    _bad_per_feat_final = (~np.isfinite(_X_final)).sum(axis=0)
-    _feat_all_bad = _bad_per_feat_final == _X_final.shape[0]  # every cell non-finite
-    if _feat_all_bad.any():
-        n_drop_final = int(_feat_all_bad.sum())
-        logger.warning(
-            "map run [filter]: final check — dropping %d all-nonfinite features",
-            n_drop_final,
-        )
-        result = _slice_anndata(result, None, ~_feat_all_bad)   # var mask as positional arg
-        _X_final = _X_final[:, ~_feat_all_bad]
-        _bad_per_feat_final = _bad_per_feat_final[~_feat_all_bad]
-    _remaining_bad = _bad_per_feat_final.sum()
-    if _remaining_bad > 0:
-        _X_final[~np.isfinite(_X_final)] = 0.0
-        result.X = _X_final
-        logger.info(
-            "map run [filter]: final check — zero-imputed %d residual non-finite cells",
-            int(_remaining_bad),
-        )
+    # When result.X is a dask array (large dataset), use dask to count bad
+    # values without materialising 192 GB.  For numpy arrays, use the original
+    # fast path.
+    if isinstance(result.X, da.Array):
+        # Chunked check — never loads full matrix
+        _bad_per_feat_final = (~da.isfinite(result.X)).sum(axis=0).compute()
+        _feat_all_bad = _bad_per_feat_final == result.X.shape[0]
+        if _feat_all_bad.any():
+            logger.warning(
+                "map run [filter]: final check — dropping %d all-nonfinite features",
+                int(_feat_all_bad.sum()),
+            )
+            result = _slice_anndata(result, None, ~_feat_all_bad)
+            _bad_per_feat_final = _bad_per_feat_final[~_feat_all_bad]
+        _remaining_bad = int(_bad_per_feat_final.sum())
+        if _remaining_bad > 0:
+            # Impute NaN to 0 lazily via dask map_blocks
+            result.X = da.where(da.isfinite(result.X), result.X,
+                                np.float32(0)).astype("float32")
+            logger.info(
+                "map run [filter]: final check — will zero-impute %d residual "
+                "non-finite values (lazy, applied on write)", _remaining_bad,
+            )
+    else:
+        _X_final = result.X if isinstance(result.X, np.ndarray) else np.asarray(result.X)
+        _bad_per_feat_final = (~np.isfinite(_X_final)).sum(axis=0)
+        _feat_all_bad = _bad_per_feat_final == _X_final.shape[0]
+        if _feat_all_bad.any():
+            n_drop_final = int(_feat_all_bad.sum())
+            logger.warning(
+                "map run [filter]: final check — dropping %d all-nonfinite features",
+                n_drop_final,
+            )
+            result = _slice_anndata(result, None, ~_feat_all_bad)
+            _X_final = _X_final[:, ~_feat_all_bad]
+            _bad_per_feat_final = _bad_per_feat_final[~_feat_all_bad]
+        _remaining_bad = _bad_per_feat_final.sum()
+        if _remaining_bad > 0:
+            _X_final[~np.isfinite(_X_final)] = 0.0
+            result.X = _X_final
+            logger.info(
+                "map run [filter]: final check — zero-imputed %d residual non-finite cells",
+                int(_remaining_bad),
+            )
 
     # ── Post-filter steps (run on already-materialised numpy array) ────────
     if getattr(args, "batch_column", None):
@@ -1690,21 +1706,38 @@ def _apply_transform_yj_inmem(data: anndata.AnnData, args: argparse.Namespace) -
     # percentile removes these without discarding any cells or features.
     _clip_pct = getattr(args, "yj_clip_percentile", 99.9)
     if _clip_pct is not None and _clip_pct < 100:
-        X_clip = np.asarray(data.X, dtype=np.float32)
-        lo = np.nanpercentile(X_clip, 100 - _clip_pct, axis=0)
-        hi = np.nanpercentile(X_clip,         _clip_pct, axis=0)
-        n_clipped = int(((X_clip < lo) | (X_clip > hi)).sum())
-        if n_clipped:
-            X_clip = np.clip(X_clip, lo, hi)
+        # Compute clip bounds per feature using dask if X is lazy (avoids 192 GB alloc)
+        if isinstance(data.X, da.Array):
+            import dask.array as _da2
+            lo = _da2.nanpercentile(data.X, 100 - _clip_pct, axis=0).compute()
+            hi = _da2.nanpercentile(data.X,         _clip_pct, axis=0).compute()
+            # Apply clip lazily — no full materialisation
+            X_clip_dask = _da2.clip(data.X, lo, hi).astype("float32")
+            n_clipped_approx = -1   # can't count without computing; skip log
             logger.info(
-                "map run [transform-yj]: clipped %s extreme values "
-                "to [%.1f, %.1f]th percentile range",
-                f"{n_clipped:,}", 100 - _clip_pct, _clip_pct,
+                "map run [transform-yj]: clipping to [%.1f, %.1f]th percentile (lazy)",
+                100 - _clip_pct, _clip_pct,
             )
             data = anndata.AnnData(
-                X=X_clip, obs=data.obs.copy(),
+                X=X_clip_dask, obs=data.obs.copy(),
                 var=data.var.copy(), uns=data.uns.copy()
             )
+        else:
+            X_clip = np.asarray(data.X, dtype=np.float32)
+            lo = np.nanpercentile(X_clip, 100 - _clip_pct, axis=0)
+            hi = np.nanpercentile(X_clip,         _clip_pct, axis=0)
+            n_clipped = int(((X_clip < lo) | (X_clip > hi)).sum())
+            if n_clipped:
+                np.clip(X_clip, lo, hi, out=X_clip)   # in-place: avoids 192 GB copy
+                logger.info(
+                    "map run [transform-yj]: clipped %s extreme values "
+                    "to [%.1f, %.1f]th percentile range",
+                    f"{n_clipped:,}", 100 - _clip_pct, _clip_pct,
+                )
+                data = anndata.AnnData(
+                    X=X_clip, obs=data.obs.copy(),
+                    var=data.var.copy(), uns=data.uns.copy()
+                )
 
     _max_cpus    = getattr(args, "max_cpus", None)
     _n_jobs      = _max_cpus if _max_cpus else -1
@@ -2432,17 +2465,24 @@ def run_pipeline_map_run(arguments: argparse.Namespace) -> None:
             logger.info(f"map run [{step}]: running in memory → accumulates in cells.zarr")
             if step == "filter":
                 cells = _apply_filter_inmem(cells, arguments)
-                # Streaming path already returns numpy; dask path may not.
+                # Keep cells.X as a dask array so downstream streaming paths
+                # (YJ Phase-1/Phase-2, scale) can process feature blocks without
+                # materialising the full n_cells × n_feat matrix into RAM.
+                # Forcing .compute() here was the root cause of the YJ OOM:
+                # all three streaming paths in transform_features_yj gate on
+                # isinstance(data.X, da.Array) which would be False after compute.
                 if isinstance(cells.X, da.Array):
+                    gb = cells.X.shape[0] * cells.X.shape[1] * 4 / 1e9
                     logger.info(
-                        f"map run [filter]: materialising {cells.shape[0]:,} × "
-                        f"{cells.shape[1]:,} (post-filter) into RAM …"
+                        f"map run [filter]: keeping X as lazy dask array "
+                        f"({cells.shape[0]:,} × {cells.shape[1]} = {gb:.1f} GB) "
+                        f"— streaming YJ/scale will process in feature blocks"
                     )
-                    cells.X = cells.X.compute()
-                logger.info(
-                    f"map run [filter]: materialised — "
-                    f"{cells.X.nbytes / 1e9:.1f} GB in RAM"
-                )
+                else:
+                    logger.info(
+                        f"map run [filter]: materialised — "
+                        f"{cells.X.nbytes / 1e9:.1f} GB in RAM"
+                    )
             elif step == "transform-yj":
                 # Phase 2: if budget set and X is dask, stream YJ output to zarr
                 _budget_gb2 = getattr(arguments, "memory_budget_gb", None)
