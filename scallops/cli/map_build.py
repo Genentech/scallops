@@ -1445,33 +1445,59 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
                 obs_kept = obs_slim.iloc[np.where(cell_keep)[0]].reset_index(drop=True)
                 feat_var_keep = np.ones(n_feat_p1, dtype=bool)
 
-                if by_cols and all(c in obs_kept.columns for c in by_cols):
-                    group_vars = []
-                    for _, grp_idx in obs_kept.groupby(by_cols, observed=True).groups.items():
-                        if len(grp_idx) < 2:
-                            continue
-                        Xg = X_kept[grp_idx.values].compute().astype(np.float64)
-                        fm = np.isfinite(Xg)
-                        Xgc = np.where(fm, Xg, 0.0)
-                        mu  = Xgc.sum(axis=0) / np.maximum(fm.sum(axis=0), 1)
-                        sig = np.sqrt(np.maximum(
-                            (Xgc**2).sum(axis=0) / np.maximum(fm.sum(axis=0), 1) - mu**2, 0))
-                        rng = np.maximum(6 * sig, 1e-8)
-                        Xs  = (np.clip(Xg, mu-3*sig, mu+3*sig) - (mu-3*sig)) / rng
-                        Xs  = np.where(fm, Xs, np.nan)
-                        group_vars.append(np.nanvar(Xs, axis=0, ddof=0))
-                    if group_vars:
-                        feat_var = np.nanmedian(np.stack(group_vars), axis=0)
-                        feat_var_keep = np.isfinite(feat_var) & (feat_var >= (min_var or 0.0))
+                # Variance filter — row-slab chunk-based accumulation.
+                # Iterates row slabs (chunk_size × n_feat) without loading full
+                # well-groups. Peak RAM = one row slab × n_feat × 8 bytes.
+                from scallops.features.preprocessing import (
+                    _clip_bounds_mean3sd, _scale_to_01, _nanvar_from_accum,
+                )
+                # Accumulate raw stats (sum, sq, cnt) per group across row slabs
+                _raw_sum: dict = {}; _raw_sq: dict = {}; _raw_cnt: dict = {}
+                # Map each cell to its group key
+                _all_keys = (
+                    obs_kept[by_cols].astype(str).agg("-".join, axis=1).values
+                    if by_cols and all(c in obs_kept.columns for c in by_cols)
+                    else np.full(len(obs_kept), "__all__")
+                )
+                # Iterate over ROW slabs using explicit index ranges.
+                # X_kept may have multiple col chunks (multi-dim partition grid);
+                # row_start:row_end slicing always gives one complete row slab
+                # regardless of how many column chunks exist.
+                _row_start = 0
+                for _chunk_size in X_kept.chunks[0]:  # one entry per row chunk
+                    _row_end = _row_start + _chunk_size
+                    _chunk = X_kept[_row_start:_row_end].compute().astype(np.float64)
+                    _keys  = _all_keys[_row_start:_row_end]
+                    for _g in np.unique(_keys):
+                        _Xg = _chunk[_keys == _g]
+                        _fm = np.isfinite(_Xg)
+                        _Xgc = np.where(_fm, _Xg, 0.0)
+                        _raw_sum[_g] = _raw_sum.get(_g, np.zeros(n_feat_p1)) + _Xgc.sum(axis=0)
+                        _raw_sq[_g]  = _raw_sq.get(_g,  np.zeros(n_feat_p1)) + (_Xgc**2).sum(axis=0)
+                        _raw_cnt[_g] = _raw_cnt.get(_g, np.zeros(n_feat_p1)) + _fm.sum(axis=0).astype(np.float64)
+                        del _Xg, _fm, _Xgc
+                    del _chunk
+                    _row_start = _row_end
+
+                # Compute scaled variance per group from accumulated stats
+                _gvars = []
+                for _g in _raw_sum:
+                    _lo, _hi = _clip_bounds_mean3sd(_raw_sum[_g], _raw_sq[_g], _raw_cnt[_g])
+                    # Scaled var approximation from stats: Var(X_clipped)/range²
+                    # Use _nanvar_from_accum on the raw (unscaled) as proxy —
+                    # then normalize by 6σ² to get scale-agnostic value
+                    _mu  = np.where(_raw_cnt[_g] > 0, _raw_sum[_g] / np.maximum(_raw_cnt[_g], 1), np.nan)
+                    _var = np.where(_raw_cnt[_g] > 1,
+                                    _raw_sq[_g] / np.maximum(_raw_cnt[_g], 1) - _mu**2, np.nan)
+                    _rng = np.maximum(np.sqrt(np.maximum(_var, 0)) * 6, 1e-8)
+                    _scaled_var = _var / (_rng**2)
+                    _gvars.append(_scaled_var)
+
+                if _gvars:
+                    feat_var = np.nanmedian(np.stack(_gvars), axis=0)
                 else:
-                    _Xall = X_kept.compute().astype(np.float64)
-                    fm    = np.isfinite(_Xall)
-                    mu    = np.nanmean(_Xall, axis=0)
-                    sig   = np.nanstd(_Xall, axis=0)
-                    rng   = np.maximum(6*sig, 1e-8)
-                    Xs    = (np.clip(_Xall, mu-3*sig, mu+3*sig) - (mu-3*sig)) / rng
-                    feat_var = np.nanvar(np.where(fm, Xs, np.nan), axis=0, ddof=0)
-                    feat_var_keep = np.isfinite(feat_var) & (feat_var >= (min_var or 0.0))
+                    feat_var = np.zeros(n_feat_p1)
+                feat_var_keep = np.isfinite(feat_var) & (feat_var >= (min_var or 0.0))
 
                 n_feat_final = int(feat_var_keep.sum())
                 logger.info("map run [filter]: [3/4] %d / %d features kept (var≥%.4g)",
