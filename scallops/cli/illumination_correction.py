@@ -64,6 +64,7 @@ def single_agg_illumination_correction(
     agg_method: Literal["mean", "median"] = "mean",
     expected_images: int | None = None,
     no_version: bool = False,
+    t_index: int | None = None,
 ) -> None:
     """Run illumination correction by aggregation for a group of images (typically all
     tiles in a well).
@@ -80,6 +81,8 @@ def single_agg_illumination_correction(
     :param agg_method: Method to aggregate images, either 'mean' or 'median'.
     :param expected_images: Number of expected images.
     :param no_version: Whether to skip version/CLI information in output.
+    :param t_index: The t-index to select for images with a time dimension. Required
+        when images have more than one timepoint (e.g. live imaging data).
     """
     _, image_filepaths, image_metadata = image_tuple
     image_key = image_metadata["id"]
@@ -106,6 +109,7 @@ def single_agg_illumination_correction(
         z_index=z_index,
         expected_images=expected_images,
         agg_method=agg_method,
+        t_index=t_index,
     )
     if save_z_index:
         if output_image_format == "zarr":
@@ -160,6 +164,7 @@ def run_illumination_correction_agg(arguments: argparse.Namespace):
     output_image_format = arguments.output_image_format
     z_index = arguments.z_index
     channel = arguments.channel
+    t_index = arguments.t_index
     if z_index not in ("max", "focus"):
         try:
             z_index = int(z_index)
@@ -197,4 +202,5 @@ def run_illumination_correction_agg(arguments: argparse.Namespace):
             output_image_format=output_image_format,
             force=force,
             expected_images=expected_images,
+            t_index=t_index,
         ).compute()

@@ -11,6 +11,7 @@ from scallops.cli.util import (
     images_arg,
     no_version_arg,
     subset_arg,
+    t_index_arg,
     verbose_arg,
     z_index_tile_arg,
 )
@@ -109,6 +110,7 @@ def _add_agg_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> 
         type=int,
         help="Channel index (0-based) to select best focus z index",
     )
+    t_index_arg(parser)
     force_arg(parser)
     verbose_arg(parser)
     expected_images_arg(parser)

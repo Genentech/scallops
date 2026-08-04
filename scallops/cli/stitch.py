@@ -44,6 +44,7 @@ from scallops.stitch.shift_utils import (
 )
 from scallops.stitch.utils import (
     _init_tiles,
+    _select_t_index,
     _stage_positions_from_image_metadata,
     get_pixel_size,
     read_stage_positions,
@@ -66,6 +67,7 @@ def single_stitch_preview(
     show_image: bool,
     stage_positions_path: str | None = None,
     z_index: Literal["max", "focus"] | int = "max",
+    t_index: int | None = None,
 ) -> None:
     """Generate a preview of the stitching.
 
@@ -78,6 +80,8 @@ def single_stitch_preview(
     :param log: Whether to apply log transformation.
     :param downsample: Downsampling factor for the preview.
     :param show_image: Whether to show images.
+    :param t_index: The t-index to select from images with a time dimension. Required
+        when images have more than one timepoint (e.g. live imaging data).
     """
     _, image_filepaths, image_metadata = image_tuple
     init = _init_tiles(
@@ -86,6 +90,7 @@ def single_stitch_preview(
         channel=channel,
         z_index=z_index,
         expected_images=None,
+        t_index=t_index,
     )
     z_index = init["z_index"]
     n_scenes = init["n_scenes"]
@@ -115,6 +120,7 @@ def single_stitch_preview(
         fileattrs=fileattrs,
         channel=channel,
         n_scenes=n_scenes,
+        t_index=t_index,
     )
     image_spacing = get_pixel_size(primary_filepaths, stage_positions_path)
     swap, flip_y, flip_x, area_fraction, tile_shape_no_crop, center_tile, max_shift = (
@@ -169,7 +175,7 @@ def single_stitch_preview(
                 dask=False,
                 scene_id=i if n_scenes is not None else None,
             )
-            img = img.isel(t=0, c=channel, missing_dims="ignore")
+            img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
             z_index_ = z_index[i] if z_index_per_tile else z_index
             img = (
                 _z_projection(img, z_index_)
@@ -247,6 +253,7 @@ def run_stitch_preview(args: argparse.Namespace) -> None:
         stage_positions_path=args.stage_positions,
         show_image=not args.no_tiles,
         z_index=args.z_index,
+        t_index=args.t_index,
     ).compute()
 
 
@@ -310,6 +317,7 @@ def run_stitch(args: argparse.Namespace) -> None:
             z_index = int(z_index)
         except ValueError:
             pass
+    t_index = args.t_index
 
     expected_images = args.expected_images
     crop_width_y = args.crop_y
@@ -406,4 +414,5 @@ def run_stitch(args: argparse.Namespace) -> None:
             channel_cross_correlation_upsample=channel_cross_correlation_upsample,
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
+            t_index=t_index,
         ).compute()
