@@ -1890,8 +1890,44 @@ def _apply_scale_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annda
         )
     else:
         max_val = getattr(args, "scale_max_value", getattr(args, "localz_max_value", 5.0))
-        result = normalize_features(data, normalize="zscore", by=[plate, well],
-                                    max_value=max_val if max_val and max_val > 0 else None)
+        max_val = max_val if max_val and max_val > 0 else None
+
+        if isinstance(data.X, da.Array):
+            # Sequential group-by-group zscore to bound memory.
+            # normalize_features with a dask-backed xarray may schedule all
+            # groups in parallel; for n_cells≈1.2M × 3290 × float32 per well,
+            # 12 wells simultaneously = ~570 GB peak.
+            # Processing one group at a time caps peak at ~50 GB per group.
+            import tempfile as _tmp_m, zarr as _zarr_s
+            _budget_gb = getattr(args, "memory_budget_gb", None)
+            _out_dir   = getattr(args, "output_dir", None) or getattr(args, "output", None) or ""
+            _scale_zarr = _out_dir.rstrip("/") + "_scale_tmp.zarr" if _out_dir else \
+                          _tmp_m.mkdtemp(prefix="scallops_scale_") + "/scale_out.zarr"
+            n_obs, n_feat = data.shape
+            _zg = _zarr_s.open_group(_scale_zarr, mode="w")
+            _zX = _zg.require_dataset("X", shape=(n_obs, n_feat), dtype="float32",
+                                       chunks=(min(50_000, n_obs), n_feat), overwrite=True)
+            _grp_cols = [c for c in [plate, well] if c in data.obs.columns]
+            _obs_df   = data.obs.reset_index(drop=True)
+            _groups   = (_obs_df.groupby(_grp_cols, observed=True).groups
+                         if _grp_cols else {"__all__": _obs_df.index})
+            for _grp_key, _grp_idx in _groups.items():
+                _idx = _grp_idx.values
+                _Xg  = data.X[_idx].compute().astype(np.float64)
+                _fin = np.isfinite(_Xg)
+                _mu  = np.nanmean(np.where(_fin, _Xg, np.nan), axis=0)
+                _sig = np.nanstd( np.where(_fin, _Xg, np.nan), axis=0)
+                _sig = np.where(_sig > 0, _sig, 1.0)
+                _Xs  = (_Xg - _mu) / _sig
+                if max_val is not None:
+                    _Xs = np.clip(_Xs, -max_val, max_val)
+                _zX[_idx] = _Xs.astype(np.float32)
+                del _Xg, _Xs
+            _X_da  = da.from_zarr(_scale_zarr, component="X")
+            result = anndata.AnnData(X=_X_da, obs=data.obs.copy(), var=data.var.copy())
+        else:
+            result = normalize_features(data, normalize="zscore", by=[plate, well],
+                                        max_value=max_val)
 
     _merge_uns(data, result)
     return result
