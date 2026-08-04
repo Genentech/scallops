@@ -367,12 +367,7 @@ def _normalize_group(
     scaling: bool,
     batch_size: int | None,
 ) -> np.ndarray | da.Array:
-    if (
-        batch_size is not None
-        and not isinstance(data, da.Array)
-        and indices is not None
-        and indices.shape[0] > batch_size
-    ):
+    if batch_size is not None and indices is not None and indices.shape[0] > batch_size:
         value_list = []
         if reference_data is None:
             reference_data = data
