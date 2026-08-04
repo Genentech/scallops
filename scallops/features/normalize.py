@@ -5,12 +5,13 @@ from typing import Literal
 import anndata
 import dask.array as da
 import numpy as np
-import pandas as pd
 import scipy
-from anndata._core.index import _normalize_index
-from array_api_compat import get_namespace
+import xarray as xr
+from dask.delayed import delayed
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
+
+from scallops.features.util import _anndata_to_xr
 
 logger = logging.getLogger("scallops")
 
@@ -47,49 +48,278 @@ def _normalize_features_array(
      :return: Array of normalized values
 
     """
+    if isinstance(values, da.Array):
+        chunks = list(values.chunksize)
+        if chunks[0] != values.shape[0]:
+            chunks[0] = -1
+        chunks = tuple(chunks)
+        if chunks != values.chunksize:
+            values = values.rechunk(chunks)
+        if reference_values is not None:
+            ref_chunks = list(reference_values.chunksize)
+            if ref_chunks[0] != reference_values.shape[0]:
+                ref_chunks[0] = -1
+            if ref_chunks[1] != chunks[1]:
+                ref_chunks[1] = chunks[1]
+            ref_chunks = tuple(ref_chunks)
+            if ref_chunks != reference_values.chunksize:
+                reference_values = reference_values.rechunk(ref_chunks)
+        arrays = (
+            (values, reference_values) if reference_values is not None else (values,)
+        )
+
+        return da.map_blocks(
+            _normalize_features_np,
+            *arrays,
+            indices=delayed(indices),
+            robust=robust,
+            mad_scale=mad_scale,
+            scaling=scaling,
+            centering=centering,
+            max_value=max_value,
+            meta=values._meta,
+        )
+
+    return _normalize_features_np(
+        values=values,
+        ref_values=reference_values,
+        indices=indices,
+        robust=robust,
+        mad_scale=mad_scale,
+        scaling=scaling,
+        max_value=max_value,
+        centering=centering,
+    )
+
+
+def normalize_features(
+    data: anndata.AnnData,
+    reference_query: str | None = None,
+    by: Sequence[str] | str | None = None,
+    normalize: Literal["zscore", "local-zscore", "nn-zscore"] = "zscore",
+    n_neighbors: int | None = 100,
+    neighbors_metric: str = "minkowski",
+    robust: bool = False,
+    mad_scale: float | str = "normal",
+    max_value: float | None = None,
+    centering: bool = True,
+    scaling: bool = True,
+    batch_size: int | None = None,
+    centroid_column_names: tuple[str, str] = (
+        "Nuclei_AreaShape_Center_Y",
+        "Nuclei_AreaShape_Center_X",
+    ),
+) -> anndata.AnnData:
+    """Normalize features
+
+    :param data: Annotated data matrix.
+    :param reference_query: Query to extract reference observations
+        (e.g. "gene_symbol=='NTC'")
+    :param by: Column(s) in `data.obs` to stratify by.
+    :param normalize: Normalization method to use where `local` uses nearest
+        neighbors by location and `nn` uses nearest neighbors by `neighbors_metric`.
+    :param n_neighbors: Number of neighbors for local and nearest neighbor zscore.
+    :param neighbors_metric: Nearest neighbor metric to use when normalize is
+        `nn-zscore`.
+    :param robust: Use robust statistics.
+    :param mad_scale: Numerical scale factor to divide median absolute deviation. The
+        string “normal” is also accepted, and results in scale being the inverse of the
+        standard normal quantile function at 0.75
+    :param centering: Whether to center the data before scaling.
+    :param max_value: Truncate to this value after scaling
+    :param scaling: Whether to scale the data by dividing by the standard deviation.
+    :param batch_size: Batch size to use for local scaling to conserve memory.
+    :param centroid_column_names: Columns for y and x centroids to use for local zscore.
+    :return: Normalized data
+    """
 
     mad_scale = _convert_scale(mad_scale)
-    xp = get_namespace(values)
-    if reference_values is None:
-        reference_values = values
+    xdata = _anndata_to_xr(data)
+    if by is not None:
+        group_result = xdata.groupby(by).map(
+            lambda x: _normalize_group(
+                x,
+                reference_query=reference_query,
+                normalize=normalize,
+                n_neighbors=n_neighbors,
+                neighbors_metric=neighbors_metric,
+                robust=robust,
+                max_value=max_value,
+                mad_scale=mad_scale,
+                centering=centering,
+                scaling=scaling,
+                batch_size=batch_size,
+                centroid_column_names=centroid_column_names,
+            )
+        )
+
+        return anndata.AnnData(
+            X=group_result.data,
+            obs=data.obs.loc[group_result.coords["obs"].values],
+            var=data.var.copy(),
+        )
+
+    result = _normalize_group(
+        xdata,
+        reference_query=reference_query,
+        normalize=normalize,
+        n_neighbors=n_neighbors,
+        neighbors_metric=neighbors_metric,
+        robust=robust,
+        max_value=max_value,
+        mad_scale=mad_scale,
+        centering=centering,
+        scaling=scaling,
+        batch_size=batch_size,
+        centroid_column_names=centroid_column_names,
+    )
+    return anndata.AnnData(X=result.data, obs=data.obs.copy(), var=data.var.copy())
+
+
+def _normalize_group(
+    data: xr.DataArray,
+    reference_query: str | None,
+    normalize: Literal["zscore", "local-zscore", "nn-zscore"],
+    n_neighbors: int | None,
+    neighbors_metric: str,
+    robust: bool,
+    mad_scale: float | str,
+    centering: bool,
+    max_value: float | None,
+    scaling: bool,
+    batch_size: int | None,
+    centroid_column_names: tuple[str, str] = (
+        "Nuclei_AreaShape_Center_Y",
+        "Nuclei_AreaShape_Center_X",
+    ),
+) -> xr.DataArray:
+    indices = None
+    reference_data = (
+        data.query(dict(obs=reference_query)) if reference_query is not None else None
+    )
+
+    if reference_data is not None:
+        if reference_data.shape[0] == 0:
+            raise ValueError("No reference data found.")
+    if normalize == "nn-zscore":
+        # nearest neighbors in PCA space
+        nn_query = data.data
+        nn_ref = nn_query
+        if reference_data is not None:
+            nn_ref = reference_data.data
+        indices = _nearest_neighbors_indices(
+            nn_ref, nn_query, n_neighbors=n_neighbors, metric=neighbors_metric
+        )
+    elif normalize == "local-zscore":
+        nn_query = np.stack(
+            (
+                data.coords[centroid_column_names[0]].values,
+                data.coords[centroid_column_names[1]].values,
+            ),
+            axis=1,
+        )
+        nn_ref = nn_query
+        if reference_data is not None:
+            nn_ref = np.stack(
+                (
+                    reference_data.coords[centroid_column_names[0]].values,
+                    reference_data.coords[centroid_column_names[1]].values,
+                ),
+                axis=1,
+            )
+
+        indices = _nearest_neighbors_indices(
+            nn_ref, nn_query, n_neighbors=n_neighbors, metric=neighbors_metric
+        )
+    if batch_size is not None and indices is not None and indices.shape[0] > batch_size:
+        value_list = []
+        if reference_data is None:
+            reference_data = data
+
+        for i in range(0, indices.shape[0], batch_size):
+            sl = slice(i, i + batch_size)
+            values = _normalize_features_array(
+                data.data[sl],
+                reference_data.data,
+                indices=indices[sl],
+                robust=robust,
+                mad_scale=mad_scale,
+                centering=centering,
+                scaling=scaling,
+                max_value=max_value,
+            )
+            value_list.append(values)
+        values = np.concatenate(value_list)
+    else:
+        values = _normalize_features_array(
+            data.data,
+            reference_data.data if reference_data is not None else None,
+            indices=indices,
+            robust=robust,
+            mad_scale=mad_scale,
+            centering=centering,
+            scaling=scaling,
+            max_value=max_value,
+        )
+    return data.copy(data=values, deep=False)
+
+
+def _nearest_neighbors_indices(
+    reference: np.ndarray,
+    query: np.ndarray,
+    n_neighbors: int = 100,
+    metric: str = "minkowski",
+) -> np.ndarray:
+    if n_neighbors > len(reference):
+        raise ValueError(f"n_neighbors: {n_neighbors}, n points: {len(reference)}")
+    return (
+        NearestNeighbors(n_neighbors=n_neighbors, metric=metric)
+        .fit(reference)
+        .kneighbors(query, return_distance=False)
+    )
+
+
+def _normalize_features_np(
+    values: np.ndarray,
+    ref_values: np.ndarray | None = None,
+    indices: np.ndarray | None = None,
+    mad_scale: float | str = "normal",
+    centering: bool = True,
+    scaling: bool = True,
+    robust: bool = True,
+    max_value: float | None = None,
+) -> np.ndarray:
+    mad_scale = _convert_scale(mad_scale)
+
+    if ref_values is None:
+        ref_values = values
     means = None
     stds = None
     if indices is None:
         if robust:
             if centering:
-                means = xp.nanmedian(reference_values, axis=0)
+                means = np.nanmedian(ref_values, axis=0)
             if scaling:
-                stds = (
-                    xp.nanmedian(xp.abs(reference_values - means), axis=0) / mad_scale
-                )
+                stds = np.nanmedian(np.abs(ref_values - means), axis=0) / mad_scale
         else:
             if centering:
-                means = xp.nanmean(reference_values, axis=0)
+                means = np.nanmean(ref_values, axis=0)
             if scaling:
-                stds = xp.nanstd(reference_values, axis=0)
+                stds = np.nanstd(ref_values, axis=0)
         if centering:
-            means = xp.expand_dims(means, 0)
+            means = np.expand_dims(means, 0)
         if scaling:
-            stds = xp.expand_dims(stds, 0)
+            stds = np.expand_dims(stds, 0)
     else:
-        if isinstance(reference_values, da.Array):
-            # neighbors = indices.shape[1]
-            # features = reference_values.shape[1]
-            # labels = indices.shape[0]
-            # reference_values = reference_values[indices.flatten()].reshape(
-            #     (labels, neighbors, features)
-            # )
-            reference_values = reference_values.vindex[indices]
-        else:
-            reference_values = reference_values[indices]
-        # reference_values dims are (labels,neighbors,features)
+        ref_values = ref_values[indices]
+        # ref_values dims are (labels,neighbors,features)
         if robust:
-            means = xp.nanmedian(reference_values, axis=1)
+            means = np.nanmedian(ref_values, axis=1)
 
             if scaling:
                 stds = (
-                    xp.nanmedian(
-                        xp.abs(reference_values - xp.expand_dims(means, axis=1)),
+                    np.nanmedian(
+                        np.abs(ref_values - np.expand_dims(means, axis=1)),
                         axis=1,
                     )
                     / mad_scale
@@ -97,9 +327,9 @@ def _normalize_features_array(
 
         else:
             if centering:
-                means = xp.nanmean(reference_values, axis=1)
+                means = np.nanmean(ref_values, axis=1)
             if scaling:
-                stds = xp.nanstd(reference_values, axis=1)
+                stds = np.nanstd(ref_values, axis=1)
 
     if centering:
         values = values - means
@@ -107,8 +337,8 @@ def _normalize_features_array(
         stds[stds == 0] = 1.0
         values = values / stds
         if max_value is not None:
-            values = xp.clip(values, -max_value, max_value)
-
+            values[values > max_value] = max_value
+            values[values < -max_value] = -max_value
     return values
 
 
@@ -208,254 +438,3 @@ def typical_variation_normalization(
             }
         },
     )
-
-
-def normalize_features(
-    data: anndata.AnnData,
-    reference_query: str | None = None,
-    by: Sequence[str] | str | None = None,
-    normalize: Literal["zscore", "local-zscore"] = "zscore",
-    n_neighbors: int = 100,
-    neighbors_metric: str = "minkowski",
-    robust: bool = False,
-    mad_scale: float | str = "normal",
-    max_value: float | None = None,
-    centering: bool = True,
-    scaling: bool = True,
-    batch_size: int | None = None,
-    centroid_column_names: tuple[str, str] = (
-        "Nuclei_AreaShape_Center_Y",
-        "Nuclei_AreaShape_Center_X",
-    ),
-) -> anndata.AnnData:
-    """Normalize features
-
-    :param data: Annotated data matrix.
-    :param reference_query: Query to extract reference observations
-        (e.g. "gene_symbol=='NTC'")
-    :param by: Column(s) in `data.obs` to stratify by.
-    :param normalize: Normalization method to use where `local` uses nearest
-        neighbors by location and `nn` uses nearest neighbors by `neighbors_metric`.
-    :param n_neighbors: Number of neighbors for local and nearest neighbor zscore.
-    :param neighbors_metric: Nearest neighbor metric to use when normalize is
-        `local-zscore`.
-    :param robust: Use robust statistics.
-    :param mad_scale: Numerical scale factor to divide median absolute deviation. The
-        string “normal” is also accepted, and results in scale being the inverse of the
-        standard normal quantile function at 0.75
-    :param centering: Whether to center the data before scaling.
-    :param max_value: Truncate to this value after scaling
-    :param scaling: Whether to scale the data by dividing by the standard deviation.
-    :param batch_size: Batch size to use for local z-score scaling to conserve memory.
-    :param centroid_column_names: Columns for y and x centroids to use for local zscore.
-    :return: Normalized data
-    """
-
-    mad_scale = _convert_scale(mad_scale)
-    centroid_column_names = list(centroid_column_names)
-    if normalize == "local-zscore":
-        indices = _nearest_neighbors_indices_by_group(
-            df=data.obs,
-            centroid_column_names=centroid_column_names,
-            by=by,
-            reference_query=reference_query,
-            n_neighbors=n_neighbors,
-            metric=neighbors_metric,
-        )
-
-        result = _normalize_group(
-            data.X,
-            reference_data=data.X
-            if reference_query is None
-            else data.X[
-                data.obs.index.get_indexer_for(data.obs.query(reference_query).index)
-            ],
-            indices=indices,
-            robust=robust,
-            max_value=max_value,
-            mad_scale=mad_scale,
-            centering=centering,
-            scaling=scaling,
-            batch_size=batch_size,
-        )
-        return anndata.AnnData(
-            X=result,
-            obs=data.obs.copy(),
-            var=data.var.copy(),
-            uns=data.uns.copy(),
-        )
-    if by is not None:
-        group_indices = data.obs.groupby(
-            by, as_index=False, sort=False, group_keys=True, observed=True, dropna=False
-        ).indices
-        result_obs = []
-        result_arrays = []
-
-        for key in group_indices.keys():
-            indices = group_indices[key]
-            sl = indices
-
-            if np.all(np.diff(indices) == 1):
-                sl = slice(indices[0], indices[-1] + 1)
-            data_slice = data.X[sl]
-            data_obs_slice = data.obs.iloc[indices]
-            reference_data_slice = None
-
-            if reference_query is not None:
-                ref_indices = _normalize_index(
-                    data_obs_slice.query(reference_query).index, data_obs_slice.index
-                )
-                reference_data_slice = data_slice[ref_indices]
-
-            result = _normalize_group(
-                data_slice,
-                reference_data=reference_data_slice,
-                indices=None,
-                robust=robust,
-                max_value=max_value,
-                mad_scale=mad_scale,
-                centering=centering,
-                scaling=scaling,
-                batch_size=batch_size,
-            )
-
-            result_arrays.append(result)
-            result_obs.append(data_obs_slice)
-
-        return anndata.AnnData(
-            X=get_namespace(data.X).vstack(result_arrays),
-            obs=pd.concat(result_obs),
-            var=data.var.copy(),
-            uns=data.uns.copy(),
-            obsm=data.obsm.copy(),
-            varm=data.varm.copy(),
-        )
-
-    result = _normalize_group(
-        data.X,
-        reference_data=data.X
-        if reference_query is None
-        else data.X[
-            data.obs.index.get_indexer_for(data.obs.query(reference_query).index)
-        ],
-        indices=None,
-        robust=robust,
-        max_value=max_value,
-        mad_scale=mad_scale,
-        centering=centering,
-        scaling=scaling,
-        batch_size=batch_size,
-    )
-    return anndata.AnnData(
-        X=result,
-        obs=data.obs.copy(),
-        var=data.var.copy(),
-        uns=data.uns.copy(),
-        obsm=data.obsm.copy(),
-        varm=data.varm.copy(),
-    )
-
-
-def _normalize_group(
-    data: np.ndarray | da.Array,
-    indices: np.ndarray | None,
-    reference_data: np.ndarray | da.Array | None,
-    robust: bool,
-    mad_scale: float | str,
-    centering: bool,
-    max_value: float | None,
-    scaling: bool,
-    batch_size: int | None,
-) -> np.ndarray | da.Array:
-    if batch_size is not None and indices is not None and indices.shape[0] > batch_size:
-        value_list = []
-        if reference_data is None:
-            reference_data = data
-        xp = get_namespace(data)
-        for i in range(0, indices.shape[0], batch_size):
-            sl = slice(i, i + batch_size)
-            values = _normalize_features_array(
-                data[sl],
-                reference_data,
-                indices=indices[sl],
-                robust=robust,
-                mad_scale=mad_scale,
-                centering=centering,
-                scaling=scaling,
-                max_value=max_value,
-            )
-            value_list.append(values)
-        values = xp.concatenate(value_list)
-    else:
-        values = _normalize_features_array(
-            data,
-            reference_data if reference_data is not None else None,
-            indices=indices,
-            robust=robust,
-            mad_scale=mad_scale,
-            centering=centering,
-            scaling=scaling,
-            max_value=max_value,
-        )
-    return values
-
-
-def _nearest_neighbors_indices(
-    reference: np.ndarray,
-    query: np.ndarray,
-    n_neighbors: int = 100,
-    metric: str = "minkowski",
-) -> np.ndarray:
-    if n_neighbors > len(reference):
-        raise ValueError(f"n_neighbors: {n_neighbors}, n points: {len(reference)}")
-    # shape is reference.shape[0], n_neighbors
-    return (
-        NearestNeighbors(n_neighbors=n_neighbors, metric=metric)
-        .fit(reference)
-        .kneighbors(query, return_distance=False)
-    )
-
-
-def _nearest_neighbors_indices_by_group(
-    df: pd.DataFrame,
-    centroid_column_names: tuple[str, str],
-    by: str | list[str] | None,
-    reference_query: str | None,
-    n_neighbors: int = 100,
-    metric: str = "minkowski",
-) -> np.ndarray:
-    df_ref = df.query(reference_query) if reference_query is not None else df
-    if by is None:
-        nn_indices = _nearest_neighbors_indices(
-            query=df[centroid_column_names].values,
-            reference=df_ref[centroid_column_names].values,
-            n_neighbors=n_neighbors,
-            metric=metric,
-        )
-        return nn_indices
-
-    query_indices = df.groupby(
-        by, as_index=False, sort=False, group_keys=True, observed=True, dropna=False
-    ).indices
-    ref_indices = (
-        df_ref.groupby(
-            by, as_index=False, sort=False, group_keys=True, observed=True, dropna=False
-        ).indices
-        if reference_query is not None
-        else query_indices
-    )
-    result = []
-    for key in query_indices.keys():
-        query_indices_ = query_indices[key]
-        ref_indices_ = ref_indices[key]
-        nn_indices = _nearest_neighbors_indices(
-            query=df.iloc[query_indices_][centroid_column_names].values,
-            reference=df_ref.iloc[ref_indices_][centroid_column_names].values,
-            n_neighbors=n_neighbors,
-            metric=metric,
-        )
-        nn_indices = ref_indices_[nn_indices]
-        result.append(nn_indices)
-    result = np.vstack(result)
-    # reference.shape[0], n_neighbors
-    return result
