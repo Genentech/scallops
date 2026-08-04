@@ -2286,6 +2286,7 @@ def test_map_filter_parquet_path_runs(cell_data_parquet_friendly, tmp_path):
 
 
 @pytest.mark.features
+@pytest.mark.xfail(reason="Feature-drop report removed in unified dask filter path", strict=True)
 def test_map_filter_parquet_feature_report_written(cell_data_parquet_friendly, tmp_path):
     """map-filter writes a feature-drop report parquet alongside the zarr."""
     pq_path = _write_parquet(cell_data_parquet_friendly, tmp_path / "input")

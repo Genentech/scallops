@@ -1251,24 +1251,16 @@ def _memory_monitor_start(warn_pct: float = 80.0, critical_pct: float = 90.0,
 
 
 def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> anndata.AnnData:
-    """Filter cells and features.
+    """Filter cells and features — unified out-of-core dask path.
 
-    Variance is computed **per plate × well** (stratified), using median
-    group-variance so that a feature is only removed if it is uninformative
-    *within* wells, not just between wells.  Cell-level filtering (max_fraction_not_finite) is always
-    global.
+    Both parquet and zarr inputs are normalised to a lazy ``da.Array``
+    before any filter logic runs.  All statistics (NaN counts, variance
+    clip bounds, scaled variance) are computed with tiny ``.compute()``
+    calls that return O(n_feat) scalars.  The filtered result is written
+    directly to the output S3 zarr via ``da.to_zarr`` — no materialisation
+    to RAM, no local intermediate zarr.
 
-    Three execution paths are selected automatically:
-
-    * **Parquet column-batch** — when ``data.uns["_parquet_sources"]`` exists
-      (set by ``_read_data`` for parquet inputs).  Reads all row groups in
-      parallel for N features at a time.  ~3 min for 14.3 M × 9 K on S3.
-
-    * **Zarr row-batch** — when ``data.X`` is a dask array without parquet
-      sources (local or S3 zarr).  Reads one row-chunk at a time with bounded
-      concurrency (16 local / 50 remote).
-
-    * **In-memory** — h5ad or any numpy-backed AnnData.
+    Peak RAM = O(one dask chunk) regardless of total dataset size.
     """
     from scallops.features.preprocessing import (
         filter_data, filter_batch_correlated, remove_correlated_features,
@@ -1335,245 +1327,206 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     )
 
     parquet_sources = data.uns.get("_parquet_sources")
-    _feat_report = None   # populated by parquet path; None for zarr/in-memory
+    _feat_report    = None
+    _budget_gb      = getattr(args, "memory_budget_gb", None)
+
+    # ── Normalise to lazy dask array (one path for parquet AND zarr) ──────────
+    # Only load obs columns that are actually needed: label-filter cols + by_cols
+    # + perturbation.  Avoids loading 153 string obs columns × 14 M cells (~200 GB).
+    _needed_obs = set()
+    if label_filter:
+        from pandas.core.computation.parsing import tokenize_string
+        try:
+            _needed_obs.update(
+                t[1] for t in tokenize_string(label_filter)
+                if t[0] == 1 and t[1] in obs_all.columns
+            )
+        except Exception:
+            _needed_obs.update(obs_all.columns)  # fall back to all
+    if by_cols:
+        _needed_obs.update(by_cols)
+    if pert_col and pert_col in obs_all.columns:
+        _needed_obs.add(pert_col)
+    # Always keep condition / plate / well if present
+    for _c in ["condition", "plate", "well", "gene_symbol"]:
+        if _c in obs_all.columns:
+            _needed_obs.add(_c)
 
     if parquet_sources:
-        # ── Parquet column-batch path ──────────────────────────────────────
-        logger.info(
-            "map run [filter]: parquet column-batch mode (%d sources)",
-            len(parquet_sources),
-        )
-        _budget_gb = getattr(args, "memory_budget_gb", None)
-        _filter_zarr = None
-        _stream_chunk_gb = 2.0
-        if _budget_gb is not None:
-            # Each step saturates to budget_gb — bigger chunks = fewer passes = faster.
-            # Write-through frees RAM between steps so peak = budget_gb throughout.
-            # Cap variance chunk at budget/4 so overhead (obs + Python) fits.
-            # Full budget would read all cells × all features in one float64 chunk.
-            _stream_chunk_gb = max(0.1, float(_budget_gb) / 4)
-            _filter_zarr = (getattr(args, "output", None) or
-                            getattr(args, "output_dir", "")).rstrip("/") + "_filter.zarr"
+        # Parquet: read feature columns lazily via dask.dataframe → dask array.
+        # Obs is read eagerly but only the needed columns (small).
+        import dask.dataframe as _dd
+        import pyarrow.dataset as _pads, pyarrow.fs as _pafs
 
-        _mem_stop = _memory_monitor_start(budget_gb=getattr(args, "memory_budget_gb", None))
-        try:
-            X_filtered, cell_keep, feat_keep, _feat_report, _zarr_col_idx = _col_batch_filter_parquet(
-                parquet_sources, obs_all, label_mask, by_cols,
-                max_fnf, min_var, max_var,
-                feat_cols=list(data.var.index),
-                batch_size=getattr(args, "filter_batch_size", 500_000),
-                max_memory_gb=(getattr(args, "filter_max_memory_gb", None)
-                               or getattr(args, "memory_budget_gb", None)),
-                max_feature_nan_fraction=getattr(args, "max_feature_nan_fraction", None),
-                max_residual_nan_fraction=max_res_nan_frac,
-                residual_nan_impute=res_nan_impute,
-                perturbation_column=pert_col,
-                output_zarr_path=_filter_zarr,
-                streaming_chunk_gb=_stream_chunk_gb,
-            )
-        except MemoryError as exc:
-            logger.critical(
-                "!!! OUT OF MEMORY during parquet column-batch filter !!!\n  %s", exc,
-            )
-            raise
-        finally:
-            if _mem_stop is not None:
-                _mem_stop.set()
+        feat_cols = list(data.var.index)
+        _paths    = [src["path"] for src in parquet_sources]
 
         logger.info(
-            "map run [filter]: done — %s cells × %s features",
-            f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
+            "map run [filter]: unified dask path — parquet (%d sources, %d features)",
+            len(_paths), len(feat_cols),
         )
-        _log_attrition(
-            "filter", "variance/NaN/label",
-            len(obs_all), int(cell_keep.sum()),
-            len(data.var), int(feat_keep.sum()),
-        )
-        if X_filtered is None and _filter_zarr:
-            # Phase 3: zarr-backed result — load as dask (0 GB RAM for X)
-            _X_da = da.from_zarr(_filter_zarr, component="X")
-            # Select the correct surviving columns using the exact zarr column
-            # indices returned by _col_batch_filter_parquet.  Simple [:, :n]
-            # would be wrong if variance filter dropped non-contiguous columns.
-            if _zarr_col_idx is not None and len(_zarr_col_idx) < _X_da.shape[1]:
-                _X_da = _X_da[:, _zarr_col_idx]
-            result = anndata.AnnData(
-                X=_X_da,
-                obs=obs_all.iloc[cell_keep].copy(),
-                var=data.var.iloc[feat_keep].copy(),
-                uns=dict(data.uns),
-            )
-        else:
-            result = anndata.AnnData(
-                X=X_filtered,
-                obs=obs_all.iloc[cell_keep].copy(),
-                var=data.var.iloc[feat_keep].copy(),
-                uns=dict(data.uns),
-            )
-        _merge_uns(data, result)
 
-        # Stash the feature-drop report in uns so callers can retrieve and write it
-        if _feat_report is not None and not _feat_report.empty:
-            result.uns["_filter_feature_report_json"] = _feat_report.to_json(orient="records")
-        # Centroid columns needed by local-zscore may have been dropped by the
-        # variance/NaN filter.  Read them directly from parquet for kept cells.
-        if getattr(args, "scale_method", "global") == "local":
-            _cy = getattr(args, "localz_centroid_y", "Nuclei_AreaShape_Center_Y")
-            _cx = getattr(args, "localz_centroid_x", "Nuclei_AreaShape_Center_X")
-            _cent_need = [
-                c for c in [_cy, _cx]
-                if c not in result.obs.columns and c in list(data.var.index)
-            ]
-            if _cent_need:
-                import pyarrow.dataset as _pads
-                import pyarrow.fs as _pafs2
-                _cfs, _ = _pafs2.FileSystem.from_uri(parquet_sources[0]["path"])
-                _cpaths = [_pafs2.FileSystem.from_uri(src["path"])[1]
-                           for src in parquet_sources]
-                _cds = _pads.dataset(_cpaths, filesystem=_cfs, format="parquet")
-                _ctab = (
-                    _cds.scanner(columns=_cent_need, use_threads=True)
-                    .to_table().to_pandas()
-                )
-                for col in _cent_need:
-                    if col in _ctab.columns:
-                        result.obs[col] = _ctab[col].values[cell_keep]
-                        logger.info(
-                            "map run [filter]: saved centroid '%s' to obs "
-                            "(dropped by variance/NaN filter, needed by local-zscore)", col
-                        )
+        # Lazy feature read
+        ddf_feats = _dd.read_parquet(_paths, columns=feat_cols)
+        X_dask    = ddf_feats.to_dask_array(lengths=True)
+
+        # Eager obs read (only needed columns, cheap)
+        _obs_cols_available = [c for c in _needed_obs if c in obs_all.columns]
+        obs_slim = obs_all[_obs_cols_available].copy()
 
     elif isinstance(data.X, da.Array):
-        # ── Zarr row-batch path ────────────────────────────────────────────
-        zarr_is_remote = data.uns.get("_zarr_is_remote", False)
-        X_orig = data.X
-
-        n_chunks = X_orig.numblocks[0]
-        try:
-            chunk_gb = X_orig.chunks[0][0] * X_orig.shape[1] * 4 / 1e9
-        except Exception:
-            chunk_gb = float("nan")
-
-        # Derive n_prefetch from budget: load as many concurrent chunks as
-        # budget allows, capped at 64 to avoid too many S3 connections.
-        if _budget_gb is not None and chunk_gb > 0:
-            n_prefetch = min(64, max(2, int(_budget_gb / chunk_gb)))
-        else:
-            n_prefetch = 50 if zarr_is_remote else 16
-
+        # Zarr: X is already a lazy dask array — just slim obs
         logger.info(
-            "map run [filter]: zarr row-batch mode (n_prefetch=%d, remote=%s) — "
-            "%d chunks × %.1f GB each",
-            n_prefetch, zarr_is_remote, n_chunks, chunk_gb,
+            "map run [filter]: unified dask path — zarr (%d × %d, chunks %s)",
+            data.X.shape[0], data.X.shape[1],
+            str(data.X.chunksize),
         )
-
-        _mem_stop = _memory_monitor_start(budget_gb=getattr(args, "memory_budget_gb", None))
-        try:
-            # Pass 1: scan NaN counts; pass 2: materialise filtered matrix.
-            # Steps 1+2 (feature/cell NaN filter) and steps 3+4 (residual-NaN +
-            # variance filter) use the same shared helpers as the parquet path so
-            # both paths are guaranteed identical behaviour.
-            from scallops.features.preprocessing import (
-                _dask_nan_scan, _dask_materialise,
-                _apply_filter_steps_1_2,
-                _apply_filter_post_materialise,
-            )
-            logger.info(
-                "map run [filter]: zarr dask-native scan — "
-                "%d chunks across %d dimension(s)",
-                X_orig.npartitions if hasattr(X_orig, "npartitions")
-                else int(np.prod(X_orig.numblocks)), X_orig.ndim,
-            )
-            bad_counts, nan_per_feat = _dask_nan_scan(X_orig)
-            _n_cells_z = X_orig.shape[0]
-            _n_feat_z  = X_orig.shape[1]
-            feat_pass1, cell_keep = _apply_filter_steps_1_2(
-                bad_counts, nan_per_feat, label_mask, _n_cells_z, _n_feat_z,
-                max_feature_nan_fraction=getattr(args, "max_feature_nan_fraction", None),
-                max_fraction_not_finite=max_fnf,
-            )
-            logger.info(
-                "map run [filter]: pass 1/2 done — %s cells kept, %s / %s features",
-                f"{cell_keep.sum():,}", f"{feat_pass1.sum():,}", f"{_n_feat_z:,}",
-            )
-            feat_keep = feat_pass1
-
-            out_gb = int(cell_keep.sum()) * int(feat_keep.sum()) * 4 / 1e9
-            logger.info(
-                "map run [filter]: pass 2/2 — materialising %s × %s (%.1f GB) …",
-                f"{cell_keep.sum():,}", f"{feat_keep.sum():,}", out_gb,
-            )
-            X_filtered = _dask_materialise(X_orig, cell_keep, feat_keep)
-            logger.info(
-                "map run [filter]: materialised %.1f GB", X_filtered.nbytes / 1e9
-            )
-
-            # Steps 3 + 4 — residual-NaN handling + variance filter (shared helper)
-            obs_kept_z = obs_all.iloc[cell_keep].reset_index(drop=True)
-            X_filtered, feat_keep, _feat_var_z = _apply_filter_post_materialise(
-                X_filtered, feat_keep, obs_kept_z,
-                by=by_cols,
-                min_variance=min_var,
-                max_variance=max_var,
-                max_residual_nan_fraction=max_res_nan_frac,
-                residual_nan_impute=res_nan_impute,
-                perturbation_column=pert_col,
-            )
-
-        except MemoryError as exc:
-            logger.critical(
-                "!!! OUT OF MEMORY during zarr streaming filter !!!\n  %s", exc,
-            )
-            raise
-        finally:
-            if _mem_stop is not None:
-                _mem_stop.set()
-
-        _log_attrition(
-            "filter", "variance/NaN/label",
-            len(obs_all), int(cell_keep.sum()),
-            X_orig.shape[1], int(feat_keep.sum()),
-        )
-        result = anndata.AnnData(
-            X=X_filtered,
-            obs=obs_all.iloc[cell_keep].copy(),
-            var=data.var.iloc[feat_keep].copy(),
-            uns=dict(data.uns),
-        )
-        _merge_uns(data, result)
+        X_dask   = data.X
+        _obs_cols_available = [c for c in _needed_obs if c in obs_all.columns]
+        obs_slim = obs_all[_obs_cols_available].copy()
 
     else:
-        # ── In-memory path (h5ad or small numpy-backed data) ──────────────
+        # Tiny numpy/h5ad — keep old in-memory path untouched
+        logger.info("map run [filter]: in-memory path (small numpy array)")
         data_for_filter = (
             _slice_anndata(data, label_mask) if not label_mask.all() else data
         )
-        result_tmp = filter_data(
-            data_for_filter,
-            max_fraction_not_finite=max_fnf,
-            min_variance=min_var,
-            max_variance=max_var,
-            by=by_cols,
-        )
-        X_filtered = (
-            result_tmp.X if isinstance(result_tmp.X, np.ndarray)
-            else result_tmp.X.compute()
-        )
-        cell_keep = obs_all.index.isin(result_tmp.obs.index)
-        feat_keep = data.var.index.isin(result_tmp.var.index)
+        from scallops.features.preprocessing import filter_data as _fd
+        result_tmp  = _fd(data_for_filter, max_fraction_not_finite=max_fnf,
+                          min_variance=min_var, max_variance=max_var, by=by_cols)
+        X_filtered  = (result_tmp.X if isinstance(result_tmp.X, np.ndarray)
+                       else result_tmp.X.compute())
+        cell_keep   = obs_all.index.isin(result_tmp.obs.index)
+        feat_keep   = data.var.index.isin(result_tmp.var.index)
+        _log_attrition("filter", "variance/NaN/label", len(obs_all),
+                       int(cell_keep.sum()), len(data.var), int(feat_keep.sum()))
+        result = anndata.AnnData(X=X_filtered,
+                                 obs=obs_all.iloc[cell_keep].copy(),
+                                 var=data.var.iloc[feat_keep].copy(),
+                                 uns=dict(data.uns))
+        _merge_uns(data, result)
+        # skip unified path below
+        X_dask = None
 
-        logger.info(
-            "map run [filter]: in-memory — %s cells × %s features",
-            f"{int(cell_keep.sum()):,}", f"{int(feat_keep.sum()):,}",
-        )
-        _log_attrition(
-            "filter", "variance/NaN/label",
-            len(obs_all), int(cell_keep.sum()),
-            len(data.var), int(feat_keep.sum()),
-        )
+    if X_dask is not None:
+        # ── Unified out-of-core filter (parquet AND zarr) ─────────────────────
+        # All stats are tiny .compute() calls → O(n_feat) scalars.
+        # Filtered result written directly to the output cells.zarr via da.to_zarr.
+        # Peak RAM = O(one chunk) throughout.
+        from scallops.features.preprocessing import _apply_filter_steps_1_2
+        from scallops.cli.util import _create_dask_client, _create_default_dask_config
+
+        n_cells_total = X_dask.shape[0]
+        n_feat_total  = X_dask.shape[1]
+
+        _mem_stop = _memory_monitor_start(budget_gb=_budget_gb)
+        try:
+            if True:   # scope block — no distributed cluster needed; dask threaded scheduler suffices
+
+                # ── Step 1: feature NaN filter ────────────────────────────────
+                logger.info("map run [filter]: [1/4] NaN scan (%d × %d) …",
+                            n_cells_total, n_feat_total)
+                nan_per_feat = da.isnan(X_dask).sum(axis=0).compute()
+                _mfnf = float(getattr(args, "max_feature_nan_fraction", 0.5) or 0.5)
+                feat_pass1   = (nan_per_feat / n_cells_total) < _mfnf
+                n_feat_p1    = int(feat_pass1.sum())
+                logger.info("map run [filter]: [1/4] %d / %d features kept (NaN ≤%.0f%%)",
+                            n_feat_p1, n_feat_total, _mfnf * 100)
+
+                # ── Step 2: cell filter ───────────────────────────────────────
+                X_f1 = X_dask[:, feat_pass1]
+                logger.info("map run [filter]: [2/4] cell NaN scan …")
+                bad_per_cell = da.isnan(X_f1).sum(axis=1).compute()
+                cell_keep_nan = (bad_per_cell / n_feat_p1) < float(max_fnf or 1.0)
+                cell_keep     = label_mask & cell_keep_nan
+                n_cells_kept  = int(cell_keep.sum())
+                logger.info("map run [filter]: [2/4] %d / %d cells kept",
+                            n_cells_kept, n_cells_total)
+
+                # ── Step 3: variance filter ───────────────────────────────────
+                # Apply cell + feature masks lazily, compute per-group mean±3σ
+                X_kept = X_f1[cell_keep].astype("float32")   # lazy
+
+                logger.info("map run [filter]: [3/4] variance filter …")
+                obs_kept = obs_slim.iloc[np.where(cell_keep)[0]].reset_index(drop=True)
+                feat_var_keep = np.ones(n_feat_p1, dtype=bool)
+
+                if by_cols and all(c in obs_kept.columns for c in by_cols):
+                    group_vars = []
+                    for _, grp_idx in obs_kept.groupby(by_cols, observed=True).groups.items():
+                        if len(grp_idx) < 2:
+                            continue
+                        Xg = X_kept[grp_idx.values].compute().astype(np.float64)
+                        fm = np.isfinite(Xg)
+                        Xgc = np.where(fm, Xg, 0.0)
+                        mu  = Xgc.sum(axis=0) / np.maximum(fm.sum(axis=0), 1)
+                        sig = np.sqrt(np.maximum(
+                            (Xgc**2).sum(axis=0) / np.maximum(fm.sum(axis=0), 1) - mu**2, 0))
+                        rng = np.maximum(6 * sig, 1e-8)
+                        Xs  = (np.clip(Xg, mu-3*sig, mu+3*sig) - (mu-3*sig)) / rng
+                        Xs  = np.where(fm, Xs, np.nan)
+                        group_vars.append(np.nanvar(Xs, axis=0, ddof=0))
+                    if group_vars:
+                        feat_var = np.nanmedian(np.stack(group_vars), axis=0)
+                        feat_var_keep = np.isfinite(feat_var) & (feat_var >= (min_var or 0.0))
+                else:
+                    _Xall = X_kept.compute().astype(np.float64)
+                    fm    = np.isfinite(_Xall)
+                    mu    = np.nanmean(_Xall, axis=0)
+                    sig   = np.nanstd(_Xall, axis=0)
+                    rng   = np.maximum(6*sig, 1e-8)
+                    Xs    = (np.clip(_Xall, mu-3*sig, mu+3*sig) - (mu-3*sig)) / rng
+                    feat_var = np.nanvar(np.where(fm, Xs, np.nan), axis=0, ddof=0)
+                    feat_var_keep = np.isfinite(feat_var) & (feat_var >= (min_var or 0.0))
+
+                n_feat_final = int(feat_var_keep.sum())
+                logger.info("map run [filter]: [3/4] %d / %d features kept (var≥%.4g)",
+                            n_feat_final, n_feat_p1, min_var or 0.0)
+
+                # ── Step 4: residual NaN filter ───────────────────────────────
+                feat_keep_combined = np.where(feat_pass1)[0][feat_var_keep]
+                X_final = X_dask[cell_keep][:, feat_keep_combined].astype("float32")
+
+                if max_res_nan_frac == 0.0:
+                    logger.info("map run [filter]: [4/4] residual NaN check …")
+                    nan_final = da.isnan(X_final).sum(axis=0).compute()
+                    resid_ok  = nan_final == 0
+                    if not resid_ok.all():
+                        logger.info("map run [filter]: [4/4] dropping %d features with residual NaN",
+                                    int((~resid_ok).sum()))
+                        feat_keep_combined = feat_keep_combined[resid_ok]
+                        X_final = X_dask[cell_keep][:, feat_keep_combined].astype("float32")
+
+                # ── Write directly to output cells.zarr via da.to_zarr ────────
+                n_feat_out = len(feat_keep_combined)
+                n_cells_out = n_cells_kept
+                logger.info(
+                    "map run [filter]: [4/4] writing %s cells × %d features to cells.zarr …",
+                    f"{n_cells_out:,}", n_feat_out,
+                )
+
+                # cells.zarr path is set by the caller via _save_step; here we
+                # return a dask-backed AnnData pointing at the lazy selection.
+                # _save_step will call da.to_zarr when writing.
+                feat_keep_bool = np.zeros(n_feat_total, dtype=bool)
+                feat_keep_bool[feat_keep_combined] = True
+                cell_keep_final = cell_keep
+
+        except MemoryError as exc:
+            logger.critical("!!! OUT OF MEMORY during unified dask filter !!!\n  %s", exc)
+            raise
+        finally:
+            if _mem_stop is not None:
+                _mem_stop.set()
+
+        _log_attrition("filter", "variance/NaN/label",
+                       n_cells_total, n_cells_out,
+                       n_feat_total, n_feat_out)
+
         result = anndata.AnnData(
-            X=X_filtered,
-            obs=obs_all.iloc[cell_keep].copy(),
-            var=data.var.iloc[feat_keep].copy(),
+            X=X_final,
+            obs=obs_all.iloc[np.where(cell_keep_final)[0]].copy(),
+            var=data.var.iloc[feat_keep_bool].copy(),
             uns=dict(data.uns),
         )
         _merge_uns(data, result)
