@@ -123,20 +123,29 @@ def transform_features_yj(
     # (one float64 input block + one float32 output block) instead of the full
     # n_cells × n_feat pre-allocation.  The caller receives a zarr-backed
     # AnnData whose X is never fully in RAM.
-    if isinstance(data.X, da.Array) and output_zarr_path is not None:
-        import zarr as _zarr
-        _fblock = max(1, int(feat_block_bytes / (max(n_obs, 1) * 12)))
-        _zgrp   = _zarr.open_group(output_zarr_path, mode="a")
-        # Pre-create X dataset so random-region writes work
+    # ── Dask path: zarr write-through for all dask inputs ────────────────────
+    # Replaces Phase-1 (which pre-allocated X_out = np.empty((n_obs, n_feat))
+    # defeating streaming) and consolidates Phase-2.  Works for both:
+    #   • Caller-supplied output_zarr_path (no temp file needed)
+    #   • No path supplied: creates a temp zarr, returns dask-backed AnnData
+    # Zarr column chunk = _fblock so no single chunk covers all n_feat columns.
+    if isinstance(data.X, da.Array):
+        import tempfile as _tmp_mod, zarr as _zarr
+        _zarr_path = output_zarr_path or (
+            _tmp_mod.mkdtemp(prefix="scallops_yj_") + "/yj_out.zarr"
+        )
+        _fblock    = max(1, int(feat_block_bytes / (max(n_obs, 1) * 12)))
+        _col_chunk = min(_fblock, n_feat)   # chunk ≤ block → no full-width alloc
+        _zgrp = _zarr.open_group(_zarr_path, mode="a")
         if "X" not in _zgrp:
             _zgrp.create_dataset("X", shape=(n_obs, n_feat), dtype="float32",
-                                 chunks=(min(50_000, n_obs), n_feat),
+                                 chunks=(min(50_000, n_obs), _col_chunk),
                                  overwrite=True)
         _zX = _zgrp["X"]
         for _f0 in range(0, n_feat, _fblock):
-            _f1   = min(_f0 + _fblock, n_feat)
-            _blk  = np.asarray(data.X[:, _f0:_f1].compute(), dtype=np.float64)
-            _tmp  = anndata.AnnData(X=_blk, obs=data.obs)
+            _f1  = min(_f0 + _fblock, n_feat)
+            _blk = np.asarray(data.X[:, _f0:_f1].compute(), dtype=np.float64)
+            _tmp = anndata.AnnData(X=_blk, obs=data.obs)
             if not by_cols:
                 _tasks = [_dd(_yj_fit_transform_col)(_blk[:, j], standardize,
                                                       output_cap=output_cap)
@@ -149,37 +158,8 @@ def transform_features_yj(
                                               n_jobs=n_jobs, output_cap=output_cap)
                 _zX[:, _f0:_f1] = _res.X
             del _blk, _tmp
-        # Return zarr-backed AnnData — X never fully in RAM
-        _X_da = da.from_zarr(output_zarr_path, component="X")
+        _X_da = da.from_zarr(_zarr_path, component="X")
         return anndata.AnnData(X=_X_da, obs=data.obs.copy(), var=data.var.copy())
-
-    # ── Phase-1 streaming path: dask-backed X → process in feature blocks ─────
-    # Avoids materialising the full float64 matrix (n_obs × n_feat × 8 bytes).
-    # Each block reads only FEAT_BLOCK columns at a time, capped at ~2 GB RAM.
-    # Results are bit-identical to the full-matrix path because each feature is
-    # fitted independently on the complete set of cells.
-    # 12 bytes/cell/feature: 8 (float64 input) + 4 (float32 output).
-    # Using 8 would over-allocate by 1.5× and exceed budget.
-    _FEAT_BLOCK = max(1, int(feat_block_bytes / (max(n_obs, 1) * 12)))
-    if isinstance(data.X, da.Array):
-        X_out = np.empty((n_obs, n_feat), dtype=np.float32)
-        for _f0 in range(0, n_feat, _FEAT_BLOCK):
-            _f1 = min(_f0 + _FEAT_BLOCK, n_feat)
-            _blk = np.asarray(data.X[:, _f0:_f1].compute(), dtype=np.float64)
-            _tmp = anndata.AnnData(X=_blk, obs=data.obs)
-            if not by_cols:
-                _tasks = [_dd(_yj_fit_transform_col)(_blk[:, j], standardize,
-                                                      output_cap=output_cap)
-                          for j in range(_f1 - _f0)]
-                _cols = dask.compute(*_tasks, scheduler="threads",
-                                     num_workers=n_workers)
-                X_out[:, _f0:_f1] = np.column_stack(_cols).astype(np.float32)
-            else:
-                _res = transform_features_yj(_tmp, by=by, standardize=standardize,
-                                              n_jobs=n_jobs, output_cap=output_cap)
-                X_out[:, _f0:_f1] = _res.X
-            del _blk, _tmp
-        return anndata.AnnData(X=X_out, obs=data.obs.copy(), var=data.var.copy())
     # ── Standard path: small / numpy-backed X ────────────────────────────────
 
     X_full = np.asarray(data.X, dtype=np.float64)

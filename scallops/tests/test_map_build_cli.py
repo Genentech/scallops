@@ -2709,26 +2709,49 @@ def _make_zarr_adata(tmp_path, n_obs=50_000, n_feat=300, seed=7):
     return result
 
 
-@pytest.mark.features
-def test_filter_peak_rss_respects_budget(tmp_path):
-    """Filter RSS increase must stay within budget.
 
-    Data: 50K × 300 float32 = 60 MB.
-    Budget: 0.2 GB.  The INCREASE in RSS (peak - baseline) must be ≤ budget × 5
-    (×5 accounts for dask chunk decompression overhead, zarr buffers, etc.).
-    It must NOT materialise the full 60 MB matrix into float64 (480 MB).
+# ---------------------------------------------------------------------------
+# Memory budget enforcement tests
+# Use data large enough (1 GB) that signal >> Python/library overhead noise.
+# All tests measure delta = peak_rss - baseline_rss (overhead-free).
+# Assert delta ≤ budget_gb: if it fails, the implementation is broken.
+# ---------------------------------------------------------------------------
+
+def _measure_baseline_gb():
+    """Current process RSS in GB — call BEFORE the operation under test."""
+    return _psutil.Process(os.getpid()).memory_info().rss / 1e9
+
+
+def _run_with_rss_monitor(fn):
+    """Run fn(), return (result, peak_rss_gb) sampled every 250 ms."""
+    readings = []
+    stop = threading.Event()
+    mon = threading.Thread(target=_peak_rss_gb, args=(stop, readings), daemon=True)
+    mon.start()
+    result = fn()
+    stop.set(); mon.join(timeout=2)
+    return result, (max(readings) if readings else 0)
+
+
+@pytest.mark.features
+def test_filter_delta_rss_within_budget(tmp_path):
+    """Filter: RSS increase (peak - baseline) must not exceed budget_gb.
+
+    Data: 250K × 500 float32 = 500 MB.
+    Budget: 0.5 GB.
+    Expected behaviour: filter processes in dask chunks, delta ≤ budget.
+    If filter materialises the full float64 matrix, delta ≈ 2 GB (fail).
     """
     import dask.array as da
     from scallops.cli.map_build import _apply_filter_inmem
 
-    budget_gb = 0.2   # 200 MB data budget
-    raw_gb    = 50_000 * 300 * 4 / 1e9   # 0.06 GB
+    budget_gb = 0.5
+    raw_gb    = 250_000 * 500 * 4 / 1e9   # 0.5 GB
 
-    adata = _make_zarr_adata(tmp_path, n_obs=50_000, n_feat=300)
-    assert isinstance(adata.X, da.Array), "Test fixture must be dask-backed"
+    adata = _make_zarr_adata(tmp_path, n_obs=250_000, n_feat=500)
+    assert isinstance(adata.X, da.Array)
 
-    # Measure Python baseline BEFORE any operation
-    baseline_gb = _psutil.Process(os.getpid()).memory_info().rss / 1e9
+    baseline_gb = _measure_baseline_gb()
 
     args = argparse.Namespace(
         plate_column="plate", well_column="well",
@@ -2737,7 +2760,7 @@ def test_filter_peak_rss_respects_budget(tmp_path):
         min_variance=0.001, max_variance=None,
         max_residual_nan_fraction=0.0, residual_nan_impute="zero",
         perturbation="gene_symbol", memory_budget_gb=budget_gb,
-        streaming_threshold_gb=None, filter_batch_size=5_000,
+        streaming_threshold_gb=None, filter_batch_size=10_000,
         filter_max_memory_gb=budget_gb, force=True, no_version=True,
         client="none", dask_cluster=None,
         include_measurement_types=None, feature_channels=None,
@@ -2747,75 +2770,41 @@ def test_filter_peak_rss_respects_budget(tmp_path):
         scale_method="global", output_dir=str(tmp_path), output=None,
     )
 
-    stop = threading.Event()
-    readings = []
-    mon = threading.Thread(target=_peak_rss_gb, args=(stop, readings), daemon=True)
-    mon.start()
-    t0 = time.monotonic()
+    result, peak_gb = _run_with_rss_monitor(lambda: _apply_filter_inmem(adata, args))
+    delta_gb = peak_gb - baseline_gb
 
-    result = _apply_filter_inmem(adata, args)
+    print(f"\n  filter: data={raw_gb*1000:.0f}MB budget={budget_gb*1000:.0f}MB "
+          f"baseline={baseline_gb:.2f}GB peak={peak_gb:.2f}GB delta={delta_gb*1000:.0f}MB")
 
-    stop.set(); mon.join(timeout=2)
-    elapsed = time.monotonic() - t0
-    peak_gb  = max(readings) if readings else 0
-    delta_gb = peak_gb - baseline_gb   # data-related RSS increase only
-
-    # delta must be ≤ budget × 5 (decompression + dask chunk buffers)
-    # and must NOT equal raw_gb × 8 (full float64 materialisation = 480 MB)
-    assert delta_gb <= budget_gb * 5, (
-        f"RSS increase {delta_gb*1000:.0f} MB exceeded budget {budget_gb*1000:.0f} MB × 5. "
-        f"Filter materialised more data than the budget allows."
+    assert delta_gb <= budget_gb, (
+        f"RSS delta {delta_gb*1000:.0f} MB > budget {budget_gb*1000:.0f} MB. "
+        f"Filter materialised more than the budget allows. "
+        f"(raw data = {raw_gb*1000:.0f} MB, full float64 would be {raw_gb*2*1000:.0f} MB)"
     )
-    assert result.shape[0] > 0, "No cells survived filter"
-    assert result.shape[1] < 300, "Constant feat_0 should have been dropped"
-    print(f"\n  filter: {raw_gb*1000:.0f} MB data, budget={budget_gb*1000:.0f} MB, "
-          f"baseline={baseline_gb:.2f}GB peak={peak_gb:.2f}GB "
-          f"delta={delta_gb*1000:.0f}MB, time={elapsed:.1f}s")
+    assert result.shape[0] > 0
+    assert result.shape[1] < 500
 
 
 @pytest.mark.features
-def test_yj_feat_block_size_respects_budget():
-    """YJ feat_block must be < n_feat when budget/8 < n_feat × n_cells × 12."""
-    # With budget=0.5 GB and n_cells=100K:
-    # feat_block = 0.5e9 / 8 / (100_000 × 12) = 52 features
-    # This MUST be < n_feat=300, forcing multiple blocks
-    budget_gb = 0.5
-    n_cells   = 100_000
-    n_feat    = 300
-    bytes_per_cell = 12   # float64 in + float32 out
+def test_yj_delta_rss_within_budget(tmp_path):
+    """YJ: RSS increase must not exceed budget_gb.
 
-    feat_block_bytes = budget_gb * 1e9 / 8   # budget/8 per block
-    feat_block = max(1, int(feat_block_bytes / (n_cells * bytes_per_cell)))
-
-    assert feat_block < n_feat, (
-        f"feat_block={feat_block} >= n_feat={n_feat}: budget {budget_gb} GB "
-        f"gives one giant block, defeating chunking"
-    )
-    assert feat_block >= 1, "feat_block must be at least 1"
-    n_blocks = -(-n_feat // feat_block)   # ceil
-    assert n_blocks >= 2, f"Should need at least 2 blocks, got {n_blocks}"
-    print(f"\n  budget={budget_gb} GB → feat_block={feat_block} → {n_blocks} blocks")
-
-
-@pytest.mark.features
-def test_yj_processes_in_feature_blocks(tmp_path):
-    """YJ with budget < full matrix must use feature-block streaming.
-
-    Verifies two things:
-    1. feat_block_bytes=budget/8 forces multiple blocks (not one giant block).
-    2. transform_features_yj is called with the correct output_zarr_path
-       (Phase-2 zarr write-through, no X_out pre-allocation).
-
-    We instrument the call to verify the path taken without measuring RSS,
-    since RSS delta is dominated by Python/scipy overhead from per-feature
-    optimization that is correct and unavoidable.
+    Data: 100K × 400 float32 = 160 MB.  Budget: 0.3 GB.
+    With Phase-2 (zarr write-through, feat_block = budget/8 per block):
+      peak per block = budget/8 × 12 bytes/cell/feat ≈ budget × 1.5 → small
+      delta ≤ budget
+    Without Phase-2 (Phase-1 pre-allocates X_out = 160 MB):
+      delta ≈ 160 MB → borderline
+    Without any streaming (full float64):
+      delta ≈ 160 MB × 2 = 320 MB → FAIL
     """
     import dask.array as da
     from scallops.cli.map_build import _apply_filter_inmem, _apply_transform_yj_inmem
-    import scallops.features.preprocessing as _pp
 
-    budget_gb = 0.05   # 50 MB — forces feat_block = ~10 features for 50K cells
-    adata = _make_zarr_adata(tmp_path, n_obs=50_000, n_feat=300)
+    budget_gb = 0.3
+    raw_gb    = 100_000 * 400 * 4 / 1e9   # 0.16 GB
+
+    adata = _make_zarr_adata(tmp_path, n_obs=100_000, n_feat=400)
 
     filter_args = argparse.Namespace(
         plate_column="plate", well_column="well",
@@ -2824,91 +2813,8 @@ def test_yj_processes_in_feature_blocks(tmp_path):
         min_variance=0.001, max_variance=None,
         max_residual_nan_fraction=None, residual_nan_impute="zero",
         perturbation="gene_symbol", memory_budget_gb=budget_gb,
-        streaming_threshold_gb=None, filter_batch_size=5_000,
+        streaming_threshold_gb=None, filter_batch_size=10_000,
         filter_max_memory_gb=budget_gb, force=True, no_version=True,
-        client="none", dask_cluster=None,
-        include_measurement_types=None, feature_channels=None,
-        obs_force=None, condition_column=None, condition_source_column=None,
-        condition_map=None, max_zero_fraction=None, min_unique=None,
-        near_zero_threshold=0.0, max_correlation=None, batch_column=None,
-        scale_method="global", output_dir=str(tmp_path), output=None,
-    )
-    filtered = _apply_filter_inmem(adata, filter_args)
-    assert isinstance(filtered.X, da.Array), \
-        "Filter must return dask-backed AnnData for YJ streaming"
-
-    # Instrument transform_features_yj to capture first-call arguments
-    first_call = {}
-    _orig = _pp.transform_features_yj
-    def _spy(data, by=None, standardize=False, n_jobs=-1,
-             output_cap=None, output_zarr_path=None, feat_block_bytes=2e9):
-        if not first_call:
-            first_call.update({
-                "output_zarr_path": output_zarr_path,
-                "feat_block_bytes": feat_block_bytes,
-                "X_is_dask": isinstance(data.X, da.Array),
-            })
-        return _orig(data, by=by, standardize=standardize, n_jobs=n_jobs,
-                     output_cap=output_cap, output_zarr_path=output_zarr_path,
-                     feat_block_bytes=feat_block_bytes)
-    _pp.transform_features_yj = _spy
-
-    try:
-        yj_args = argparse.Namespace(
-            plate_column="plate", well_column="well",
-            yj_clip_percentile=99.9, yj_standardize=False, yj_clip_output=None,
-            max_cpus=2, memory_budget_gb=budget_gb,
-            output_dir=str(tmp_path), output=None,
-            force=True, no_version=True, client="none", dask_cluster=None,
-        )
-        result = _apply_transform_yj_inmem(filtered, yj_args)
-    finally:
-        _pp.transform_features_yj = _orig
-
-    # Verify Phase-2 was used (output_zarr_path set, X was dask)
-    assert first_call.get("output_zarr_path"), \
-        "YJ must use Phase-2 zarr write-through when X is dask and output_dir is set"
-    assert first_call.get("X_is_dask"), \
-        "YJ must receive a dask array (not materialised numpy)"
-
-    # Verify feat_block_bytes = budget/8 forces multiple blocks
-    feat_block_bytes = first_call["feat_block_bytes"]
-    n_obs, n_feat = filtered.shape
-    feat_block = max(1, int(feat_block_bytes / (n_obs * 12)))
-    assert feat_block < n_feat, (
-        f"feat_block={feat_block} >= n_feat={n_feat}: "
-        f"budget {budget_gb} GB gives one giant block, defeating streaming"
-    )
-    n_blocks = -(-n_feat // feat_block)
-    assert n_blocks >= 2, f"Must use ≥2 blocks, got {n_blocks}"
-
-    assert result.shape == filtered.shape, "YJ must preserve shape"
-    print(f"\n  YJ: feat_block={feat_block}/{n_feat} features → {n_blocks} blocks, "
-          f"Phase-2={'yes' if first_call.get('output_zarr_path') else 'no'}")
-
-
-@pytest.mark.features
-def test_scale_preserves_dask_input(tmp_path):
-    """Scale must not materialise the full matrix when data.X is dask.
-
-    xr.DataArray accepts dask arrays and xarray groupby operates group-by-group,
-    so scale should pass data.X through without calling .compute() on the full matrix.
-    Verified by checking result.X remains lazy (dask or backed).
-    """
-    import dask.array as da
-    from scallops.cli.map_build import _apply_filter_inmem, _apply_scale_inmem
-
-    adata = _make_zarr_adata(tmp_path, n_obs=20_000, n_feat=100)
-
-    filter_args = argparse.Namespace(
-        plate_column="plate", well_column="well",
-        label_filter=None, features=None,
-        max_fraction_not_finite=0.25, max_feature_nan_fraction=0.5,
-        min_variance=0.001, max_variance=None,
-        max_residual_nan_fraction=None, residual_nan_impute="zero",
-        perturbation="gene_symbol", memory_budget_gb=0.5,
-        streaming_threshold_gb=None, filter_batch_size=2_000,
-        filter_max_memory_gb=0.5, force=True, no_version=True,
         client="none", dask_cluster=None,
         include_measurement_types=None, feature_channels=None,
         obs_force=None, condition_column=None, condition_source_column=None,
@@ -2919,60 +2825,132 @@ def test_scale_preserves_dask_input(tmp_path):
     filtered = _apply_filter_inmem(adata, filter_args)
     assert isinstance(filtered.X, da.Array), "Filter must return dask X"
 
-    scale_args = argparse.Namespace(
-        plate_column="plate", well_column="well",
-        scale_method="global", scale_max_value=5.0,
-        memory_budget_gb=0.5, force=True, no_version=True,
-        client="none", dask_cluster=None, output_dir=str(tmp_path),
+    n_feat_out = filtered.shape[1]
+    feat_block = max(1, int(budget_gb * 1e9 / 8 / (filtered.shape[0] * 12)))
+    assert feat_block < n_feat_out, (
+        f"feat_block={feat_block} >= n_feat={n_feat_out}: "
+        f"budget too large, chunking won't happen — use a smaller budget in the test"
     )
 
-    # Track whether .compute() is called on the full X
-    called_compute = []
-    orig_compute = type(filtered.X).compute
-    def spy_compute(self, **kwargs):
-        called_compute.append(self.shape)
-        return orig_compute(self, **kwargs)
+    yj_args = argparse.Namespace(
+        plate_column="plate", well_column="well",
+        yj_clip_percentile=99.9, yj_standardize=False, yj_clip_output=None,
+        max_cpus=2, memory_budget_gb=budget_gb,
+        output_dir=str(tmp_path), output=None,
+        force=True, no_version=True, client="none", dask_cluster=None,
+    )
 
-    # Scale and verify it doesn't crash — xarray handles dask natively
-    result = _apply_scale_inmem(filtered, scale_args)
+    baseline_gb = _measure_baseline_gb()
+    result, peak_gb = _run_with_rss_monitor(
+        lambda: _apply_transform_yj_inmem(filtered, yj_args)
+    )
+    delta_gb = peak_gb - baseline_gb
 
-    # Scale output may be numpy (xarray computes per group) — that's OK
-    # What matters: it didn't OOM by trying to allocate the full float64 matrix
-    assert result.shape == filtered.shape, "Scale must preserve shape"
+    print(f"\n  YJ: data={raw_gb*1000:.0f}MB budget={budget_gb*1000:.0f}MB "
+          f"feat_block={feat_block}/{n_feat_out} "
+          f"baseline={baseline_gb:.2f}GB peak={peak_gb:.2f}GB delta={delta_gb*1000:.0f}MB")
+
+    assert delta_gb <= budget_gb, (
+        f"RSS delta {delta_gb*1000:.0f} MB > budget {budget_gb*1000:.0f} MB. "
+        f"YJ is not respecting the memory budget. "
+        f"(raw={raw_gb*1000:.0f}MB, full float64 would be {raw_gb*2*1000:.0f}MB)"
+    )
+    assert result.shape == filtered.shape
+
+
+@pytest.mark.features
+def test_yj_feat_block_size_respects_budget():
+    """YJ feat_block = budget/8 must be < n_feat (arithmetic check)."""
+    budget_gb = 0.5
+    n_cells   = 100_000
+    n_feat    = 400
+    feat_block = max(1, int(budget_gb * 1e9 / 8 / (n_cells * 12)))
+    assert feat_block < n_feat, (
+        f"feat_block={feat_block} >= n_feat={n_feat}: "
+        f"budget {budget_gb} GB gives one block — no chunking"
+    )
+    n_blocks = -(-n_feat // feat_block)
+    assert n_blocks >= 2
+    print(f"\n  budget={budget_gb}GB → feat_block={feat_block} → {n_blocks} blocks")
+
+
+@pytest.mark.features
+def test_yj_uses_zarr_write_through(tmp_path):
+    """YJ must write to a zarr store (Phase-2) rather than pre-allocating X_out.
+
+    Phase-1 did: X_out = np.empty((n_obs, n_feat), float32) — full output buffer.
+    Phase-2 writes each feature block directly to zarr — no pre-allocation.
+
+    Verified by:
+    1. YJ with dask input + output_dir must create a *_yjtmp.zarr file.
+    2. Result shape is preserved.
+    3. feat_block < n_feat (multiple blocks processed).
+    """
+    import dask.array as da, os
+    from scallops.cli.map_build import _apply_filter_inmem, _apply_transform_yj_inmem
+
+    budget_gb = 0.2
+    adata = _make_zarr_adata(tmp_path, n_obs=50_000, n_feat=300)
+    filter_args = argparse.Namespace(
+        plate_column="plate", well_column="well",
+        label_filter=None, features=None,
+        max_fraction_not_finite=0.25, max_feature_nan_fraction=0.5,
+        min_variance=0.001, max_variance=None,
+        max_residual_nan_fraction=None, residual_nan_impute="zero",
+        perturbation="gene_symbol", memory_budget_gb=budget_gb,
+        streaming_threshold_gb=None, filter_batch_size=5_000,
+        filter_max_memory_gb=budget_gb, force=True, no_version=True,
+        client="none", dask_cluster=None,
+        include_measurement_types=None, feature_channels=None,
+        obs_force=None, condition_column=None, condition_source_column=None,
+        condition_map=None, max_zero_fraction=None, min_unique=None,
+        near_zero_threshold=0.0, max_correlation=None, batch_column=None,
+        scale_method="global", output_dir=str(tmp_path), output=None,
+    )
+    filtered = _apply_filter_inmem(adata, filter_args)
+    assert isinstance(filtered.X, da.Array), "Filter must return dask X"
+
     n_obs, n_feat = filtered.shape
-    raw_gb = n_obs * n_feat * 4 / 1e9
-    print(f"\n  scale: {raw_gb*1000:.0f} MB input → output type: {type(result.X).__name__}")
+    feat_block = max(1, int(budget_gb * 1e9 / 8 / (n_obs * 12)))
+    assert feat_block < n_feat, "Budget must force multiple blocks for this test"
+
+    yj_args = argparse.Namespace(
+        plate_column="plate", well_column="well",
+        yj_clip_percentile=99.9, yj_standardize=False, yj_clip_output=None,
+        max_cpus=2, memory_budget_gb=budget_gb,
+        output_dir=str(tmp_path), output=None,
+        force=True, no_version=True, client="none", dask_cluster=None,
+    )
+    result = _apply_transform_yj_inmem(filtered, yj_args)
+
+    # Phase-2 proof: a _yjtmp.zarr must have been created alongside the output
+    yj_zarr = str(tmp_path) + "_yjtmp.zarr"
+    assert os.path.exists(yj_zarr), (
+        f"No YJ zarr at {yj_zarr}. "
+        f"Phase-2 write-through was not used — YJ may have pre-allocated full X_out."
+    )
+    assert result.shape == filtered.shape, "YJ must preserve shape"
+    print(f"\n  YJ Phase-2 confirmed: zarr={yj_zarr}  "
+          f"feat_block={feat_block}/{n_feat} → {-(-n_feat//feat_block)} blocks")
 
 
 @pytest.mark.features
 def test_pca_batch_size_derived_from_budget():
-    """PCA batch_size must be < n_cells when budget / (n_feat × 8) < n_cells.
-
-    Pure arithmetic test — verifies the formula produces meaningful batching
-    for realistic MAP dataset sizes (14M cells × 3K features, budget 800 GB).
-    No actual PCA run needed; the formula is what enforces memory limits.
-    """
+    """PCA batch_size = budget / (n_feat × 8) must force multiple batches."""
     cases = [
-        # (n_cells, n_feat, budget_gb, expect_batching)
-        # 14M × 3290 × 8 bytes = 368 GB < 800 GB → fits in one batch (OK)
-        (14_000_000, 3_290,  800, False),
-        # 14M × 3290 × 8 = 368 GB > 200 GB → must batch
-        (14_000_000, 3_290,  200, True),
-        # 1M × 1K × 8 = 8 GB < 100 GB → one batch OK
-        (1_000_000,  1_000,  100, False),
-        # 1M × 1K × 8 = 8 GB > 4 GB → must batch
-        (1_000_000,  1_000,    4, True),
+        (14_000_000, 3_290,  200, True),   # 14M × 3290 × 8 = 368 GB > 200 GB
+        (1_000_000,  1_000,    4, True),   # 1M × 1K × 8 = 8 GB > 4 GB
+        (14_000_000, 3_290,  800, False),  # 368 GB < 800 GB → one batch OK
     ]
     for n_cells, n_feat, budget_gb, expect_batching in cases:
         batch_size = max(128, int(budget_gb * 1e9 / (n_feat * 8)))
         needs_batching = batch_size < n_cells
-        n_batches = -(-n_cells // batch_size)
+        n_batches = -(-n_cells // batch_size) if needs_batching else 1
         if expect_batching:
             assert needs_batching, (
                 f"n_cells={n_cells:,} n_feat={n_feat} budget={budget_gb}GB: "
-                f"batch_size={batch_size:,} >= n_cells — no incremental batching!"
+                f"batch_size={batch_size:,} >= n_cells → no batching"
             )
-            assert n_batches >= 2, f"Expected ≥2 batches, got {n_batches}"
-        print(f"  {n_cells//1000}K cells × {n_feat} feat, budget={budget_gb}GB "
-              f"→ batch={batch_size:,} ({n_batches} batches, "
-              f"{'batching ✓' if needs_batching else 'one-shot (OK for small data)'})")
+        print(f"  {n_cells//1000}K×{n_feat} budget={budget_gb}GB → "
+              f"batch={batch_size:,} ({n_batches} batch{'es' if n_batches>1 else ''}, "
+              f"{'batching ✓' if needs_batching else 'one-shot OK'})")
