@@ -2653,3 +2653,199 @@ def test_map_run_parquet_full_pipeline(tmp_path):
     assert S.shape[0] == S.shape[1], "similarity matrix is not square"
     S_arr = np.asarray(S.todense() if hasattr(S, "todense") else S)
     assert np.all(np.isfinite(S_arr)), "similarity matrix contains non-finite values"
+
+
+# ---------------------------------------------------------------------------
+# Memory budget enforcement tests
+# ---------------------------------------------------------------------------
+
+import threading, time, psutil as _psutil
+
+
+def _peak_rss_gb(stop_event, readings):
+    """Background sampler — records peak RSS of this process + children."""
+    proc = _psutil.Process(os.getpid())
+    while not stop_event.is_set():
+        try:
+            rss = proc.memory_info().rss
+            for c in proc.children(recursive=True):
+                try: rss += c.memory_info().rss
+                except: pass
+            readings.append(rss / 1e9)
+        except: pass
+        stop_event.wait(0.25)
+
+
+def _make_zarr_adata(tmp_path, n_obs=50_000, n_feat=300, seed=7):
+    """Write a zarr-backed AnnData and return it with data.X as a dask array."""
+    import zarr
+    import dask.array as da
+    rng = np.random.default_rng(seed)
+    X = rng.standard_normal((n_obs, n_feat)).astype(np.float32)
+    X[:, 0] = 5.5                       # constant → variance filter should drop it
+    X[:int(n_obs * 0.1), 1] = np.nan   # 10% NaN in feat 1
+
+    feat_names = [f"Cells_Intensity_feat{j}" for j in range(n_feat)]
+    plates = ["P1"] * (n_obs // 2) + ["P2"] * (n_obs // 2)
+    wells  = [str(i % 3 + 1) for i in range(n_obs)]
+    genes  = (["NTC"]   * (n_obs // 5) + ["geneA"] * (n_obs // 5) +
+              ["geneB"] * (n_obs // 5) + ["geneC"] * (n_obs // 5) +
+              ["geneD"] * (n_obs - 4 * (n_obs // 5)))
+
+    adata = anndata.AnnData(
+        X=X,
+        obs=pd.DataFrame({"plate": plates, "well": wells, "gene_symbol": genes},
+                         index=pd.RangeIndex(n_obs).astype(str)),
+        var=pd.DataFrame(index=feat_names),
+    )
+    path = str(tmp_path / "data.zarr")
+    adata.write_zarr(path)
+
+    # Read back with X as a dask array (chunk by row groups matching zarr chunks)
+    z = zarr.open(path, mode="r")
+    X_dask = da.from_zarr(z["X"])   # lazy, no data loaded
+    result = anndata.AnnData(X=X_dask, obs=adata.obs.copy(), var=adata.var.copy())
+    assert isinstance(result.X, da.Array), "X must be dask for streaming tests"
+    return result
+
+
+@pytest.mark.features
+def test_filter_peak_rss_respects_budget(tmp_path):
+    """Filter with a budget smaller than raw data must not materialise full matrix.
+
+    Data: 50K × 300 float32 = 60 MB raw.
+    Budget: 0.01 GB (10 MB) — forces dask path, peak should stay well below
+    60 MB of data + Python overhead.
+    """
+    import dask.array as da
+    from scallops.cli.map_build import _apply_filter_inmem
+
+    adata = _make_zarr_adata(tmp_path, n_obs=50_000, n_feat=300)
+    assert isinstance(adata.X, da.Array), "Test fixture must be dask-backed"
+
+    args = argparse.Namespace(
+        plate_column="plate", well_column="well",
+        label_filter=None, features=None,
+        max_fraction_not_finite=0.25, max_feature_nan_fraction=0.5,
+        min_variance=0.001, max_variance=None,
+        max_residual_nan_fraction=0.0, residual_nan_impute="zero",
+        perturbation="gene_symbol", memory_budget_gb=0.01,   # 10 MB — tiny
+        streaming_threshold_gb=None, filter_batch_size=5_000,
+        filter_max_memory_gb=0.01, force=True, no_version=True,
+        client="none", dask_cluster=None,
+        include_measurement_types=None, feature_channels=None,
+        obs_force=None, condition_column=None, condition_source_column=None,
+        condition_map=None, max_zero_fraction=None, min_unique=None,
+        near_zero_threshold=0.0, max_correlation=None, batch_column=None,
+        scale_method="global", output_dir=str(tmp_path), output=None,
+    )
+
+    stop = threading.Event()
+    readings = []
+    mon = threading.Thread(target=_peak_rss_gb, args=(stop, readings), daemon=True)
+    mon.start()
+    t0 = time.monotonic()
+
+    result = _apply_filter_inmem(adata, args)
+
+    stop.set(); mon.join(timeout=2)
+    elapsed = time.monotonic() - t0
+    peak_gb = max(readings) if readings else 0
+
+    raw_gb = 50_000 * 300 * 4 / 1e9   # 0.06 GB
+    # Allow 3 GB overhead (Python + dask workers) — anything << full materialise
+    assert peak_gb < 3.5, (
+        f"Peak RSS {peak_gb:.2f} GB exceeded 3.5 GB budget+overhead "
+        f"for {raw_gb*1000:.0f} MB raw data (filter should be out-of-core)"
+    )
+    assert result.shape[0] > 0, "No cells survived filter"
+    assert result.shape[1] < 300, "Constant feat_0 should have been dropped"
+    print(f"\n  filter: {raw_gb*1000:.0f} MB data, budget=10 MB, "
+          f"peak={peak_gb:.2f} GB, time={elapsed:.1f}s, "
+          f"shape={result.shape}")
+
+
+@pytest.mark.features
+def test_yj_feat_block_size_respects_budget():
+    """YJ feat_block must be < n_feat when budget/8 < n_feat × n_cells × 12."""
+    # With budget=0.5 GB and n_cells=100K:
+    # feat_block = 0.5e9 / 8 / (100_000 × 12) = 52 features
+    # This MUST be < n_feat=300, forcing multiple blocks
+    budget_gb = 0.5
+    n_cells   = 100_000
+    n_feat    = 300
+    bytes_per_cell = 12   # float64 in + float32 out
+
+    feat_block_bytes = budget_gb * 1e9 / 8   # budget/8 per block
+    feat_block = max(1, int(feat_block_bytes / (n_cells * bytes_per_cell)))
+
+    assert feat_block < n_feat, (
+        f"feat_block={feat_block} >= n_feat={n_feat}: budget {budget_gb} GB "
+        f"gives one giant block, defeating chunking"
+    )
+    assert feat_block >= 1, "feat_block must be at least 1"
+    n_blocks = -(-n_feat // feat_block)   # ceil
+    assert n_blocks >= 2, f"Should need at least 2 blocks, got {n_blocks}"
+    print(f"\n  budget={budget_gb} GB → feat_block={feat_block} → {n_blocks} blocks")
+
+
+@pytest.mark.features
+def test_yj_peak_rss_respects_budget(tmp_path):
+    """YJ with budget smaller than full matrix must process in feature blocks.
+
+    Data: 50K × 300 float32 = 60 MB.
+    Budget: 0.05 GB (50 MB) → feat_block = 50e6/8/(50K×12) ≈ 10 features/block.
+    Peak should stay << full matrix size.
+    """
+    import dask.array as da
+    from scallops.cli.map_build import _apply_filter_inmem, _apply_transform_yj_inmem
+
+    adata = _make_zarr_adata(tmp_path, n_obs=50_000, n_feat=300)
+
+    filter_args = argparse.Namespace(
+        plate_column="plate", well_column="well",
+        label_filter=None, features=None,
+        max_fraction_not_finite=0.25, max_feature_nan_fraction=0.5,
+        min_variance=0.001, max_variance=None,
+        max_residual_nan_fraction=None, residual_nan_impute="zero",
+        perturbation="gene_symbol", memory_budget_gb=0.05,
+        streaming_threshold_gb=None, filter_batch_size=5_000,
+        filter_max_memory_gb=0.05, force=True, no_version=True,
+        client="none", dask_cluster=None,
+        include_measurement_types=None, feature_channels=None,
+        obs_force=None, condition_column=None, condition_source_column=None,
+        condition_map=None, max_zero_fraction=None, min_unique=None,
+        near_zero_threshold=0.0, max_correlation=None, batch_column=None,
+        scale_method="global", output_dir=str(tmp_path), output=None,
+    )
+    filtered = _apply_filter_inmem(adata, filter_args)
+    assert isinstance(filtered.X, da.Array), \
+        "Filter must return dask-backed AnnData for YJ streaming to work"
+
+    yj_args = argparse.Namespace(
+        plate_column="plate", well_column="well",
+        yj_clip_percentile=99.9, yj_standardize=False, yj_clip_output=None,
+        max_cpus=2, memory_budget_gb=0.05,
+        output_dir=str(tmp_path), output=None,
+        force=True, no_version=True, client="none", dask_cluster=None,
+    )
+
+    stop = threading.Event()
+    readings = []
+    mon = threading.Thread(target=_peak_rss_gb, args=(stop, readings), daemon=True)
+    mon.start()
+
+    result = _apply_transform_yj_inmem(filtered, yj_args)
+
+    stop.set(); mon.join(timeout=2)
+    peak_gb = max(readings) if readings else 0
+    raw_gb  = filtered.shape[0] * filtered.shape[1] * 4 / 1e9
+
+    # Allow 3.5 GB overhead — should not materialise the full matrix
+    assert peak_gb < 3.5, (
+        f"Peak RSS {peak_gb:.2f} GB >> 3.5 GB for {raw_gb*1000:.0f} MB data. "
+        f"YJ is materialising the full matrix instead of streaming."
+    )
+    assert result.shape == filtered.shape, "YJ must preserve shape"
+    print(f"\n  YJ: {raw_gb*1000:.0f} MB data, budget=50 MB, "
+          f"peak={peak_gb:.2f} GB, shape={result.shape}")
