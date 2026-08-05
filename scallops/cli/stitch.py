@@ -318,6 +318,9 @@ def run_stitch(args: argparse.Namespace) -> None:
         except ValueError:
             pass
     t_index = args.t_index
+    split_t = args.split_t
+    if split_t and t_index is not None:
+        raise ValueError("`--split-t` and `--t-index` are mutually exclusive.")
 
     expected_images = args.expected_images
     crop_width_y = args.crop_y
@@ -415,4 +418,5 @@ def run_stitch(args: argparse.Namespace) -> None:
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
             t_index=t_index,
+            split_t=split_t,
         ).compute()
