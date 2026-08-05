@@ -1396,8 +1396,15 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
     # When result.X is a dask array (large dataset), use dask to count bad
     # values without materialising 192 GB.  For numpy arrays, use the original
     # fast path.
+    # Whether to impute or drop cells with residual NaN is controlled by
+    # residual_nan_impute.  When max_residual_nan_fraction == 0.0 (zero
+    # tolerance) the intent is zero NaN in output — drop cells, never impute.
+    _impute_residual = (
+        getattr(args, "residual_nan_impute", "zero") == "zero"
+        and max_res_nan_frac != 0.0   # only impute when tolerance > 0
+    )
+
     if isinstance(result.X, da.Array):
-        # Chunked check — never loads full matrix
         _bad_per_feat_final = (~da.isfinite(result.X)).sum(axis=0).compute()
         _feat_all_bad = _bad_per_feat_final == result.X.shape[0]
         if _feat_all_bad.any():
@@ -1409,34 +1416,63 @@ def _apply_filter_inmem(data: anndata.AnnData, args: argparse.Namespace) -> annd
             _bad_per_feat_final = _bad_per_feat_final[~_feat_all_bad]
         _remaining_bad = int(_bad_per_feat_final.sum())
         if _remaining_bad > 0:
-            # Impute NaN to 0 lazily via dask map_blocks
-            result.X = da.where(da.isfinite(result.X), result.X,
-                                np.float32(0)).astype("float32")
-            logger.info(
-                "map run [filter]: final check — will zero-impute %d residual "
-                "non-finite values (lazy, applied on write)", _remaining_bad,
-            )
+            if _impute_residual:
+                result.X = da.where(da.isfinite(result.X), result.X,
+                                    np.float32(0)).astype("float32")
+                logger.info(
+                    "map run [filter]: final check — will zero-impute %d residual "
+                    "non-finite values (lazy, applied on write)", _remaining_bad,
+                )
+            else:
+                # Drop cells that have any non-finite value (zero-tolerance policy)
+                _cell_ok = da.isfinite(result.X).all(axis=1).compute()
+                n_drop_cells = int((~_cell_ok).sum())
+                logger.info(
+                    "map run [filter]: final check — dropping %d cells with residual NaN "
+                    "(zero-tolerance; set residual_nan_impute=zero with tolerance>0 to impute)",
+                    n_drop_cells,
+                )
+                result = anndata.AnnData(
+                    X=result.X[_cell_ok],
+                    obs=result.obs.iloc[np.where(_cell_ok)[0]].copy(),
+                    var=result.var.copy(),
+                    uns=dict(result.uns),
+                )
     else:
         _X_final = result.X if isinstance(result.X, np.ndarray) else np.asarray(result.X)
         _bad_per_feat_final = (~np.isfinite(_X_final)).sum(axis=0)
         _feat_all_bad = _bad_per_feat_final == _X_final.shape[0]
         if _feat_all_bad.any():
-            n_drop_final = int(_feat_all_bad.sum())
             logger.warning(
                 "map run [filter]: final check — dropping %d all-nonfinite features",
-                n_drop_final,
+                int(_feat_all_bad.sum()),
             )
             result = _slice_anndata(result, None, ~_feat_all_bad)
             _X_final = _X_final[:, ~_feat_all_bad]
             _bad_per_feat_final = _bad_per_feat_final[~_feat_all_bad]
-        _remaining_bad = _bad_per_feat_final.sum()
+        _remaining_bad = int(_bad_per_feat_final.sum())
         if _remaining_bad > 0:
-            _X_final[~np.isfinite(_X_final)] = 0.0
-            result.X = _X_final
-            logger.info(
-                "map run [filter]: final check — zero-imputed %d residual non-finite cells",
-                int(_remaining_bad),
-            )
+            if _impute_residual:
+                _X_final[~np.isfinite(_X_final)] = 0.0
+                result.X = _X_final
+                logger.info(
+                    "map run [filter]: final check — zero-imputed %d residual non-finite cells",
+                    int(_remaining_bad),
+                )
+            else:
+                # Drop cells containing any non-finite value
+                _cell_ok = np.isfinite(_X_final).all(axis=1)
+                n_drop_cells = int((~_cell_ok).sum())
+                logger.info(
+                    "map run [filter]: final check — dropping %d cells with residual NaN "
+                    "(zero-tolerance policy)", n_drop_cells,
+                )
+                result = anndata.AnnData(
+                    X=_X_final[_cell_ok],
+                    obs=result.obs.iloc[_cell_ok].copy(),
+                    var=result.var.copy(),
+                    uns=dict(result.uns),
+                )
 
     # ── Post-filter steps (run on already-materialised numpy array) ────────
     if getattr(args, "batch_column", None):
