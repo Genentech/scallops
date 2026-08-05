@@ -369,6 +369,13 @@ def run_stitch(args: argparse.Namespace) -> None:
     elif not no_save_image or not no_save_labels:
         image_output = _add_suffix(image_output, ".zarr")
         image_output_root = open_ome_zarr(image_output, mode="a")
+        # Pre-create shared top-level groups before dispatching concurrent
+        # per-well writes below: require_group's check-then-create isn't safe
+        # when multiple wells race to create the same missing parent group.
+        if not no_save_labels:
+            image_output_root.require_group("labels")
+        if not no_save_image:
+            image_output_root.require_group("images")
     with (
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters) as client,
