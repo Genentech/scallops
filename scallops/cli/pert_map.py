@@ -49,6 +49,7 @@ def _read_data(
     data_paths: list[str],
     feature_filter: str | None = None,
     label_filter: str | None = None,
+    use_dask: bool = True,
 ) -> anndata.AnnData:
     if label_filter is not None:
         if fsspec.url_to_fs(label_filter)[0].exists(label_filter):
@@ -73,10 +74,10 @@ def _read_data(
         for path in paths:
             path = fs.unstrip_protocol(path)
             if path.endswith(".parquet"):
-                d = dd.read_parquet(path)
+                d = dd.read_parquet(path) if use_dask else pd.read_parquet(path)
                 d = pandas_to_anndata(d)
             elif path.endswith(".zarr") or path.endswith(".h5ad"):
-                d = read_anndata(path, dask=True)
+                d = read_anndata(path, dask=use_dask)
             else:
                 raise ValueError(f"Unrecognized file type: {path}")
             assert not d.obs.index.has_duplicates, "Duplicate obs index detected."
@@ -112,7 +113,7 @@ def rechunk(
 
 
 def run_recall(arguments: argparse.Namespace):
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     force = arguments.force
     no_version = arguments.no_version
     dask_server_url = arguments.client
@@ -178,7 +179,7 @@ def run_recall(arguments: argparse.Namespace):
 
 
 def run_similarity_matrix(arguments: argparse.Namespace):
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     force = arguments.force
     no_version = arguments.no_version
 
@@ -215,7 +216,7 @@ def run_similarity_matrix(arguments: argparse.Namespace):
 
 
 def run_aggregate(arguments: argparse.Namespace):
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     label_filter = arguments.label_filter
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata
@@ -282,7 +283,7 @@ def run_aggregate(arguments: argparse.Namespace):
 
 
 def run_tvn(arguments: argparse.Namespace):
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     label_filter = arguments.label_filter
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata
@@ -340,7 +341,7 @@ def run_tvn(arguments: argparse.Namespace):
 
 
 def run_pca(arguments: argparse.Namespace):
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     label_filter = arguments.label_filter
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata
@@ -401,7 +402,7 @@ def run_pca(arguments: argparse.Namespace):
 
 
 def run_rank_features(arguments: argparse.Namespace):
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     label_filter = arguments.label_filter
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata
@@ -512,7 +513,7 @@ def run_rank_features(arguments: argparse.Namespace):
 
 
 def run_norm_features(arguments: argparse.Namespace):
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     label_filter = arguments.label_filter
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata
@@ -549,7 +550,9 @@ def run_norm_features(arguments: argparse.Namespace):
         batch_size = None
     centroid_column_names = arguments.centroid_columns
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads()
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
+    dask_cluster_parameters["resources"] = {"scallops_localz_limit": 1}
+    print(dask_cluster_parameters)
     output_ext = os.path.splitext(os.path.basename(output.lower()))[1]
     if output_ext == ".zarr":
         output_format = "zarr"
@@ -572,7 +575,12 @@ def run_norm_features(arguments: argparse.Namespace):
     if not no_version:
         metadata.update(cli_metadata())
     with (
-        _create_default_dask_config(),
+        _create_default_dask_config(
+            {
+                "distributed.scheduler.worker-saturation": 1.0,
+                "optimization.fuse.active": False,
+            }
+        ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
@@ -635,7 +643,7 @@ def run_norm_features(arguments: argparse.Namespace):
 
 
 def run_filter_data(arguments: argparse.Namespace) -> None:
-    data_paths = arguments.dataset
+    data_paths = arguments.input
     label_filter = arguments.label_filter
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata

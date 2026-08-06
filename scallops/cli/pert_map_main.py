@@ -33,9 +33,9 @@ def _run_aggregate(arguments: argparse.Namespace):
     run_aggregate(arguments)
 
 
-def dataset_arg(parser: argparse.ArgumentParser):
+def input_arg(parser: argparse.ArgumentParser):
     parser.add_argument(
-        "--dataset",
+        "--input",
         type=str,
         nargs="+",
         help="Path to one or more zarr, h5ad, or Parquet files or a "
@@ -135,7 +135,7 @@ def _create_similarity_matrix_parser(
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
 
     required.add_argument(
         "--output",
@@ -166,7 +166,7 @@ def _create_aggregate_parser(
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
 
     required.add_argument(
         "--output",
@@ -200,7 +200,7 @@ def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
 
     required.add_argument(
         "--output",
@@ -237,7 +237,7 @@ def _create_recall_parser(
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
 
     required.add_argument(
         "--output",
@@ -270,7 +270,7 @@ def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
 
     required.add_argument(
         "--output",
@@ -307,7 +307,7 @@ def _create_normalize_parser(
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
 
     required.add_argument(
         "--output",
@@ -397,7 +397,7 @@ def _create_filter_parser(
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
     required.add_argument(
         "--output",
         help="Path to save result in zarr or h5ad format",
@@ -453,7 +453,7 @@ def _create_rank_parser(
         ),
     )
     required = parser.add_argument_group("required arguments")
-    dataset_arg(required)
+    input_arg(required)
 
     required.add_argument(
         "--output",

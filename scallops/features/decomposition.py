@@ -1,89 +1,18 @@
 import logging
-from collections.abc import Sequence
-from functools import partial
 
 import anndata
-import dask
 import dask.array as da
 from array_api_compat import get_namespace
 from sklearn.utils import gen_batches
 
-from scallops.features.util import _anndata_to_xr
+from scallops.utils import tqdm_func
 
 logger = logging.getLogger("scallops")
-
-
-def _centerscale(
-    data: anndata.AnnData,
-    min_std: float | None = 0,
-    standardize: bool = True,
-    standardize_by: str | Sequence[str] | None = None,
-    max_value: float | None = None,
-) -> anndata.AnnData:
-    is_dask = isinstance(data.X, da.Array)
-    xp = get_namespace(data.X)
-    if standardize and standardize_by is not None:
-        xdata = _anndata_to_xr(data, standardize_by)
-
-        def _standardize(x, min_std, max_value):
-            std = x.std(dim="obs")
-            if min_std is not None and min_std > 0:
-                std = std.where(std.data > min_std)
-            x = (x - x.mean(dim="obs")) / std
-            if max_value is not None:
-                x = x.clip(-max_value, max_value)
-            return x
-
-        xdata = xdata.groupby(standardize_by).map(
-            partial(_standardize, min_std=min_std, max_value=max_value)
-        )
-        X = xdata.data
-        no_nans_per_feature = xp.isnan(X).sum(axis=0) == 0
-
-        if is_dask:
-            no_nans_per_feature = no_nans_per_feature.compute()
-        X = X[:, no_nans_per_feature]
-        logger.info(f"# of features {X.shape[1]:,} / {data.X.shape[1]:,}")
-        return anndata.AnnData(
-            X=X,
-            obs=data.obs.loc[xdata.coords["obs"].values],
-            var=data.var[no_nans_per_feature],
-        )
-    else:
-        X = data.X
-        var = data.var
-        means = None
-        stds = None
-        if standardize or min_std is not None:
-            means = X.mean(axis=0, keepdims=True)
-            stds = X.std(axis=0, keepdims=True)
-        if min_std is not None:
-            if is_dask:
-                means, stds = dask.compute(means, stds)
-            features_keep = stds > min_std
-            features_keep = features_keep.squeeze()
-
-            X = X[:, features_keep]
-
-            stds = stds[:, features_keep]
-            means = means[:, features_keep]
-            var = data.var[features_keep]
-            logger.info(f"# of features {X.shape[1]:,} / {data.X.shape[1]:,}")
-        if standardize:
-            X = (X - means) / stds
-            if max_value is not None:
-                X = xp.clip(X, -max_value, max_value)
-
-        return anndata.AnnData(X=X, obs=data.obs.copy(), var=var)
 
 
 def pca(
     data: anndata.AnnData,
     n_components: int | float | None = None,
-    min_std: float | None = 0,
-    standardize: bool = True,
-    standardize_by: str | Sequence[str] | None = None,
-    max_value: float | None = None,
     batch_size: int | None = None,
     gpu: bool | None = None,
     whiten: bool = False,
@@ -92,26 +21,13 @@ def pca(
     """Embed data using PCA.
 
     :param data: AnnData object.
-    :param standardize: Whether to standardize the data.
-    :param standardize_by: Standardize the data specified groups
     :param n_components: Number of PCA components.
-    :param min_std: Remove features with standard deviation <= `min_std` after
-     standardization.
-    :param max_value: Clip to this value after standardizing
     :param batch_size: Batch size for incremental PCA.
     :param gpu: Whether to use GPU.
     :param whiten: Whether to use whitening.
     :param progress: Whether to show progress bar for incremental PCA.
     :return: PCA Embedding
     """
-    if standardize:
-        data = _centerscale(
-            data=data,
-            min_std=min_std,
-            standardize=standardize,
-            standardize_by=standardize_by,
-            max_value=max_value,
-        )
     X = data.X
     is_dask = isinstance(data.X, da.Array)
     if gpu is None:
@@ -132,15 +48,8 @@ def pca(
 
         d = IncrementalPCA(n_components=n_components, whiten=whiten, copy=not is_dask)
         batches = list(gen_batches(X.shape[0], batch_size, min_batch_size=n_components))
-
-        if progress:
-            try:
-                from tqdm import tqdm
-            except ImportError:
-                from scallops.utils import _tqdm_shim as tqdm
-        else:
-            from scallops.utils import _tqdm_shim as tqdm
-        for batch in tqdm(batches):
+        tqdm, progress_args = tqdm_func(progress)
+        for batch in tqdm(batches, **progress_args):
             X_batch = X[batch]
             if is_dask:
                 X_batch = X_batch.compute()
