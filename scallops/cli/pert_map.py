@@ -389,9 +389,6 @@ def run_pca(arguments: argparse.Namespace):
         data = pca(
             data=data,
             n_components=n_components,
-            min_std=None,
-            standardize=False,
-            standardize_by=None,
             whiten=whiten,
         )
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
