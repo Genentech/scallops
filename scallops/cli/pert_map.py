@@ -350,6 +350,8 @@ def run_pca(arguments: argparse.Namespace):
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
     rechunk_feature_size = arguments.rechunk_features
+    if rechunk_feature_size is None:
+        rechunk_feature_size = "-1"
     force = arguments.force
     no_version = arguments.no_version
 
