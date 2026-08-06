@@ -550,7 +550,7 @@ def run_norm_features(arguments: argparse.Namespace):
     centroid_column_names = arguments.centroid_columns
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
-    dask_cluster_parameters["resources"] = {"scallops_localz_limit": 1}
+
     output_ext = os.path.splitext(os.path.basename(output.lower()))[1]
     if output_ext == ".zarr":
         output_format = "zarr"
@@ -578,6 +578,7 @@ def run_norm_features(arguments: argparse.Namespace):
                 "distributed.scheduler.worker-saturation": 1.0,
                 "optimization.fuse.active": False,
                 "distributed.admin.large-graph-warning-threshold": "100MB",
+                "distributed.worker.resources.scallops_localz_limit": 1,
             }
         ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
