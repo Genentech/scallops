@@ -554,7 +554,6 @@ def run_norm_features(arguments: argparse.Namespace):
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
     dask_cluster_parameters["resources"] = {"scallops_localz_limit": 1}
-    print(dask_cluster_parameters)
     output_ext = os.path.splitext(os.path.basename(output.lower()))[1]
     if output_ext == ".zarr":
         output_format = "zarr"
@@ -581,6 +580,7 @@ def run_norm_features(arguments: argparse.Namespace):
             {
                 "distributed.scheduler.worker-saturation": 1.0,
                 "optimization.fuse.active": False,
+                "distributed.admin.large-graph-warning-threshold": "100MB",
             }
         ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
@@ -709,7 +709,6 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         logger.info(
             f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}"
         )
-        data.X = data.X.rechunk(("auto", "auto"))
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
         fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
