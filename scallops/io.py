@@ -42,7 +42,7 @@ import xarray as xr
 import zarr
 from anndata._io.specs import read_elem
 from anndata.experimental import read_dispatched
-from bioio.writers import OmeTiffWriter
+from bioio_ome_tiff.writers import OmeTiffWriter
 from dask.bag import from_sequence
 from dask.delayed import Delayed, delayed
 from dask.diagnostics import ProgressBar
