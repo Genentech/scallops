@@ -596,13 +596,8 @@ def run_norm_features(arguments: argparse.Namespace):
                 else dd.read_parquet(join_path),
                 join_fields,
             )
-        logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+        _log_data_shape(data)
         if centering or scaling:
-            chunks = list(data.X.chunksize)
-            feature_chunk_size = 10
-            if chunks[1] != feature_chunk_size:
-                chunks[1] = feature_chunk_size
-                data.X = data.X.rechunk(tuple(chunks))
             data = normalize_features(
                 data,
                 reference,
@@ -617,6 +612,7 @@ def run_norm_features(arguments: argparse.Namespace):
                 batch_size=batch_size,
                 centroid_column_names=centroid_column_names,
             )
+            _log_data_shape(data, "After normalization, ")
         else:
             logger.info("No normalization")
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
@@ -644,9 +640,10 @@ def run_norm_features(arguments: argparse.Namespace):
             )
 
 
-def _log_data_shape(data, prefix=""):
+def _log_data_shape(data, prefix="", log_chunk_size=True):
     logger.info(f"{prefix}# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-    logger.info(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
+    if log_chunk_size:
+        logger.info(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
 
 
 def run_filter_data(arguments: argparse.Namespace) -> None:
