@@ -644,6 +644,11 @@ def run_norm_features(arguments: argparse.Namespace):
             )
 
 
+def _log_data_shape(data, prefix=""):
+    logger.info(f"{prefix}# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+    logger.info(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
+
+
 def run_filter_data(arguments: argparse.Namespace) -> None:
     data_paths = arguments.input
     label_filter = arguments.label_filter
@@ -698,7 +703,8 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
                 else dd.read_parquet(join_path),
                 join_fields,
             )
-        logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+        _log_data_shape(data)
+
         data = filter_data(
             data=data,
             max_fraction_not_finite=max_cell_fraction_not_finite,
@@ -706,11 +712,10 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             max_variance=max_feature_variance,
             by=by,
         )
-        logger.info(
-            f"After filtering: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}"
-        )
+
         data.X = data.X.rechunk(("auto", "auto"))
-        logger.info(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
+        _log_data_shape(data, "After filtering, ")
+
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
         fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
