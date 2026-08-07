@@ -19,10 +19,6 @@ def test_decomposition():
     result = pca(
         data=adata,
         n_components=2,
-        min_std=0,
-        standardize=True,
-        standardize_by=["plate", "well"],
-        max_value=10,
         progress=False,
         batch_size=2,
     )
@@ -37,7 +33,6 @@ def test_decomposition_compare_numpy():
     result = pca(
         data=adata,
         n_components=2,
-        standardize=False,
         progress=False,
         batch_size=2,
     )
