@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import sys
+import tempfile
 import time
 import types
 from collections.abc import Sequence
@@ -91,6 +92,7 @@ DEFAULT_DASK_CONFIG = {
     "distributed.comm.timeouts.tcp": "60s",
     "distributed.scheduler.worker-ttl": "10 minutes",
     "logging.distributed": "error",
+    "temporary-directory": tempfile.gettempdir(),
 }
 
 
