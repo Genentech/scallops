@@ -97,7 +97,9 @@ def _read_data(
 
 
 def rechunk(
-    data: anndata.AnnData, rechunk_label_size: str, rechunk_feature_size: str
+    data: anndata.AnnData,
+    rechunk_label_size: str | None,
+    rechunk_feature_size: str | None,
 ) -> anndata.AnnData:
     if rechunk_label_size is not None or rechunk_feature_size is not None:
         if rechunk_label_size is not None and rechunk_label_size.isdigit():
@@ -578,7 +580,7 @@ def run_norm_features(arguments: argparse.Namespace):
                 "distributed.scheduler.worker-saturation": 1.0,
                 "optimization.fuse.active": False,
                 "distributed.admin.large-graph-warning-threshold": "100MB",
-                "distributed.worker.resources.scallops_localz_limit": 1,
+                "distributed.worker.resources.process": 1,
             }
         ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),

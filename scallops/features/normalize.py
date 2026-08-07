@@ -116,7 +116,7 @@ def normalize_features(
             # memory = (x.shape[0] * x.shape[1] * n_neighbors) / batch_size + (x.shape[0] * x.shape[1])
             # memory *= 8
 
-            with dask.annotate(resources={"scallops_localz_limit": 1}):
+            with dask.annotate(resources={"process": 1}):
                 result = _local_z_batched_func(
                     x=x,
                     ref_indices=ref_indices,
