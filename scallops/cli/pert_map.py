@@ -101,6 +101,10 @@ def rechunk(
     rechunk_label_size: str | None,
     rechunk_feature_size: str | None,
 ) -> anndata.AnnData:
+    if rechunk_label_size == "":
+        rechunk_label_size = None
+    if rechunk_feature_size == "":
+        rechunk_feature_size = None
     if rechunk_label_size is not None or rechunk_feature_size is not None:
         if rechunk_label_size is not None and rechunk_label_size.isdigit():
             rechunk_label_size = int(rechunk_label_size)
@@ -710,7 +714,6 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             by=by,
         )
 
-        data.X = data.X.rechunk(("auto", "auto"))
         _log_data_shape(data, "After filtering, ")
 
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))

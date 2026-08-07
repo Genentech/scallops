@@ -48,11 +48,15 @@ def common_args(
     metadata: bool = True,
     rechunk: bool = True,
     dask_client_value: str | None = None,
+    rechunk_features: str | None = None,
+    rechunk_labels: str | None = None,
 ):
     if metadata:
         metadata_args(parser)
     if rechunk:
-        rechunk_args(parser)
+        rechunk_args(
+            parser, rechunk_features=rechunk_features, rechunk_labels=rechunk_labels
+        )
     dask_client_arg(parser, dask_client_value)
     dask_cluster_arg(parser)
     force_arg(parser)
@@ -60,14 +64,22 @@ def common_args(
     _sort_groups(parser)
 
 
-def rechunk_args(parser: argparse.ArgumentParser):
+def rechunk_args(
+    parser: argparse.ArgumentParser,
+    rechunk_features: str | None = None,
+    rechunk_labels: str | None = None,
+):
     parser.add_argument(
         "--rechunk-features",
         type=str,
+        default=rechunk_features,
         help="Rechunk dataset features before processing.",
     )
     parser.add_argument(
-        "--rechunk-labels", type=str, help="Rechunk dataset labels before processing."
+        "--rechunk-labels",
+        type=str,
+        default=rechunk_labels,
+        help="Rechunk dataset labels before processing.",
     )
 
 
@@ -428,7 +440,7 @@ def _create_filter_parser(
         help="Metadata column(s) in dataset to stratify variance computation (e.g. plate well).",
         nargs="*",
     )
-    common_args(parser)
+    common_args(parser, rechunk_features="auto", rechunk_labels="auto")
     parser.set_defaults(
         func=_run_filter_data,
     )
