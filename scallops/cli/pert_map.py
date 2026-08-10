@@ -177,7 +177,7 @@ def run_recall(arguments: argparse.Namespace):
                 recall_thresholds=recall_thresholds,
             )
             result["null"] = "all"
-            result["reference"] = ground_truth_name
+            result["dataset"] = ground_truth_name
             results.append(result)
 
             in_corum = similarity_data.obs.index.isin(ground_truth_df["a"].unique())
@@ -191,11 +191,17 @@ def run_recall(arguments: argparse.Namespace):
                 recall_thresholds=recall_thresholds,
             )
             result["null"] = "CORUM"
-            result["reference"] = ground_truth_name
+            result["dataset"] = ground_truth_name
             results.append(result)
 
         df = pd.concat(results)
-        df["threshold"] = df["threshold"].astype(str)
+        multi_threshold = False
+        for threshold in recall_thresholds:
+            if not np.isscalar(threshold):
+                multi_threshold = True
+                break
+        if multi_threshold:
+            df["threshold"] = df["threshold"].astype(str)
         table = pa.Table.from_pandas(df, preserve_index=False)
         table = table.replace_schema_metadata(
             {
