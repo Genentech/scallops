@@ -146,7 +146,7 @@ def run_recall(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         similarity_data = _read_data(data_paths)
-        similarity_data.X = similarity_data.X.compute()
+        similarity_data.X = similarity_data.X.compute()  # load into memory
         results = []
         gene_symbols = similarity_data.obs.index.values
         for ground_truth_name, ground_truth_df in ground_truth:
@@ -160,13 +160,15 @@ def run_recall(arguments: argparse.Namespace):
                     if key in ground_truth_df.index:
                         indices_a.append(i)
                         indices_b.append(j)
+            if len(indices_a) == 0:
+                raise ValueError("No genes found in ground truth.")
             indices_a = np.array(indices_a)
             indices_b = np.array(indices_b)
+
+            query_distribution = similarity_data.X[indices_a, indices_b]
             null_distribution = similarity_data.X[
                 np.tril_indices(similarity_data.shape[0], k=-1)
             ]
-
-            query_distribution = similarity_data.X[indices_a, indices_b]
             result = recall(
                 query_distribution=query_distribution,
                 null_distribution=null_distribution,
