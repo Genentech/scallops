@@ -46,15 +46,20 @@ def input_arg(parser: argparse.ArgumentParser):
 def common_args(
     parser: argparse.ArgumentParser,
     metadata: bool = True,
-    rechunk: bool = True,
+    pre_rechunk: bool = True,
+    post_rechunk: bool = True,
     dask_client_value: str | None = None,
     rechunk_features: str | None = None,
     rechunk_labels: str | None = None,
 ):
     if metadata:
         metadata_args(parser)
-    if rechunk:
-        rechunk_args(
+    if pre_rechunk:
+        pre_rechunk_args(
+            parser, rechunk_features=rechunk_features, rechunk_labels=rechunk_labels
+        )
+    if post_rechunk:
+        post_rechunk_args(
             parser, rechunk_features=rechunk_features, rechunk_labels=rechunk_labels
         )
     dask_client_arg(parser, dask_client_value)
@@ -64,22 +69,45 @@ def common_args(
     _sort_groups(parser)
 
 
-def rechunk_args(
+def pre_rechunk_args(
     parser: argparse.ArgumentParser,
     rechunk_features: str | None = None,
     rechunk_labels: str | None = None,
 ):
     parser.add_argument(
-        "--rechunk-features",
+        "--pre-rechunk-labels",
         type=str,
+        dest="rechunk_labels",
+        default=rechunk_labels,
+        help="Rechunk dataset labels before processing.",
+    )
+
+    parser.add_argument(
+        "--pre-rechunk-features",
+        type=str,
+        dest="rechunk_features",
         default=rechunk_features,
         help="Rechunk dataset features before processing.",
     )
+
+
+def post_rechunk_args(
+    parser: argparse.ArgumentParser,
+    rechunk_features: str | None = None,
+    rechunk_labels: str | None = None,
+):
     parser.add_argument(
-        "--rechunk-labels",
+        "--post-rechunk-labels",
         type=str,
         default=rechunk_labels,
-        help="Rechunk dataset labels before processing.",
+        help="Rechunk dataset labels after processing.",
+    )
+
+    parser.add_argument(
+        "--post-rechunk-features",
+        type=str,
+        default=rechunk_features,
+        help="Rechunk dataset features after processing.",
     )
 
 
@@ -161,7 +189,7 @@ def _create_similarity_matrix_parser(
         nargs="+",
     )
 
-    common_args(parser=parser, metadata=False, rechunk=False)
+    common_args(parser=parser, metadata=False, pre_rechunk=False, post_rechunk=False)
     parser.set_defaults(func=_run_similarity_matrix)
 
 
@@ -197,7 +225,7 @@ def _create_aggregate_parser(
     )
     filter_args(parser)
 
-    common_args(parser)
+    common_args(parser, pre_rechunk=True, post_rechunk=True)
     parser.set_defaults(func=_run_aggregate)
 
 
@@ -232,7 +260,7 @@ def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     )
     filter_args(parser)
 
-    common_args(parser, dask_client_value="none")
+    common_args(parser, pre_rechunk=True, post_rechunk=True, dask_client_value="none")
     parser.set_defaults(func=_run_tvn)
 
 
@@ -257,7 +285,9 @@ def _create_recall_parser(
         required=True,
     )
     required.add_argument(
-        "--ground-truth", help="Path(s) to ground truth datasets from CORUM", nargs="+"
+        "--ground-truth-corum",
+        help="Path(s) to ground truth datasets from CORUM",
+        nargs="+",
     )
     required.add_argument(
         "--threshold",
@@ -267,7 +297,13 @@ def _create_recall_parser(
         default=[0.99, 0.95, 0.01, 0.05],
     )
 
-    common_args(parser, metadata=False, rechunk=False, dask_client_value="none")
+    common_args(
+        parser,
+        metadata=False,
+        pre_rechunk=False,
+        post_rechunk=False,
+        dask_client_value="none",
+    )
     parser.set_defaults(func=_run_recall)
 
 
@@ -302,7 +338,7 @@ def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     parser.add_argument(
         "--components", type=int, default=128, help="Number of principal components"
     )
-    common_args(parser)
+    common_args(parser, pre_rechunk=True, post_rechunk=True)
     parser.set_defaults(func=_run_pca)
 
 
@@ -391,7 +427,7 @@ def _create_normalize_parser(
         nargs=2,
     )
 
-    common_args(parser)
+    common_args(parser, pre_rechunk=True, post_rechunk=True)
     parser.set_defaults(func=_run_norm_features)
 
 
@@ -440,7 +476,13 @@ def _create_filter_parser(
         help="Metadata column(s) in dataset to stratify variance computation (e.g. plate well).",
         nargs="*",
     )
-    common_args(parser, rechunk_features="auto", rechunk_labels="auto")
+    common_args(
+        parser,
+        pre_rechunk=True,
+        post_rechunk=True,
+        rechunk_features="auto",
+        rechunk_labels="auto",
+    )
     parser.set_defaults(
         func=_run_filter_data,
     )
@@ -509,7 +551,7 @@ def _create_rank_parser(
         type=int,
     )
 
-    common_args(parser)
+    common_args(parser, pre_rechunk=True, post_rechunk=False)
     parser.set_defaults(func=_run_rank_features)
 
 

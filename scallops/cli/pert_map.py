@@ -123,7 +123,7 @@ def run_recall(arguments: argparse.Namespace):
     force = arguments.force
     no_version = arguments.no_version
     dask_server_url = arguments.client
-    ground_truth_paths = arguments.ground_truth
+    ground_truth_paths = arguments.ground_truth_corum
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
@@ -152,9 +152,11 @@ def run_recall(arguments: argparse.Namespace):
         for ground_truth_name, ground_truth_df in ground_truth:
             indices_a = []
             indices_b = []
+
             for i in range(len(gene_symbols)):
+                gene1 = gene_symbols[i]
                 for j in range(i):
-                    key = gene_symbols[i] + "-" + gene_symbols[j]
+                    key = gene1 + "-" + gene_symbols[j]
                     if key in ground_truth_df.index:
                         indices_a.append(i)
                         indices_b.append(j)
@@ -163,14 +165,29 @@ def run_recall(arguments: argparse.Namespace):
             null_distribution = similarity_data.X[
                 np.tril_indices(similarity_data.shape[0], k=-1)
             ]
+
             query_distribution = similarity_data.X[indices_a, indices_b]
             result = recall(
                 query_distribution=query_distribution,
                 null_distribution=null_distribution,
                 recall_thresholds=recall_thresholds,
             )
+            result["null"] = "all"
             result["reference"] = ground_truth_name
             results.append(result)
+
+            in_corum = similarity_data.obs.index.isin(ground_truth_df["a"])
+            similarity_data_corum = similarity_data.X[in_corum, in_corum]
+            null_distribution_corum = similarity_data_corum[
+                np.tril_indices(similarity_data_corum.shape[0], k=-1)
+            ]
+            result = recall(
+                query_distribution=query_distribution,
+                null_distribution=null_distribution_corum,
+                recall_thresholds=recall_thresholds,
+            )
+            result["null"] = "corum"
+            result["reference"] = ground_truth_name
 
         df = pd.concat(results)
         df["threshold"] = df["threshold"].astype(str)
@@ -298,6 +315,8 @@ def run_tvn(arguments: argparse.Namespace):
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
     rechunk_feature_size = arguments.rechunk_features
+    post_rechunk_label_size = arguments.post_rechunk_labels
+    post_rechunk_feature_size = arguments.post_rechunk_features
     force = arguments.force
     no_version = arguments.no_version
 
@@ -337,13 +356,10 @@ def run_tvn(arguments: argparse.Namespace):
             reference_query=reference_query,
             by=by,
         )
-        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
-        fs.makedirs(output_dir, exist_ok=True)
-        data.uns["scallops"] = _fix_json(metadata)
-        if output.lower().endswith(".zarr"):
-            data.write_zarr(output, convert_strings_to_categoricals=False)
-        else:
-            data.write_h5ad(output, convert_strings_to_categoricals=False)
+
+        _write_anndata(
+            data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
+        )
 
 
 def run_pca(arguments: argparse.Namespace):
@@ -356,8 +372,8 @@ def run_pca(arguments: argparse.Namespace):
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
     rechunk_feature_size = arguments.rechunk_features
-    if rechunk_feature_size is None:
-        rechunk_feature_size = "-1"
+    post_rechunk_label_size = arguments.post_rechunk_labels
+    post_rechunk_feature_size = arguments.post_rechunk_features
     force = arguments.force
     no_version = arguments.no_version
 
@@ -377,7 +393,7 @@ def run_pca(arguments: argparse.Namespace):
     if not no_version:
         metadata.update(cli_metadata())
     with (
-        _create_default_dask_config(),
+        _create_default_dask_config({"array.rechunk.method": "tasks"}),  # for dask pca
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
@@ -397,13 +413,21 @@ def run_pca(arguments: argparse.Namespace):
             n_components=n_components,
             whiten=whiten,
         )
-        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
-        fs.makedirs(output_dir, exist_ok=True)
-        data.uns["scallops"] = _fix_json(metadata)
-        if output.lower().endswith(".zarr"):
-            data.write_zarr(output, convert_strings_to_categoricals=False)
-        else:
-            data.write_h5ad(output, convert_strings_to_categoricals=False)
+        _write_anndata(
+            data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
+        )
+
+
+def _write_anndata(data, output, metadata, rechunk_label_size, rechunk_feature_size):
+    output = output.rstrip("/")
+    fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
+    fs.makedirs(output_dir, exist_ok=True)
+    data.uns["scallops"] = _fix_json(metadata)
+    data = rechunk(data, rechunk_label_size, rechunk_feature_size)
+    if output.lower().endswith(".zarr"):
+        data.write_zarr(output, convert_strings_to_categoricals=False)
+    else:
+        data.write_h5ad(output, convert_strings_to_categoricals=False)
 
 
 def run_rank_features(arguments: argparse.Namespace):
@@ -416,6 +440,7 @@ def run_rank_features(arguments: argparse.Namespace):
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
     rechunk_feature_size = arguments.rechunk_features
+
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
@@ -525,8 +550,11 @@ def run_norm_features(arguments: argparse.Namespace):
     join_fields = arguments.join
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
+
     rechunk_label_size = arguments.rechunk_labels
     rechunk_feature_size = arguments.rechunk_features
+    post_rechunk_label_size = arguments.post_rechunk_labels
+    post_rechunk_feature_size = arguments.post_rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
@@ -621,11 +649,15 @@ def run_norm_features(arguments: argparse.Namespace):
             logger.info("No normalization")
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
         fs.makedirs(output_dir, exist_ok=True)
-        data.uns["scallops"] = _fix_json(metadata)
-        if output_format == "zarr":
-            data.write_zarr(output, convert_strings_to_categoricals=False)
-        elif output_format == "h5ad":
-            data.write_h5ad(output, convert_strings_to_categoricals=False)
+
+        if output_format in ("zarr", "h5ad"):
+            _write_anndata(
+                data,
+                output,
+                metadata,
+                post_rechunk_label_size,
+                post_rechunk_feature_size,
+            )
         else:
             data.X = data.X.compute()
             df = data.to_df().join(data.obs)
@@ -644,12 +676,6 @@ def run_norm_features(arguments: argparse.Namespace):
             )
 
 
-def _log_data_shape(data, prefix="", log_chunk_size=True):
-    logger.info(f"{prefix}# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-    if log_chunk_size:
-        logger.info(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
-
-
 def run_filter_data(arguments: argparse.Namespace) -> None:
     data_paths = arguments.input
     label_filter = arguments.label_filter
@@ -660,6 +686,8 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
     rechunk_feature_size = arguments.rechunk_features
+    post_rechunk_label_size = arguments.post_rechunk_labels
+    post_rechunk_feature_size = arguments.post_rechunk_features
     force = arguments.force
     no_version = arguments.no_version
     by = arguments.by
@@ -715,11 +743,12 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         )
 
         _log_data_shape(data, "After filtering, ")
+        _write_anndata(
+            data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
+        )
 
-        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
-        fs.makedirs(output_dir, exist_ok=True)
-        data.uns["scallops"] = _fix_json(metadata)
-        if output.lower().endswith(".zarr"):
-            data.write_zarr(output, convert_strings_to_categoricals=False)
-        else:
-            data.write_h5ad(output, convert_strings_to_categoricals=False)
+
+def _log_data_shape(data, prefix="", log_chunk_size=True):
+    logger.info(f"{prefix}# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+    if log_chunk_size:
+        logger.info(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
