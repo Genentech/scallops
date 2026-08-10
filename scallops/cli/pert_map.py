@@ -255,6 +255,8 @@ def run_aggregate(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
     by = arguments.by
     output = arguments.output
 
@@ -393,8 +395,15 @@ def run_pca(arguments: argparse.Namespace):
     metadata = {}
     if not no_version:
         metadata.update(cli_metadata())
+    dask_config = {}
+    if (
+        batch_size is None
+        and rechunk_label_size is not None
+        or rechunk_feature_size is not None
+    ):
+        dask_config = {"array.rechunk.method": "tasks"}  # for dask PCA
     with (
-        _create_default_dask_config({"array.rechunk.method": "tasks"}),  # for dask pca
+        _create_default_dask_config(dask_config),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
