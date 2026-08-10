@@ -220,7 +220,7 @@ def _create_aggregate_parser(
         nargs="+",
     )
     parser.add_argument(
-        "--center-query",
+        "--center-reference-query",
         help="Center the data to a reference before aggregating (e.g. gene_symbol=='NTC')",
     )
     filter_args(parser)
