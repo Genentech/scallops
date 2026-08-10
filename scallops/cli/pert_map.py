@@ -371,6 +371,8 @@ def run_pca(arguments: argparse.Namespace):
     join_path = arguments.metadata
     join_fields = arguments.join
     batch_size = arguments.batch_size
+    if batch_size <= 0:
+        batch_size = None
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
