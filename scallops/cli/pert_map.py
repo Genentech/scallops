@@ -180,8 +180,8 @@ def run_recall(arguments: argparse.Namespace):
             result["reference"] = ground_truth_name
             results.append(result)
 
-            in_corum = similarity_data.obs.index.isin(ground_truth_df["a"])
-            similarity_data_corum = similarity_data.X[in_corum, in_corum]
+            in_corum = similarity_data.obs.index.isin(ground_truth_df["a"].unique())
+            similarity_data_corum = similarity_data.X[in_corum,][:, in_corum]
             null_distribution_corum = similarity_data_corum[
                 np.tril_indices(similarity_data_corum.shape[0], k=-1)
             ]
@@ -190,7 +190,7 @@ def run_recall(arguments: argparse.Namespace):
                 null_distribution=null_distribution_corum,
                 recall_thresholds=recall_thresholds,
             )
-            result["null"] = "corum"
+            result["null"] = "CORUM"
             result["reference"] = ground_truth_name
 
         df = pd.concat(results)
