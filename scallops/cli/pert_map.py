@@ -84,7 +84,9 @@ def _read_data(
             assert not d.var.index.has_duplicates, "Duplicate var index detected."
             results.append(d)
 
-    data = anndata.concat(results, index_unique="-")
+    data = (
+        results[0] if len(results) == 1 else anndata.concat(results, index_unique="-")
+    )
 
     assert not data.obs.index.has_duplicates
     if isinstance(label_filter, str):
