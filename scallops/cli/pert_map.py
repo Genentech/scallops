@@ -195,13 +195,19 @@ def run_recall(arguments: argparse.Namespace):
 
         df = pd.concat(results)
         df["threshold"] = df["threshold"].astype(str)
-        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
-        fs.makedirs(output_dir, exist_ok=True)
-        _to_parquet(
-            df,
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        table = table.replace_schema_metadata(
+            {
+                "scallops".encode(): json.dumps(metadata).encode(),
+                **table.schema.metadata,
+            }
+        )
+
+        fs, output = fsspec.url_to_fs(output)
+        pq.write_table(
+            table,
             output,
-            write_index=False,
-            custom_metadata=dict(scallops=json.dumps(metadata)),
+            filesystem=fs,
         )
 
 
