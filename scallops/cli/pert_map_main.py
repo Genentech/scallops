@@ -338,6 +338,7 @@ def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     parser.add_argument(
         "--components", type=int, default=128, help="Number of principal components"
     )
+    parser.add_argument("--batch-size", type=int, help=argparse.SUPPRESS)
     common_args(parser, pre_rechunk=True, post_rechunk=True)
     parser.set_defaults(func=_run_pca)
 

@@ -368,6 +368,7 @@ def run_pca(arguments: argparse.Namespace):
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata
     join_fields = arguments.join
+    batch_size = arguments.batch_size
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
@@ -409,9 +410,7 @@ def run_pca(arguments: argparse.Namespace):
             )
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         data = pca(
-            data=data,
-            n_components=n_components,
-            whiten=whiten,
+            data=data, n_components=n_components, whiten=whiten, batch_size=batch_size
         )
         _write_anndata(
             data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
