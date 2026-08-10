@@ -192,6 +192,7 @@ def run_recall(arguments: argparse.Namespace):
             )
             result["null"] = "CORUM"
             result["reference"] = ground_truth_name
+            results.append(result)
 
         df = pd.concat(results)
         df["threshold"] = df["threshold"].astype(str)
