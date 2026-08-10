@@ -226,18 +226,11 @@ def run_similarity_matrix(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths)
-
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         data = anndata.AnnData(
             X=pairwise_similarities(data), obs=data.obs, var=data.obs
         )
-        fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
-        fs.makedirs(output_dir, exist_ok=True)
-        data.uns["scallops"] = _fix_json(metadata)
-        if output.lower().endswith(".zarr"):
-            data.write_zarr(output, convert_strings_to_categoricals=False)
-        else:
-            data.write_h5ad(output, convert_strings_to_categoricals=False)
+        _write_anndata(data, output, metadata, None, None)
 
 
 def run_aggregate(arguments: argparse.Namespace):
