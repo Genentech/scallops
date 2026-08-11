@@ -99,8 +99,9 @@ def feature_variance(
 def filter_data(
     data: anndata.AnnData,
     max_fraction_not_finite: float | None = 0.25,
-    min_variance: float | None = 0.001,
+    min_variance: float | None = None,
     max_variance: float | None = None,
+    n_features: int | None = None,
     by: str | Sequence | None = None,
     scale: bool = True,
 ) -> anndata.AnnData:
@@ -111,6 +112,7 @@ def filter_data(
     missing or infinite values
     :param min_variance: Keep features with variance >= `min_variance`
     :param max_variance: Keep features with variance <= `max_variance`
+    :param n_features: Keep `n_features` after applying any min/max filter
     :param by: Column(s) in `data.obs` to stratify by when computing variance. If
     provided, the median variance is used for filtering.
     :param scale: Set to True to apply min-max scaling per group.
@@ -118,12 +120,13 @@ def filter_data(
     """
     xp = get_namespace(data.X)
     keep_cells = None
-    keep_features = None
+    variance = None
+    variance_indices = None
     if max_fraction_not_finite is not None:
         invalid_counts_per_cell = (~xp.isfinite(data.X)).sum(axis=1)
         max_counts = int(data.shape[1] * max_fraction_not_finite)
         keep_cells = invalid_counts_per_cell <= max_counts
-    if min_variance is not None or max_variance is not None:
+    if min_variance is not None or max_variance is not None or n_features is not None:
         if min_variance is None:
             min_variance = -np.inf
         if max_variance is None:
@@ -144,12 +147,17 @@ def filter_data(
                 X = (X - min_value) / (max_value - min_value)
             variance = xp.var(X, axis=0)
 
-        keep_features = (
-            (variance >= min_variance)
-            & (variance <= max_variance)
-            & (xp.isfinite(variance))
-        )
-
     if isinstance(data.X, da.Array):
-        keep_features, keep_cells = dask.compute(keep_features, keep_cells)
-    return _slice_anndata(data, keep_cells, keep_features)
+        keep_cells, variance = dask.compute(keep_cells, variance)
+    if variance is not None:
+        variance_indices = np.argsort(variance)  # nans are at end
+        keep_variance_indices = (
+            (variance[variance_indices] >= min_variance)
+            & (variance[variance_indices] <= max_variance)
+            & (xp.isfinite(variance[variance_indices]))
+        )
+        variance_indices = variance_indices[keep_variance_indices]
+        if n_features is not None:
+            variance_indices = variance_indices[:n_features]
+
+    return _slice_anndata(data, keep_cells, variance_indices)

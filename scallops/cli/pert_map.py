@@ -723,6 +723,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         logger.info(f"Skipping {output}")
         return
 
+    n_features = arguments.n_features
     min_feature_variance = arguments.min_feature_variance
     max_feature_variance = arguments.max_feature_variance
     max_cell_fraction_not_finite = arguments.max_cell_fraction_not_finite
@@ -760,6 +761,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             max_fraction_not_finite=max_cell_fraction_not_finite,
             min_variance=min_feature_variance,
             max_variance=max_feature_variance,
+            n_features=n_features,
             by=by,
             scale=scale,
         )

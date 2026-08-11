@@ -460,20 +460,25 @@ def _create_filter_parser(
     filter_args(parser)
     parser.add_argument(
         "--min-feature-variance",
-        default=0.001,
         type=float,
         help="Minimum median feature variance across `by` to retain a feature.",
-    )
-    parser.add_argument(
-        "--no-scale",
-        action="store_true",
-        help="Do not min-max scale each feature before computing variance.",
     )
     parser.add_argument(
         "--max-feature-variance",
         type=float,
         help="Maximum median feature variance across `by` to retain a feature.",
     )
+    parser.add_argument(
+        "--n-features",
+        type=int,
+        help="Select top n features by variance.",
+    )
+    parser.add_argument(
+        "--no-scale",
+        action="store_true",
+        help="Do not min-max scale each feature before computing variance.",
+    )
+
     parser.add_argument(
         "--max-cell-fraction-not-finite",
         default=0.25,
