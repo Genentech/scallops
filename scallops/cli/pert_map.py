@@ -702,6 +702,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     feature_filter = arguments.feature_filter
     join_path = arguments.metadata
     join_fields = arguments.join
+    scale = not arguments.no_scale
     if join_path is not None and join_fields is None:
         raise ValueError("Please specify join fields")
     rechunk_label_size = arguments.rechunk_labels
@@ -760,6 +761,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
             min_variance=min_feature_variance,
             max_variance=max_feature_variance,
             by=by,
+            scale=scale,
         )
 
         _log_data_shape(data, "After filtering, ")

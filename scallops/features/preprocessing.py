@@ -59,16 +59,15 @@ def transform_features_yj(
 
 
 def feature_variance(
-    data: anndata.AnnData, by: str | Sequence
-) -> np.ndarray | da.Array:
+    data: anndata.AnnData, by: str | Sequence, scale: bool = True
+) -> xr.DataArray:
     """Compute feature variance stratified by column(s) in `data.obs`
 
     :param data: AnnData object
     :param by: Column(s) in `data.obs` to stratify by when computing variance.
-    :return: Median feature variance
+    :param scale: Set to True to apply min-max scaling.
+    :return: Feature variance
     """
-
-    xp = get_namespace(data.X)
 
     if not isinstance(by, str) and isinstance(by, Sequence):
         # xarray outputs all combinations, even ones that don't exist
@@ -82,18 +81,28 @@ def feature_variance(
         by = "obs"
     else:
         xdata = _anndata_to_xr(data, by)
+    grouped = xdata.groupby(by)
+    if scale:
 
-    variance = xdata.groupby(by).var(skipna=False)  # dims (by, 'var')
-    variance = xp.median(variance.data, axis=0)
+        def single_group(x):
+            min_value = x.min(skipna=False, dim="obs")
+            max_value = x.max(skipna=False, dim="obs")
+            x = (x - min_value) / (max_value - min_value)
+            return x.var(skipna=False, dim="obs")
+
+        variance = grouped.map(single_group)
+    else:
+        variance = grouped.var(skipna=False)  # dims (by, 'var')
     return variance
 
 
 def filter_data(
     data: anndata.AnnData,
     max_fraction_not_finite: float | None = 0.25,
-    min_variance: float | None = 0.1,
+    min_variance: float | None = 0.001,
     max_variance: float | None = None,
     by: str | Sequence | None = None,
+    scale: bool = True,
 ) -> anndata.AnnData:
     """Filter cells using `max_fraction_not_finite` then filter features using variance
 
@@ -104,6 +113,7 @@ def filter_data(
     :param max_variance: Keep features with variance <= `max_variance`
     :param by: Column(s) in `data.obs` to stratify by when computing variance. If
     provided, the median variance is used for filtering.
+    :param scale: Set to True to apply min-max scaling per group.
     :return: Filtered AnnData object
     """
     xp = get_namespace(data.X)
@@ -124,10 +134,15 @@ def filter_data(
             data = _slice_anndata(data, keep_cells)
             keep_cells = None
         if by is not None:
-            variance = feature_variance(data, by)
-
+            variance = feature_variance(data, by, scale)
+            variance = xp.median(variance.data, axis=0)
         else:
-            variance = xp.var(data.X, axis=0)
+            X = data.X
+            if scale:
+                min_value = xp.min(X, axis=0)
+                max_value = xp.max(X, axis=0)
+                X = (X - min_value) / (max_value - min_value)
+            variance = xp.var(X, axis=0)
 
         keep_features = (
             (variance >= min_variance)

@@ -225,7 +225,7 @@ def _create_aggregate_parser(
     )
     filter_args(parser)
 
-    common_args(parser, pre_rechunk=True, post_rechunk=True)
+    common_args(parser, dask_client_value="none", pre_rechunk=True, post_rechunk=True)
     parser.set_defaults(func=_run_aggregate)
 
 
@@ -455,10 +455,14 @@ def _create_filter_parser(
     filter_args(parser)
     parser.add_argument(
         "--min-feature-variance",
-        default=0.1,
+        default=0.001,
         type=float,
-        help="Maximum median feature variance across `by` to retain a feature. "
-        "Set to -1 to disable.",
+        help="Minimum median feature variance across `by` to retain a feature.",
+    )
+    parser.add_argument(
+        "--no-scale",
+        action="store_true",
+        help="Do not min-max scale each feature before computing variance.",
     )
     parser.add_argument(
         "--max-feature-variance",
@@ -474,7 +478,7 @@ def _create_filter_parser(
 
     parser.add_argument(
         "--by",
-        help="Metadata column(s) in dataset to stratify variance computation (e.g. plate well).",
+        help="Metadata column(s) in dataset to stratify min-max scaling and variance computation (e.g. plate well).",
         nargs="*",
     )
     common_args(

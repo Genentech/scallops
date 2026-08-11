@@ -5,7 +5,53 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import PowerTransformer
 
-from scallops.features.preprocessing import filter_data, transform_features_yj
+from scallops.features.preprocessing import (
+    feature_variance,
+    filter_data,
+    transform_features_yj,
+)
+
+
+@pytest.mark.parametrize("use_dask", [True, False])
+@pytest.mark.features
+def test_feature_variance(use_dask):
+    rng = np.random.default_rng(0)
+    X = rng.random((20, 2))
+    adata = anndata.AnnData(
+        da.from_array(X) if use_dask else X,
+        obs=pd.DataFrame(
+            data=dict(
+                pert=["pert1", "pert2"] * 10,
+                well=["well1", "well2"] * 10,
+            )
+        ),
+        var=pd.DataFrame(index=["gene1", "gene2"]),
+    )
+    if use_dask:
+        adata2 = adata.copy()
+        adata2.X = adata2.X.compute()
+        df = adata2.to_df().join(adata2.obs)
+    else:
+        df = adata.to_df().join(adata.obs)
+
+    def single_group(x):
+        x = x.copy()
+        for gene in ["gene1", "gene2"]:
+            value = (x[gene].values - np.min(x[gene])) / (
+                np.max(x[gene]) - np.min(x[gene])
+            )
+            value = np.var(value)
+            x[gene] = value
+
+        return x.drop_duplicates(["gene1", "gene2"])
+
+    result_df = (
+        df.groupby("well").apply(single_group, include_groups=False).reset_index()
+    )
+    result = feature_variance(adata, by="well", scale=True)
+    if use_dask:
+        result = result.compute()
+    np.testing.assert_almost_equal(result.data, result_df[["gene1", "gene2"]].values)
 
 
 @pytest.mark.parametrize("by", [None, "well"])
