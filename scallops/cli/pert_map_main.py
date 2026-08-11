@@ -330,7 +330,7 @@ def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     parser.add_argument(
         "--whiten",
         action="store_true",
-        help="When True the components_ vectors are multiplied by the "
+        help="When True the components vectors are multiplied by the "
         "square root of n_samples and then divided by the singular "
         "values to ensure uncorrelated outputs with unit "
         "component-wise variances.",
