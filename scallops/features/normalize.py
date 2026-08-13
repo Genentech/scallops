@@ -98,7 +98,8 @@ def normalize_features(
             progress = True
             x = data.X
             df = data.obs
-
+        if is_dask:
+            progress = False
         ref_indices = (
             _normalize_index(df.query(reference_query).index, df.index)
             if reference_query is not None
@@ -203,7 +204,17 @@ def _local_z_batched(
         sl = slice(batch, batch + batch_size)
         nn_indices_ = nn_indices[sl]
         x_ = x[sl]
-        reference_data_ = reference_data[nn_indices_]
+        if isinstance(reference_data, da.Array):
+            n_labels = nn_indices_.shape[0]
+            n_neighbors = nn_indices_.shape[1]
+            nn_indices_ = nn_indices_.flatten()
+            nn_indices_ = da.from_array(nn_indices_)
+            # (labels,neighbors,features)
+            reference_data_ = reference_data[nn_indices_].reshape(
+                (n_labels, n_neighbors, -1)
+            )
+        else:
+            reference_data_ = reference_data[nn_indices_]
         result = _normalize_features_array(
             values=x_,
             reference_values=reference_data_,
@@ -215,7 +226,11 @@ def _local_z_batched(
             local_zscore=nn_indices is not None,
         )
         result_arrays.append(result)
-    return get_namespace(x).vstack(result_arrays)
+    return (
+        get_namespace(x).vstack(result_arrays)
+        if len(result_arrays) > 1
+        else result_arrays[0]
+    )
 
 
 def _normalize_features_array(
