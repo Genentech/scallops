@@ -85,8 +85,8 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
         values = values / std
     np.testing.assert_array_equal(
         values,
-        normed_data.X,
-        err_msg="Not equal",
+        normed_data[ds.obs.index].X,
+        err_msg="Expected values not equal",
     )
 
 
@@ -97,12 +97,15 @@ def _compare_anndata(data1: anndata.AnnData, data2: anndata.AnnData):
     pd.testing.assert_frame_equal(data1.var, data2.var)
 
 
-@pytest.mark.parametrize("normalize", ["zscore", "local-zscore"])
+@pytest.mark.parametrize("normalize", ["local-zscore", "zscore"])
 @pytest.mark.parametrize("reference", ["gene_symbol=='NTC'", None])
-@pytest.mark.parametrize("robust", [True, False])
+@pytest.mark.parametrize("robust", [False, True])
 @pytest.mark.parametrize("by", [["plate", "well"], None])
+@pytest.mark.parametrize("sort", ["well", None])
 @pytest.mark.features
-def test_norm_features(client, data, normalize, by, robust, reference, tmp_path):
+def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp_path):
+    if sort is not None:
+        data = _slice_anndata(data, data.obs.sort_values(sort).index)
     n_neighbors = 2 if by is None else 1
     scaling = n_neighbors > 1
     normed_data = normalize_features(
@@ -114,7 +117,29 @@ def test_norm_features(client, data, normalize, by, robust, reference, tmp_path)
         n_neighbors=n_neighbors,
         scaling=scaling,
     )
-    if normalize in ("nn-zscore", "local-zscore"):
+    if by is not None:
+        indices = data.obs.groupby(by).indices
+        for name in indices:
+            query = []
+            for i in range(len(by)):
+                query.append(f"{by[i]}=='{name[i]}'")
+
+            _diff_values(
+                _slice_anndata(data, indices[name]),
+                _slice_anndata(
+                    normed_data, normed_data.obs.query("&".join(query)).index
+                ),
+                normalize,
+                robust,
+                reference,
+                scaling,
+                n_neighbors,
+            )
+    else:
+        _diff_values(
+            data, normed_data, normalize, robust, reference, scaling, n_neighbors
+        )
+    if normalize == "local-zscore":
         normed_data2 = normalize_features(
             data,
             reference_query=reference,
@@ -141,7 +166,7 @@ def test_norm_features(client, data, normalize, by, robust, reference, tmp_path)
         scaling=scaling,
     )
     normed_data_dask.X = normed_data_dask.X.compute()
-    if normalize in ("nn-zscore", "local-zscore"):
+    if normalize == "local-zscore":
         normed_data_dask2 = normalize_features(
             dask_data,
             reference_query=reference,
@@ -162,29 +187,6 @@ def test_norm_features(client, data, normalize, by, robust, reference, tmp_path)
         normed_data_dask, normed_data_dask.obs.sort_values("label").index
     )
     _compare_anndata(normed_data, normed_data_dask)
-
-    if by is not None:
-        indices = data.obs.groupby(by).indices
-        for name in indices:
-            query = []
-            for i in range(len(by)):
-                query.append(f"{by[i]}=='{name[i]}'")
-
-            _diff_values(
-                _slice_anndata(data, indices[name]),
-                _slice_anndata(
-                    normed_data, normed_data.obs.query("&".join(query)).index
-                ),
-                normalize,
-                robust,
-                reference,
-                scaling,
-                n_neighbors,
-            )
-    else:
-        _diff_values(
-            data, normed_data, normalize, robust, reference, scaling, n_neighbors
-        )
 
 
 @pytest.mark.parametrize("by", [None, ["well"]])
