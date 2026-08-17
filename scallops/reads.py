@@ -774,7 +774,9 @@ def read_statistics(reads_df: pd.DataFrame | dd.DataFrame) -> dict[str, float | 
     outside_labels = reads_df.query("label==0")
     mapping_rate = reads_df.query("barcode_match").shape[0] / reads_df.shape[0]
     mapping_rate_within_labels = (
-        in_labels.query("barcode_match").shape[0] / in_labels.shape[0]
+        (in_labels.query("barcode_match").shape[0] / in_labels.shape[0])
+        if in_labels.shape[0] > 0
+        else 0
     )
 
     barcode_matches = in_labels.query("barcode_match==1")

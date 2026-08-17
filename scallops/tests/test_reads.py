@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scallops.io import read_image
+from scallops.io import read_barcodes, read_image
 from scallops.reads import (
     annotated_spots,
     apply_channel_crosstalk_matrix,
@@ -16,7 +16,9 @@ from scallops.reads import (
     correct_mismatches,
     decode_max,
     peaks_to_bases,
+    read_statistics,
 )
+from scallops.registration.crosscorrelation import align_image
 from scallops.segmentation.watershed import (
     segment_cells_watershed,
     segment_nuclei_watershed,
@@ -152,6 +154,39 @@ def test_correct_mismatches():
     pd.testing.assert_frame_equal(
         corrected_reads[expected_result.columns], expected_result
     )
+
+
+@pytest.mark.basecalls
+def test_dark_bases(experiment_c):
+    image = experiment_c.images["A1-102"]
+    image = align_image(
+        image,
+        align_within_time_channels=[1, 2, 3, 4],
+        align_between_time_channel=0,
+        filter_percentiles=[0, 90],
+    )
+    bases = ["G", "T", "A"]  # simulate C as dark base
+    image = image.isel(z=0, c=[1, 2, 3])
+    loged = transform_log(image)
+    std_arr = std(loged)
+    peaks = find_peaks(std_arr)
+    maxed = max_filter(loged)
+    bases_array = peaks_to_bases(
+        maxed=maxed,
+        peaks=peaks[peaks["peak"] >= 50],
+        # labels=array_A1_102_cells.squeeze().values,
+        bases=bases,
+    )
+    df_barcode = read_barcodes(
+        "scallops/tests/data/experimentC/barcodes.csv", image.t.values - 1
+    )
+
+    df_reads = decode_max(
+        bases_array, barcodes=df_barcode, dark_bases=[("C", [0, 1, 2], 0.2)]
+    )
+    df_reads["label"] = 0
+    stats = read_statistics(df_reads)
+    assert stats["mapping_rate"] > 0.55
 
 
 @pytest.mark.basecalls
