@@ -12,6 +12,7 @@ from anndata._core.index import _normalize_index
 from array_api_compat import get_namespace
 from flox import rechunk_for_blockwise
 from flox.lib import _issorted
+from scipy.stats import median_abs_deviation
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
@@ -92,10 +93,10 @@ def normalize_features(
             and len(data.X.chunks[0]) > 1
             and _issorted(series.cat.codes.values)
         )
-
-        group_indices = series.groupby(
-            series, observed=True, sort=False, dropna=False
-        ).indices
+        if normalize != "zscore":
+            group_indices = series.groupby(
+                series, observed=True, sort=False, dropna=False
+            ).indices
     else:
         group_indices = {None: None}
     if normalize == "zscore":
@@ -135,12 +136,36 @@ def normalize_features(
         stds = None
 
         if robust:
-            xp = get_namespace(data.X)
             if centering:
                 means = grouped_ref.median(**kwargs)
+
             if scaling:
-                diff = xp.abs(grouped_ref - means)
-                stds = diff.median(dim="var") / mad_scale
+                if by is not None:
+                    results = []
+                    xp = get_namespace(data.X)
+                    for key, group in grouped_ref:
+                        value = median_abs_deviation(
+                            group.data, axis=0, scale=mad_scale
+                        )
+                        value = xp.expand_dims(value, axis=0)
+                        key_values = np.empty(
+                            1,
+                            dtype=object if isinstance(key, tuple) else by_values.dtype,
+                        )
+                        key_values[0] = key
+                        coords = dict(obs=key_values)
+                        results.append(
+                            xr.DataArray(
+                                value,
+                                dims=("obs", "var"),
+                                coords=coords,
+                                name="",
+                            )
+                        )
+                    stds = xr.concat(results, dim="obs")
+                else:
+                    stds = median_abs_deviation(grouped_ref, axis=0, scale=mad_scale)
+
         else:
             if centering:
                 means = grouped_ref.mean(**kwargs)
@@ -153,7 +178,6 @@ def normalize_features(
         if scaling:
             if by is not None and isinstance(grouped_values, xr.DataArray):
                 grouped_values = grouped_values.groupby("obs")
-
             grouped_values = grouped_values / stds
 
             if max_value is not None:

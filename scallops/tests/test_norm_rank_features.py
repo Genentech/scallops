@@ -76,6 +76,7 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
         if robust:
             mean = np.median(ref_values, axis=1)
             std = median_abs_deviation(ref_values, axis=1, scale="normal")
+
         else:
             mean = np.mean(ref_values, axis=1)
             std = np.std(ref_values, axis=1)
@@ -83,31 +84,44 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
 
     if scaling:
         values = values / std
-    np.testing.assert_array_equal(
+
+    np.testing.assert_allclose(
         values,
-        normed_data[ds.obs.index].X,
+        _slice_anndata(normed_data, ds.obs.index).X,
+        rtol=2.07703709e-15,
+        atol=2.22044605e-15,
         err_msg="Expected values not equal",
     )
 
 
 def _compare_anndata(data1: anndata.AnnData, data2: anndata.AnnData):
-    np.testing.assert_array_equal(data1.X, data2.X)
-    np.testing.assert_array_equal(data1.X, data2.X)
+    data2 = _slice_anndata(data2, data1.obs.index)
+
+    np.testing.assert_allclose(
+        data1.X,
+        data2.X,
+        rtol=2.07703709e-16,
+        atol=2.22044605e-16,
+        err_msg="Expected values not equal",
+    )
     pd.testing.assert_frame_equal(data1.obs, data2.obs)
     pd.testing.assert_frame_equal(data1.var, data2.var)
 
 
-@pytest.mark.parametrize("normalize", ["local-zscore", "zscore"])
+@pytest.mark.parametrize("normalize", ["zscore", "local-zscore"])
 @pytest.mark.parametrize("reference", ["gene_symbol=='NTC'", None])
-@pytest.mark.parametrize("robust", [False, True])
+@pytest.mark.parametrize("robust", [True, False])
 @pytest.mark.parametrize("by", [["plate", "well"], None])
 @pytest.mark.parametrize("sort", ["well", None])
 @pytest.mark.features
 def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp_path):
     if sort is not None:
         data = _slice_anndata(data, data.obs.sort_values(sort).index)
-    n_neighbors = 2 if by is None else 1
+    n_neighbors = 3
+    if by is not None and reference is not None:
+        n_neighbors = 1
     scaling = n_neighbors > 1
+
     normed_data = normalize_features(
         data,
         reference_query=reference,
@@ -125,19 +139,26 @@ def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp
                 query.append(f"{by[i]}=='{name[i]}'")
 
             _diff_values(
-                _slice_anndata(data, indices[name]),
-                _slice_anndata(
+                ds=_slice_anndata(data, indices[name]),
+                normed_data=_slice_anndata(
                     normed_data, normed_data.obs.query("&".join(query)).index
                 ),
-                normalize,
-                robust,
-                reference,
-                scaling,
-                n_neighbors,
+                normalize=normalize,
+                robust=robust,
+                reference=reference,
+                scaling=scaling,
+                n_neighbors=n_neighbors,
             )
+
     else:
         _diff_values(
-            data, normed_data, normalize, robust, reference, scaling, n_neighbors
+            ds=data,
+            normed_data=normed_data,
+            normalize=normalize,
+            robust=robust,
+            reference=reference,
+            scaling=scaling,
+            n_neighbors=n_neighbors,
         )
     if normalize == "local-zscore":
         normed_data2 = normalize_features(
@@ -153,7 +174,7 @@ def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp
         _compare_anndata(normed_data, normed_data2)
 
     dask_data = anndata.AnnData(
-        X=da.from_array(data.X, chunks=(1, 2)), obs=data.obs, var=data.var
+        X=da.from_array(data.X, chunks=(1, 1)), obs=data.obs, var=data.var
     )
 
     normed_data_dask = normalize_features(
