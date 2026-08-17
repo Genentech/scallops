@@ -139,10 +139,11 @@ def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
 
     :param x: Array with transformed data (read, cycle, channel).
     :param min_error: Minimum p-value error.
-    :return: Array with computed quality scores (higher is better).
+    :return: Array with computed quality scores (higher is better) with shape (read, cycle)
     """
 
     p = np.max(softmax(x, axis=2), axis=2)
+
     p_error = 1 - p
     p_error[p_error < min_error] = min_error
     return -10 * np.log10(p_error)
@@ -493,19 +494,40 @@ def _decode_max_chunk(
     meta_df: pd.DataFrame,
     offset: slice | None,
     whitelist: list[str] | None,
+    dark_bases: list[tuple[str, list[int], float]] | None,
 ) -> pd.DataFrame:
     """Decode the maximum intensity chunk from the input spot data and compute base
     quality scores.
 
-    :param spots: Spot data.
+    :param spots: Spot data (read, t, c).
     :param bases: List of bases.
     :param meta_df: Metadata dataframe.
     :param offset: Offset into metadata.
     :param whitelist: List of whitelisted barcodes.
+    :param dark_bases: List of dark bases.
     :return: A pandas DataFrame with decoded barcode sequences and quality metrics.
     """
-    Q = quality_softmax(spots)
-    channel_calls = np.argmax(spots, axis=2)
+
+    Q = quality_softmax(spots)  # (read, t)
+    channel_calls = np.argmax(spots, axis=2)  # (read, t)
+    if dark_bases is not None:
+        # call bases for non-dark channels
+        bases = list(bases)
+        # dark bases called at cycles with all unmixed intensities below dark_base_threshold% of the spot’s
+        # maximum unmixed intensity across all cycles.
+        for dark_base_index, (dark_base, channels, dark_base_threshold) in enumerate(
+            dark_bases
+        ):
+            dark_base_base_offset = dark_base_index + len(bases)
+            max_spots = np.max(spots[..., channels], axis=2)  # (read, t)
+            max_spots_per_read = np.max(max_spots, axis=1)  # (read,)
+            cutoff = max_spots_per_read * dark_base_threshold  # (read,)
+            cutoff = np.expand_dims(cutoff, axis=1)
+            dark_base_present = max_spots < cutoff
+            channel_calls[dark_base_present] = dark_base_base_offset
+            bases.append(dark_base)
+        bases = np.array(bases)
+
     calls = bases[channel_calls]
 
     df = (
@@ -526,12 +548,14 @@ def _decode_max_chunk(
 def decode_max(
     spots: xr.DataArray,
     barcodes: pd.DataFrame | None = None,
+    dark_bases: list[tuple[str, list[int], float]] | None = None,
 ) -> pd.DataFrame | dd.DataFrame:
     """Call reads by assigning the base with the highest intensity.
 
     :param spots: Spots returned from peaks_to_bases containing dimensions (read,t,c)
     :param barcodes: Table of designed barcode sequences used for indicating whether a
         barcode is an exact match. Expected to have column 'barcode'.
+    :param dark_bases: List of dark bases.
     :return: The reads data frame
     """
 
@@ -545,6 +569,7 @@ def decode_max(
             offset=None,
             meta_df=meta_df,
             whitelist=whitelist,
+            dark_bases=dark_bases,
         )
     else:
         # # no chunking in t or c dimension
@@ -586,6 +611,7 @@ def decode_max(
                     spots=block,
                     whitelist=whitelist,
                     meta_df=meta_df,
+                    dark_bases=dark_bases,
                     offset=slice(start[0], stop[0]),
                     bases=bases,
                 )
