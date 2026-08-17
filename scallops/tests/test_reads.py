@@ -226,9 +226,9 @@ def test_dark_bases_two_color(experiment_c):
     #   red   = max(A, C)  — both A and C excite the red dye in Illumina 2-color
     #   green = max(A, T)  — both A and T excite the green dye
     spots = bases_array_c.values  # (read, t, 4)  channels: G=0, T=1, A=2, C=3
-    red = np.maximum(spots[..., 2], spots[..., 3])    # max(A, C)
+    red = np.maximum(spots[..., 2], spots[..., 3])  # max(A, C)
     green = np.maximum(spots[..., 2], spots[..., 1])  # max(A, T)
-    two_color = np.stack([red, green], axis=-1)        # (read, t, 2)
+    two_color = np.stack([red, green], axis=-1)  # (read, t, 2)
 
     two_color_array = xr.DataArray(
         two_color,
@@ -237,12 +237,15 @@ def test_dark_bases_two_color(experiment_c):
     ).assign_coords(c=["red", "green"])
 
     # Illumina 2-color encoding matrix: rows = G, T, A, C; cols = red, green
-    E = np.array([
-        [0, 0],  # G → dark
-        [0, 1],  # T → green only
-        [1, 1],  # A → red + green
-        [1, 0],  # C → red only
-    ], dtype=float)
+    E = np.array(
+        [
+            [0, 0],  # G → dark
+            [0, 1],  # T → green only
+            [1, 1],  # A → red + green
+            [1, 0],  # C → red only
+        ],
+        dtype=float,
+    )
     base_labels = ["G", "T", "A", "C"]
 
     df_barcode = read_barcodes(

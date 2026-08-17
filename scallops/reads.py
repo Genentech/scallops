@@ -161,10 +161,10 @@ def channel_probs(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
     # so cycles where that channel fires (bright) score > 0.5 and cycles where it doesn't
     # (dark) score < 0.5. A global reference breaks 4-color data because all channels
     # compete against the single brightest channel in the whole read.
-    dark = x.min(axis=1, keepdims=True)          # (read, 1, n_channels)
-    bright = x.max(axis=1, keepdims=True)         # (read, 1, n_channels)
+    dark = x.min(axis=1, keepdims=True)  # (read, 1, n_channels)
+    bright = x.max(axis=1, keepdims=True)  # (read, 1, n_channels)
     mid = np.broadcast_to((dark + bright) / 2, x.shape)  # (read, cycle, n_channels)
-    p = softmax(np.stack([x, mid], axis=-1), axis=-1)     # (read, cycle, n_channels, 2)
+    p = softmax(np.stack([x, mid], axis=-1), axis=-1)  # (read, cycle, n_channels, 2)
     return np.clip(p[..., 0], min_error, 1 - min_error)
 
 
@@ -577,9 +577,11 @@ def _decode_max_chunk(
         # which outperforms raw softmax even on standard 4-color data (f=0.375).
         bright_fraction = encoding.sum(axis=0) / encoding.shape[0]  # (n_channels,)
         f = 0.5 * (1.0 - float(bright_fraction.max()))
-        lo = spots.min(axis=1, keepdims=True)   # (read, 1, n_channels)
-        hi = spots.max(axis=1, keepdims=True)   # (read, 1, n_channels)
-        log_bp = (spots - (lo + f * (hi - lo))) @ (2 * encoding - 1).T  # (read, cycle, n_bases)
+        lo = spots.min(axis=1, keepdims=True)  # (read, 1, n_channels)
+        hi = spots.max(axis=1, keepdims=True)  # (read, 1, n_channels)
+        log_bp = (spots - (lo + f * (hi - lo))) @ (
+            2 * encoding - 1
+        ).T  # (read, cycle, n_bases)
         bp = softmax(log_bp, axis=-1)
         p_best = np.clip(bp.max(axis=2), 1e-6, 1 - 1e-6)
         Q = -10 * np.log10(1 - p_best)
