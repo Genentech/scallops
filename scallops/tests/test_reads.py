@@ -6,6 +6,7 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from scallops.io import read_barcodes, read_image
 from scallops.reads import (
@@ -158,6 +159,7 @@ def test_correct_mismatches():
 
 @pytest.mark.basecalls
 def test_dark_bases(experiment_c):
+    """3-color simulation: G/T/A have dedicated channels; C is detected by absence of signal."""
     image = experiment_c.images["A1-102"]
     image = align_image(
         image,
@@ -174,15 +176,81 @@ def test_dark_bases(experiment_c):
     bases_array = peaks_to_bases(
         maxed=maxed,
         peaks=peaks[peaks["peak"] >= 50],
-        # labels=array_A1_102_cells.squeeze().values,
         bases=bases,
     )
     df_barcode = read_barcodes(
         "scallops/tests/data/experimentC/barcodes.csv", image.t.values - 1
     )
 
+    df_reads = decode_max(bases_array, barcodes=df_barcode, dark_bases=["C"])
+    df_reads["label"] = 0
+    stats = read_statistics(df_reads)
+    assert stats["mapping_rate"] > 0.55
+
+
+@pytest.mark.basecalls
+def test_dark_bases_two_color(experiment_c):
+    """2-color Illumina simulation: combine 4 SBS channels into red (A+C) and green (A+T).
+
+    Encoding:
+        G → dark  (neither channel)
+        T → green only
+        A → red + green
+        C → red only
+    """
+    image = experiment_c.images["A1-102"]
+    image = align_image(
+        image,
+        align_within_time_channels=[1, 2, 3, 4],
+        align_between_time_channel=0,
+        filter_percentiles=[0, 90],
+    )
+    # all 4 SBS channels: c=1→G, c=2→T, c=3→A, c=4→C
+    image = image.isel(z=0, c=[1, 2, 3, 4])
+    loged = transform_log(image)
+    std_arr = std(loged)
+    peaks = find_peaks(std_arr)
+    maxed = max_filter(loged)
+    bases_array = peaks_to_bases(
+        maxed=maxed,
+        peaks=peaks[peaks["peak"] >= 50],
+        bases=["G", "T", "A", "C"],
+    )
+
+    # Apply crosstalk correction before combining channels, as in the notebook.
+    # Without it, spectral bleedthrough between dyes produces ambiguous combined signals.
+    w = channel_crosstalk_matrix(bases_array)
+    bases_array_c = apply_channel_crosstalk_matrix(bases_array, w)
+
+    # Simulate 2-color channels from the crosstalk-corrected 4-channel arrays:
+    #   red   = max(A, C)  — both A and C excite the red dye in Illumina 2-color
+    #   green = max(A, T)  — both A and T excite the green dye
+    spots = bases_array_c.values  # (read, t, 4)  channels: G=0, T=1, A=2, C=3
+    red = np.maximum(spots[..., 2], spots[..., 3])    # max(A, C)
+    green = np.maximum(spots[..., 2], spots[..., 1])  # max(A, T)
+    two_color = np.stack([red, green], axis=-1)        # (read, t, 2)
+
+    two_color_array = xr.DataArray(
+        two_color,
+        dims=bases_array.dims,
+        coords={k: v for k, v in bases_array.coords.items() if k != "c"},
+    ).assign_coords(c=["red", "green"])
+
+    # Illumina 2-color encoding matrix: rows = G, T, A, C; cols = red, green
+    E = np.array([
+        [0, 0],  # G → dark
+        [0, 1],  # T → green only
+        [1, 1],  # A → red + green
+        [1, 0],  # C → red only
+    ], dtype=float)
+    base_labels = ["G", "T", "A", "C"]
+
+    df_barcode = read_barcodes(
+        "scallops/tests/data/experimentC/barcodes.csv", image.t.values - 1
+    )
+
     df_reads = decode_max(
-        bases_array, barcodes=df_barcode, dark_bases=[("C", [0, 1, 2], 0.2)]
+        two_color_array, barcodes=df_barcode, encoding=E, base_labels=base_labels
     )
     df_reads["label"] = 0
     stats = read_statistics(df_reads)
