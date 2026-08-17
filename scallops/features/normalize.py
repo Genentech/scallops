@@ -69,7 +69,7 @@ def normalize_features(
     :param centroid_column_names: Columns for y and x centroids to use for local zscore.
     :return: Normalized data
     """
-
+    assert normalize in ["zscore", "local-zscore"]
     mad_scale = _convert_scale(mad_scale)
     centroid_column_names = list(centroid_column_names)
     is_dask = isinstance(data.X, da.Array)
@@ -82,10 +82,10 @@ def normalize_features(
                 by = by[0]
                 by_multi = False
 
-        groupby_values = (
+        by_values = (
             data.obs[by].apply(tuple, axis=1) if by_multi else data.obs[by].values
         )
-        series = pd.Series(groupby_values, dtype="category")
+        series = pd.Series(by_values, dtype="category")
         has_sorted_groups = (
             normalize == "local-zscore"
             and is_dask
@@ -101,7 +101,7 @@ def normalize_features(
     if normalize == "zscore":
         coords = {}
         if by is not None:
-            coords["obs"] = groupby_values
+            coords["obs"] = by_values
         xdata = xr.DataArray(data.X, dims=["obs", "var"], coords=coords)
         x_ref_data = xdata
         if reference_query is not None:
@@ -140,19 +140,22 @@ def normalize_features(
                 means = grouped_ref.median(**kwargs)
             if scaling:
                 diff = xp.abs(grouped_ref - means)
-                stds = diff.median(axis=0) / mad_scale
+                stds = diff.median(dim="var") / mad_scale
         else:
             if centering:
                 means = grouped_ref.mean(**kwargs)
             if scaling:
                 stds = grouped_ref.std(**kwargs)
+
         if centering:
             grouped_values = grouped_values - means
 
         if scaling:
-            if by is not None and isinstance(groupby_values, xr.DataArray):
+            if by is not None and isinstance(grouped_values, xr.DataArray):
                 grouped_values = grouped_values.groupby("obs")
+
             grouped_values = grouped_values / stds
+
             if max_value is not None:
                 grouped_values = grouped_values.clip(-max_value, max_value)
         return anndata.AnnData(
@@ -181,18 +184,11 @@ def normalize_features(
                 x = data.X
             df = data.obs
 
-        global_reference_indices = None
         local_reference_indices = None
         if reference_query is not None:
             local_reference_indices = _normalize_index(
                 df.query(reference_query).index, df.index
             )
-            if has_sorted_groups:
-                global_reference_indices = (
-                    group_indices_[local_reference_indices]
-                    if group_indices_ is not None
-                    else local_reference_indices
-                )
 
         if normalize == "local-zscore":
             query_coordinates = df[centroid_column_names].values
@@ -208,8 +204,8 @@ def normalize_features(
                 metric=neighbors_metric,
             )
             if has_sorted_groups:
-                if global_reference_indices is not None:
-                    nn_indices = global_reference_indices[nn_indices]
+                if local_reference_indices is not None:
+                    nn_indices = local_reference_indices[nn_indices]
                 indices.append(nn_indices)
             else:
                 if local_reference_indices is not None:
@@ -301,7 +297,6 @@ def _local_z_batched(
     robust: bool = False,
     batch_size: int | None = None,
     progress: bool | str = False,
-    block_info=None,
 ):
     if isinstance(x, da.Array):
         batch_size = None
@@ -309,9 +304,7 @@ def _local_z_batched(
     if batch_size is None:
         batch_size = x.shape[0]
     result_arrays = []
-    if block_info is not None:
-        array_location = block_info[0]["array-location"][0]
-        nn_indices = nn_indices - array_location[0]
+
     tqdm, progress_args = tqdm_func(progress)
     for batch in tqdm(range(0, x.shape[0], batch_size), **progress_args):
         sl = slice(batch, batch + batch_size)
