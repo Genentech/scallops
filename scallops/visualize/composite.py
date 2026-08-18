@@ -18,15 +18,11 @@ from matplotlib.colors import Colormap, ListedColormap
 from scipy import ndimage as ndi
 
 from scallops.experiment.elements import Experiment
-from scallops.experiment.util import _concat_images
 from scallops.visualize.utils import (
     _create_color_map_for_rgb,
-    _figsize,
     _get_image_crop_slice,
     _wrap_cols,
-    channel_thresholds,
 )
-from scallops.xr import _crop
 
 
 def _create_labels_cmap(
@@ -311,7 +307,8 @@ def imcomposite(
     labels_contour_thickness: int = 1,
     labels_contour_alpha: float = 1,
     dim: str | None = "c",
-    facet: str | None = None,
+    col_facet: str | None = None,
+    row_facet: str | None = None,
     col_wrap: int | None = 3,
     figsize: tuple[int, int] = None,
     ax: plt.Axes | Sequence[plt.Axes] | None = None,
@@ -378,12 +375,19 @@ def imcomposite(
             plt.show()
     """
 
-    if facet is not None:
-        facet_values = image.coords[facet].values
+    if col_facet is not None or row_facet is not None:
+        col_facet_values = (
+            image.coords[col_facet].values if col_facet is not None else [None]
+        )
+        row_facet_values = (
+            image.coords[row_facet].values if row_facet is not None else [None]
+        )
         ncol, nrow = (
-            _wrap_cols(ncol=len(facet_values), col_wrap=col_wrap)
+            _wrap_cols(
+                ncol=len(col_facet_values) * len(row_facet_values), col_wrap=col_wrap
+            )
             if col_wrap is not None
-            else (len(facet_values), 1)
+            else (len(col_facet_values), len(row_facet_values))
         )
         if figsize is None:
             figsize = 6 * ncol, 6 * nrow
@@ -394,27 +398,41 @@ def imcomposite(
             ax = ax.ravel()
         for i in range(len(ax)):
             ax[i].axis("off")
-        for i in range(len(facet_values)):
-            sel = {}
-            sel[facet] = facet_values[i]
-            imcomposite(
-                image=image.sel(sel),
-                labels=labels,
-                vmin=vmin,
-                vmax=vmax,
-                cmap=cmap,
-                labels_cmap=labels_cmap,
-                labels_alpha=labels_alpha,
-                labels_contour=labels_contour,
-                labels_contour_cmap=labels_contour_cmap,
-                labels_contour_thickness=labels_contour_thickness,
-                labels_contour_alpha=labels_contour_alpha,
-                dim=dim,
-                ax=ax[i],
-                rgb=rgb,
-                mask=mask,
-            )
-            ax[i].set_title(f"{facet}={facet_values[i]}")
+        index = 0
+        for i in range(len(row_facet_values)):
+            for j in range(len(col_facet_values)):
+                sel = {}
+                if col_facet is not None:
+                    sel[col_facet] = col_facet_values[j]
+                if row_facet is not None:
+                    sel[row_facet] = row_facet_values[i]
+
+                image_ = image.sel(sel)
+                imcomposite(
+                    image=image_,
+                    labels=labels,
+                    vmin=vmin,
+                    vmax=vmax,
+                    cmap=cmap,
+                    labels_cmap=labels_cmap,
+                    labels_alpha=labels_alpha,
+                    labels_contour=labels_contour,
+                    labels_contour_cmap=labels_contour_cmap,
+                    labels_contour_thickness=labels_contour_thickness,
+                    labels_contour_alpha=labels_contour_alpha,
+                    dim=dim if dim in image_.dims else None,
+                    ax=ax[index],
+                    rgb=rgb,
+                    mask=mask,
+                )
+
+                title = []
+                if col_facet is not None:
+                    title.append(f"{col_facet}={col_facet_values[j]}")
+                if row_facet is not None:
+                    title.append(f"{row_facet}={row_facet_values[i]}")
+                ax[index].set_title(", ".join(title))
+                index += 1
         return ax
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize if figsize is not None else (6, 6))
@@ -570,145 +588,3 @@ def label_montage(
             col_index = 0
             row_index = row_index + 1
     return im_combined
-
-
-def montage_plot(
-    image: xr.DataArray | Experiment,
-    percentile_min: Sequence[float] | float = 0.0,
-    percentile_max: Sequence[float] | float = 99.0,
-    pad_min: Sequence[float] | float = 100,
-    pad_max: Sequence[float] | float = 3000,
-    figsize: tuple[int, int] | None = None,
-    thresholds: dict[int, tuple[float, float]] = None,
-    row_labels: str | Sequence[str] | None = None,
-    col_labels: str | Sequence[str] | None = None,
-    crop: int | tuple[int, int, int, int] | None = None,
-    display_t: bool | None = False,
-    cmap: None | Sequence[str, str | Colormap] | str | Colormap = None,
-):
-    """Plot an image montage, which is a composite view of multiple images arranged
-    in a grid.
-
-    A montage provides a compact visualization of multiple images, often used in
-    scientific and medical imaging to compare variations or features across different
-    samples or channels.
-
-    :param image: XArray with dimensions (t, c, z, y, x) or (i, t, c, z, y, x).
-    :param percentile_min: Lower percentile used to calculate contrasting thresholds.
-        If a list, different percentiles per channel.Default is 0.0. If a number, the
-        same percentile is applied for all channels.
-    :param percentile_max: Upper percentile used to calculate contrasting thresholds.
-        If a list, different percentiles per channel. Default is 99.0. If a number,
-        the same percentile is applied for all channels.
-    :param pad_min: vmin = tmin - pad_min and vmax = tmax + pad_max. If vectors,
-        different pads per channel. Otherwise, apply the same pad.
-    :param pad_max: vmax = tmax + pad_max. If vectors, different pads per channel.
-        Otherwise, apply the same pad.
-    :param figsize:  Figure size.
-    :param thresholds:  Optional dictionary that maps channel to a tuple of
-        (tmin, tmax) instead of computing thresholds using percentiles and pad.
-    :param row_labels: Image attribute to show along rows (e.g., well_row) or a list of
-        labels.
-    :param col_labels: Image attribute to show along columns (e.g., well_row) or a
-        list of labels.
-    :param crop: Pixel size for cropping each panel at the center (e.g., crop=300
-        means only show 300x300 at the center) or tuple of (x, y, width, height).
-    :param display_t: Use the T dimension in rows
-    :param cmap: Sequence of colormaps or registered colormap name used to map scalar
-        data to colors.
-
-    :example:
-
-        .. code-block:: python
-
-            # Generate synthetic data for testing
-            import numpy as np
-            import xarray as xr
-            from scallops.visualize import montage_plot
-
-            image_data = np.random.rand(t, c, z, y, x)
-            image = xr.DataArray(image_data, dims=("t", "c", "z", "y", "x"))
-
-            # Plot the image montage
-            montage_plot(
-                image.isel(t=0, z=0),
-                percentile_min=0,
-                percentile_max=1,
-                pad_min=0.01,
-                pad_max=0.99,
-                figsize=(12, 8),
-            )
-            plt.show()
-    """
-
-    if isinstance(image, Experiment):
-        image = _concat_images(image)
-    if display_t:
-        row_labels = image.t.values if row_labels is None else row_labels
-        image = image.rename({"t": "i"})
-    if "t" in image.sizes:
-        image = image.isel(t=0)
-    channels = image.c.values
-    nchannels = len(channels)
-    if crop is not None:
-        image = _crop(image, crop)
-    _thresholds = channel_thresholds(
-        image=image,
-        percentile_min=percentile_min,
-        percentile_max=percentile_max,
-        pad_min=pad_min,
-        pad_max=pad_max,
-        thresholds=thresholds,
-    )
-    # [black, green, red, magenta, cyan, yellow, blue]
-    default_rgbs = [
-        [1, 1, 1],
-        [0, 1, 0],
-        [1, 0, 0],
-        [1, 0, 1],
-        [0, 1, 1],
-        [1, 1, 0],
-        [0, 0, 1],
-    ]
-    nimages = image.sizes["i"] if "i" in image.dims else 1
-    figsize = _figsize(ncol=nchannels, nrow=nimages) if figsize is None else figsize
-    fig, axes = plt.subplots(nimages, nchannels, figsize=figsize, squeeze=False)
-
-    for i in range(nimages):
-        data_array = image.isel(i=i, missing_dims="ignore")
-        for j in range(nchannels):
-            ax = axes[i, j]
-            c = channels[j]
-            if cmap is None:
-                cmap_j = _create_color_map_for_rgb(default_rgbs[j % len(default_rgbs)])
-            else:
-                cmap_j = cmap[j % len(cmap)] if isinstance(cmap, Sequence) else cmap
-            if i == 0:
-                if col_labels is None:
-                    title = str(c)
-                    if thresholds and c in thresholds:
-                        vmin, vmax = _thresholds[c]
-                        title = f"{title} ({vmin:.1f}-{vmax:.1f})"
-                else:
-                    title = (
-                        col_labels[j]
-                        if not isinstance(col_labels, str)
-                        else data_array.attrs[col_labels]
-                    )
-                ax.set_title(title)
-            ax.axis("off")
-            data = data_array.sel(c=c).squeeze().values
-            vmin, vmax = _thresholds[c]
-            ax.imshow(data, cmap=cmap_j, vmin=vmin, vmax=vmax)
-        if row_labels is not None:
-            left_axis = axes[i, 0]
-            left_axis.axis("on")
-            left_axis.get_yaxis().set_ticks([])
-            left_axis.get_xaxis().set_visible(False)
-            y_label = (
-                row_labels[i]
-                if not isinstance(row_labels, str)
-                else data_array.attrs[row_labels]
-            )
-            left_axis.set_ylabel(y_label)
-    fig.tight_layout()
