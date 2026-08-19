@@ -45,6 +45,8 @@ from scallops.utils import _fix_json
 
 logger = _get_cli_logger()
 
+zarr.config.set({"array.rectilinear_chunks": True})
+
 
 def _read_data(
     data_paths: list[str],
@@ -626,7 +628,7 @@ def run_norm_features(arguments: argparse.Namespace):
             return
 
     metadata = {}
-    zarr.config.set({"array.rectilinear_chunks": True})
+
     if not no_version:
         metadata.update(cli_metadata())
     with (
