@@ -18,12 +18,7 @@ Submodules:
 - utils: General utility functions for visualization tasks.
 """
 
-from .composite import (  # noqa: F401
-    experiment_composite,
-    imcomposite,
-    label_montage,
-    montage_plot,
-)
+from .composite import experiment_composite, imcomposite, label_montage  # noqa: F401
 from .crosstalk import pairwise_channel_scatter_plot  # noqa: F401
 from .distribution import (  # noqa: F401
     cdf_plot,
