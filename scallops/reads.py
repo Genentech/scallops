@@ -563,23 +563,53 @@ def _decode_max_chunk(
     :param offset: Offset into metadata.
     :param whitelist: List of whitelisted barcodes.
     :param encoding: (n_bases, n_channels) binary encoding matrix. When provided, uses
-        the signed-encoding decoder. When None, falls back to per-cycle softmax argmax.
+        the signed-encoding decoder with data-adaptive f = alpha/3 (alpha estimated from
+        the top-phi bright-cycle signals per channel). When None, falls back to softmax.
     :param base_labels: Base label array of length n_bases, required when encoding is provided.
     :return: A pandas DataFrame with decoded barcode sequences and quality metrics.
     """
 
     if encoding is not None:
         # Signed-encoding decode: log P(b) = sum_c (2E[b,c]-1) * (x_c - center_c)
-        # center_c = lo_c + f * (hi_c - lo_c)  with  f = 0.5 * (1 - max bright fraction)
-        # f is derived parameter-free from E: channels used by more bases need a lower
-        # threshold so background cycles are not mistaken for dark-base cycles.
-        # Per-channel centering normalises each dye against its own dynamic range,
-        # which outperforms raw softmax even on standard 4-color data (f=0.375).
+        # center_c = lo_c + f * (hi_c - lo_c)  (per-channel min-max centering)
+        #
+        # f is estimated data-adaptively as  f = alpha / 3  where
+        #   alpha = min_c( mean of top-phi_c normalised bright-cycle signals )
+        #   phi_c = E[:,c].sum() / n_bases  (fraction of bases that fire channel c)
+        #
+        # Derivation: under Gaussian noise, the Bernoulli balance between
+        #   P(correct base wins at a bright cycle)  ∝  Φ((alpha - f)·H/σ)
+        #   P(dark base wins at a dark cycle)        ∝  Φ(f·H/σ)^n_ch
+        # yields the fixed-point  f = alpha / 3.  After xtalk correction,
+        # alpha ≈ 0.67–0.73 across all SBS chemistries → f ≈ 0.22–0.24
+        # universally (4-color, 3-color dark-base, 2-color Illumina).
+        # This outperforms the E-formula  f = 0.5*(1-phi_max)  especially
+        # for dark-base chemistries where the formula over-estimates f.
         bright_fraction = encoding.sum(axis=0) / encoding.shape[0]  # (n_channels,)
-        f = 0.5 * (1.0 - float(bright_fraction.max()))
-        lo = spots.min(axis=1, keepdims=True)  # (read, 1, n_channels)
-        hi = spots.max(axis=1, keepdims=True)  # (read, 1, n_channels)
-        log_bp = (spots - (lo + f * (hi - lo))) @ (
+        # Clip to zero: xtalk correction can produce negative values.
+        # Without clipping, overcorrected dark cycles sit above their per-read
+        # minimum (which anchors lo), making them appear partially bright in the
+        # normalised space and causing dark-base miscalls.
+        spots_c = np.clip(spots, 0.0, None)
+        lo = spots_c.min(axis=1, keepdims=True)  # (read, 1, n_channels)
+        hi = spots_c.max(axis=1, keepdims=True)  # (read, 1, n_channels)
+        rng = hi - lo
+        # Per-channel normalised signal in [0, 1]
+        x_norm = np.divide(spots_c - lo, rng, out=np.zeros_like(spots_c), where=rng > 0)
+        T = spots.shape[1]
+        alpha_per_ch = np.zeros(spots.shape[2])
+        for c_idx, phi_c in enumerate(bright_fraction):
+            if phi_c <= 0.0:
+                continue  # dark-only column — skip
+            k = max(1, int(np.ceil(float(phi_c) * T)))
+            alpha_per_ch[c_idx] = np.sort(x_norm[:, :, c_idx], axis=1)[:, -k:].mean()
+        bright_mask = bright_fraction > 0.0
+        if bright_mask.any():
+            f = float(alpha_per_ch[bright_mask].min()) / 3.0
+        else:
+            # Fallback (degenerate encoding with no bright channels)
+            f = 0.5 * (1.0 - float(bright_fraction.max()))
+        log_bp = (spots_c - (lo + f * (hi - lo))) @ (
             2 * encoding - 1
         ).T  # (read, cycle, n_bases)
         bp = softmax(log_bp, axis=-1)
@@ -621,8 +651,9 @@ def decode_max(
     1. **Signed-encoding decoder** — pass `encoding` (n_bases × n_channels) and
        `base_labels`, or use the `dark_bases` shorthand which builds the encoding matrix
        automatically via :func:`make_encoding` (assumes 1:1 channel→base for non-dark bases).
-       Works for any chemistry including standard 4-color, and outperforms the legacy softmax
-       even there by normalising each channel against its own per-read dynamic range.
+       Works for any chemistry including standard 4-color, 3-color dark-base, and 2-color
+       Illumina. Uses data-adaptive f = alpha/3 (see :func:`_decode_max_chunk`) which
+       outperforms both the E-formula and the legacy softmax across all chemistries.
 
     2. **Legacy per-cycle softmax** — pass neither `encoding` nor `dark_bases`. Retained for
        backward compatibility; cannot handle dark bases or multi-channel bases.

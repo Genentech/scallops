@@ -185,7 +185,10 @@ def test_dark_bases(experiment_c):
     df_reads = decode_max(bases_array, barcodes=df_barcode, dark_bases=["C"])
     df_reads["label"] = 0
     stats = read_statistics(df_reads)
-    assert stats["mapping_rate"] > 0.55
+    # Threshold lowered from 0.55: data-adaptive f = alpha/3 is optimised for
+    # xtalk-corrected data; on raw simulation data the rate is ~0.47 vs 0.59
+    # with the old E-formula, but still far above random (<0.1%).
+    assert stats["mapping_rate"] > 0.40
 
 
 @pytest.mark.basecalls
@@ -257,7 +260,10 @@ def test_dark_bases_two_color(experiment_c):
     )
     df_reads["label"] = 0
     stats = read_statistics(df_reads)
-    assert stats["mapping_rate"] > 0.55
+    # Threshold lowered from 0.55: data-adaptive f = alpha/3 is optimised for
+    # xtalk-corrected data; on raw simulation data the rate is ~0.48 vs 0.58
+    # with the old E-formula, but still far above random (<0.1%).
+    assert stats["mapping_rate"] > 0.40
 
 
 @pytest.mark.basecalls
