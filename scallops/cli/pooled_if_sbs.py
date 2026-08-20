@@ -55,6 +55,8 @@ from scallops.reads import (
     channel_crosstalk_matrix,
     correct_mismatches,
     decode_max,
+    decode_polar,
+    make_encoding,
     merge_sbs_phenotype,
     peaks_to_bases,
     read_statistics,
@@ -899,6 +901,7 @@ def reads_pipeline(
     barcode_column: str = "barcode",
     read_filter: float | None = None,
     crosstalk_n_reads: int = 500000,
+    dark_bases: list[str] | None = None,
 ):
     """Run the reads pipeline.
 
@@ -928,6 +931,13 @@ def reads_pipeline(
     :param no_version: Whether to skip version/CLI information in output.
     :param barcode_column: Column name of barcode
     :param read_filter: Filter reads by quality score before assigning reads to labels.
+    :param dark_bases: Single-element list containing the base that carries no fluorescent
+        dye (e.g. ``["G"]`` for NIS-seq).  When provided, constructs the encoding matrix via
+        :func:`~scallops.reads.make_encoding` and routes to :func:`~scallops.reads.decode_max`
+        (signed encoding, SE) for orthogonal encodings, or :func:`~scallops.reads.decode_polar`
+        (atan2 angle classification) when the encoding is non-orthogonal (some bright base
+        fires more than one channel).  When ``None`` (default), falls back to the legacy
+        per-cycle softmax decoder.
     """
 
     if not force:
@@ -1046,7 +1056,37 @@ def reads_pipeline(
     if os.environ.get("SCALLOPS_IMAGE_SCALE") == "1":
         bases_array_reads = bases_array_reads.astype(int)
 
-    df_reads = decode_max(bases_array_reads, barcodes=df_barcode)
+    if dark_bases:
+        channel_bases = list(bases_array_reads.c.values)
+        encoding, base_labels_arr = make_encoding(channel_bases, list(dark_bases))
+        e_bright = encoding[encoding.sum(axis=1) > 0]
+        non_orthogonal = bool(np.any(e_bright.sum(axis=1) > 1))
+        if non_orthogonal:
+            logger.info(
+                "Non-orthogonal encoding detected — using decode_polar "
+                "(atan2 angle classification)."
+            )
+            df_reads = decode_polar(
+                bases_array_reads,
+                barcodes=df_barcode,
+                encoding=encoding,
+                base_labels=base_labels_arr,
+                w_cor=w,
+            )
+        else:
+            logger.info(
+                "Orthogonal encoding with dark bases %s — using decode_max "
+                "(signed encoding, f=alpha/3).",
+                dark_bases,
+            )
+            df_reads = decode_max(
+                bases_array_reads,
+                barcodes=df_barcode,
+                encoding=encoding,
+                base_labels=base_labels_arr,
+            )
+    else:
+        df_reads = decode_max(bases_array_reads, barcodes=df_barcode)
 
     if n_mismatches is not None and n_mismatches > 0:
         df_reads = correct_mismatches(
@@ -1235,6 +1275,7 @@ def reads_main(arguments: argparse.Namespace):
     crosstalk_n_reads = arguments.crosstalk_nreads
 
     bases = list(arguments.bases)
+    dark_bases = [arguments.dark_bases] if arguments.dark_bases else None
     crosstalk_correction_method = arguments.crosstalk_correction_method
     force = arguments.force
     crosstalk_correction_method_args = dict()
@@ -1291,4 +1332,5 @@ def reads_main(arguments: argparse.Namespace):
                 barcode_column=barcode_column,
                 read_filter=read_filter,
                 crosstalk_n_reads=crosstalk_n_reads,
+                dark_bases=dark_bases,
             )

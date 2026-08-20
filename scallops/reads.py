@@ -583,9 +583,9 @@ def _decode_max_chunk(
         # yields the fixed-point  f = alpha / 3.  After xtalk correction,
         # alpha ≈ 0.67–0.73 across all SBS chemistries → f ≈ 0.22–0.24
         # universally (4-color, 3-color dark-base, 2-color Illumina).
-        # This outperforms the E-formula  f = 0.5*(1-phi_max)  especially
-        # for dark-base chemistries where the formula over-estimates f.
+
         bright_fraction = encoding.sum(axis=0) / encoding.shape[0]  # (n_channels,)
+
         # Clip to zero: xtalk correction can produce negative values.
         # Without clipping, overcorrected dark cycles sit above their per-read
         # minimum (which anchors lo), making them appear partially bright in the
@@ -594,6 +594,7 @@ def _decode_max_chunk(
         lo = spots_c.min(axis=1, keepdims=True)  # (read, 1, n_channels)
         hi = spots_c.max(axis=1, keepdims=True)  # (read, 1, n_channels)
         rng = hi - lo
+
         # Per-channel normalised signal in [0, 1]
         x_norm = np.divide(spots_c - lo, rng, out=np.zeros_like(spots_c), where=rng > 0)
         T = spots.shape[1]
@@ -821,6 +822,16 @@ def decode_polar(
 ) -> pd.DataFrame:
     """Call reads using polar-coordinate classification.
 
+    .. note::
+        For **orthogonal** encodings (each bright base fires exactly one channel),
+        :func:`decode_max` with ``dark_bases`` or ``encoding`` is the preferred
+        method — its signed-encoding formula accounts for per-channel dynamic range
+        (SNR proxy) and consistently outperforms the polar dot-product argmax.
+        Use ``decode_polar`` when the encoding is **non-orthogonal**, i.e. when at
+        least one bright base fires more than one channel (e.g. Illumina 2-colour
+        where A appears in both the red and green channels).  In that case the
+        amplitude-independent angle :math:`\\theta` is the only reliable discriminant.
+
     Separates signal into two independent properties:
 
     * **Radius** :math:`R = \\|\\mathbf{x} - \\mathbf{lo}\\|_2` — detects dark bases
@@ -869,7 +880,7 @@ def decode_polar(
     """
     channel_bases = list(spots.c.values)
 
-    # ── Build encoding matrix ──────────────────────────────────────────────────
+    # Build encoding matrix
     if encoding is not None:
         E = np.asarray(encoding, dtype=float)
         base_labels_arr = np.asarray(base_labels)
@@ -883,12 +894,12 @@ def decode_polar(
     bright_rows = np.where(E.sum(axis=1) > 0)[0]  # rows with signal → bright bases
     has_dark = len(dark_rows) > 0
 
-    # ── Baseline-correct and clip ──────────────────────────────────────────────
+    # Baseline-correct and clip
     sp = np.clip(spots.data, 0.0, None)
     lo = sp.min(axis=1, keepdims=True)  # (read, 1, n_ch)
     d = sp - lo  # (read, t, n_ch)
 
-    # ── Dark-base detection (R threshold, same formula for any chemistry) ──────
+    # Dark-base detection (R threshold, same formula for any chemistry)
     if has_dark:
         R = np.sqrt((d**2).sum(axis=-1))  # (read, t)
         R_max = R.max(axis=1, keepdims=True)  # (read, 1)
@@ -896,7 +907,7 @@ def decode_polar(
     else:
         dark_mask = np.zeros(d.shape[:2], dtype=bool)
 
-    # ── Bright-base direction ──────────────────────────────────────────────────
+    # Bright-base direction
     E_bright = E[bright_rows]  # (n_bright, n_ch)
     # Does any bright base fire more than one channel? (non-orthogonal encoding)
     non_orthogonal = bool(np.any(E_bright.sum(axis=1) > 1))
@@ -927,10 +938,10 @@ def decode_polar(
         bright_scores = d @ E_bright.T  # (read, t, n_bright)
         bright_calls = bright_rows[bright_scores.argmax(axis=-1)]
 
-    # ── Combine dark and bright calls ─────────────────────────────────────────
+    # Combine dark and bright calls ─
     calls = np.where(dark_mask, dark_rows[0] if has_dark else 0, bright_calls)
 
-    # ── Build output DataFrame ────────────────────────────────────────────────
+    # Build output DataFrame ──
     Q = quality_softmax(sp)
     meta_df = spots["read"].to_dataframe()
     whitelist = barcodes["barcode"].values if barcodes is not None else None

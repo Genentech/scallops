@@ -262,6 +262,15 @@ def _create_reads_parser(subparsers, default_help):
         help="ISS bases",
     )
     parser.add_argument(
+        "--dark-bases",
+        dest="dark_bases",
+        default=None,
+        help="Single base that carries no fluorescent dye (e.g. 'G' for NIS-seq). "
+        "Enables signed-encoding (SE) basecalling via decode_max for orthogonal encodings, "
+        "or polar-coordinate basecalling via decode_polar when any bright base fires more "
+        "than one channel. When omitted, uses the legacy per-cycle softmax decoder.",
+    )
+    parser.add_argument(
         "--barcode-col",
         help="`Barcode` column in barcodes CSV",
         default="barcode",

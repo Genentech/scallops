@@ -658,6 +658,7 @@ task reads {
         Boolean? force
         String labels
         String? bases
+        String? dark_bases
         Boolean? all_reads
         Boolean? crosstalk_correction_by_t
         Int? mismatches
@@ -687,6 +688,7 @@ task reads {
         --labels "~{labels}" \
         --label-name "~{label_name}" \
         ~{"--bases " + bases} \
+        ~{"--dark-bases " + dark_bases} \
         ~{"--threshold-peaks " + threshold_peaks} \
         ~{"--threshold-peaks-crosstalk " + threshold_peaks_crosstalk} \
         ~{"--mismatches " + mismatches} \

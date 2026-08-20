@@ -61,6 +61,7 @@ workflow ops_workflow {
 
         Boolean? reads_crosstalk_correction_by_t
         String? reads_bases
+        String? reads_dark_bases
         String? reads_threshold_peaks
         String? reads_threshold_peaks_crosstalk
         String? reads_extra_arguments
@@ -587,6 +588,7 @@ workflow ops_workflow {
                         barcode_column=barcode_column,
                         output_directory=reads_directory,
                         bases=reads_bases,
+                        dark_bases=reads_dark_bases,
                         all_reads=all_reads,
                         crosstalk_correction_by_t=reads_crosstalk_correction_by_t,
                         threshold_peaks=reads_threshold_peaks,
