@@ -435,8 +435,10 @@ def run_pca(arguments: argparse.Namespace):
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
 
         pca = PCA(n_components=n_components, whiten=whiten, batch_size=batch_size)
-        pca.fit(data)
-        data = pca.transform(data)
+        pca.fit(data.X)
+        X_transformed = pca.transform(data.X)
+        data = anndata.AnnData(X_transformed, obs=data.obs)
+        pca.add_uns(data)
         _write_anndata(
             data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
         )

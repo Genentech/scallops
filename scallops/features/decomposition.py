@@ -1,7 +1,8 @@
 import logging
 
-import anndata
 import dask.array as da
+import numpy as np
+from anndata import AnnData
 from array_api_compat import get_namespace
 from sklearn.utils import gen_batches
 
@@ -33,13 +34,31 @@ class PCA:
         self.whiten = whiten
         self.progress = progress
 
-    def fit(self, data: anndata.AnnData):
+    @property
+    def components_(self):
+        return self.d.components_
+
+    @property
+    def mean_(self):
+        return self.d.mean_
+
+    @property
+    def explained_variance_ratio_(self):
+        return self.d.explained_variance_ratio_
+
+    @property
+    def explained_variance_(self):
+        return self.d.explained_variance_
+
+    def fit(self, X: np.ndarray | da.Array, y: None = None):
         """Fit the model.
 
-        :param data: Training data.
+        :param X: Training data.
+        :param y: Not used, present for API consistency by convention.
+        :return: The instance itself.
         """
-        X = data.X
-        is_dask = isinstance(data.X, da.Array)
+
+        is_dask = isinstance(X, da.Array)
         if self.gpu is None:
             try:
                 import torch
@@ -95,19 +114,33 @@ class PCA:
             d = PCA(**kwargs)
             d.fit(X)
         self.d = d
+        return self
 
-    def transform(self, data: anndata.AnnData) -> anndata.AnnData:
+    def add_uns(self, data: AnnData):
+        """Add metadata for storing PCA parameters in uns slot
+        :param data: Data to add metadata to.
+        """
+        data.uns["pca"] = {
+            "variance_ratio": self.explained_variance_ratio_,
+            "variance": self.explained_variance_,
+            "mean": self.mean_,
+            "PCs": self.components_,
+            "features": data.var.index.values,
+        }
+
+    def transform(
+        self, X: np.ndarray | da.Array, y: None = None
+    ) -> np.ndarray | da.Array:
         """Apply dimensionality reduction.
 
-        :param data: Data to project.
+        :param X: Data to project.
+        :param y: Not used, present for API consistency by convention.
         :return: Projection of data
         """
 
         d = self.d
-        X = data.X
         components_ = d.components_
         mean_ = d.mean_
-        variance_ratio = d.explained_variance_ratio_
         variance = d.explained_variance_
 
         if mean_ is not None:
@@ -115,15 +148,4 @@ class PCA:
         X_transformed = X @ components_.T  # (n_components, n_features)
         if self.whiten:
             X_transformed /= get_namespace(variance).sqrt(variance)
-
-        uns = {
-            "pca": {
-                "variance_ratio": variance_ratio,
-                "variance": variance,
-                "mean": mean_,
-                "PCs": components_,
-                "features": data.var.index.values,
-            }
-        }
-
-        return anndata.AnnData(X=X_transformed, obs=data.obs.copy(), uns=uns)
+        return X_transformed

@@ -354,14 +354,17 @@ def test_agg_features(by, weighted, agg_func, use_dask):
     )
 
 
+@pytest.mark.parametrize("use_dask", [True, False])
 @pytest.mark.features
-def test_typical_variation_normalization():
+def test_typical_variation_normalization(use_dask):
     d = anndata.AnnData(
         X=np.arange(64).reshape((32, 2)),
         obs=pd.DataFrame(
             data=dict(pert=["1", "2"] * 16, batch=["1", "2", "2", "1"] * 8)
         ),
     )
+    if use_dask:
+        d.X = da.from_array(d.X).rechunk((16, 2))
     # from efaar_benchmarking.efaar import tvn_on_controls
 
     # ref_tvn = tvn_on_controls(

@@ -13,9 +13,9 @@ from array_api_compat import get_namespace
 from flox import rechunk_for_blockwise
 from flox.lib import _issorted
 from scipy.stats import median_abs_deviation
-from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
+from scallops.features.decomposition import PCA
 from scallops.features.util import _slice_anndata
 from scallops.utils import tqdm_func
 
@@ -449,6 +449,7 @@ def typical_variation_normalization(
     data: anndata.AnnData,
     reference_query: str,
     by: Sequence[str] | str | None = None,
+    pca_kwargs: dict | None = None,
 ) -> anndata.AnnData:
     """
     Apply Typical Variation Normalization based on control
@@ -465,6 +466,7 @@ def typical_variation_normalization(
     """
     # Adapted from EFAAR_benchmarking <https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/efaar.py>_
     X = data.X
+    xp = get_namespace(X)
     reference_indices = data.obs.index.get_indexer_for(
         data.obs.query(reference_query).index
     )
@@ -478,7 +480,7 @@ def typical_variation_normalization(
         max_value=None,
         local_zscore=False,
     )
-    d = PCA()
+    d = PCA(**pca_kwargs if pca_kwargs is not None else {})
     X = d.fit(X[reference_indices]).transform(X)
     components_ = d.components_
     mean_ = d.mean_
@@ -503,7 +505,7 @@ def typical_variation_normalization(
                 max_value=None,
             )
 
-        target_cov = np.cov(X[reference_indices], rowvar=False, ddof=1) + 0.5 * np.eye(
+        target_cov = xp.cov(X[reference_indices], rowvar=False, ddof=1) + 0.5 * xp.eye(
             X.shape[1]
         )
 
@@ -513,14 +515,14 @@ def typical_variation_normalization(
                 np.isin(group_indices, reference_indices)
             ]
 
-            source_cov = np.cov(
+            source_cov = xp.cov(
                 X[group_control_indices], rowvar=False, ddof=1
-            ) + 0.5 * np.eye(X.shape[1])
+            ) + 0.5 * xp.eye(X.shape[1])
 
-            X[group_indices] = np.matmul(
+            X[group_indices] = xp.matmul(
                 X[group_indices], scipy.linalg.fractional_matrix_power(source_cov, -0.5)
             )
-            X[group_indices] = np.matmul(
+            X[group_indices] = xp.matmul(
                 X[group_indices], scipy.linalg.fractional_matrix_power(target_cov, 0.5)
             )
     else:
