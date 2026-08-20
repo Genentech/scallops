@@ -741,6 +741,211 @@ def decode_max(
     return df
 
 
+def _polar_thresholds_from_wcor(
+    w_cor: np.ndarray,
+    channel_bases: list[str],
+) -> dict:
+    """Infer polar angle thresholds from the xtalk correction matrix.
+
+    Computes the expected signal direction for each base via the forward xtalk
+    model (``W_fwd = inv(w_cor)``), then places angle boundaries at the midpoint
+    between adjacent centroid directions.  Fully parameter-free.
+
+    The xtalk matrix size (``w_cor.shape[0]``) determines the signal model.
+    The number of channels in the target data (``len(channel_bases)``) determines
+    which polar coordinate system to use.  These may differ — for example, a
+    3-channel xtalk matrix can be used to compute 2-colour angle thresholds when
+    the 2-colour channels are synthesised from the 3 original channels via max().
+
+    :param w_cor: ``(n, n)`` xtalk correction matrix from
+        :func:`channel_crosstalk_matrix`, where ``n`` is the number of physical
+        channels used for correction.
+    :param channel_bases: Ordered base labels for each **data** channel (may be
+        fewer than ``n`` for synthesised channels such as 2-colour Illumina).
+    :return: Dict with keys ``t1``, ``t2`` (3-channel spherical) or ``t_lo``,
+        ``t_hi`` (2-channel planar), giving angle boundaries in degrees.
+    """
+    # Use the xtalk matrix size for E_soft computation (physical channels)
+    n_xtalk = w_cor.shape[0]
+    n_data = len(channel_bases)
+
+    w_fwd = np.linalg.inv(w_cor)
+    col_sums = w_fwd.sum(axis=0, keepdims=True).clip(1e-9)
+    e_soft = (w_fwd / col_sums).T  # (n_xtalk, n_xtalk): rows = bases
+
+    e_norm = e_soft / np.linalg.norm(e_soft, axis=1, keepdims=True).clip(1e-9)
+
+    if n_data == 3 or (n_data != 2 and n_xtalk == 3):
+        # Spherical: theta1 from axis-0, theta2 in transverse 1-2 plane
+        theta1 = np.degrees(np.arccos(np.clip(e_norm[:, 0], 0.0, 1.0)))
+        theta2 = np.degrees(np.arctan2(e_norm[:, 2] + 1e-9, e_norm[:, 1] + 1e-9))
+        t1 = (theta1[0] + min(theta1[1], theta1[2])) / 2
+        t2 = (theta2[1] + theta2[2]) / 2
+        return {"t1": float(t1), "t2": float(t2)}
+
+    # Planar (2-colour Illumina): channels are synthesised as
+    #   ch0 = max(A_ch, C_ch),  ch1 = max(A_ch, T_ch)
+    # E_soft rows: A=0, T=1, C=2  (for 3-channel physical xtalk)
+    # 2-col encoding bl=[G,T,A,C]: G=dark, T=ch1-only, A=both, C=ch0-only
+    e_2col = np.zeros((4, 2))
+    if n_xtalk >= 3:
+        # Use all 3 physical channel directions
+        e_2col[1, 0] = max(e_soft[1, 0], e_soft[1, 2])  # T in ch0=max(A,C)
+        e_2col[1, 1] = max(e_soft[1, 0], e_soft[1, 1])  # T in ch1=max(A,T)
+        e_2col[2, 0] = max(e_soft[0, 0], e_soft[0, 2])  # A in ch0
+        e_2col[2, 1] = max(e_soft[0, 0], e_soft[0, 1])  # A in ch1
+        e_2col[3, 0] = max(e_soft[2, 0], e_soft[2, 2])  # C in ch0
+        e_2col[3, 1] = max(e_soft[2, 0], e_soft[2, 1])  # C in ch1
+    else:
+        # Fallback: use 2-channel xtalk directly
+        e_2col[1, :] = e_soft[min(1, n_xtalk - 1)]
+        e_2col[2, :] = e_soft[0]
+        e_2col[3, 0] = e_soft[min(2, n_xtalk - 1), 0]
+        e_2col[3, 1] = e_soft[min(2, n_xtalk - 1), min(1, n_xtalk - 1)]
+
+    e_n2 = e_2col / np.linalg.norm(e_2col, axis=1, keepdims=True).clip(1e-9)
+    theta_cent = np.degrees(np.arctan2(e_n2[:, 1] + 1e-9, e_n2[:, 0] + 1e-9))
+    t_lo = (theta_cent[3] + theta_cent[2]) / 2  # C / A boundary
+    t_hi = (theta_cent[2] + theta_cent[1]) / 2  # A / T boundary
+    return {"t_lo": float(t_lo), "t_hi": float(t_hi)}
+
+
+def decode_polar(
+    spots: xr.DataArray,
+    barcodes: pd.DataFrame | None = None,
+    encoding: np.ndarray | None = None,
+    base_labels: list[str] | np.ndarray | None = None,
+    dark_bases: list[str] | None = None,
+    w_cor: np.ndarray | None = None,
+    r_frac: float = 0.15,
+) -> pd.DataFrame:
+    """Call reads using polar-coordinate classification.
+
+    Separates signal into two independent properties:
+
+    * **Radius** :math:`R = \\|\\mathbf{x} - \\mathbf{lo}\\|_2` — detects dark bases
+      (all channels quiet below :math:`r_{\\text{frac}} \\cdot R_{\\max}`).
+    * **Direction** — determines which bright base fired.
+
+    Two direction strategies, chosen automatically from the encoding matrix:
+
+    **Orthogonal encoding** (each bright base fires exactly one channel,
+    e.g. 4-colour identity or 3-colour dark-base):
+
+    .. math::
+
+        \\text{calls} = \\arg\\max_b\\; (\\mathbf{x} - \\mathbf{lo}) \\cdot E[b,:]
+
+    **Non-orthogonal encoding** (some bright base fires multiple channels,
+    e.g. Illumina 2-colour where A fires both red and green):
+
+    .. math::
+
+        \\theta = \\arctan\\!\\left(\\frac{d_{c_1}}{d_{c_0}}\\right),
+        \\quad \\text{classified by xtalk-inferred} \\; \\theta_{\\text{low}}, \\theta_{\\text{high}}
+
+    The branching depends on the **encoding matrix**, not on channel count —
+    orthogonal chemistries use the dot-product regardless of dimensionality.
+
+    Angle thresholds for non-orthogonal encodings are derived parameter-free
+    from ``w_cor`` via :func:`_polar_thresholds_from_wcor`; if ``w_cor`` is
+    ``None`` the theoretical midpoints (45°, etc.) are used.
+
+    :param spots: Spot DataArray from :func:`peaks_to_bases`, dims ``(read, t, c)``.
+    :param barcodes: Whitelist DataFrame with column ``'barcode'``; adds a
+        ``barcode_match`` column to the result when provided.
+    :param encoding: ``(n_bases, n_channels)`` encoding matrix.  All-zero rows
+        indicate dark bases.  Takes priority over ``dark_bases``.
+    :param base_labels: Base labels of length ``n_bases``, required with
+        ``encoding``.
+    :param dark_bases: Shorthand for 1:1 channel→base chemistry with named dark
+        bases.  Builds the encoding matrix via :func:`make_encoding`.
+    :param w_cor: Xtalk correction matrix from :func:`channel_crosstalk_matrix`.
+        Used to derive angle thresholds for non-orthogonal encodings.
+    :param r_frac: Per-read fraction of :math:`R_{\\max}` below which a cycle
+        is classified as the dark base.  Ignored when no dark bases exist.
+    :return: DataFrame with columns ``barcode``, ``Q_mean``, ``Q_min``, and
+        optionally ``barcode_match``.
+    """
+    channel_bases = list(spots.c.values)
+
+    # ── Build encoding matrix ──────────────────────────────────────────────────
+    if encoding is not None:
+        E = np.asarray(encoding, dtype=float)
+        base_labels_arr = np.asarray(base_labels)
+    elif dark_bases is not None and len(dark_bases) > 0:
+        E, base_labels_arr = make_encoding(channel_bases, list(dark_bases))
+    else:
+        E = np.eye(len(channel_bases), dtype=float)
+        base_labels_arr = np.array(channel_bases)
+
+    dark_rows = np.where(E.sum(axis=1) == 0)[0]  # all-zero rows → dark bases
+    bright_rows = np.where(E.sum(axis=1) > 0)[0]  # rows with signal → bright bases
+    has_dark = len(dark_rows) > 0
+
+    # ── Baseline-correct and clip ──────────────────────────────────────────────
+    sp = np.clip(spots.data, 0.0, None)
+    lo = sp.min(axis=1, keepdims=True)  # (read, 1, n_ch)
+    d = sp - lo  # (read, t, n_ch)
+
+    # ── Dark-base detection (R threshold, same formula for any chemistry) ──────
+    if has_dark:
+        R = np.sqrt((d**2).sum(axis=-1))  # (read, t)
+        R_max = R.max(axis=1, keepdims=True)  # (read, 1)
+        dark_mask = R < r_frac * R_max  # (read, t)
+    else:
+        dark_mask = np.zeros(d.shape[:2], dtype=bool)
+
+    # ── Bright-base direction ──────────────────────────────────────────────────
+    E_bright = E[bright_rows]  # (n_bright, n_ch)
+    # Does any bright base fire more than one channel? (non-orthogonal encoding)
+    non_orthogonal = bool(np.any(E_bright.sum(axis=1) > 1))
+
+    if non_orthogonal:
+        # Angle-based classification: the ratio of channel signals encodes base
+        # identity independently of amplitude — mandatory for 2-colour Illumina
+        # where A fires both channels and dot-products create unresolvable ties.
+        if w_cor is not None:
+            thresholds = _polar_thresholds_from_wcor(w_cor, channel_bases)
+        else:
+            thresholds = {"t_lo": 22.5, "t_hi": 67.5}
+        t_lo, t_hi = thresholds["t_lo"], thresholds["t_hi"]
+
+        c0, c1 = d[..., 0] + 1e-9, d[..., 1] + 1e-9
+        theta = np.degrees(np.arctan2(c1, c0))  # (read, t)
+        # bl2=[G,T,A,C]: G=0 dark; C=3 (ch0 dominant,θ≈0); A=2 (both,θ≈45);
+        # T=1 (ch1 dominant, θ≈90).  bright_rows=[1,2,3] in this ordering.
+        bright_calls = np.where(
+            theta <= t_lo,
+            bright_rows[2],  # ch0-dominant → C (last bright_row)
+            np.where(theta >= t_hi, bright_rows[0], bright_rows[1]),  # T / A
+        )
+    else:
+        # Dot-product projection — argmax over channel directions.
+        # For orthogonal E (identity): equivalent to argmax(d).  Works for
+        # any number of channels without further branching.
+        bright_scores = d @ E_bright.T  # (read, t, n_bright)
+        bright_calls = bright_rows[bright_scores.argmax(axis=-1)]
+
+    # ── Combine dark and bright calls ─────────────────────────────────────────
+    calls = np.where(dark_mask, dark_rows[0] if has_dark else 0, bright_calls)
+
+    # ── Build output DataFrame ────────────────────────────────────────────────
+    Q = quality_softmax(sp)
+    meta_df = spots["read"].to_dataframe()
+    whitelist = barcodes["barcode"].values if barcodes is not None else None
+
+    df = meta_df.copy()
+    df.index.name = None
+    df["barcode"] = ["".join(base_labels_arr[row]) for row in calls.astype(int)]
+    df["Q"] = list(Q)
+    df["Q_mean"] = Q.mean(axis=1)
+    df["Q_min"] = Q.min(axis=1)
+    if whitelist is not None:
+        df["barcode_match"] = df["barcode"].isin(whitelist)
+    return df
+
+
 def peaks_to_bases(
     maxed: xr.DataArray,
     peaks: pd.DataFrame | dd.DataFrame,
