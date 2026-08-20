@@ -551,6 +551,22 @@ def _save_ome_tiff(
         os.remove(local_path)
 
 
+reverse_complement_dna_lookup = {"G": "C", "A": "T", "T": "A", "C": "G", "N": "N"}
+
+
+def reverse_complement_dna(x: str) -> str:
+    """Reverse complement a DNA sequence.
+
+    :param x: The DNA sequence to be reverse complemented
+    :return: The reverse complemented DNA sequence
+    """
+    s = []
+    for i in range(len(x)):
+        b = x[len(x) - 1 - i]
+        s.append(reverse_complement_dna_lookup[b])
+    return "".join(s)
+
+
 def read_barcodes(
     barcodes_path: str,
     barcode_indices: None | Sequence[int],
