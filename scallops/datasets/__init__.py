@@ -133,6 +133,7 @@ def nis_seq_schmid_burgk() -> Path:
         "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle14_C10_time001_tile0040_channel06.tif": None,
         "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-cellpose-masks/nuclear_mask_cycle1_C10_time001_tile0040_channel02.tif": None,
         "nis-seq/NIS-Seq_Brunello_sgRNAs/Brunello_sgRNAs.txt": None,
+        # "nis-seq/results/test_NuclearSequences.txt": None,
     }
     path = pooch.os_cache("scallops")
     p = pooch.create(

@@ -20,7 +20,6 @@ from scallops.reads import (
     correct_mismatches,
     decode_max,
     peaks_to_bases,
-    read_statistics,
 )
 from scallops.registration.crosscorrelation import align_image
 from scallops.segmentation.watershed import (
@@ -164,6 +163,11 @@ def test_correct_mismatches():
 def test_dark_bases():
     data_path = Path("scallops/tests/data/nis-seq")
     bases = np.array(["A", "T", "C"])
+    paper_df = (
+        pd.read_csv(data_path / "results/test_NuclearSequences.txt", sep="\t")
+        .rename({"nucleus": "label"}, axis=1)
+        .set_index("label")
+    )
 
     experiment = read_experiment(
         data_path / "Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images",
@@ -171,12 +175,6 @@ def test_dark_bases():
         group_by=("well", "tile"),
     )
     iss_image = experiment.images["C10-0040"].squeeze()
-    iss_image = align_image(
-        iss_image,
-        align_within_time_channels=None,  # Ensure we align all channels within a cycle
-        align_between_time_channel=0,  # Ensure we align all cycles
-        filter_percentiles=[0, 90],  # reduces potential noise during aligning
-    )
     nuclei = (
         read_image(
             data_path
@@ -189,11 +187,17 @@ def test_dark_bases():
         data_path / "NIS-Seq_Brunello_sgRNAs/Brunello_sgRNAs.txt",
         sep="\t",
         header=None,
-        names=["gene", "barcode"],
+        names=["gene", "sequence"],
     )
-    df_barcode["barcode"] = df_barcode["barcode"].map(reverse_complement_dna)
+    df_barcode["barcode"] = df_barcode["sequence"].map(reverse_complement_dna)
     df_barcode["barcode"] = df_barcode["barcode"].str[0 : iss_image.sizes["t"]]
 
+    iss_image = align_image(
+        iss_image,
+        align_within_time_channels=None,
+        align_between_time_channel=0,  # Ensure we align all cycles
+        filter_percentiles=[0, 90],  # reduces potential noise during aligning
+    )
     iss_image = iss_image.isel(c=[1, 2, 3])
     loged = transform_log(iss_image)
     std_arr = std(loged)
@@ -219,13 +223,42 @@ def test_dark_bases():
         df_reads.query("barcode_match")
     )
     threshold_peaks = peak_thresholds_lower_df.iloc[0]["threshold"]
-
-    assert (
-        read_statistics(df_reads.query(f"peak>{threshold_peaks}"))[
-            "labels_with_mapped_reads"
-        ]
-        > 840
+    # filtering for paper:
+    # requiring the dominant sequence to make up more than two-thirds of total intensity of
+    # library spots in a given nucleus and the maximum signal intensity per nucleus across channels and
+    # sequencing cycles to pass a numeric threshold (7 × 105 for all cell types except 2 × 105 for iMacs)
+    df_labels = (
+        assign_barcodes_to_labels(df_reads.query(f"peak>{threshold_peaks}"))
+        .set_index("label")
+        .query("barcode_count_0/barcode_count > 0.66")
     )
+    df_labels = df_labels.join(df_barcode.set_index("barcode"), on="barcode_0")
+    combined_df = paper_df.join(df_labels, rsuffix="_1")
+    combined_df["sequence"] = combined_df["sequence"].fillna("")
+    combined_df["sequence_1"] = combined_df["sequence_1"].fillna("")
+    n_common = (
+        (combined_df["sequence"] == combined_df["sequence_1"])
+        & (combined_df["sequence"] != "")
+    ).sum()
+    assert n_common >= 80
+
+    corrected_df_reads = correct_mismatches(
+        df_reads.query(f"peak>{threshold_peaks}"), df_barcode
+    )
+    df_labels = (
+        assign_barcodes_to_labels(corrected_df_reads)
+        .set_index("label")
+        .query("barcode_count_0/barcode_count > 0.66")
+    )
+    df_labels = df_labels.join(df_barcode.set_index("barcode"), on="barcode_0")
+    combined_df = paper_df.join(df_labels, rsuffix="_1")
+    combined_df["sequence"] = combined_df["sequence"].fillna("")
+    combined_df["sequence_1"] = combined_df["sequence_1"].fillna("")
+    n_common = (
+        (combined_df["sequence"] == combined_df["sequence_1"])
+        & (combined_df["sequence"] != "")
+    ).sum()
+    assert n_common >= 475
 
 
 @pytest.mark.basecalls
