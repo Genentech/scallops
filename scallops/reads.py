@@ -32,6 +32,8 @@ from scallops.io import CYAN, GRAY, GREEN, MAGENTA, RED, save_stack_imagej
 
 logger = logging.getLogger("scallops")
 
+MIN_P_ERROR: float = 1e-6
+
 
 def _hamming_distance(
     whitelist_barcodes: np.ndarray, read_barcodes: np.ndarray
@@ -134,7 +136,7 @@ def summarize_base_call_mismatches(
     return df
 
 
-def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
+def quality_softmax(x: np.ndarray, min_error: float = MIN_P_ERROR) -> np.ndarray:
     """Computes the phred quality score of transformed data using the softmax function.
 
     :param x: Array with transformed data (read, cycle, channel).
@@ -143,7 +145,6 @@ def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
     """
 
     p = np.max(softmax(x, axis=2), axis=2)
-
     p_error = 1 - p
     p_error[p_error < min_error] = min_error
     return -10 * np.log10(p_error)
@@ -511,6 +512,7 @@ def _decode_max_chunk(
     Q = quality_softmax(spots)  # (read, t)
     channel_calls = np.argmax(spots, axis=2)  # (read, t)
     if dark_bases is not None:
+        min_error = MIN_P_ERROR
         # call bases for non-dark channels
         bases = list(bases)
         # dark bases called at cycles with all unmixed intensities below dark_base_threshold% of the spot’s
@@ -519,12 +521,24 @@ def _decode_max_chunk(
             dark_bases
         ):
             dark_base_base_offset = dark_base_index + len(bases)
-            max_spots = np.max(spots[..., channels], axis=2)  # (read, t)
+
+            max_spots = np.max(spots[..., None], axis=2)  # (read, t)
             max_spots_per_read = np.max(max_spots, axis=1)  # (read,)
             cutoff = max_spots_per_read * dark_base_threshold  # (read,)
             cutoff = np.expand_dims(cutoff, axis=1)
-            dark_base_present = max_spots < cutoff
+            p_dark = softmax(
+                np.concatenate(
+                    (max_spots, np.repeat(cutoff, spots.shape[1], axis=1)), axis=2
+                ),
+                axis=2,
+            )  # (read, t, 2)
+            p_dark = p_dark[..., 1]
+            p_dark_error = 1 - p_dark
+            p_dark_error[p_dark_error < min_error] = min_error
+            Q_dark = -10 * np.log10(p_dark_error)
+            dark_base_present = (max_spots < cutoff).squeeze(axis=2)
             channel_calls[dark_base_present] = dark_base_base_offset
+            Q[dark_base_present] = Q_dark[dark_base_present]
             bases.append(dark_base)
         bases = np.array(bases)
 
