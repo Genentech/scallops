@@ -80,7 +80,7 @@ class PCA:
             )
             batches = list(
                 gen_batches(
-                    X.shape[0], self.batch_size, min_batch_size=self.n_components
+                    X.shape[0], self.batch_size, min_batch_size=self.n_components or 0
                 )
             )
             tqdm, progress_args = tqdm_func(self.progress)
@@ -89,8 +89,6 @@ class PCA:
                 if is_dask:
                     X_batch = X_batch.compute()
                 d.partial_fit(X_batch)
-
-            # x = d.transform(X)  # loads everything into memory
 
         else:
             if not is_dask:
