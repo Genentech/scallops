@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from sklearn.decomposition import IncrementalPCA
 
-from scallops.features.decomposition import pca
+from scallops.features.decomposition import PCA
 
 
 @pytest.mark.features
@@ -16,12 +16,13 @@ def test_decomposition():
         data=dict(plate="test", well=["a"] * 5 + ["b"] * 5),
     )
     adata = anndata.AnnData(X=X, obs=obs)
-    result = pca(
-        data=adata,
+    pca = PCA(
         n_components=2,
         progress=False,
         batch_size=2,
     )
+    pca.fit(adata)
+    result = pca.transform(adata)
     np.testing.assert_array_equal(result.obs.columns, ("plate", "well"))
     assert result.X.shape == (10, 2)
 
@@ -30,13 +31,13 @@ def test_decomposition():
 def test_decomposition_compare_numpy():
     X = da.random.random((10, 10), chunks=(2, 2))
     adata = anndata.AnnData(X=X)
-    result = pca(
-        data=adata,
+    pca = PCA(
         n_components=2,
         progress=False,
         batch_size=2,
     )
-
+    pca.fit(adata)
+    result = pca.transform(adata)
     d = IncrementalPCA(n_components=2, batch_size=2)
     result2 = d.fit_transform(X.compute())
     np.testing.assert_array_equal(result.uns["pca"]["mean"], d.mean_)

@@ -26,7 +26,7 @@ from scallops.cli.util import (
     load_json,
 )
 from scallops.features.agg import agg_features
-from scallops.features.decomposition import pca
+from scallops.features.decomposition import PCA
 from scallops.features.map_eval import pairwise_similarities, read_corum, recall
 from scallops.features.normalize import (
     _convert_scale,
@@ -433,9 +433,10 @@ def run_pca(arguments: argparse.Namespace):
                 join_fields,
             )
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-        data = pca(
-            data=data, n_components=n_components, whiten=whiten, batch_size=batch_size
-        )
+
+        pca = PCA(n_components=n_components, whiten=whiten, batch_size=batch_size)
+        pca.fit(data)
+        data = pca.transform(data)
         _write_anndata(
             data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
         )
