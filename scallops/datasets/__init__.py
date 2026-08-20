@@ -63,3 +63,84 @@ def feldman_2019_small() -> Path:
     for key in registry.keys():
         p.fetch(key)
     return path / "experimentC"
+
+
+def nis_seq_schmid_burgk() -> Path:
+    """Example SBS tile from Schmid-Burgk et al.
+    (https://www.nature.com/articles/s41587-024-02516-5#MOESM3).
+
+    :return: Path to root data directory.
+    """
+
+    import pooch
+
+    registry = {
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle1_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle1_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle1_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle1_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle2_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle2_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle2_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle2_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle3_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle3_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle3_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle3_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle4_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle4_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle4_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle4_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle5_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle5_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle5_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle5_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle6_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle6_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle6_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle6_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle7_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle7_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle7_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle7_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle8_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle8_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle8_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle8_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle9_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle9_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle9_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle9_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle10_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle10_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle10_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle10_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle11_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle11_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle11_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle11_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle12_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle12_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle12_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle12_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle13_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle13_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle13_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle13_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle14_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle14_C10_time001_tile0040_channel03.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle14_C10_time001_tile0040_channel04.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images/cycle14_C10_time001_tile0040_channel06.tif": None,
+        "nis-seq/Fig1E_NIS_HeLa_tile40/NIS-Seq-cellpose-masks/nuclear_mask_cycle1_C10_time001_tile0040_channel02.tif": None,
+        "nis-seq/NIS-Seq_Brunello_sgRNAs/Brunello_sgRNAs.txt": None,
+        "nis-seq/results/test_NuclearSequences.txt": None,
+    }
+    path = pooch.os_cache("scallops")
+    p = pooch.create(
+        path=path,
+        base_url="https://github.com/Genentech/scallops/raw/refs/heads/dark-bases/scallops/tests/data/",  # FIXME
+        registry=registry,
+    )
+    for key in registry.keys():
+        p.fetch(key)
+    return path / "nis-seq"

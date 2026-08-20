@@ -32,6 +32,8 @@ from scallops.io import CYAN, GRAY, GREEN, MAGENTA, RED, save_stack_imagej
 
 logger = logging.getLogger("scallops")
 
+MIN_P_ERROR: float = 1e-6
+
 
 def _hamming_distance(
     whitelist_barcodes: np.ndarray, read_barcodes: np.ndarray
@@ -134,12 +136,12 @@ def summarize_base_call_mismatches(
     return df
 
 
-def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
+def quality_softmax(x: np.ndarray, min_error: float = MIN_P_ERROR) -> np.ndarray:
     """Computes the phred quality score of transformed data using the softmax function.
 
     :param x: Array with transformed data (read, cycle, channel).
     :param min_error: Minimum p-value error.
-    :return: Array with computed quality scores (higher is better).
+    :return: Array with computed quality scores (higher is better) with shape (read, cycle)
     """
 
     p = np.max(softmax(x, axis=2), axis=2)
@@ -331,7 +333,12 @@ def _crosstalk_median_ratio(a: np.ndarray) -> np.ndarray:
     return median_array
 
 
-def _agg_barcodes(df: pd.DataFrame, sort_by: str | list[str]) -> pd.DataFrame:
+def _agg_barcodes(
+    df: pd.DataFrame,
+    sort_by: str | list[str],
+    agg_columns: list[str],
+    top2_columns: list[str],
+) -> pd.DataFrame:
     """Aggregate barcode counts/intensities from a dataframe.
 
     :param df: Dataframe containing `label`, `barcode`, and `peak` columns.
@@ -347,13 +354,6 @@ def _agg_barcodes(df: pd.DataFrame, sort_by: str | list[str]) -> pd.DataFrame:
         mismatch = True
     if len(df) == 0:
         return pd.DataFrame()
-
-    peak_sum = df["peak"].sum()
-    count_sum = len(df)
-    q_mean_sum = df["Q_mean"].sum()
-    q_min_sum = df["Q_min"].sum()
-    label = df.iloc[0]["label"]
-
     barcode_groupby = df.groupby(
         "barcode", as_index=True, group_keys=True, sort=False, dropna=False
     )
@@ -361,29 +361,27 @@ def _agg_barcodes(df: pd.DataFrame, sort_by: str | list[str]) -> pd.DataFrame:
     top2 = barcode_groupby.agg("sum").nlargest(n=2, columns=sort_by)
     barcode_0 = top2.iloc[0].name
     barcode_1 = top2.iloc[1].name if len(top2) > 1 else ""
+    d = {
+        "label": [df.iloc[0]["label"]],
+        "barcode_0": [barcode_0],
+        "barcode_1": [barcode_1],
+        "mismatch": [mismatch],
+        "barcode_count": [len(df)],
+        "barcode_count_0": [barcode_sizes.loc[barcode_0]],
+    }
+    # barcode 0
+    for c in agg_columns + top2_columns:
+        d[f"barcode_{c}_0"] = [top2.iloc[0][c]]
 
-    return pd.DataFrame.from_dict(
-        {
-            "label": [label],
-            "mismatch": [mismatch],
-            "barcode_Q_mean": [q_mean_sum],
-            "barcode_Q_min": [q_min_sum],
-            "barcode_peak": [peak_sum],
-            "barcode_count": [count_sum],
-            "barcode_0": [barcode_0],
-            "barcode_Q_mean_0": [top2.iloc[0]["Q_mean"]],
-            "barcode_Q_min_0": [top2.iloc[0]["Q_min"]],
-            "barcode_peak_0": [top2.iloc[0]["peak"]],
-            "barcode_count_0": [barcode_sizes.loc[barcode_0]],
-            "barcode_Q_0": [top2.iloc[0]["Q"]],
-            "barcode_1": [barcode_1],
-            "barcode_Q_mean_1": [top2.iloc[1]["Q_mean"] if len(top2) > 1 else 0],
-            "barcode_Q_min_1": [top2.iloc[1]["Q_min"] if len(top2) > 1 else 0],
-            "barcode_peak_1": [top2.iloc[1]["peak"] if len(top2) > 1 else np.nan],
-            "barcode_count_1": [barcode_sizes.loc[barcode_1] if len(top2) > 1 else 0],
-            "barcode_Q_1": [top2.iloc[1]["Q"] if len(top2) > 1 else None],
-        }
-    )
+    # barcode 1
+    d["barcode_count_1"] = ([barcode_sizes.loc[barcode_1] if len(top2) > 1 else 0],)
+    default_values = {"Q_min": 0, "Q_mean": 0, "peak": np.nan}
+    for c in agg_columns + top2_columns:
+        d[f"barcode_{c}_1"] = [
+            top2.iloc[1][c] if len(top2) > 1 else default_values.get(c)
+        ]
+
+    return pd.DataFrame.from_dict(d)
 
 
 def assign_barcodes_to_labels(
@@ -399,32 +397,41 @@ def assign_barcodes_to_labels(
 
     columns = []
     columns.append(("label", df_reads["label"].dtype))
+    columns.append(("barcode_0", object))
+    columns.append(("barcode_1", object))
     columns.append(("mismatch", bool))
-    columns.append(("barcode_Q_mean", np.float64))
-    columns.append(("barcode_Q_min", np.float64))
-    columns.append(("barcode_peak", np.float64))
     columns.append(("barcode_count", np.int64))
+    columns.append(("barcode_count_0", np.int64))
+    top2_columns = ["Q"]
+    agg_columns = ["Q_mean", "Q_min", "peak"]
+    agg_columns = [c for c in agg_columns if c in df_reads.columns]
+    top2_columns = [c for c in top2_columns if c in df_reads.columns]
+    # barcode 0
+    for c in agg_columns:
+        columns.append((f"barcode_{c}_0", np.float64))
+    for c in top2_columns:
+        columns.append((f"barcode_{c}_0", object))
 
-    for i in range(2):
-        columns.append((f"barcode_{i}", object))
-        columns.append((f"barcode_Q_mean_{i}", np.float64))
-        columns.append((f"barcode_Q_min_{i}", np.float64))
-        columns.append((f"barcode_peak_{i}", np.float64))
-        columns.append((f"barcode_count_{i}", np.int64))
-        columns.append((f"barcode_Q_{i}", object))
-
+    # barcode 1
+    for c in agg_columns:
+        columns.append((f"barcode_{c}_1", np.float64))
+    for c in top2_columns:
+        columns.append((f"barcode_{c}_1", object))
     apply_args = (
         dict(meta=dd.utils.make_meta(columns))
         if isinstance(df_reads, dd.DataFrame)
         else dict()
     )
     apply_args["sort_by"] = sort_by
-    reads_columns = ["label", "peak", "barcode", "Q", "Q_min", "Q_mean"]
+    columns_needed = ["label", "barcode"] + agg_columns + top2_columns
+
     if "mismatches" in df_reads.columns:
-        reads_columns.append("mismatches")
+        columns_needed.append("mismatches")
     return df_reads.groupby("label", group_keys=False, sort=False, dropna=False)[
-        reads_columns
-    ].apply(_agg_barcodes, **apply_args)
+        columns_needed
+    ].apply(
+        _agg_barcodes, agg_columns=agg_columns, top2_columns=top2_columns, **apply_args
+    )
 
 
 def correct_mismatches(
@@ -493,19 +500,53 @@ def _decode_max_chunk(
     meta_df: pd.DataFrame,
     offset: slice | None,
     whitelist: list[str] | None,
+    dark_bases: list[tuple[str, list[int], float]] | None,
 ) -> pd.DataFrame:
     """Decode the maximum intensity chunk from the input spot data and compute base
     quality scores.
 
-    :param spots: Spot data.
+    :param spots: Spot data (read, t, c).
     :param bases: List of bases.
     :param meta_df: Metadata dataframe.
     :param offset: Offset into metadata.
     :param whitelist: List of whitelisted barcodes.
+    :param dark_bases: List of dark bases.
     :return: A pandas DataFrame with decoded barcode sequences and quality metrics.
     """
-    Q = quality_softmax(spots)
-    channel_calls = np.argmax(spots, axis=2)
+
+    Q = quality_softmax(spots)  # (read, t)
+    channel_calls = np.argmax(spots, axis=2)  # (read, t)
+    if dark_bases is not None:
+        min_error = MIN_P_ERROR
+        # call bases for non-dark channels
+        bases = list(bases)
+        # dark bases called at cycles with all unmixed intensities below dark_base_threshold% of the spot’s
+        # maximum unmixed intensity across all cycles.
+        for dark_base_index, (dark_base, channels, dark_base_threshold) in enumerate(
+            dark_bases
+        ):
+            dark_base_base_offset = dark_base_index + len(bases)
+
+            max_spots = np.max(spots[..., None], axis=2)  # (read, t)
+            max_spots_per_read = np.max(max_spots, axis=1)  # (read,)
+            cutoff = max_spots_per_read * dark_base_threshold  # (read,)
+            cutoff = np.expand_dims(cutoff, axis=1)
+            p_dark = softmax(
+                np.concatenate(
+                    (max_spots, np.repeat(cutoff, spots.shape[1], axis=1)), axis=2
+                ),
+                axis=2,
+            )  # (read, t, 2)
+            p_dark = p_dark[..., 1]
+            p_dark_error = 1 - p_dark
+            p_dark_error[p_dark_error < min_error] = min_error
+            Q_dark = -10 * np.log10(p_dark_error)
+            dark_base_present = (max_spots < cutoff).squeeze(axis=2)
+            channel_calls[dark_base_present] = dark_base_base_offset
+            Q[dark_base_present] = Q_dark[dark_base_present]
+            bases.append(dark_base)
+        bases = np.array(bases)
+
     calls = bases[channel_calls]
 
     df = (
@@ -526,12 +567,14 @@ def _decode_max_chunk(
 def decode_max(
     spots: xr.DataArray,
     barcodes: pd.DataFrame | None = None,
+    dark_bases: list[tuple[str, list[int], float]] | None = None,
 ) -> pd.DataFrame | dd.DataFrame:
     """Call reads by assigning the base with the highest intensity.
 
     :param spots: Spots returned from peaks_to_bases containing dimensions (read,t,c)
     :param barcodes: Table of designed barcode sequences used for indicating whether a
         barcode is an exact match. Expected to have column 'barcode'.
+    :param dark_bases: List of dark bases.
     :return: The reads data frame
     """
 
@@ -545,6 +588,7 @@ def decode_max(
             offset=None,
             meta_df=meta_df,
             whitelist=whitelist,
+            dark_bases=dark_bases,
         )
     else:
         # # no chunking in t or c dimension
@@ -586,6 +630,7 @@ def decode_max(
                     spots=block,
                     whitelist=whitelist,
                     meta_df=meta_df,
+                    dark_bases=dark_bases,
                     offset=slice(start[0], stop[0]),
                     bases=bases,
                 )
@@ -748,7 +793,9 @@ def read_statistics(reads_df: pd.DataFrame | dd.DataFrame) -> dict[str, float | 
     outside_labels = reads_df.query("label==0")
     mapping_rate = reads_df.query("barcode_match").shape[0] / reads_df.shape[0]
     mapping_rate_within_labels = (
-        in_labels.query("barcode_match").shape[0] / in_labels.shape[0]
+        (in_labels.query("barcode_match").shape[0] / in_labels.shape[0])
+        if in_labels.shape[0] > 0
+        else 0
     )
 
     barcode_matches = in_labels.query("barcode_match==1")

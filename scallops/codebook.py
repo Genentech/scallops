@@ -5,7 +5,7 @@ Authors:
     - The SCALLOPS development team.
 """
 
-from collections.abc import Hashable
+from collections.abc import Hashable, Sequence
 from typing import Literal
 
 import numpy as np
@@ -13,32 +13,15 @@ import pandas as pd
 import skimage.measure
 import xarray as xr
 from skimage.measure import label, regionprops
-from sklearn.metrics.pairwise import ArgKmin
+from sklearn.metrics.pairwise import pairwise_distances_argmin_min
 
 
-def image_to_codes(array: xr.DataArray) -> np.ndarray:
+def reshape_image_to_codes(array: xr.DataArray) -> np.ndarray:
     """Reshape a 5-dimensional array of shape (t, c, z, y, x) to a 2-dimensional array of shape
     (z+y+x, t+c).
 
     :param array: The input 5-dimensional array representing images. Dimensions: (t, c, z, y, x).
     :return: Reshaped 2-dimensional array of shape (z+y+x, t+c).
-
-    :example:
-
-    .. code-block:: python
-
-        import xarray as xr
-        import numpy as np
-        from scallops.codebook import image_to_codes
-
-        # Create a synthetic DataArray
-        image_shape = (3, 4, 5, 100, 100)  # (t, c, z, y, x)
-        imagestack = xr.DataArray(
-            np.random.rand(*image_shape), dims=("t", "c", "z", "y", "x")
-        )
-
-        # Reshape the 5D array to a 2D array
-        reshaped_array = image_to_codes(imagestack)
     """
     # Rearrange axes to z, y, x, t, c and then reshape to 2D array of (z+y+x, t+c)
     dims = ["y", "x", "t", "c"]
@@ -72,21 +55,6 @@ def _regionprops(
              - The filtered and reshaped `argmin` array.
              - The reshaped `distances` array.
              - A list of region properties for the labeled regions.
-
-    :example:
-
-    .. code-block:: python
-
-        argmin = np.random.randint(0, 5, (512, 512))
-        distances = np.random.random((512, 512))
-        passes_filters = distances < 0.5
-        sizes = {"y": 512, "x": 512}
-
-        argmin_, distances_, props = _regionprops(
-            argmin, distances, passes_filters, sizes
-        )
-
-        print(f"Number of regions: {len(props)}")
     """
     # Copy argmin to prevent modifying the original array
     argmin_ = argmin.copy()
@@ -109,7 +77,7 @@ def _regionprops(
     return argmin_, distances_, props
 
 
-def decode_metric(
+def decode_image(
     array: xr.DataArray,
     codebook: xr.DataArray,
     metric: Literal[
@@ -148,7 +116,7 @@ def decode_metric(
     :param scale_factors: Optional 1-d array (time, channel) to divide array by
     :return: Data frame containing called features
     """
-    codes = image_to_codes(array)
+    codes = reshape_image_to_codes(array)
     argmin, distances, trace_norms, passes_filters = _decode_metric(
         array=codes,
         codebook=codebook,
@@ -263,64 +231,12 @@ def _regionprops_to_table(
     return df
 
 
-def _pairwise_distances_argmin_min(
-    X: np.ndarray, Y: np.ndarray, metric: str = "euclidean"
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute the pairwise distances between two arrays, handling NaN values.
-
-    This function extends the functionality of `pairwise_distances_argmin_min` from
-    sklearn, allowing it to handle NaN values gracefully. It uses `ArgKmin` to
-    compute the nearest neighbor distances and their corresponding indices.
-
-    :param X: A 2D NumPy array of shape (n_samples_X, n_features).
-    :param Y: A 2D NumPy array of shape (n_samples_Y, n_features).
-    :param metric: The distance metric to use (default is "euclidean").
-
-    :return:
-        - `indices`: A 1D NumPy array containing the index of the nearest neighbor in `Y` for each sample in `X`.
-        - `values`: A 1D NumPy array containing the corresponding distance values.
-
-    :raises ValueError: If the input arrays are not 2D or if the metric is invalid.
-
-    :example:
-
-    .. code-block:: python
-
-        X = np.array([[1, 2], [3, 4], [5, 6]])
-        Y = np.array([[1, 2], [7, 8], [9, 10]])
-
-        indices, values = _pairwise_distances_argmin_min(X, Y)
-        print(indices)  # Output: [0 1 2]
-        print(values)  # Output: [0. 5.65685 5.65685]
-    """
-    # Ensure inputs are C-contiguous arrays for better performance
-    X = np.asarray(X, order="C")
-    Y = np.asarray(Y, order="C")
-
-    # Use ArgKmin to compute the nearest neighbor distances and their indices
-    values, indices = ArgKmin.compute(
-        X=X,
-        Y=Y,
-        k=1,
-        metric=metric,
-        metric_kwargs={},
-        strategy="auto",
-        return_distance=True,
-    )
-
-    # Flatten the results to match the expected output shape
-    values = values.flatten()
-    indices = indices.flatten()
-
-    return indices, values
-
-
 def _decode_metric(
     array: np.ndarray,
     codebook: xr.DataArray,
     metric: str = "euclidean",
     norm_order: int = 2,
-    scale_factors: np.ndarray = None,
+    scale_factors: np.ndarray | None = None,
     min_intensity: float = 0,
     max_distance: float = np.inf,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -331,7 +247,7 @@ def _decode_metric(
         channel)
     :param norm_order: Norm to apply (`numpy:reference/generated/numpy.linalg.norm`)
     :param metric: Distance metric
-    :param min_intensity: Minimum intensity to include
+    :param min_intensity: Minimum normed value in array to include
     :param max_distance: Maximum distance between a feature and its closest code for which the coded
         target will be assigned.
     :param scale_factors: Optional 1-d array (time, channel) to divide array by
@@ -345,7 +261,7 @@ def _decode_metric(
         scale_factors = np.ones(codebook_pixel_array.shape[1])
     normed_trace, norms = unit_norm(array / scale_factors, norm_order=norm_order)
 
-    argmin, distances = _pairwise_distances_argmin_min(
+    argmin, distances = pairwise_distances_argmin_min(
         normed_trace, codebook_pixel_array, metric=metric
     )
 
@@ -386,7 +302,7 @@ def unit_norm(
 
 
 def estimate_scale_factors(
-    array: xr.DataArray,
+    codes: xr.DataArray | np.ndarray,
     codebook: xr.DataArray,
     initial_scale_factors: np.ndarray = None,
     max_iter: int = 10,
@@ -415,57 +331,32 @@ def estimate_scale_factors(
     """Calculate the scale factors that would result in the mean on bit intensity for each bit to be
     equal.
 
-    :param array:
-        2-dimensional array with dimensions read and t+c or a 4-dimensional array with dimensions (t, c, y, x).
-    :param codebook:
-        The codebook used to call features. Dimensions are f (feature), t, c.
-    :param norm_order:
-        Norm to apply (`numpy:reference/generated/numpy.linalg.norm`).
-    :param metric:
-        Distance metric as in `sklearn.metrics.pairwise.ArgKmin.valid_metrics()`.
-    :param min_intensity:
-        Minimum intensity to include.
-    :param max_distance:
-        Maximum distance between a feature and its closest code for which the coded target will be assigned.
-    :param initial_scale_factors:
-        Initial scale factors of 1-dimensional array (t+c) to divide array by. If not provided, set to 90th percentile
+    :param codes: 2-dimensional array with dimensions read and t+c.
+    :param codebook: The codebook used to call features. Dimensions are f (feature), t, c.
+    :param norm_order: Norm to apply (`numpy:reference/generated/numpy.linalg.norm`).
+    :param metric: Distance metric as in `sklearn.metrics.pairwise.ArgKmin.valid_metrics()`.
+    :param min_intensity: Minimum intensity to include.
+    :param max_distance: Maximum distance between a feature and its closest code for which the coded target will be
+        assigned.
+    :param initial_scale_factors: Initial scale factors of 1-dimensional array (t+c) to divide array by. If not provided, set to 90th percentile
         for each bit.
-    :param max_iter:
-        Maximum number of iterations to perform.
+    :param max_iter: Maximum number of iterations to perform.
     :return: The estimated scaling factors.
-
-    :example:
-
-    .. code-block:: python
-
-        import xarray as xr
-        import numpy as np
-        from scallops.codebook import estimate_scale_factors
-
-        # Create synthetic DataArray
-        image_shape = (3, 4, 100, 100)  # (t, c, y, x)
-        array = xr.DataArray(np.random.rand(*image_shape), dims=("t", "c", "y", "x"))
-        codebook_shape = (6, 3, 4)  # (f, t, c)
-        codebook = xr.DataArray(np.random.rand(*codebook_shape), dims=("f", "t", "c"))
-
-        # Calculate the estimated scaling factors
-        scale_factors = estimate_scale_factors(array, codebook, max_iter=5)
     """
-    array = image_to_codes(array)
+    if not isinstance(codes, xr.DataArray):
+        codes = xr.DataArray(codes)
     scale_factors = initial_scale_factors
     if scale_factors is None:
-        scale_factors = np.nanquantile(array, 0.9, axis=0)
+        scale_factors = np.nanquantile(codes, 0.9, axis=0)
         if np.any(scale_factors == 0):
-            scale_factors = np.nanmax(array, axis=0)
+            scale_factors = np.nanmax(codes, axis=0)
     codebook_pixel_array = codebook.stack(pixel_array=("t", "c"))  # dims (f,t+c)
     codebook_pixel_array, _ = unit_norm(codebook_pixel_array, norm_order=norm_order)
     codebook_pixel_array = codebook_pixel_array > 0
-    # use DataArray.where for masking later
-    array = xr.DataArray(array)
 
     for i in range(max_iter):
         argmin, distances, values_norms, passes_filters = _decode_metric(
-            array=array,
+            array=codes,
             codebook=codebook,
             scale_factors=scale_factors,
             metric=metric,
@@ -475,7 +366,7 @@ def estimate_scale_factors(
         )
 
         new_scale_factors = _update_scale_factors(
-            array, passes_filters, values_norms, codebook_pixel_array, argmin
+            codes, passes_filters, values_norms, codebook_pixel_array, argmin
         )
         # new_scale_factors /= new_scale_factors.min()
         if np.all(new_scale_factors == 1) or np.array_equal(
@@ -540,3 +431,27 @@ def _update_scale_factors(
     new_scale_factors = on_mean_per_bit / np.nanmean(on_mean_per_bit)
     new_scale_factors[np.isnan(new_scale_factors)] = 1
     return new_scale_factors
+
+
+def barcodes_to_codebook(
+    barcodes: Sequence[str],
+    features: Sequence[str],
+    encoding: np.ndarray,
+    encoding_bases: Sequence[str],
+):
+    # encoding = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]])
+    encoding_base_map = dict()
+    for i in range(len(encoding_bases)):
+        encoding_base_map[encoding_bases[i]] = i
+    n_cycles = len(barcodes[0])
+    codebook = np.zeros((len(features), n_cycles, 3), dtype=np.uint32)
+
+    for barcode_index in range(len(barcodes)):
+        barcode = barcodes[barcode_index]
+        for cycle_index in range(n_cycles):
+            base_index = encoding_base_map[barcode[cycle_index]]
+            encoded_value = encoding[base_index]
+            codebook[barcode_index, cycle_index] = encoded_value
+
+    coords = dict(f=features)
+    return xr.DataArray(codebook, dims=("f", "t", "c"), coords=coords)

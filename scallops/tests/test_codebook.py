@@ -7,15 +7,15 @@ from scallops.codebook import (
     _decode_metric,
     _regionprops,
     _regionprops_to_table,
-    decode_metric,
+    barcodes_to_codebook,
+    decode_image,
     estimate_scale_factors,
-    image_to_codes,
+    reshape_image_to_codes,
 )
 
 BASES = ["A", "C", "G", "T"]
 
 
-@pytest.mark.basecalls
 def create_bases_df(reads):
     bases_df = pd.concat(
         [
@@ -30,7 +30,6 @@ def create_bases_df(reads):
     return bases_df
 
 
-@pytest.mark.basecalls
 def _create_read(read):
     data = []
     for cycle in range(len(read)):
@@ -42,7 +41,6 @@ def _create_read(read):
     return df
 
 
-@pytest.mark.basecalls
 def create_bases_array(reads):
     nreads = len(reads)
     ncycles = len(reads[0])
@@ -122,7 +120,7 @@ def test_metric_decode_coords():
     )
     codebook = xr.DataArray([[[1], [1]]], dims=["f", "t", "c"])
 
-    codes = image_to_codes(array)
+    codes = reshape_image_to_codes(array)
 
     argmin, distances, trace_norms, passes_filters = _decode_metric(
         array=codes, codebook=codebook, min_intensity=2, norm_order=2
@@ -155,11 +153,13 @@ def test_scale_factors():
     )
     codebook = np.array([[[0, 1], [1, 0]], [[0, 0], [1, 1]]])
     codebook = xr.DataArray(codebook, dims=["f", "t", "c"], coords=dict(f=["A", "B"]))
-
-    scale_factors = estimate_scale_factors(
+    codes = reshape_image_to_codes(
         xr.DataArray(values.reshape(2, 2, 1, 3), dims=["t", "c", "y", "x"]).expand_dims(
             "z", 2
-        ),
+        )
+    )
+    scale_factors = estimate_scale_factors(
+        codes,
         codebook,
         max_distance=0.5,
         min_intensity=1,
@@ -193,8 +193,10 @@ def test_scale_factors_multi_iter():
     codebook = np.array([[[0, 1], [1, 0]], [[0, 0], [1, 1]]])
     codebook = xr.DataArray(codebook, dims=["f", "t", "c"], coords=dict(f=["A", "B"]))
     scale_factors = estimate_scale_factors(
-        xr.DataArray(values.reshape(2, 2, 2, 2), dims=["t", "c", "y", "x"]).expand_dims(
-            "z", 2
+        reshape_image_to_codes(
+            xr.DataArray(
+                values.reshape(2, 2, 2, 2), dims=["t", "c", "y", "x"]
+            ).expand_dims("z", 2)
         ),
         codebook,
     )
@@ -250,7 +252,15 @@ def test_pixels():
     codebook = np.array([[[0, 1], [1, 0]], [[0, 0], [1, 1]]])  # A  # B
     codebook = xr.DataArray(codebook, dims=["f", "t", "c"], coords=dict(f=["A", "B"]))
     values = xr.DataArray(values, dims=["t", "c", "y", "x"]).expand_dims("z", 2)
-    df = decode_metric(values, codebook, norm_order=1)
+    df = decode_image(values, codebook, norm_order=1)
     assert len(df) == 2
     assert df.query('feature=="A"').iloc[0].area == 3
     assert df.query('feature=="B"').iloc[0].area == 1
+
+
+def test_barcodes_to_codebook():
+    barcodes = ["ACGG", "ACGT", "TGCA"]
+    features = ["1", "2", "3"]
+    encoding = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]])
+    encoding_bases = np.array(["A", "T", "C", "G"])
+    barcodes_to_codebook(barcodes, features, encoding, encoding_bases)

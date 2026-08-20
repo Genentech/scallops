@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scallops.io import read_image
+from scallops.io import (
+    read_experiment,
+    read_image,
+    reverse_complement_dna,
+)
 from scallops.reads import (
     annotated_spots,
     apply_channel_crosstalk_matrix,
@@ -17,6 +21,7 @@ from scallops.reads import (
     decode_max,
     peaks_to_bases,
 )
+from scallops.registration.crosscorrelation import align_image
 from scallops.segmentation.watershed import (
     segment_cells_watershed,
     segment_nuclei_watershed,
@@ -152,6 +157,108 @@ def test_correct_mismatches():
     pd.testing.assert_frame_equal(
         corrected_reads[expected_result.columns], expected_result
     )
+
+
+@pytest.mark.basecalls
+def test_dark_bases():
+    data_path = Path("scallops/tests/data/nis-seq")
+    bases = np.array(["A", "T", "C"])
+    paper_df = (
+        pd.read_csv(data_path / "results/test_NuclearSequences.txt", sep="\t")
+        .rename({"nucleus": "label"}, axis=1)
+        .set_index("label")
+    )
+
+    experiment = read_experiment(
+        data_path / "Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images",
+        "cycle{t}_{well}_time001_tile{tile}_channel{c}.tif",
+        group_by=("well", "tile"),
+    )
+    iss_image = experiment.images["C10-0040"].squeeze()
+    nuclei = (
+        read_image(
+            data_path
+            / "Fig1E_NIS_HeLa_tile40/NIS-Seq-cellpose-masks/nuclear_mask_cycle1_C10_time001_tile0040_channel02.tif"
+        )
+        .squeeze()
+        .data
+    )
+    df_barcode = pd.read_csv(
+        data_path / "NIS-Seq_Brunello_sgRNAs/Brunello_sgRNAs.txt",
+        sep="\t",
+        header=None,
+        names=["gene", "sequence"],
+    )
+    df_barcode["barcode"] = df_barcode["sequence"].map(reverse_complement_dna)
+    df_barcode["barcode"] = df_barcode["barcode"].str[0 : iss_image.sizes["t"]]
+
+    iss_image = align_image(
+        iss_image,
+        align_within_time_channels=None,
+        align_between_time_channel=0,  # Ensure we align all cycles
+        filter_percentiles=[0, 90],  # reduces potential noise during aligning
+    )
+    iss_image = iss_image.isel(c=[1, 2, 3])
+    loged = transform_log(iss_image)
+    std_arr = std(loged)
+    maxed = max_filter(loged, width=5)
+    peaks = find_peaks(std_arr)
+    bases_array = peaks_to_bases(maxed=maxed, peaks=peaks, labels=nuclei, bases=bases)
+    threshold_peaks_crosstalk_correction_df = peak_thresholds_from_bases(
+        bases_array=bases_array
+    )
+    threshold_peaks_crosstalk_correction = threshold_peaks_crosstalk_correction_df.iloc[
+        0
+    ]["threshold"]
+    w = channel_crosstalk_matrix(
+        bases_array.where(
+            bases_array.peak > threshold_peaks_crosstalk_correction, drop=True
+        )
+    )
+    corrected_bases_array = apply_channel_crosstalk_matrix(bases_array, w)
+    df_reads = decode_max(
+        corrected_bases_array, barcodes=df_barcode, dark_bases=[("G", [0, 1, 2], 0.2)]
+    )
+    peak_thresholds_lower_df = peak_thresholds_from_reads(
+        df_reads.query("barcode_match")
+    )
+    threshold_peaks = peak_thresholds_lower_df.iloc[0]["threshold"]
+    # filtering for paper:
+    # requiring the dominant sequence to make up more than two-thirds of total intensity of
+    # library spots in a given nucleus and the maximum signal intensity per nucleus across channels and
+    # sequencing cycles to pass a numeric threshold (7 × 105 for all cell types except 2 × 105 for iMacs)
+    df_labels = (
+        assign_barcodes_to_labels(df_reads.query(f"peak>{threshold_peaks}"))
+        .set_index("label")
+        .query("barcode_count_0/barcode_count > 0.66")
+    )
+    df_labels = df_labels.join(df_barcode.set_index("barcode"), on="barcode_0")
+    combined_df = paper_df.join(df_labels, rsuffix="_1")
+    combined_df["sequence"] = combined_df["sequence"].fillna("")
+    combined_df["sequence_1"] = combined_df["sequence_1"].fillna("")
+    n_common = (
+        (combined_df["sequence"] == combined_df["sequence_1"])
+        & (combined_df["sequence"] != "")
+    ).sum()
+    assert n_common >= 80
+
+    corrected_df_reads = correct_mismatches(
+        df_reads.query(f"peak>{threshold_peaks}"), df_barcode
+    )
+    df_labels = (
+        assign_barcodes_to_labels(corrected_df_reads)
+        .set_index("label")
+        .query("barcode_count_0/barcode_count > 0.66")
+    )
+    df_labels = df_labels.join(df_barcode.set_index("barcode"), on="barcode_0")
+    combined_df = paper_df.join(df_labels, rsuffix="_1")
+    combined_df["sequence"] = combined_df["sequence"].fillna("")
+    combined_df["sequence_1"] = combined_df["sequence_1"].fillna("")
+    n_common = (
+        (combined_df["sequence"] == combined_df["sequence_1"])
+        & (combined_df["sequence"] != "")
+    ).sum()
+    assert n_common >= 475
 
 
 @pytest.mark.basecalls
