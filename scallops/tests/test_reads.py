@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scallops.io import read_barcodes, read_image
+from scallops.io import (
+    read_experiment,
+    read_image,
+    reverse_complement_dna,
+)
 from scallops.reads import (
     annotated_spots,
     apply_channel_crosstalk_matrix,
@@ -157,36 +161,71 @@ def test_correct_mismatches():
 
 
 @pytest.mark.basecalls
-def test_dark_bases(experiment_c):
-    image = experiment_c.images["A1-102"]
-    image = align_image(
-        image,
-        align_within_time_channels=[1, 2, 3, 4],
-        align_between_time_channel=0,
-        filter_percentiles=[0, 90],
-    )
-    bases = ["G", "T", "A"]  # simulate C as dark base
-    image = image.isel(z=0, c=[1, 2, 3])
-    loged = transform_log(image)
-    std_arr = std(loged)
-    peaks = find_peaks(std_arr)
-    maxed = max_filter(loged)
-    bases_array = peaks_to_bases(
-        maxed=maxed,
-        peaks=peaks[peaks["peak"] >= 50],
-        # labels=array_A1_102_cells.squeeze().values,
-        bases=bases,
-    )
-    df_barcode = read_barcodes(
-        "scallops/tests/data/experimentC/barcodes.csv", image.t.values - 1
-    )
+def test_dark_bases():
+    data_path = Path("scallops/tests/data/nis-seq")
+    bases = np.array(["A", "T", "C"])
 
-    df_reads = decode_max(
-        bases_array, barcodes=df_barcode, dark_bases=[("C", [0, 1, 2], 0.2)]
+    experiment = read_experiment(
+        data_path / "Fig1E_NIS_HeLa_tile40/NIS-Seq-raw-images",
+        "cycle{t}_{well}_time001_tile{tile}_channel{c}.tif",
+        group_by=("well", "tile"),
     )
-    df_reads["label"] = 0
-    stats = read_statistics(df_reads)
-    assert stats["mapping_rate"] > 0.55
+    iss_image = experiment.images["C10-0040"].squeeze()
+    iss_image = align_image(
+        iss_image,
+        align_within_time_channels=None,  # Ensure we align all channels within a cycle
+        align_between_time_channel=0,  # Ensure we align all cycles
+        filter_percentiles=[0, 90],  # reduces potential noise during aligning
+    )
+    nuclei = (
+        read_image(
+            data_path
+            / "Fig1E_NIS_HeLa_tile40/NIS-Seq-cellpose-masks/nuclear_mask_cycle1_C10_time001_tile0040_channel02.tif"
+        )
+        .squeeze()
+        .data
+    )
+    df_barcode = pd.read_csv(
+        data_path / "NIS-Seq_Brunello_sgRNAs/Brunello_sgRNAs.txt",
+        sep="\t",
+        header=None,
+        names=["gene", "barcode"],
+    )
+    df_barcode["barcode"] = df_barcode["barcode"].map(reverse_complement_dna)
+    df_barcode["barcode"] = df_barcode["barcode"].str[0 : iss_image.sizes["t"]]
+
+    iss_image = iss_image.isel(c=[1, 2, 3])
+    loged = transform_log(iss_image)
+    std_arr = std(loged)
+    maxed = max_filter(loged, width=5)
+    peaks = find_peaks(std_arr)
+    bases_array = peaks_to_bases(maxed=maxed, peaks=peaks, labels=nuclei, bases=bases)
+    threshold_peaks_crosstalk_correction_df = peak_thresholds_from_bases(
+        bases_array=bases_array
+    )
+    threshold_peaks_crosstalk_correction = threshold_peaks_crosstalk_correction_df.iloc[
+        0
+    ]["threshold"]
+    w = channel_crosstalk_matrix(
+        bases_array.where(
+            bases_array.peak > threshold_peaks_crosstalk_correction, drop=True
+        )
+    )
+    corrected_bases_array = apply_channel_crosstalk_matrix(bases_array, w)
+    df_reads = decode_max(
+        corrected_bases_array, barcodes=df_barcode, dark_bases=[("G", [0, 1, 2], 0.2)]
+    )
+    peak_thresholds_lower_df = peak_thresholds_from_reads(
+        df_reads.query("barcode_match")
+    )
+    threshold_peaks = peak_thresholds_lower_df.iloc[0]["threshold"]
+
+    assert (
+        read_statistics(df_reads.query(f"peak>{threshold_peaks}"))[
+            "labels_with_mapped_reads"
+        ]
+        > 840
+    )
 
 
 @pytest.mark.basecalls
