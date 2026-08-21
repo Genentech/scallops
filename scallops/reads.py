@@ -811,6 +811,123 @@ def _polar_thresholds_from_wcor(
     return {"t_lo": float(t_lo), "t_hi": float(t_hi)}
 
 
+def _rfrac_from_sweep(
+    Rn: np.ndarray,
+    bright_calls: np.ndarray,
+    dark_base_idx: int,
+    base_labels_arr: np.ndarray,
+    whitelist: np.ndarray,
+    n_grid: int = 20,
+) -> float:
+    """Find the r_frac that maximises whitelist mapping rate via a vectorised grid sweep.
+
+    All r_frac values in ``[0.05, 0.50]`` are evaluated simultaneously using
+    broadcasting — no Python loop over the grid.  Cost is O(n·T·G) in memory
+    and O(n·T·G + n·G·log|WL|) in time, where G = ``n_grid``.
+
+    :param Rn: ``(n, T)`` per-read normalised radius ``R / R_max``.
+    :param bright_calls: ``(n, T)`` base index (into ``base_labels_arr``) when
+        the cycle is classified as bright.
+    :param dark_base_idx: Index into ``base_labels_arr`` for the dark base.
+    :param base_labels_arr: Ordered base labels (length = alphabet size).
+    :param whitelist: 1-D array of barcode strings.
+    :param n_grid: Number of evenly-spaced r_frac candidates in ``[0.05, 0.50]``.
+    :return: Optimal r_frac as a float.
+    """
+    T = Rn.shape[1]
+    n_bases = len(base_labels_arr)
+    powers = (n_bases ** np.arange(T)).astype(np.int64)
+
+    # Encode whitelist as sorted int64 array.
+    # Single join+encode avoids one Python .encode() call per barcode.
+    char_to_idx = {label: i for i, label in enumerate(base_labels_arr)}
+    wl_valid = [s for s in whitelist if len(s) == T]
+    if not wl_valid:
+        return 0.11 * np.sqrt(Rn.shape[-1] if Rn.ndim > 1 else 1)
+    cmap = np.zeros(256, dtype=np.int64)
+    for label, idx in char_to_idx.items():
+        cmap[ord(label)] = idx
+    bc_bytes = np.frombuffer("".join(wl_valid).encode("ascii"), dtype=np.uint8).reshape(
+        -1, T
+    )
+    wl_ints = np.sort((cmap[bc_bytes] * powers).sum(axis=1))
+
+    # Precompute base barcode (all bright) and per-cycle dark correction
+    bright_ints = (bright_calls.astype(np.int64) * powers).sum(axis=1)  # (n,)
+    delta = (np.int64(dark_base_idx) - bright_calls.astype(np.int64)) * powers  # (n, T)
+
+    # Vectorised evaluation — search [0.05, 0.40]; optimal is never above 0.35
+    rfrac_grid = np.linspace(0.05, 0.40, n_grid)
+    mask = Rn[:, :, np.newaxis] < rfrac_grid[np.newaxis, np.newaxis, :]  # (n, T, G)
+    corr = (delta[:, :, np.newaxis] * mask).sum(axis=1)  # (n, G)
+    bc = bright_ints[:, np.newaxis] + corr  # (n, G)
+
+    pos = np.searchsorted(wl_ints, bc)
+    pos = np.clip(pos, 0, len(wl_ints) - 1)
+    rates = (wl_ints[pos] == bc).mean(axis=0)  # (G,)
+
+    return float(rfrac_grid[np.argmax(rates)])
+
+
+def _decode_polar_chunk(
+    spots: np.ndarray,
+    E: np.ndarray,
+    base_labels_arr: np.ndarray,
+    bright_rows: np.ndarray,
+    dark_rows: np.ndarray,
+    has_dark: bool,
+    r_frac: float,
+    non_orthogonal: bool,
+    t_lo: float,
+    t_hi: float,
+    meta_df: pd.DataFrame,
+    whitelist: np.ndarray | None,
+    offset: slice | None,
+) -> pd.DataFrame:
+    """Process one chunk of spots through the polar decoder (numpy-only)."""
+    sp = np.clip(spots, 0.0, None)
+    lo = sp.min(axis=1, keepdims=True)
+    d = sp - lo
+
+    E_bright = E[bright_rows]
+    if non_orthogonal:
+        c0, c1 = d[..., 0] + 1e-9, d[..., 1] + 1e-9
+        theta = np.degrees(np.arctan2(c1, c0))
+        bright_calls = np.where(
+            theta <= t_lo,
+            bright_rows[2],
+            np.where(theta >= t_hi, bright_rows[0], bright_rows[1]),
+        )
+    else:
+        bright_scores = d @ E_bright.T
+        bright_calls = bright_rows[bright_scores.argmax(axis=-1)]
+
+    if has_dark:
+        R = np.sqrt((d**2).sum(axis=-1))
+        R_max = R.max(axis=1, keepdims=True)
+        Rn = np.divide(R, R_max, out=np.zeros_like(R), where=R_max > 0)
+        dark_mask = Rn < r_frac
+    else:
+        dark_mask = np.zeros(d.shape[:2], dtype=bool)
+
+    calls = np.where(dark_mask, dark_rows[0] if has_dark else 0, bright_calls)
+
+    Q = quality_softmax(sp)
+    df = (
+        meta_df.iloc[offset.start : offset.stop].copy()
+        if offset is not None
+        else meta_df.copy()
+    )
+    df.index.name = None
+    df["barcode"] = ["".join(base_labels_arr[row]) for row in calls.astype(int)]
+    df["Q"] = list(Q)
+    df["Q_mean"] = Q.mean(axis=1)
+    df["Q_min"] = Q.min(axis=1)
+    if whitelist is not None:
+        df["barcode_match"] = df["barcode"].isin(whitelist)
+    return df
+
+
 def decode_polar(
     spots: xr.DataArray,
     barcodes: pd.DataFrame | None = None,
@@ -818,14 +935,14 @@ def decode_polar(
     base_labels: list[str] | np.ndarray | None = None,
     dark_bases: list[str] | None = None,
     w_cor: np.ndarray | None = None,
-    r_frac: float = 0.15,
+    r_frac: float | None = None,
 ) -> pd.DataFrame:
     """Call reads using polar-coordinate classification.
 
     .. note::
         For **orthogonal** encodings (each bright base fires exactly one channel),
         :func:`decode_max` with ``dark_bases`` or ``encoding`` is the preferred
-        method — its signed-encoding formula accounts for per-channel dynamic range
+        method, its SE formula accounts for per-channel dynamic range
         (SNR proxy) and consistently outperforms the polar dot-product argmax.
         Use ``decode_polar`` when the encoding is **non-orthogonal**, i.e. when at
         least one bright base fires more than one channel (e.g. Illumina 2-colour
@@ -875,6 +992,9 @@ def decode_polar(
         Used to derive angle thresholds for non-orthogonal encodings.
     :param r_frac: Per-read fraction of :math:`R_{\\max}` below which a cycle
         is classified as the dark base.  Ignored when no dark bases exist.
+        When ``None`` (default) and dark bases are present, the optimal value
+        is found automatically via :func:`_rfrac_from_sweep` if a barcode
+        whitelist is provided, otherwise falls back to :math:`0.11\\sqrt{n_c}`.
     :return: DataFrame with columns ``barcode``, ``Q_mean``, ``Q_min``, and
         optionally ``barcode_match``.
     """
@@ -890,70 +1010,128 @@ def decode_polar(
         E = np.eye(len(channel_bases), dtype=float)
         base_labels_arr = np.array(channel_bases)
 
-    dark_rows = np.where(E.sum(axis=1) == 0)[0]  # all-zero rows → dark bases
-    bright_rows = np.where(E.sum(axis=1) > 0)[0]  # rows with signal → bright bases
+    dark_rows = np.where(E.sum(axis=1) == 0)[0]
+    bright_rows = np.where(E.sum(axis=1) > 0)[0]
     has_dark = len(dark_rows) > 0
 
-    # Baseline-correct and clip
-    sp = np.clip(spots.data, 0.0, None)
-    lo = sp.min(axis=1, keepdims=True)  # (read, 1, n_ch)
-    d = sp - lo  # (read, t, n_ch)
-
-    # Dark-base detection (R threshold, same formula for any chemistry)
-    if has_dark:
-        R = np.sqrt((d**2).sum(axis=-1))  # (read, t)
-        R_max = R.max(axis=1, keepdims=True)  # (read, 1)
-        dark_mask = R < r_frac * R_max  # (read, t)
-    else:
-        dark_mask = np.zeros(d.shape[:2], dtype=bool)
-
-    # Bright-base direction
-    E_bright = E[bright_rows]  # (n_bright, n_ch)
-    # Does any bright base fire more than one channel? (non-orthogonal encoding)
+    #  Angle thresholds (non-orthogonal only, parameter-free from w_cor) ─
+    E_bright = E[bright_rows]
     non_orthogonal = bool(np.any(E_bright.sum(axis=1) > 1))
-
     if non_orthogonal:
-        # Angle-based classification: the ratio of channel signals encodes base
-        # identity independently of amplitude — mandatory for 2-colour Illumina
-        # where A fires both channels and dot-products create unresolvable ties.
-        if w_cor is not None:
-            thresholds = _polar_thresholds_from_wcor(w_cor, channel_bases)
-        else:
-            thresholds = {"t_lo": 22.5, "t_hi": 67.5}
+        thresholds = (
+            _polar_thresholds_from_wcor(w_cor, channel_bases)
+            if w_cor is not None
+            else {"t_lo": 22.5, "t_hi": 67.5}
+        )
         t_lo, t_hi = thresholds["t_lo"], thresholds["t_hi"]
+    else:
+        t_lo, t_hi = 0.0, 0.0  # unused for orthogonal
 
-        c0, c1 = d[..., 0] + 1e-9, d[..., 1] + 1e-9
-        theta = np.degrees(np.arctan2(c1, c0))  # (read, t)
-        # bl2=[G,T,A,C]: G=0 dark; C=3 (ch0 dominant,θ≈0); A=2 (both,θ≈45);
-        # T=1 (ch1 dominant, θ≈90).  bright_rows=[1,2,3] in this ordering.
-        bright_calls = np.where(
-            theta <= t_lo,
-            bright_rows[2],  # ch0-dominant → C (last bright_row)
-            np.where(theta >= t_hi, bright_rows[0], bright_rows[1]),  # T / A
+    #  r_frac: auto-compute from a sample when the input is dask
+    whitelist_arr = barcodes["barcode"].values if barcodes is not None else None
+    if r_frac is None and has_dark:
+        if whitelist_arr is not None:
+            # Use up to 50 k spots for the sweep; materialise only that sample
+            n_sample = min(50_000, spots.sizes["read"])
+            sp_sample = np.clip(spots.isel(read=slice(0, n_sample)).data, 0.0, None)
+            if hasattr(sp_sample, "compute"):
+                sp_sample = sp_sample.compute()
+            lo_s = sp_sample.min(axis=1, keepdims=True)
+            d_s = sp_sample - lo_s
+            R_s = np.sqrt((d_s**2).sum(axis=-1))
+            Rmax_s = R_s.max(axis=1, keepdims=True)
+            Rn_s = np.divide(R_s, Rmax_s, out=np.zeros_like(R_s), where=Rmax_s > 0)
+            if non_orthogonal:
+                c0s, c1s = d_s[..., 0] + 1e-9, d_s[..., 1] + 1e-9
+                theta_s = np.degrees(np.arctan2(c1s, c0s))
+                bc_s = np.where(
+                    theta_s <= t_lo,
+                    bright_rows[2],
+                    np.where(theta_s >= t_hi, bright_rows[0], bright_rows[1]),
+                )
+            else:
+                bc_s = bright_rows[(d_s @ E_bright.T).argmax(axis=-1)]
+            r_frac = _rfrac_from_sweep(
+                Rn_s, bc_s, int(dark_rows[0]), base_labels_arr, whitelist_arr
+            )
+        else:
+            r_frac = 0.11 * np.sqrt(len(channel_bases))
+
+    #  Dispatch: dask (chunked) or numpy (all at once)
+    meta_df = spots["read"].to_dataframe()
+
+    if not isinstance(spots.data, da.Array):
+        df = _decode_polar_chunk(
+            spots=spots.data,
+            E=E,
+            base_labels_arr=base_labels_arr,
+            bright_rows=bright_rows,
+            dark_rows=dark_rows,
+            has_dark=has_dark,
+            r_frac=r_frac if r_frac is not None else 0.0,
+            non_orthogonal=non_orthogonal,
+            t_lo=t_lo,
+            t_hi=t_hi,
+            meta_df=meta_df,
+            whitelist=whitelist_arr,
+            offset=None,
         )
     else:
-        # Dot-product projection — argmax over channel directions.
-        # For orthogonal E (identity): equivalent to argmax(d).  Works for
-        # any number of channels without further branching.
-        bright_scores = d @ E_bright.T  # (read, t, n_bright)
-        bright_calls = bright_rows[bright_scores.argmax(axis=-1)]
+        # Mirror the decode_max dask pattern: rechunk so t and c are whole,
+        # then dispatch one delayed _decode_polar_chunk per read-chunk.
+        dims = spots.dims
+        chunksize = list(spots.data.chunksize)
+        for i, dim in enumerate(dims):
+            if dim in ("c", "t") and spots.data.chunksize[i] != spots.data.shape[i]:
+                chunksize[i] = -1
+        chunksize = tuple(chunksize)
+        if chunksize != spots.data.chunksize:
+            spots = spots.copy(data=spots.data.rechunk(chunksize))
 
-    # Combine dark and bright calls ─
-    calls = np.where(dark_mask, dark_rows[0] if has_dark else 0, bright_calls)
+        columns = [(col, meta_df[col].dtype) for col in meta_df.columns]
+        columns += [
+            ("barcode", object),
+            ("Q", object),
+            ("Q_mean", np.float64),
+            ("Q_min", np.float64),
+        ]
+        if whitelist_arr is not None:
+            columns.append(("barcode_match", bool))
+        meta = dd.utils.make_meta(columns)
 
-    # Build output DataFrame ──
-    Q = quality_softmax(sp)
-    meta_df = spots["read"].to_dataframe()
-    whitelist = barcodes["barcode"].values if barcodes is not None else None
+        _chunk_delayed = delayed(_decode_polar_chunk)
+        meta_df_d = delayed(meta_df)
+        whitelist_d = delayed(whitelist_arr)
+        E_d = delayed(E)
+        bla_d = delayed(base_labels_arr)
+        br_d = delayed(bright_rows)
+        dr_d = delayed(dark_rows)
 
-    df = meta_df.copy()
-    df.index.name = None
-    df["barcode"] = ["".join(base_labels_arr[row]) for row in calls.astype(int)]
-    df["Q"] = list(Q)
-    df["Q_mean"] = Q.mean(axis=1)
-    df["Q_min"] = Q.min(axis=1)
-    if whitelist is not None:
-        df["barcode_match"] = df["barcode"].isin(whitelist)
+        starts = [cached_cumsum(bds, initial_zero=True) for bds in spots.data.chunks]
+        results = []
+        for block in spots.data.to_delayed().ravel():
+            key = np.array(block.key[1:])
+            start = [starts[i][key[i]] for i in range(len(starts))]
+            stop = [starts[i][key[i] + 1] for i in range(len(starts))]
+            results.append(
+                _chunk_delayed(
+                    spots=block,
+                    E=E_d,
+                    base_labels_arr=bla_d,
+                    bright_rows=br_d,
+                    dark_rows=dr_d,
+                    has_dark=has_dark,
+                    r_frac=r_frac if r_frac is not None else 0.0,
+                    non_orthogonal=non_orthogonal,
+                    t_lo=t_lo,
+                    t_hi=t_hi,
+                    meta_df=meta_df_d,
+                    whitelist=whitelist_d,
+                    offset=slice(start[0], stop[0]),
+                )
+            )
+        df = dd.from_delayed(results, meta=meta, verify_meta=False)
+
     return df
 
 

@@ -265,10 +265,10 @@ def _create_reads_parser(subparsers, default_help):
         "--dark-bases",
         dest="dark_bases",
         default=None,
-        help="Single base that carries no fluorescent dye (e.g. 'G' for NIS-seq). "
-        "Enables signed-encoding (SE) basecalling via decode_max for orthogonal encodings, "
-        "or polar-coordinate basecalling via decode_polar when any bright base fires more "
-        "than one channel. When omitted, uses the legacy per-cycle softmax decoder.",
+        help="Single base carrying no fluorescent dye. For 3-channel SBS this is "
+        "auto-inferred as the GTAC member absent from --bases.  Required for "
+        "2-channel SBS where two GTAC members are absent and the dark base is "
+        "ambiguous (e.g. '--dark-bases G' for standard Illumina 2-colour).",
     )
     parser.add_argument(
         "--barcode-col",

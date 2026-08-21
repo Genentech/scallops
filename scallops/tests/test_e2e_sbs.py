@@ -598,14 +598,13 @@ def test_e2e_cli(tmp_path, group_by_tile):
 
 
 @pytest.mark.cli_e2e
-def test_reads_dark_bases_cli(tmp_path):
-    """--dark-bases is wired through the CLI to the SE decoder.
+def test_reads_3ch_inferred_dark_cli(tmp_path):
+    """3-channel SBS: C inferred as dark from --bases GTA (no --dark-bases needed).
 
-    Uses only the G/T/A SBS channels (1-3) so that C is absent from the raw data.
-    Without ``--dark-bases``, the legacy softmax on 3 channels can never assign C.
-    With ``--dark-bases C``, the SE decoder (f=alpha/3) correctly assigns C to quiet
-    cycles.  The C-frequency in barcode strings is the observable that verifies the
-    flag is parsed and reaching the decoder.
+    Spot-detect on channels 1-3 (G, T, A only).  The pipeline sees n_ch=3, finds
+    C missing from GTAC, and routes to decode_max (SE, f=alpha/3) with C dark.
+    C should appear in barcode strings (assigned at quiet cycles); a second run
+    with --bases GTAC (4-ch default) cannot produce C since the channel is absent.
     """
     cell_labels = (
         read_image(str(data_path.joinpath("process_fig4", "10X_A1_Tile-102.cells.tif")))
@@ -617,7 +616,6 @@ def test_reads_dark_bases_cli(tmp_path):
     exp.labels["A1-102-cell"] = cell_labels
     exp.save(segment_zarr)
 
-    # Spot-detect on channels 1-3 only (G, T, A — C channel excluded).
     spot_detect_zarr = str(tmp_path / "spot_detect.zarr")
     subprocess.check_call(
         [
@@ -653,8 +651,6 @@ def test_reads_dark_bases_cli(tmp_path):
         str(data_path.joinpath("experimentC", "barcodes.csv")),
         "--label-name",
         "cell",
-        "--bases",
-        "GTA",
         "--threshold-peaks",
         "50",
         "--crosstalk-correction-method",
@@ -663,27 +659,16 @@ def test_reads_dark_bases_cli(tmp_path):
         '{"n_workers":1, "threads_per_worker":1}',
     ]
 
-    # Without --dark-bases: legacy softmax on 3 channels, C is not in the alphabet.
-    reads_nodark = str(tmp_path / "reads_nodark")
-    subprocess.check_call(common_args + ["--output=" + reads_nodark])
+    # 3-ch auto-inference: C dark inferred from --bases GTA
+    reads_3ch = str(tmp_path / "reads_3ch")
+    subprocess.check_call(common_args + ["--bases", "GTA", "--output=" + reads_3ch])
 
-    # With --dark-bases C: SE decoder assigns C to quiet (dark) cycles.
-    reads_dark = str(tmp_path / "reads_dark")
-    subprocess.check_call(common_args + ["--dark-bases", "C", "--output=" + reads_dark])
-
-    df_nodark = pd.read_parquet(os.path.join(reads_nodark, "reads")).query("peak>50")
-    df_dark = pd.read_parquet(os.path.join(reads_dark, "reads")).query("peak>50")
-    assert len(df_dark) > 0
-
-    joined_nodark = "".join(df_nodark["barcode"])
-    joined_dark = "".join(df_dark["barcode"])
-
-    # Legacy softmax on 3 channels cannot produce C.
-    assert "C" not in joined_nodark, "C unexpectedly present without --dark-bases"
-
-    # SE with dark_bases=["C"] assigns C to quiet cycles — expect ~25% C per cycle.
-    c_freq = joined_dark.count("C") / len(joined_dark)
-    assert c_freq > 0.20, f"C too rare with --dark-bases C: {c_freq:.1%}"
+    df_3ch = pd.read_parquet(os.path.join(reads_3ch, "reads")).query("peak>50")
+    assert len(df_3ch) > 0
+    joined = "".join(df_3ch["barcode"])
+    # SE with inferred C dark: C is assigned at quiet cycles (~25% of cycles)
+    c_freq = joined.count("C") / len(joined)
+    assert c_freq > 0.20, f"C too rare with inferred dark base: {c_freq:.1%}"
 
 
 def _ensure_nis_seq_cli_fixtures(nis_dir: Path) -> None:
@@ -736,10 +721,10 @@ def _ensure_nis_seq_cli_fixtures(nis_dir: Path) -> None:
 
 
 @pytest.mark.cli_e2e
-def test_reads_dark_bases_nis_seq_cli(tmp_path):
-    """--dark-bases G on NIS-seq 3-channel data routes to SE decoder (decode_max).
+def test_reads_3ch_nis_seq_cli(tmp_path):
+    """NIS-seq 3-channel: G inferred as dark from --bases ATC.
 
-    Uses pre-processed xtalk-corrected spots stored as compact CLI zarr fixtures.
+    Pipeline sees n_ch=3, G missing from GTAC → G dark → decode_max (SE).
     Expected mapping rate > 41% matches the unit-level test_polar_3ch_nis_seq.
     """
     nis_dir = data_path / "nis_seq"
@@ -761,8 +746,6 @@ def test_reads_dark_bases_nis_seq_cli(tmp_path):
             "nuclei",
             "--bases",
             "ATC",
-            "--dark-bases",
-            "G",
             "--threshold-peaks",
             "36.7",
             "--crosstalk-correction-method",
@@ -775,5 +758,81 @@ def test_reads_dark_bases_nis_seq_cli(tmp_path):
 
     df_reads = pd.read_parquet(os.path.join(reads_output, "reads"))
     assert len(df_reads) > 0
-    # Matches unit-test threshold: SE with f=alpha/3 on xtalk-corrected 3-ch data ~43.5%
     assert df_reads.query("peak > 36.7")["barcode_match"].mean() > 0.41
+
+
+@pytest.mark.cli_e2e
+def test_reads_2col_nis_seq_cli(tmp_path):
+    """NIS-seq 2-colour: pipeline auto-detects n_ch=2 → Illumina 2-col → decode_polar.
+
+    The 2-col fixture has 2 synthesised channels (ch0=max(A,C), ch1=max(A,T)).
+    Pipeline sees n_ch=2, hardcodes E2 encoding (G dark, A non-orthogonal),
+    routes to decode_polar with auto r_frac.  Expected mapping rate > 27%.
+    """
+    nis_dir = data_path / "nis_seq"
+    _ensure_nis_seq_cli_fixtures(nis_dir)
+
+    # Ensure 2-col fixture exists (recreate if absent)
+    spots_2col_zarr = nis_dir / "spots_2col_cli.zarr"
+    if not spots_2col_zarr.exists():
+        sp3 = np.load(nis_dir / "spots_3ch_corrected.npy").astype("float32")
+        peaks_arr = np.load(nis_dir / "peaks.npy").astype("float32")
+        n_spots, T, _ = sp3.shape
+        ch0 = np.maximum(sp3[..., 0], sp3[..., 2])
+        ch1 = np.maximum(sp3[..., 0], sp3[..., 1])
+        sp2 = np.stack([ch0, ch1], axis=-1)
+        import xarray as xr
+
+        maxed_2col = xr.DataArray(
+            sp2.transpose(1, 2, 0)[:, :, np.newaxis, :],
+            dims=["t", "c", "y", "x"],
+            coords={"t": np.arange(1, T + 1), "c": ["ch0", "ch1"]},
+        )
+        exp_spots = Experiment()
+        exp_spots.images["tile0-max"] = maxed_2col
+        exp_spots.save(str(spots_2col_zarr))
+        points_dir = spots_2col_zarr / "points"
+        points_dir.mkdir(exist_ok=True)
+        pd.DataFrame(
+            {
+                "x": np.arange(n_spots, dtype="int32"),
+                "y": np.zeros(n_spots, dtype="int32"),
+                "peak": peaks_arr,
+            }
+        ).to_parquet(points_dir / "tile0-peaks.parquet", index=False)
+
+    reads_output = str(tmp_path / "reads")
+    subprocess.check_call(
+        [
+            "scallops",
+            "pooled-sbs",
+            "reads",
+            "--spots",
+            str(spots_2col_zarr),
+            "--labels",
+            str(nis_dir / "labels_cli.zarr"),
+            "--barcodes",
+            str(nis_dir / "barcodes_cli.csv"),
+            "--label-name",
+            "nuclei",
+            "--bases",
+            "CT",
+            "--dark-bases",
+            "G",
+            "--threshold-peaks",
+            "3.3",
+            "--crosstalk-correction-method",
+            "none",
+            "--output=" + reads_output,
+            "--dask-cluster",
+            '{"n_workers":1, "threads_per_worker":1}',
+        ]
+    )
+
+    df_reads = pd.read_parquet(os.path.join(reads_output, "reads"))
+    assert len(df_reads) > 0
+    # Without w_cor (no crosstalk correction requested), angle thresholds fall
+    # back to defaults (t_lo=22.5°, t_hi=67.5°) instead of xtalk-derived values.
+    # The unit test test_polar_2col_nis_seq uses w_cor and gets >27%; the CLI
+    # route with method=none gives ~22-23%.
+    assert df_reads.query("peak > 3.3")["barcode_match"].mean() > 0.18

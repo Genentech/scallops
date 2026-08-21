@@ -348,9 +348,7 @@ def test_polar_3ch_nis_seq():
             "x": ("read", np.zeros(n_spots, int)),
         },
     )
-    df_reads = decode_polar(
-        spots_xa, barcodes=df_bcn, dark_bases=["G"], w_cor=w3, r_frac=0.2
-    )
+    df_reads = decode_polar(spots_xa, barcodes=df_bcn, dark_bases=["G"], w_cor=w3)
     stats = read_statistics(df_reads.query(f"peak>{thr_r3}"))
     n_nuc = int(labels_arr.max())
     assert stats["mapping_rate"] > 0.41  # notebook: ~43.5%
@@ -399,7 +397,6 @@ def test_polar_2col_nis_seq():
         encoding=E2,
         base_labels=["G", "T", "A", "C"],
         w_cor=w3,
-        r_frac=0.15,
     )
     stats = read_statistics(df_reads.query(f"peak>{thr_r2}"))
     n_nuc = int(labels_arr.max())
