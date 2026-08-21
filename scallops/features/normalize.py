@@ -466,7 +466,7 @@ def typical_variation_normalization(
     """
     # Adapted from EFAAR_benchmarking <https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/efaar.py>_
     X = data.X
-    xp = get_namespace(X)
+
     reference_indices = data.obs.index.get_indexer_for(
         data.obs.query(reference_query).index
     )
@@ -481,7 +481,11 @@ def typical_variation_normalization(
         local_zscore=False,
     )
     d = PCA(**pca_kwargs if pca_kwargs is not None else {})
-    X = d.fit(X[reference_indices]).transform(X)
+    x_ref = X[reference_indices]
+    if isinstance(x_ref, da.Array):
+        x_ref = x_ref.compute()
+    X = d.fit(x_ref).transform(X)
+    xp = get_namespace(x_ref)  # TODO use dask?
     components_ = d.components_
     mean_ = d.mean_
     variance_ratio = d.explained_variance_ratio_
