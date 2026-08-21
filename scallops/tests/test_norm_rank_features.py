@@ -29,21 +29,9 @@ def client():
 
 
 @pytest.fixture
-def data():
-    df = pd.DataFrame(
-        data=dict(
-            label=np.arange(6),
-            Cells_Intensity_feature_1=[1, 2, 4, 8, 16, 32],
-            Cells_Intensity_feature_2=[10, 20, 40, 80, 160, 320],
-            gene_symbol=["a", "NTC", "a", "NTC", "a", "NTC"],
-            well=["a", "a", "a", "b", "b", "b"],
-            plate=["a", "a", "a", "b", "b", "b"],
-            Nuclei_AreaShape_Center_Y=[1, 7, 12, 16, 19, 21],
-            Nuclei_AreaShape_Center_X=[1, 7, 12, 16, 19, 21],
-        ),
-    )
+def data(test_feature_table):
     return pandas_to_anndata(
-        df, ["Cells_Intensity_feature_1", "Cells_Intensity_feature_2"]
+        test_feature_table, ["Cells_Intensity_feature_1", "Cells_Intensity_feature_2"]
     )
 
 
@@ -88,6 +76,7 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
         if robust:
             mean = np.median(ref_values, axis=1)
             std = median_abs_deviation(ref_values, axis=1, scale="normal")
+
         else:
             mean = np.mean(ref_values, axis=1)
             std = np.std(ref_values, axis=1)
@@ -95,28 +84,44 @@ def _diff_values(ds, normed_data, normalize, robust, reference, scaling, n_neigh
 
     if scaling:
         values = values / std
-    np.testing.assert_array_equal(
+
+    np.testing.assert_allclose(
         values,
-        normed_data.X,
-        err_msg="Not equal",
+        _slice_anndata(normed_data, ds.obs.index).X,
+        rtol=2.07703709e-15,
+        atol=2.22044605e-15,
+        err_msg="Expected values not equal",
     )
 
 
 def _compare_anndata(data1: anndata.AnnData, data2: anndata.AnnData):
-    np.testing.assert_array_equal(data1.X, data2.X)
-    np.testing.assert_array_equal(data1.X, data2.X)
+    data2 = _slice_anndata(data2, data1.obs.index)
+
+    np.testing.assert_allclose(
+        data1.X,
+        data2.X,
+        rtol=2.07703709e-16,
+        atol=2.22044605e-16,
+        err_msg="Expected values not equal",
+    )
     pd.testing.assert_frame_equal(data1.obs, data2.obs)
     pd.testing.assert_frame_equal(data1.var, data2.var)
 
 
-@pytest.mark.parametrize("normalize", ["zscore", "local-zscore", "nn-zscore"])
+@pytest.mark.parametrize("normalize", ["zscore", "local-zscore"])
 @pytest.mark.parametrize("reference", ["gene_symbol=='NTC'", None])
 @pytest.mark.parametrize("robust", [True, False])
 @pytest.mark.parametrize("by", [["plate", "well"], None])
+@pytest.mark.parametrize("sort", ["well", None])
 @pytest.mark.features
-def test_norm_features(client, data, normalize, by, robust, reference, tmp_path):
-    n_neighbors = 2 if by is None else 1
+def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp_path):
+    if sort is not None:
+        data = _slice_anndata(data, data.obs.sort_values(sort).index)
+    n_neighbors = 3
+    if by is not None and reference is not None:
+        n_neighbors = 1
     scaling = n_neighbors > 1
+
     normed_data = normalize_features(
         data,
         reference_query=reference,
@@ -126,7 +131,36 @@ def test_norm_features(client, data, normalize, by, robust, reference, tmp_path)
         n_neighbors=n_neighbors,
         scaling=scaling,
     )
-    if normalize in ("nn-zscore", "local-zscore"):
+    if by is not None:
+        indices = data.obs.groupby(by).indices
+        for name in indices:
+            query = []
+            for i in range(len(by)):
+                query.append(f"{by[i]}=='{name[i]}'")
+
+            _diff_values(
+                ds=_slice_anndata(data, indices[name]),
+                normed_data=_slice_anndata(
+                    normed_data, normed_data.obs.query("&".join(query)).index
+                ),
+                normalize=normalize,
+                robust=robust,
+                reference=reference,
+                scaling=scaling,
+                n_neighbors=n_neighbors,
+            )
+
+    else:
+        _diff_values(
+            ds=data,
+            normed_data=normed_data,
+            normalize=normalize,
+            robust=robust,
+            reference=reference,
+            scaling=scaling,
+            n_neighbors=n_neighbors,
+        )
+    if normalize == "local-zscore":
         normed_data2 = normalize_features(
             data,
             reference_query=reference,
@@ -140,7 +174,7 @@ def test_norm_features(client, data, normalize, by, robust, reference, tmp_path)
         _compare_anndata(normed_data, normed_data2)
 
     dask_data = anndata.AnnData(
-        X=da.from_array(data.X, chunks=(1, 2)), obs=data.obs, var=data.var
+        X=da.from_array(data.X, chunks=(1, 1)), obs=data.obs, var=data.var
     )
 
     normed_data_dask = normalize_features(
@@ -153,7 +187,7 @@ def test_norm_features(client, data, normalize, by, robust, reference, tmp_path)
         scaling=scaling,
     )
     normed_data_dask.X = normed_data_dask.X.compute()
-    if normalize in ("nn-zscore", "local-zscore"):
+    if normalize == "local-zscore":
         normed_data_dask2 = normalize_features(
             dask_data,
             reference_query=reference,
@@ -174,29 +208,6 @@ def test_norm_features(client, data, normalize, by, robust, reference, tmp_path)
         normed_data_dask, normed_data_dask.obs.sort_values("label").index
     )
     _compare_anndata(normed_data, normed_data_dask)
-
-    if by is not None:
-        indices = data.obs.groupby(by).indices
-        for name in indices:
-            query = []
-            for i in range(len(by)):
-                query.append(f"{by[i]}=='{name[i]}'")
-
-            _diff_values(
-                _slice_anndata(data, indices[name]),
-                _slice_anndata(
-                    normed_data, normed_data.obs.query("&".join(query)).index
-                ),
-                normalize,
-                robust,
-                reference,
-                scaling,
-                n_neighbors,
-            )
-    else:
-        _diff_values(
-            data, normed_data, normalize, robust, reference, scaling, n_neighbors
-        )
 
 
 @pytest.mark.parametrize("by", [None, ["well"]])
@@ -338,17 +349,22 @@ def test_agg_features(by, weighted, agg_func, use_dask):
         agg_d.X = agg_d.X.compute()
     assert agg_d.shape == (2, 2)
     agg_df = agg_d.to_df().join(agg_d.obs).sort_values("pert").drop("count", axis=1)
-    pd.testing.assert_frame_equal(result_df[agg_df.columns], agg_df)
+    pd.testing.assert_frame_equal(
+        result_df[agg_df.columns].reset_index(drop=True), agg_df.reset_index(drop=True)
+    )
 
 
+@pytest.mark.parametrize("use_dask", [True, False])
 @pytest.mark.features
-def test_typical_variation_normalization():
+def test_typical_variation_normalization(use_dask):
     d = anndata.AnnData(
         X=np.arange(64).reshape((32, 2)),
         obs=pd.DataFrame(
             data=dict(pert=["1", "2"] * 16, batch=["1", "2", "2", "1"] * 8)
         ),
     )
+    if use_dask:
+        d.X = da.from_array(d.X).rechunk((16, 2))
     # from efaar_benchmarking.efaar import tvn_on_controls
 
     # ref_tvn = tvn_on_controls(

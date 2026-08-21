@@ -13,7 +13,6 @@ from anndata.typing import Index
 from pandas.core.computation.parsing import BACKTICK_QUOTED_STRING, tokenize_string
 
 from scallops.features.constants import _metadata_columns_whitelist_str
-from scallops.io import read_anndata_zarr
 
 logger = logging.getLogger("scallops")
 
@@ -184,33 +183,6 @@ def _join_metadata(
         join_df = join_df.compute()
     join_df = join_df.set_index(on)
     data.obs = data.obs.join(join_df, on=on)
-
-
-def _read_data(
-    paths: Sequence[str] | str, features: Sequence[str] | None = None
-) -> anndata.AnnData:
-    if isinstance(paths, str):
-        paths = [paths]
-    assert len(paths) == len(set(paths)), "Duplicate path"
-    data_arrays = []
-    for path in paths:
-        if path.lower().endswith(".parquet") or path.lower().endswith(".pq"):
-            df = pd.read_parquet(path)
-            d = pandas_to_anndata(df, features)
-        else:
-            d = read_anndata_zarr(path, dask=True)
-            if features is not None and len(features) > 0:
-                d = d[:, features]
-        data_arrays.append(d)
-    if len(data_arrays) == 0:
-        raise RuntimeError("No data found.")
-
-    data = (
-        data_arrays[0]
-        if len(data_arrays) == 1
-        else anndata.concat(data_arrays, index_unique="-")
-    )
-    return data
 
 
 def _get_names_from_pd_query(source) -> set[str]:

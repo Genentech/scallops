@@ -114,16 +114,15 @@ def agg_features(
         index=groups,
     )
     obs = result.coords["obs"].to_dataframe()
-    obs = obs.join(group_counts, rsuffix="_1").reset_index(drop=True)
+    obs = obs.join(group_counts, rsuffix="_1")
+    # both index and column set
     if group_by_multi:
-        new_obs = pd.DataFrame(obs["obs"].tolist(), columns=by)
-        for c in obs.columns:
-            if c.startswith("count") and c not in new_obs.columns:
-                new_obs[c] = obs[c]
-        obs = new_obs
+        obs[by] = obs["obs"].apply(pd.Series)
+        obs.index = obs["obs"].map(lambda x: "-".join(map(str, x)))
+        obs = obs.drop("obs", axis=1)
     else:
         obs = obs.rename({"obs": by}, axis=1)
-    obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
+
     return anndata.AnnData(
         X=X,
         obs=obs,

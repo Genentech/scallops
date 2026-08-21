@@ -9,17 +9,29 @@ Authors:
 """
 
 import logging
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Hashable, Mapping
+from importlib.metadata import version
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import dask
 import dask.array as da
 import fsspec
+import h5py
 import numpy as np
 import ome_types
 import xarray as xr
 import zarr
+from anndata._core.views import DaskArrayView
+from anndata._io.specs import _REGISTRY
+from anndata._io.specs.methods import (
+    suppress_autoshard_warning,
+    zarr_v3_compressor_compat,
+    zarr_v3_sharding,
+)
+from anndata._io.specs.registry import IOSpec, Writer
+from anndata.compat import DaskArray
 from dask.array import from_zarr
 from dask.delayed import Delayed
 from dask.graph_manipulation import bind
@@ -29,6 +41,7 @@ from ome_zarr.format import Format, FormatV04
 from ome_zarr.io import parse_url
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image, write_multiscale
+from packaging.version import Version
 from xarray.core.coordinates import DataArrayCoordinates
 from zarr.storage import StoreLike
 
@@ -73,17 +86,6 @@ def _get_store_path(group: zarr.Group):
     if hasattr(group.store, "path"):
         return group.store.path
     return ""
-
-
-def is_anndata_zarr(store: StoreLike) -> bool:
-    """Determines whether store is an AnnData Zarr .
-
-    :param store: Zarr store
-    """
-    try:
-        return isinstance(zarr.open(store, mode="r", path="layers"), zarr.Group)
-    except:  # noqa: E722
-        return False
 
 
 def is_ome_zarr_array(node: zarr.Group) -> bool:
@@ -899,3 +901,33 @@ class _LazyLoadZarrData(_LazyLoadData):
         if self._data is None:
             self._data = read_ome_zarr_array(self._group, self._dask)
         return self._data
+
+
+@_REGISTRY.register_write(zarr.Group, DaskArrayView, IOSpec("array", "0.2.0"))
+@_REGISTRY.register_write(zarr.Group, DaskArray, IOSpec("array", "0.2.0"))
+@suppress_autoshard_warning
+def write_basic_dask_dask_dense(
+    f: zarr.Group | h5py.Group,
+    k: str,
+    elem: DaskArray,
+    *,
+    _writer: Writer,
+    dataset_kwargs: Mapping[str, Any] = MappingProxyType({}),
+):
+    # https://github.com/scverse/anndata/pull/2584
+    import dask.array as da
+
+    dataset_kwargs = dict(dataset_kwargs)
+    if isinstance(f, h5py.Group):
+        g = f.require_dataset(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
+    else:
+        dataset_kwargs = zarr_v3_compressor_compat(dataset_kwargs)
+        with zarr_v3_sharding(
+            dataset_kwargs, format=f.metadata.zarr_format
+        ) as dataset_kwargs:
+            g = f.require_array(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
+    # use threaded scheduler with dask<=2025.3.0 avoid "Could not serialize object of type HighLevelGraph" error
+    if isinstance(f, h5py.Group) or Version(version("dask")) <= Version("2025.3.0"):
+        da.store(elem, g, scheduler="threads")
+    else:
+        da.store(elem, g)
