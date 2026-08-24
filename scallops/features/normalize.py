@@ -74,7 +74,7 @@ def normalize_features(
     mad_scale = _convert_scale(mad_scale)
     centroid_column_names = list(centroid_column_names)
     is_dask = isinstance(data.X, da.Array)
-    has_sorted_groups = False
+    use_map_blocks = False
     if by is not None:
         by_multi = not isinstance(by, str) and isinstance(by, Sequence)
         if by_multi:
@@ -87,7 +87,7 @@ def normalize_features(
             data.obs[by].apply(tuple, axis=1) if by_multi else data.obs[by].values
         )
         series = pd.Series(by_values, dtype="category")
-        has_sorted_groups = (
+        use_map_blocks = (
             is_dask and len(data.X.chunks[0]) > 1 and _issorted(series.cat.codes.values)
         )
         if normalize != "zscore":
@@ -210,21 +210,20 @@ def normalize_features(
                 obsm=data.obsm.copy(),
                 varm=data.varm.copy(),
             )
-    indices = [] if has_sorted_groups else None
-    results = [] if not has_sorted_groups else None
-    obs_list = [] if not has_sorted_groups else None
+    indices = [] if use_map_blocks else None
+    results = [] if not use_map_blocks else None
+    obs_list = [] if not use_map_blocks else None
     for key in group_indices.keys():
-        group_indices_ = None
         if by is not None:
             group_indices_ = group_indices[key]
-            if not has_sorted_groups:
+            if not use_map_blocks:
                 array_subset = group_indices_
                 if np.all(np.diff(group_indices_) == 1):
                     array_subset = slice(group_indices_[0], group_indices_[-1] + 1)
                 x = data.X[array_subset]
             df = data.obs.iloc[group_indices_]
         else:
-            if not has_sorted_groups:
+            if not use_map_blocks:
                 x = data.X
             df = data.obs
 
@@ -241,27 +240,27 @@ def normalize_features(
                 if local_reference_indices is not None
                 else query_coordinates
             )
-            nn_indices = _nearest_neighbors_indices(
+            reference_indices = _nearest_neighbors_indices(
                 query=query_coordinates,
                 reference=reference_coordinates,
                 n_neighbors=n_neighbors,
                 metric=neighbors_metric,
             )
-            if has_sorted_groups:
+            if use_map_blocks:
                 if local_reference_indices is not None:
-                    nn_indices = local_reference_indices[nn_indices]
-                indices.append(nn_indices)
+                    reference_indices = local_reference_indices[reference_indices]
+                indices.append(reference_indices)
             else:
                 if local_reference_indices is not None:
-                    nn_indices = local_reference_indices[nn_indices]
+                    reference_indices = local_reference_indices[reference_indices]
                 if is_dask:
-                    nn_indices = da.from_array(nn_indices)
+                    reference_indices = da.from_array(reference_indices, chunks=-1)
 
                 # memory = (x.shape[0] * x.shape[1] * n_neighbors) / batch_size + (x.shape[0] * x.shape[1])
                 # memory *= 8
                 result = _local_z_batched(
                     x=x,
-                    nn_indices=nn_indices,  # indices into x
+                    reference_indices=reference_indices,  # indices into x
                     robust=robust,
                     mad_scale=mad_scale,
                     centering=centering,
@@ -271,7 +270,7 @@ def normalize_features(
                 )
 
         # else:
-        #     if has_sorted_groups:
+        #     if use_map_blocks:
         #         if global_reference_indices is not None:
         #             indices.append(global_reference_indices)
         #     else:
@@ -289,11 +288,11 @@ def normalize_features(
         #             local_zscore=False,
         #         )
 
-        if not has_sorted_groups:
+        if not use_map_blocks:
             results.append(result)
             obs_list.append(df)
 
-    if has_sorted_groups:
+    if use_map_blocks:
         rechunked_data = rechunk_for_blockwise(data.X, 0, series.cat.codes.values)[1]
         indices = np.concatenate(indices, axis=0)
         chunks = [(rechunked_data.chunks[0])]
@@ -333,7 +332,7 @@ def normalize_features(
 
 def _local_z_batched(
     x: np.ndarray | da.Array,
-    nn_indices: np.ndarray | da.Array,
+    reference_indices: np.ndarray | da.Array,
     scaling: bool = True,
     centering: bool = True,
     max_value: float | None = None,
@@ -352,18 +351,18 @@ def _local_z_batched(
     tqdm, progress_args = tqdm_func(progress)
     for batch in tqdm(range(0, x.shape[0], batch_size), **progress_args):
         sl = slice(batch, batch + batch_size)
-        nn_indices_ = nn_indices[sl]
+        reference_indices_ = reference_indices[sl]
         x_ = x[sl]
         if isinstance(x, da.Array):
-            n_labels = nn_indices_.shape[0]
-            n_neighbors = nn_indices_.shape[1]
-            nn_indices_ = nn_indices_.flatten()
-            if not isinstance(nn_indices_, da.Array):
-                nn_indices_ = da.from_array(nn_indices_)
+            n_labels = reference_indices_.shape[0]
+            n_neighbors = reference_indices_.shape[1]
+            reference_indices_ = reference_indices_.flatten()
+            if not isinstance(reference_indices_, da.Array):
+                reference_indices_ = da.from_array(reference_indices_)
             # (labels,neighbors,features)
-            reference_data_ = x[nn_indices_].reshape((n_labels, n_neighbors, -1))
+            reference_data_ = x[reference_indices_].reshape((n_labels, n_neighbors, -1))
         else:
-            reference_data_ = x[nn_indices_]
+            reference_data_ = x[reference_indices_]
         result = _normalize_features_array(
             values=x_,
             # reference_indices=reference_data_,
@@ -373,7 +372,7 @@ def _local_z_batched(
             centering=centering,
             scaling=scaling,
             max_value=max_value,
-            local_zscore=nn_indices is not None,
+            local_zscore=reference_indices is not None,
         )
         result_arrays.append(result)
     return (
