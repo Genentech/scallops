@@ -490,7 +490,15 @@ def typical_variation_normalization(
     mean_ = d.mean_
     variance_ratio = d.explained_variance_ratio_
     variance = d.explained_variance_
-
+    uns = {
+        "pca": {
+            "variance_ratio": variance_ratio,
+            "variance": variance,
+            "mean": mean_,
+            "PCs": components_,
+        }
+    }
+    del d
     if by is not None:
         group_to_indices = data.obs.groupby(by, observed=True, sort=False).indices
         for group in group_to_indices.keys():
@@ -544,12 +552,5 @@ def typical_variation_normalization(
         X=X,
         obs=data.obs.copy(),
         var=data.var.copy(),
-        uns={
-            "pca": {
-                "variance_ratio": variance_ratio,
-                "variance": variance,
-                "mean": mean_,
-                "PCs": components_,
-            }
-        },
+        uns=uns,
     )
