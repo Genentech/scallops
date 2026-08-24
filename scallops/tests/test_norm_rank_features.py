@@ -462,8 +462,9 @@ def test_typical_variation_normalization(use_dask):
         atol=0.18,
     )
     np.testing.assert_allclose(
-        result_batch.X,
+        result_batch[d.obs.index].X,
         ref_tvn_batch,
         rtol=3.16,
         atol=0.18,
+        err_msg="Not equal by batch",
     )
