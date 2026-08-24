@@ -6,17 +6,17 @@ import anndata
 import dask.array as da
 import numpy as np
 import pandas as pd
-import scipy
 import xarray as xr
 from anndata._core.index import _normalize_index
 from array_api_compat import get_namespace
 from flox import rechunk_for_blockwise
 from flox.lib import _issorted
+from scipy.linalg import fractional_matrix_power
 from scipy.stats import median_abs_deviation
 from sklearn.neighbors import NearestNeighbors
 
 from scallops.features.decomposition import PCA
-from scallops.features.util import _slice_anndata
+from scallops.features.util import _get_names_from_pd_query, _slice_anndata
 from scallops.utils import tqdm_func
 
 logger = logging.getLogger("scallops")
@@ -492,28 +492,46 @@ def typical_variation_normalization(
         and the covariance matrix of each group of negative controls as the source.
     """
     # Adapted from EFAAR_benchmarking <https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/efaar.py>_
-    X = data.X
-    reference_indices = data.obs.index.get_indexer_for(
-        data.obs.query(reference_query).index
-    )
-    X = _normalize_features_array(
-        X,
-        reference_values=X[reference_indices],
-        robust=False,
-        mad_scale="normal",
-        centering=True,
-        scaling=True,
-        max_value=None,
-        local_zscore=False,
-    )
+
+    columns = _get_names_from_pd_query(reference_query)
+    columns = [c for c in columns if c in data.obs.columns]
+
+    if by is not None:
+        by = _trim_by(by)
+        by_values = _xarray_by_values(data, by)
+        coords = dict(obs=by_values)
+        coords["index"] = ("obs", data.obs.index.values)
+
+        for c in columns:
+            coords[c] = ("obs", data.obs[c].to_numpy(copy=False))
+        xdata = xr.DataArray(data.X, dims=("obs", "var"), coords=coords, name="")
+        xdata_ref = xdata.query(obs=reference_query)
+        ref_means = xdata_ref.mean(dim="obs")
+        ref_stds = xdata_ref.std(dim="obs")
+        xdata = (xdata - ref_means) / ref_stds
+        xdata_ref = xdata.query(obs=reference_query)
+    else:
+        coords = dict(obs=data.obs.index.values)
+
+        for c in columns:
+            coords[c] = ("obs", data.obs[c].to_numpy(copy=False))
+        xdata = xr.DataArray(data.X, dims=("obs", "var"), coords=coords, name="")
+        xdata_ref = xdata.query(obs=reference_query)
+        means = xdata_ref.mean(dim="obs")
+        stds = xdata_ref.std(dim="obs")
+        xdata = (xdata - means) / stds
+        xdata_ref = xdata.query(obs=reference_query)
     d = PCA(**pca_kwargs if pca_kwargs is not None else {})
-    x_ref = X[reference_indices]
-    if isinstance(x_ref, da.Array):
-        x_ref = x_ref.compute()
-    X = d.fit(x_ref).transform(X)
-    xp = get_namespace(x_ref)  # TODO use dask?
+    if isinstance(xdata_ref.data, da.Array):
+        xdata_ref.data = xdata_ref.data.compute()
+    xp = get_namespace(xdata_ref.data)  # TODO use dask?
+    d.fit(xdata_ref.data)
+    xdata.data = d.transform(xdata.data)
+    xdata_ref = xdata.query(obs=reference_query)
+
     components_ = d.components_
     mean_ = d.mean_
+
     variance_ratio = d.explained_variance_ratio_
     variance = d.explained_variance_
     uns = {
@@ -524,59 +542,50 @@ def typical_variation_normalization(
             "PCs": components_,
         }
     }
-    del d
+
     if by is not None:
-        group_to_indices = data.obs.groupby(by, observed=True, sort=False).indices
-        for group in group_to_indices.keys():
-            group_indices = group_to_indices[group]
-            group_control_indices = group_indices[
-                np.isin(group_indices, reference_indices)
-            ]
-            X[group_indices] = _normalize_features_array(
-                X[group_indices],
-                reference_values=X[group_control_indices],
-                local_zscore=False,
-                robust=False,
-                mad_scale="normal",
-                centering=True,
-                scaling=True,
-                max_value=None,
-            )
+        ref_grouped = xdata_ref.groupby("obs")
+        ref_mean = ref_grouped.mean()
+        ref_std = ref_grouped.std()
+        results = []
+        grouped = xdata.groupby("obs")
+        for key, group in grouped:
+            value = (group.data - ref_mean.sel(obs=key).data) / ref_std.sel(
+                obs=key
+            ).data
+            results.append(group.copy(data=value))
 
-        target_cov = xp.cov(X[reference_indices], rowvar=False, ddof=1) + 0.5 * xp.eye(
-            X.shape[1]
+        xdata = xr.concat(results, dim="obs")
+        xdata_ref = xdata.query(obs=reference_query)
+        n_features = xdata.shape[1]
+        target_cov = xp.cov(xdata_ref.data, rowvar=False, ddof=1) + 0.5 * xp.eye(
+            n_features
         )
-
-        for group in group_to_indices.keys():
-            group_indices = group_to_indices[group]
-            group_control_indices = group_indices[
-                np.isin(group_indices, reference_indices)
-            ]
-
+        grouped = xdata.groupby("obs")
+        results = []
+        for key, group in grouped:
             source_cov = xp.cov(
-                X[group_control_indices], rowvar=False, ddof=1
-            ) + 0.5 * xp.eye(X.shape[1])
+                group.query(obs=reference_query).data, rowvar=False, ddof=1
+            ) + 0.5 * xp.eye(n_features)
+            X = group.data
+            X = X @ fractional_matrix_power(source_cov, -0.5)
+            X = X @ fractional_matrix_power(target_cov, 0.5)
+            results.append(group.copy(data=X))
 
-            X[group_indices] = xp.matmul(
-                X[group_indices], scipy.linalg.fractional_matrix_power(source_cov, -0.5)
-            )
-            X[group_indices] = xp.matmul(
-                X[group_indices], scipy.linalg.fractional_matrix_power(target_cov, 0.5)
-            )
-    else:
-        X = _normalize_features_array(
-            X,
-            reference_values=X[reference_indices],
-            local_zscore=False,
-            robust=False,
-            mad_scale="normal",
-            centering=True,
-            scaling=True,
-            max_value=None,
+        xdata = xr.concat(results, dim="obs")
+        return anndata.AnnData(
+            X=xdata.data,
+            obs=data.obs.loc[xdata.coords["index"].values],
+            var=data.var.copy(),
+            uns=uns,
         )
-    return anndata.AnnData(
-        X=X,
-        obs=data.obs.copy(),
-        var=data.var.copy(),
-        uns=uns,
-    )
+    else:
+        means = xdata_ref.mean(dim="obs")
+        stds = xdata_ref.std(dim="obs")
+        xdata = (xdata - means) / stds
+        return anndata.AnnData(
+            X=xdata.data,
+            obs=data.obs.copy(),
+            var=data.var.copy(),
+            uns=uns,
+        )
