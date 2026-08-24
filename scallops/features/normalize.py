@@ -88,10 +88,7 @@ def normalize_features(
         )
         series = pd.Series(by_values, dtype="category")
         has_sorted_groups = (
-            normalize == "local-zscore"
-            and is_dask
-            and len(data.X.chunks[0]) > 1
-            and _issorted(series.cat.codes.values)
+            is_dask and len(data.X.chunks[0]) > 1 and _issorted(series.cat.codes.values)
         )
         if normalize != "zscore":
             group_indices = series.groupby(
@@ -134,7 +131,7 @@ def normalize_features(
 
         means = None
         stds = None
-
+        xp = get_namespace(data.X)
         if robust:
             if centering:
                 means = grouped_ref.median(**kwargs)
@@ -142,7 +139,7 @@ def normalize_features(
             if scaling:
                 if by is not None:
                     results = []
-                    xp = get_namespace(data.X)
+
                     for key, group in grouped_ref:
                         value = median_abs_deviation(
                             group.data, axis=0, scale=mad_scale
@@ -171,25 +168,48 @@ def normalize_features(
                 means = grouped_ref.mean(**kwargs)
             if scaling:
                 stds = grouped_ref.std(**kwargs)
+        if by is not None:
+            results = []
+            indices = []
+            for key, group in grouped_values:
+                values = group.data
+                if centering:
+                    values = values - means.sel(obs=key).data
+                if scaling:
+                    values = values / stds.sel(obs=key).data
 
-        if centering:
-            grouped_values = grouped_values - means
-
-        if scaling:
-            if by is not None and isinstance(grouped_values, xr.DataArray):
-                grouped_values = grouped_values.groupby("obs")
-            grouped_values = grouped_values / stds
-
+                    if max_value is not None:
+                        values = xp.clip(values, -max_value, max_value)
+                results.append(values)
+                indices.append(grouped_values.groups[key])
+            results = xp.concatenate(results)
+            indices = np.concatenate(indices)
+            obsm = dict()
+            for key in data.obsm.keys():
+                obsm[key] = data.obsm[key][indices]
+            return anndata.AnnData(
+                X=results,
+                obs=data.obs.iloc[indices],
+                var=data.var.copy(),
+                uns=data.uns.copy(),
+                obsm=obsm,
+                varm=data.varm.copy(),
+            )
+        else:
+            if centering:
+                grouped_values = grouped_values - means
+            if scaling:
+                grouped_values = grouped_values / stds
             if max_value is not None:
                 grouped_values = grouped_values.clip(-max_value, max_value)
-        return anndata.AnnData(
-            X=grouped_values.data,
-            obs=data.obs.copy(),
-            var=data.var.copy(),
-            uns=data.uns.copy(),
-            obsm=data.obsm.copy(),
-            varm=data.varm.copy(),
-        )
+            return anndata.AnnData(
+                X=grouped_values.data,
+                obs=data.obs.copy(),
+                var=data.var.copy(),
+                uns=data.uns.copy(),
+                obsm=data.obsm.copy(),
+                varm=data.varm.copy(),
+            )
     indices = [] if has_sorted_groups else None
     results = [] if not has_sorted_groups else None
     obs_list = [] if not has_sorted_groups else None
