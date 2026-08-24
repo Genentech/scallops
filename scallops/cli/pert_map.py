@@ -311,6 +311,9 @@ def run_aggregate(arguments: argparse.Namespace):
             by=by,
             agg_func="mean",
         )
+        logger.info(
+            f"After aggregation: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}"
+        )
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
         fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
