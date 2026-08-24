@@ -19,6 +19,7 @@ class PCA:
         gpu: bool | None = None,
         whiten: bool = False,
         progress: bool = True,
+        random_state: int | None = 239753,
     ):
         """Embed data using PCA
 
@@ -27,12 +28,14 @@ class PCA:
         :param gpu: Whether to use GPU.
         :param whiten: Whether to use whitening.
         :param progress: Whether to show progress bar for incremental PCA.
+        :param random_state: Random seed.
         """
         self.n_components = n_components
         self.batch_size = batch_size
         self.gpu = gpu
         self.whiten = whiten
         self.progress = progress
+        self.random_state = random_state
 
     @property
     def components_(self):
@@ -108,7 +111,7 @@ class PCA:
             sig = inspect.signature(PCA)
             kwargs = dict(n_components=self.n_components, whiten=self.whiten)
             if "random_state" in sig.parameters.keys():
-                kwargs["random_state"] = 239753
+                kwargs["random_state"] = self.random_state
             d = PCA(**kwargs)
             d.fit(X)
         self.d = d
