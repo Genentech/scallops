@@ -589,7 +589,7 @@ def run_norm_features(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
-    reference = arguments.reference
+    reference = arguments.reference_query
     output = arguments.output
 
     normalize = arguments.method

@@ -377,7 +377,7 @@ def _create_normalize_parser(
     )
 
     parser.add_argument(
-        "--reference",
+        "--reference-query",
         help="Reference expression to normalize to (e.g. gene_symbol=='NTC').",
     )
 
