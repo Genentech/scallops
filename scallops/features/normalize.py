@@ -31,6 +31,26 @@ def _convert_scale(mad_scale):
     return mad_scale
 
 
+def _trim_by(by: str | Sequence[str]) -> str | Sequence[str]:
+    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if by_multi:
+        by = list(by)
+        if len(by) == 1:
+            by = by[0]
+    return by
+
+
+def _xarray_by_values(data: anndata.AnnData, by: str | Sequence[str]) -> xr.DataArray:
+    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if by_multi:
+        by = list(by)
+        if len(by) == 1:
+            by = by[0]
+            by_multi = False
+
+    return data.obs[by].apply(tuple, axis=1) if by_multi else data.obs[by].values
+
+
 def normalize_features(
     data: anndata.AnnData,
     reference_query: str | None = None,
@@ -76,16 +96,8 @@ def normalize_features(
     is_dask = isinstance(data.X, da.Array)
     use_map_blocks = False
     if by is not None:
-        by_multi = not isinstance(by, str) and isinstance(by, Sequence)
-        if by_multi:
-            by = list(by)
-            if len(by) == 1:
-                by = by[0]
-                by_multi = False
-
-        by_values = (
-            data.obs[by].apply(tuple, axis=1) if by_multi else data.obs[by].values
-        )
+        by = _trim_by(by)
+        by_values = _xarray_by_values(data, by)
         series = pd.Series(by_values, dtype="category")
         use_map_blocks = (
             is_dask and len(data.X.chunks[0]) > 1 and _issorted(series.cat.codes.values)
@@ -108,11 +120,7 @@ def normalize_features(
             )
             coords = dict()
             if by is not None:
-                coords["obs"] = (
-                    refererence_data.obs[by].apply(tuple, axis=1)
-                    if by_multi
-                    else refererence_data.obs[by].values
-                )
+                coords["obs"] = _xarray_by_values(refererence_data, by)
             x_ref_data = xr.DataArray(
                 refererence_data.X,
                 dims=["obs", "var"],
@@ -485,7 +493,6 @@ def typical_variation_normalization(
     """
     # Adapted from EFAAR_benchmarking <https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/efaar.py>_
     X = data.X
-
     reference_indices = data.obs.index.get_indexer_for(
         data.obs.query(reference_query).index
     )
