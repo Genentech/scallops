@@ -384,6 +384,8 @@ def _create_zarr_attrs(fmt, grp, dims, image_attrs, axes, scale_dict):
         scale_dict = dict()
     scale = []
     translation = []
+    if dims is None:
+        return {}
     for d in dims:
         scale.append(scale_dict.get(d, 1.0))
         translation.append(0.0)
@@ -727,12 +729,15 @@ def _read_ome_zarr_array(
         array = node[key]
 
         return array, dims, coords, attrs
-    else:  # see if user passed test.zarr and zarr file only has one image
-        if "images" in node.keys():
-            images = node["images"]
-            image_keys = list(images.keys())
-            if len(image_keys) == 1:
-                return _read_ome_zarr_array(images[image_keys[0]])
+    elif (
+        "images" in node.keys()
+    ):  # see if user passed test.zarr and zarr file only has one image
+        images = node["images"]
+        image_keys = list(images.keys())
+        if len(image_keys) == 1:
+            return _read_ome_zarr_array(images[image_keys[0]])
+
+    else:  # is non-ome zarr
         logger.warning(f"multiscales not found in attrs for {node} ")
 
 
