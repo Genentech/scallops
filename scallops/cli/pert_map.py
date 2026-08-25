@@ -440,6 +440,7 @@ def run_pca(arguments: argparse.Namespace):
     data_paths = arguments.input
     label_filter = arguments.label_filter
     feature_filter = arguments.feature_filter
+    reference_query = arguments.reference_query
     join_path = arguments.metadata
     join_fields = arguments.join
     batch_size = arguments.batch_size
@@ -481,6 +482,7 @@ def run_pca(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
+
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -494,7 +496,11 @@ def run_pca(arguments: argparse.Namespace):
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
 
         pca = PCA(n_components=n_components, whiten=whiten, batch_size=batch_size)
-        pca.fit(data.X)
+        train_data = data
+        if reference_query is not None and reference_query != "":
+            train_data = _slice_anndata(data.obs.query(reference_query).index)
+            logger.info(f"# labels for training: {train_data.shape[0]:,}")
+        pca.fit(train_data.X)
         X_transformed = pca.transform(data.X)
         data = anndata.AnnData(X_transformed, obs=data.obs)
         pca.add_uns(data)

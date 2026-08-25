@@ -367,12 +367,16 @@ def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
         help="Path to save result in zarr or h5ad format",
         required=True,
     )
+    parser.add_argument(
+        "--reference-query",
+        help="Expression to subset training data for fitting PCA (e.g. gene_symbol=='NTC').",
+    )
     filter_args(parser)
 
     parser.add_argument(
         "--whiten",
         action="store_true",
-        help="When True the components vectors are multiplied by the "
+        help="When `true` the components vectors are multiplied by the "
         "square root of n_samples and then divided by the singular "
         "values to ensure uncorrelated outputs with unit "
         "component-wise variances.",
