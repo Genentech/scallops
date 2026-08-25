@@ -10,6 +10,8 @@ from array_api_compat import get_namespace
 from dask.array.numpy_compat import NUMPY_GE_200
 from statsmodels.stats.weightstats import DescrStatsW
 
+from scallops.features.util import _trim_by, _xarray_by_values
+
 
 def _weighted_median(x, weights):
     d = DescrStatsW(data=x, weights=weights).quantile(probs=0.5, return_pandas=False)
@@ -31,18 +33,11 @@ def agg_features(
     :return: Aggregated data
     """
     assert agg_func in ("mean", "median")
-
+    by = _trim_by(by)
     group_by_multi = not isinstance(by, str) and isinstance(by, Sequence)
-    if group_by_multi:
-        by = list(by)
-        if len(by) == 1:
-            by = by[0]
-            group_by_multi = False
 
-    if not group_by_multi:
-        coords = {"obs": data.obs[by]}
-    else:
-        coords = {"obs": data.obs[by].apply(tuple, axis=1)}
+    coords = dict(obs=_xarray_by_values(data, by))
+
     if weights_col is not None:
         coords[weights_col] = ("obs", data.obs[weights_col])
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")

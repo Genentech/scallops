@@ -17,6 +17,26 @@ from scallops.features.constants import _metadata_columns_whitelist_str
 logger = logging.getLogger("scallops")
 
 
+def _trim_by(by: str | Sequence[str]) -> str | Sequence[str]:
+    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if by_multi:
+        by = list(by)
+        if len(by) == 1:
+            by = by[0]
+    return by
+
+
+def _xarray_by_values(data: anndata.AnnData, by: str | Sequence[str]) -> xr.DataArray:
+    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if by_multi:
+        by = list(by)
+        if len(by) == 1:
+            by = by[0]
+            by_multi = False
+
+    return data.obs[by].apply(tuple, axis=1) if by_multi else data.obs[by].values
+
+
 def pandas_to_anndata(
     df: pd.DataFrame | dd.DataFrame, features: Sequence[str] | None = None
 ) -> anndata.AnnData:

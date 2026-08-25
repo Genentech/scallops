@@ -16,7 +16,12 @@ from scipy.stats import median_abs_deviation
 from sklearn.neighbors import NearestNeighbors
 
 from scallops.features.decomposition import PCA
-from scallops.features.util import _get_names_from_pd_query, _slice_anndata
+from scallops.features.util import (
+    _get_names_from_pd_query,
+    _slice_anndata,
+    _trim_by,
+    _xarray_by_values,
+)
 from scallops.utils import tqdm_func
 
 logger = logging.getLogger("scallops")
@@ -29,26 +34,6 @@ def _convert_scale(mad_scale):
         else:
             raise ValueError(f"{mad_scale} is not a valid mad_scale value.")
     return mad_scale
-
-
-def _trim_by(by: str | Sequence[str]) -> str | Sequence[str]:
-    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
-    if by_multi:
-        by = list(by)
-        if len(by) == 1:
-            by = by[0]
-    return by
-
-
-def _xarray_by_values(data: anndata.AnnData, by: str | Sequence[str]) -> xr.DataArray:
-    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
-    if by_multi:
-        by = list(by)
-        if len(by) == 1:
-            by = by[0]
-            by_multi = False
-
-    return data.obs[by].apply(tuple, axis=1) if by_multi else data.obs[by].values
 
 
 def normalize_features(
