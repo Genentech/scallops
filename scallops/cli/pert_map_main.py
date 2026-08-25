@@ -123,6 +123,12 @@ def _run_similarity_matrix(arguments: argparse.Namespace):
     run_similarity_matrix(arguments)
 
 
+def _run_set_enrichment(arguments: argparse.Namespace):
+    from scallops.cli.pert_map import run_set_enrichment
+
+    run_set_enrichment(arguments)
+
+
 def _run_recall(arguments: argparse.Namespace):
     from scallops.cli.pert_map import run_recall
 
@@ -264,6 +270,41 @@ def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     parser.set_defaults(func=_run_tvn)
 
 
+def _create_set_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+    parser = subparsers.add_parser(
+        "enrichment",
+        help="Run enrichment",
+        formatter_class=(
+            argparse.ArgumentDefaultsHelpFormatter
+            if default_help
+            else argparse.HelpFormatter
+        ),
+    )
+
+    required = parser.add_argument_group("required arguments")
+    input_arg(required)
+
+    required.add_argument(
+        "--output",
+        help="Path to save result in Parquet format",
+        required=True,
+    )
+    required.add_argument(
+        "--set",
+        help="Path(s) to set(s) in GMT format",
+        nargs="+",
+    )
+
+    common_args(
+        parser,
+        metadata=False,
+        pre_rechunk=False,
+        post_rechunk=False,
+        dask_client_value="none",
+    )
+    parser.set_defaults(func=_run_set_enrichment)
+
+
 def _create_recall_parser(
     subparsers: argparse.ArgumentParser, default_help: bool
 ) -> None:
@@ -276,6 +317,7 @@ def _create_recall_parser(
             else argparse.HelpFormatter
         ),
     )
+
     required = parser.add_argument_group("required arguments")
     input_arg(required)
 
@@ -589,4 +631,5 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool):
     _create_tvn_parser(subparsers, default_help)
     _create_aggregate_parser(subparsers, default_help)
     _create_similarity_matrix_parser(subparsers, default_help)
+    _create_set_parser(subparsers, default_help)
     _create_recall_parser(subparsers, default_help)

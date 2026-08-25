@@ -15,7 +15,6 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import zarr
 
 from scallops.cli.util import (
     _create_dask_client,
@@ -27,7 +26,13 @@ from scallops.cli.util import (
 )
 from scallops.features.agg import agg_features
 from scallops.features.decomposition import PCA
-from scallops.features.map_eval import pairwise_similarities, read_corum, recall
+from scallops.features.map_eval import (
+    pairwise_similarities,
+    read_corum,
+    read_gmt,
+    recall,
+    set_benchmark,
+)
 from scallops.features.normalize import (
     _convert_scale,
     normalize_features,
@@ -44,8 +49,6 @@ from scallops.io import _to_parquet, is_anndata, is_parquet_file, read_anndata
 from scallops.utils import _fix_json
 
 logger = _get_cli_logger()
-
-zarr.config.set({"array.rectilinear_chunks": True})
 
 
 def _read_data(
@@ -205,6 +208,59 @@ def run_recall(arguments: argparse.Namespace):
                 break
         if multi_threshold:
             df["threshold"] = df["threshold"].astype(str)
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        table = table.replace_schema_metadata(
+            {
+                "scallops".encode(): json.dumps(metadata).encode(),
+                **table.schema.metadata,
+            }
+        )
+
+        fs, output = fsspec.url_to_fs(output)
+        pq.write_table(
+            table,
+            output,
+            filesystem=fs,
+        )
+
+
+def run_set_enrichment(arguments: argparse.Namespace):
+    data_paths = arguments.input
+    force = arguments.force
+    no_version = arguments.no_version
+    dask_server_url = arguments.client
+    set_paths = arguments.set
+    dask_cluster_parameters = (
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+    )
+    output = arguments.output
+    min_genes = 10  # arguments.min_genes
+    if not force and is_parquet_file(output):
+        logger.info(f"{output} already exists, skipping. Use --force to overwrite.")
+        return
+
+    set_name_to_genes = dict()
+    for i in range(len(set_paths)):
+        df = read_gmt(set_paths[i])
+        d = df["genes"].to_dict()
+        set_name_to_genes.update(d)
+
+    metadata = {}
+    if not no_version:
+        metadata.update(cli_metadata())
+    with (
+        _create_default_dask_config(),
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
+    ):
+        similarity_data = _read_data(data_paths)
+        similarity_data.X = similarity_data.X.compute()  # load into memory
+
+        df = set_benchmark(
+            data=similarity_data,
+            set_name_to_genes=set_name_to_genes,
+            min_genes=min_genes,
+        )
+
         table = pa.Table.from_pandas(df, preserve_index=False)
         table = table.replace_schema_metadata(
             {
