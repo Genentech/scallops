@@ -490,6 +490,8 @@ def typical_variation_normalization(
     :param by: Further align control and treatments in each group,
         using the covariance matrix of all negative (reference) controls as the target
         and the covariance matrix of each group of negative controls as the source.
+    :param pca_kwargs: Arguments to pass to PCA.
+    :return: Annotated data matrix.
     """
     # Adapted from EFAAR_benchmarking <https://github.com/recursionpharma/EFAAR_benchmarking/blob/trunk/efaar_benchmarking/efaar.py>_
 
