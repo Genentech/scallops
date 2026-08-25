@@ -563,15 +563,17 @@ def typical_variation_normalization(
         target_cov = xp.cov(xdata_ref.data, rowvar=False, ddof=1) + 0.5 * xp.eye(
             n_features
         )
+        target_cov = fractional_matrix_power(target_cov, 0.5)
         grouped = xdata.groupby("obs")
         results = []
+
         for key, group in grouped:
             source_cov = xp.cov(
                 group.query(obs=reference_query).data, rowvar=False, ddof=1
             ) + 0.5 * xp.eye(n_features)
             X = group.data
             X = X @ fractional_matrix_power(source_cov, -0.5)
-            X = X @ fractional_matrix_power(target_cov, 0.5)
+            X = X @ target_cov
             results.append(group.copy(data=X))
 
         xdata = xr.concat(results, dim="obs")
