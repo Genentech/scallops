@@ -262,15 +262,6 @@ def _create_reads_parser(subparsers, default_help):
         help="ISS bases",
     )
     parser.add_argument(
-        "--dark-bases",
-        dest="dark_bases",
-        default=None,
-        help="Single base carrying no fluorescent dye. For 3-channel SBS this is "
-        "auto-inferred as the GTAC member absent from --bases.  Required for "
-        "2-channel SBS where two GTAC members are absent and the dark base is "
-        "ambiguous (e.g. '--dark-bases G' for standard Illumina 2-colour).",
-    )
-    parser.add_argument(
         "--barcode-col",
         help="`Barcode` column in barcodes CSV",
         default="barcode",

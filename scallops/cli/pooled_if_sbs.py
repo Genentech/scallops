@@ -55,8 +55,6 @@ from scallops.reads import (
     channel_crosstalk_matrix,
     correct_mismatches,
     decode_max,
-    decode_polar,
-    make_encoding,
     merge_sbs_phenotype,
     peaks_to_bases,
     read_statistics,
@@ -901,7 +899,6 @@ def reads_pipeline(
     barcode_column: str = "barcode",
     read_filter: float | None = None,
     crosstalk_n_reads: int = 500000,
-    dark_bases: list[str] | None = None,
 ):
     """Run the reads pipeline.
 
@@ -931,10 +928,6 @@ def reads_pipeline(
     :param no_version: Whether to skip version/CLI information in output.
     :param barcode_column: Column name of barcode
     :param read_filter: Filter reads by quality score before assigning reads to labels.
-    The decoder is selected automatically from the number of SBS channels:
-    4 channels → SE (identity encoding); 3 channels → SE with the missing GTAC base
-    inferred as dark; 2 channels → polar decoder with the standard Illumina 2-colour
-    encoding (G dark, A non-orthogonal).
     """
 
     if not force:
@@ -1053,86 +1046,7 @@ def reads_pipeline(
     if os.environ.get("SCALLOPS_IMAGE_SCALE") == "1":
         bases_array_reads = bases_array_reads.astype(int)
 
-    # ── Auto-select decoder from number of SBS channels ──────────────────
-    # Channel count is the number of non-DAPI fluorescence channels captured
-    # at spot-detect time and determines the encoding/chemistry automatically.
-    _STANDARD_BASES = "GTAC"
-    channel_bases = list(bases_array_reads.c.values)
-    n_ch = len(channel_bases)
-
-    if n_ch >= 4:
-        # Full 4-colour SBS: identity encoding, all bases bright
-        logger.info("4-channel SBS — decode_max (SE, identity encoding).")
-        encoding = np.eye(n_ch, dtype=float)
-        base_labels_arr = np.array(channel_bases)
-        df_reads = decode_max(
-            bases_array_reads,
-            barcodes=df_barcode,
-            encoding=encoding,
-            base_labels=base_labels_arr,
-        )
-    elif n_ch == 3:
-        # 3-colour: infer dark base as the GTAC member absent from channel labels
-        dark_inferred = [b for b in _STANDARD_BASES if b not in set(channel_bases)]
-        if dark_inferred:
-            logger.info(
-                "3-channel SBS: dark base(s) %s inferred from --bases — "
-                "decode_max (SE, f=alpha/3).",
-                dark_inferred,
-            )
-            encoding, base_labels_arr = make_encoding(channel_bases, dark_inferred)
-        else:
-            logger.info(
-                "3-channel non-standard: no dark base inferred — decode_max (SE)."
-            )
-            encoding = np.eye(n_ch, dtype=float)
-            base_labels_arr = np.array(channel_bases)
-        df_reads = decode_max(
-            bases_array_reads,
-            barcodes=df_barcode,
-            encoding=encoding,
-            base_labels=base_labels_arr,
-        )
-    elif n_ch == 2:
-        # 2-colour Illumina-style (non-orthogonal: one base fires both channels).
-        # Encoding inferred from --bases (ch0-unique, ch1-unique) and --dark-bases:
-        #   ch0_base   = channel_bases[0]  → fires ch0 only        E-row [1,0]
-        #   ch1_base   = channel_bases[1]  → fires ch1 only        E-row [0,1]
-        #   dark_base  = from --dark-bases → fires neither          E-row [0,0]
-        #   non_orth   = remaining GTAC member → fires both channels E-row [1,1]
-        ch0_base = channel_bases[0]
-        ch1_base = channel_bases[1]
-        if dark_bases:
-            dark_base = dark_bases[0]
-        else:
-            # Fallback: first GTAC member absent from channel labels
-            _absent = [b for b in _STANDARD_BASES if b not in set(channel_bases)]
-            dark_base = _absent[0] if _absent else "G"
-        _remaining = [
-            b for b in _STANDARD_BASES if b not in {dark_base, ch0_base, ch1_base}
-        ]
-        non_orth = _remaining[0] if _remaining else "A"
-        # Row order: dark, ch1-only, both, ch0-only
-        base_labels_arr = np.array([dark_base, ch1_base, non_orth, ch0_base])
-        E2 = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float)
-        logger.info(
-            "2-channel SBS — dark=%s non-orthogonal=%s ch0=%s ch1=%s — "
-            "decode_polar (atan2 + auto r_frac).",
-            dark_base,
-            non_orth,
-            ch0_base,
-            ch1_base,
-        )
-        df_reads = decode_polar(
-            bases_array_reads,
-            barcodes=df_barcode,
-            encoding=E2,
-            base_labels=base_labels_arr,
-            w_cor=w,
-        )
-    else:
-        # 1-channel or unknown — legacy softmax fallback
-        df_reads = decode_max(bases_array_reads, barcodes=df_barcode)
+    df_reads = decode_max(bases_array_reads, barcodes=df_barcode)
 
     if n_mismatches is not None and n_mismatches > 0:
         df_reads = correct_mismatches(
@@ -1321,7 +1235,6 @@ def reads_main(arguments: argparse.Namespace):
     crosstalk_n_reads = arguments.crosstalk_nreads
 
     bases = list(arguments.bases)
-    dark_bases = [arguments.dark_bases] if arguments.dark_bases else None
     crosstalk_correction_method = arguments.crosstalk_correction_method
     force = arguments.force
     crosstalk_correction_method_args = dict()
@@ -1378,5 +1291,4 @@ def reads_main(arguments: argparse.Namespace):
                 barcode_column=barcode_column,
                 read_filter=read_filter,
                 crosstalk_n_reads=crosstalk_n_reads,
-                dark_bases=dark_bases,
             )

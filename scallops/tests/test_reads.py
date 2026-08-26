@@ -16,6 +16,7 @@ from scallops.reads import (
     channel_crosstalk_matrix,
     correct_mismatches,
     decode_max,
+    decode_se,
     peaks_to_bases,
     read_statistics,
 )
@@ -182,7 +183,7 @@ def test_dark_bases(experiment_c):
         "scallops/tests/data/experimentC/barcodes.csv", image.t.values - 1
     )
 
-    df_reads = decode_max(bases_array, barcodes=df_barcode, dark_bases=["C"])
+    df_reads = decode_se(bases_array, barcodes=df_barcode, dark_bases=["C"])
     df_reads["label"] = 0
     stats = read_statistics(df_reads)
     # Threshold lowered from 0.55: data-adaptive f = alpha/3 is optimised for
@@ -255,7 +256,7 @@ def test_dark_bases_two_color(experiment_c):
         "scallops/tests/data/experimentC/barcodes.csv", image.t.values - 1
     )
 
-    df_reads = decode_max(
+    df_reads = decode_se(
         two_color_array, barcodes=df_barcode, encoding=E, base_labels=base_labels
     )
     df_reads["label"] = 0

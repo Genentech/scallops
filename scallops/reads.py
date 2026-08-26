@@ -551,77 +551,20 @@ def _decode_max_chunk(
     meta_df: pd.DataFrame,
     offset: slice | None,
     whitelist: list[str] | None,
-    encoding: np.ndarray | None,
-    base_labels: np.ndarray | None,
 ) -> pd.DataFrame:
     """Decode the maximum intensity chunk from the input spot data and compute base
     quality scores.
 
-    :param spots: Spot data (read, t, c).
-    :param bases: Channel labels; used as base labels when encoding is None.
+    :param spots: Spot data.
+    :param bases: List of bases.
     :param meta_df: Metadata dataframe.
     :param offset: Offset into metadata.
     :param whitelist: List of whitelisted barcodes.
-    :param encoding: (n_bases, n_channels) binary encoding matrix. When provided, uses
-        the signed-encoding decoder with data-adaptive f = alpha/3 (alpha estimated from
-        the top-phi bright-cycle signals per channel). When None, falls back to softmax.
-    :param base_labels: Base label array of length n_bases, required when encoding is provided.
     :return: A pandas DataFrame with decoded barcode sequences and quality metrics.
     """
-
-    if encoding is not None:
-        # Signed-encoding decode: log P(b) = sum_c (2E[b,c]-1) * (x_c - center_c)
-        # center_c = lo_c + f * (hi_c - lo_c)  (per-channel min-max centering)
-        #
-        # f is estimated data-adaptively as  f = alpha / 3  where
-        #   alpha = min_c( mean of top-phi_c normalised bright-cycle signals )
-        #   phi_c = E[:,c].sum() / n_bases  (fraction of bases that fire channel c)
-        #
-        # Derivation: under Gaussian noise, the Bernoulli balance between
-        #   P(correct base wins at a bright cycle)  ∝  Φ((alpha - f)·H/σ)
-        #   P(dark base wins at a dark cycle)        ∝  Φ(f·H/σ)^n_ch
-        # yields the fixed-point  f = alpha / 3.  After xtalk correction,
-        # alpha ≈ 0.67–0.73 across all SBS chemistries → f ≈ 0.22–0.24
-        # universally (4-color, 3-color dark-base, 2-color Illumina).
-
-        bright_fraction = encoding.sum(axis=0) / encoding.shape[0]  # (n_channels,)
-
-        # Clip to zero: xtalk correction can produce negative values.
-        # Without clipping, overcorrected dark cycles sit above their per-read
-        # minimum (which anchors lo), making them appear partially bright in the
-        # normalised space and causing dark-base miscalls.
-        spots_c = np.clip(spots, 0.0, None)
-        lo = spots_c.min(axis=1, keepdims=True)  # (read, 1, n_channels)
-        hi = spots_c.max(axis=1, keepdims=True)  # (read, 1, n_channels)
-        rng = hi - lo
-
-        # Per-channel normalised signal in [0, 1]
-        x_norm = np.divide(spots_c - lo, rng, out=np.zeros_like(spots_c), where=rng > 0)
-        T = spots.shape[1]
-        alpha_per_ch = np.zeros(spots.shape[2])
-        for c_idx, phi_c in enumerate(bright_fraction):
-            if phi_c <= 0.0:
-                continue  # dark-only column — skip
-            k = max(1, int(np.ceil(float(phi_c) * T)))
-            alpha_per_ch[c_idx] = np.sort(x_norm[:, :, c_idx], axis=1)[:, -k:].mean()
-        bright_mask = bright_fraction > 0.0
-        if bright_mask.any():
-            f = float(alpha_per_ch[bright_mask].min()) / 3.0
-        else:
-            # Fallback (degenerate encoding with no bright channels)
-            f = 0.5 * (1.0 - float(bright_fraction.max()))
-        log_bp = (spots_c - (lo + f * (hi - lo))) @ (
-            2 * encoding - 1
-        ).T  # (read, cycle, n_bases)
-        bp = softmax(log_bp, axis=-1)
-        p_best = np.clip(bp.max(axis=2), 1e-6, 1 - 1e-6)
-        Q = -10 * np.log10(1 - p_best)
-        channel_calls = np.argmax(bp, axis=2)
-        calls = base_labels[channel_calls]
-    else:
-        Q = quality_softmax(spots)
-        channel_calls = np.argmax(spots, axis=2)
-        calls = bases[channel_calls]
+    Q = quality_softmax(spots)
+    channel_calls = np.argmax(spots, axis=2)
+    calls = bases[channel_calls]
 
     df = (
         meta_df.iloc[offset.start : offset.stop].copy()
@@ -641,41 +584,14 @@ def _decode_max_chunk(
 def decode_max(
     spots: xr.DataArray,
     barcodes: pd.DataFrame | None = None,
-    encoding: np.ndarray | None = None,
-    base_labels: list[str] | np.ndarray | None = None,
-    dark_bases: list[str] | None = None,
 ) -> pd.DataFrame | dd.DataFrame:
-    """Call reads by assigning the base with the highest intensity.
-
-    Two calling modes, in priority order:
-
-    1. **Signed-encoding decoder** — pass `encoding` (n_bases × n_channels) and
-       `base_labels`, or use the `dark_bases` shorthand which builds the encoding matrix
-       automatically via :func:`make_encoding` (assumes 1:1 channel→base for non-dark bases).
-       Works for any chemistry including standard 4-color, 3-color dark-base, and 2-color
-       Illumina. Uses data-adaptive f = alpha/3 (see :func:`_decode_max_chunk`) which
-       outperforms both the E-formula and the legacy softmax across all chemistries.
-
-    2. **Legacy per-cycle softmax** — pass neither `encoding` nor `dark_bases`. Retained for
-       backward compatibility; cannot handle dark bases or multi-channel bases.
+    """Call reads by assigning the base with the highest intensity (softmax argmax).
 
     :param spots: Spots returned from peaks_to_bases containing dimensions (read, t, c).
     :param barcodes: Table of designed barcode sequences used for indicating whether a
         barcode is an exact match. Expected to have column 'barcode'.
-    :param encoding: (n_bases, n_channels) binary encoding matrix for the chemistry.
-    :param base_labels: Ordered base labels of length n_bases, required with `encoding`.
-    :param dark_bases: Shorthand: bases with no fluorescent channel (1:1 channel→base assumed).
     :return: The reads data frame.
     """
-    if encoding is None and dark_bases is not None:
-        encoding, base_labels = make_encoding(
-            channel_bases=list(spots.c.values), dark_bases=dark_bases
-        )
-
-    if encoding is not None:
-        encoding = np.asarray(encoding, dtype=float)
-        base_labels = np.asarray(base_labels)
-
     whitelist = barcodes["barcode"].values if barcodes is not None else None
     meta_df = spots["read"].to_dataframe()  # index is read
     bases = spots.c.values
@@ -686,8 +602,6 @@ def decode_max(
             offset=None,
             meta_df=meta_df,
             whitelist=whitelist,
-            encoding=encoding,
-            base_labels=base_labels,
         )
     else:
         # no chunking in t or c dimension
@@ -714,8 +628,6 @@ def decode_max(
         whitelist = delayed(whitelist)
         bases = delayed(bases)
         meta_df = delayed(meta_df)
-        encoding_delayed = delayed(encoding)
-        base_labels_delayed = delayed(base_labels)
         starts = [cached_cumsum(bds, initial_zero=True) for bds in spots.data.chunks]
         ndim = len(starts)
         results = []
@@ -731,10 +643,160 @@ def decode_max(
                     spots=block,
                     whitelist=whitelist,
                     meta_df=meta_df,
-                    encoding=encoding_delayed,
-                    base_labels=base_labels_delayed,
                     offset=slice(start[0], stop[0]),
                     bases=bases,
+                )
+            )
+        df = dd.from_delayed(results, meta=meta, verify_meta=False)
+
+    return df
+
+
+def _decode_se_chunk(
+    spots: np.ndarray,
+    encoding: np.ndarray,
+    base_labels: np.ndarray,
+    meta_df: pd.DataFrame,
+    offset: slice | None,
+    whitelist: list[str] | None,
+) -> pd.DataFrame:
+    """Signed-encoding chunk decoder with data-adaptive f = alpha/3.
+
+    For each cycle assigns the base that maximises
+    ``score(b,t) = Σ_c (2E[b,c]-1) · (x_ct - l_c - f(h_c-l_c))``,
+    where f = alpha/3 and alpha = min_c(mean top-phi_c normalised bright cycles).
+
+    :param spots: ``(read, T, n_ch)`` spot intensities (xtalk-corrected).
+    :param encoding: ``(n_bases, n_ch)`` binary encoding matrix; all-zero rows → dark bases.
+    :param base_labels: Base label array of length n_bases.
+    :param meta_df: Metadata DataFrame (index = read integer).
+    :param offset: Slice into meta_df for this chunk.
+    :param whitelist: Barcode whitelist for barcode_match column.
+    :return: DataFrame with barcode, Q, Q_mean, Q_min, optionally barcode_match.
+    """
+    bright_fraction = encoding.sum(axis=0) / encoding.shape[0]
+    spots_c = np.clip(spots, 0.0, None)
+    lo = spots_c.min(axis=1, keepdims=True)
+    hi = spots_c.max(axis=1, keepdims=True)
+    rng = hi - lo
+    x_norm = np.divide(spots_c - lo, rng, out=np.zeros_like(spots_c), where=rng > 0)
+    T = spots.shape[1]
+    alpha_per_ch = np.zeros(spots.shape[2])
+    for c_idx, phi_c in enumerate(bright_fraction):
+        if phi_c <= 0.0:
+            continue
+        k = max(1, int(np.ceil(float(phi_c) * T)))
+        alpha_per_ch[c_idx] = np.sort(x_norm[:, :, c_idx], axis=1)[:, -k:].mean()
+    bright_mask = bright_fraction > 0.0
+    f = float(alpha_per_ch[bright_mask].min()) / 3.0 if bright_mask.any() else 0.5
+    log_bp = (spots_c - (lo + f * (hi - lo))) @ (2 * encoding - 1).T
+    bp = softmax(log_bp, axis=-1)
+    p_best = np.clip(bp.max(axis=2), 1e-6, 1 - 1e-6)
+    Q = -10 * np.log10(1 - p_best)
+    calls = base_labels[np.argmax(bp, axis=2)]
+
+    df = (
+        meta_df.iloc[offset.start : offset.stop].copy()
+        if offset is not None
+        else meta_df.copy()
+    )
+    df.index.name = None
+    df["barcode"] = ["".join(x) for x in calls]
+    df["Q"] = list(Q)
+    df["Q_mean"] = Q.mean(axis=1)
+    df["Q_min"] = Q.min(axis=1)
+    if whitelist is not None:
+        df["barcode_match"] = df["barcode"].isin(whitelist)
+    return df
+
+
+def decode_se(
+    spots: xr.DataArray,
+    barcodes: pd.DataFrame | None = None,
+    encoding: np.ndarray | None = None,
+    base_labels: list[str] | np.ndarray | None = None,
+    dark_bases: list[str] | None = None,
+) -> pd.DataFrame | dd.DataFrame:
+    """Call reads using the signed-encoding (SE) decoder with data-adaptive f = alpha/3.
+
+    Outperforms softmax argmax for all SBS chemistries.  Handles dark bases (all-zero
+    rows in ``E``) automatically — their score ``-Σ d_ct`` is maximised at quiet cycles.
+    Per-channel range weighting acts as a SNR proxy, down-weighting dim channels.
+
+    :param spots: Spots DataArray with dims ``(read, t, c)``.
+    :param barcodes: Whitelist DataFrame with column ``'barcode'``; adds ``barcode_match``.
+    :param encoding: ``(n_bases, n_channels)`` binary encoding matrix.  All-zero rows
+        indicate dark bases.  When omitted and ``dark_bases`` is also omitted, defaults
+        to the identity (one bright base per channel, no dark bases).
+    :param base_labels: Ordered base labels of length n_bases, required with ``encoding``.
+    :param dark_bases: Shorthand for 1:1 channel→base chemistry with named dark bases.
+        Builds the encoding via :func:`make_encoding`.
+    :return: DataFrame with columns ``barcode``, ``Q``, ``Q_mean``, ``Q_min``, and
+        optionally ``barcode_match``.
+    """
+    if encoding is None and dark_bases is not None:
+        encoding, base_labels = make_encoding(
+            channel_bases=list(spots.c.values), dark_bases=dark_bases
+        )
+    if encoding is None:
+        n_ch = len(spots.c.values)
+        encoding = np.eye(n_ch, dtype=float)
+        base_labels = np.array(list(spots.c.values))
+
+    encoding = np.asarray(encoding, dtype=float)
+    base_labels = np.asarray(base_labels)
+
+    whitelist = barcodes["barcode"].values if barcodes is not None else None
+    meta_df = spots["read"].to_dataframe()
+
+    if not isinstance(spots.data, da.Array):
+        df = _decode_se_chunk(
+            spots=spots.data,
+            encoding=encoding,
+            base_labels=base_labels,
+            offset=None,
+            meta_df=meta_df,
+            whitelist=whitelist,
+        )
+    else:
+        dims = spots.dims
+        chunksize = list(spots.data.chunksize)
+        for i in range(len(dims)):
+            if dims[i] in ("c", "t") and spots.data.chunksize[i] != spots.data.shape[i]:
+                chunksize[i] = -1
+        chunksize = tuple(chunksize)
+        if chunksize != spots.data.chunksize:
+            spots.data = spots.data.rechunk(chunksize)
+
+        columns = [(col, meta_df[col].dtype) for col in meta_df.columns]
+        columns += [
+            ("barcode", object),
+            ("Q", object),
+            ("Q_mean", np.float64),
+            ("Q_min", np.float64),
+        ]
+        if whitelist is not None:
+            columns.append(("barcode_match", bool))
+        meta = dd.utils.make_meta(columns)
+        _chunk_d = delayed(_decode_se_chunk)
+        wl_d = delayed(whitelist)
+        mdf_d = delayed(meta_df)
+        enc_d = delayed(encoding)
+        bla_d = delayed(base_labels)
+        starts = [cached_cumsum(bds, initial_zero=True) for bds in spots.data.chunks]
+        results = []
+        for block in spots.data.to_delayed().ravel():
+            key = np.array(block.key[1:])
+            start = [starts[i][key[i]] for i in range(len(starts))]
+            stop = [starts[i][key[i] + 1] for i in range(len(starts))]
+            results.append(
+                _chunk_d(
+                    spots=block,
+                    encoding=enc_d,
+                    base_labels=bla_d,
+                    meta_df=mdf_d,
+                    whitelist=wl_d,
+                    offset=slice(start[0], stop[0]),
                 )
             )
         df = dd.from_delayed(results, meta=meta, verify_meta=False)
