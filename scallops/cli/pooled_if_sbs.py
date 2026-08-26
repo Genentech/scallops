@@ -46,6 +46,7 @@ from scallops.io import (
     _images2fov,
     _set_up_experiment,
     _to_parquet,
+    is_anndata,
     is_parquet_file,
 )
 from scallops.reads import (
@@ -77,7 +78,6 @@ from scallops.zarr_io import (
     _get_sep,
     _get_store_path,
     _write_zarr_image,
-    is_anndata_zarr,
     open_ome_zarr,
     read_ome_zarr_array,
 )
@@ -519,7 +519,7 @@ def merge_sbs_phenotype_pipeline(
     output_file = f"{output_dir}{image_key}.{output_format}"
     if not force and (
         (output_format == "parquet" and is_parquet_file(output_file))
-        or (output_format == "zarr" and is_anndata_zarr(output_file))
+        or (output_format == "zarr" and is_anndata(output_file))
     ):
         logger.info(f"Skipping merge for {image_key}")
         return []
@@ -832,7 +832,9 @@ def spot_detect_main(arguments: argparse.Namespace):
     expected_cycles = arguments.expected_cycles
     dask_scheduler_url = arguments.client
     dask_cluster_parameters = (
-        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+        load_json(arguments.dask_cluster)
+        if arguments.dask_cluster is not None
+        else _dask_workers_threads()
     )
     save_keys = ["peaks", "max"]
     if optional_save is not None:
@@ -1214,7 +1216,9 @@ def reads_main(arguments: argparse.Namespace):
     spots = arguments.spots
     dask_scheduler_url = arguments.client
     dask_cluster_parameters = (
-        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+        load_json(arguments.dask_cluster)
+        if arguments.dask_cluster is not None
+        else _dask_workers_threads()
     )
     labels = arguments.labels
     read_filter = arguments.read_quality_filter
