@@ -513,6 +513,8 @@ def typical_variation_normalization(
         xdata_ref.data = xdata_ref.data.compute()
     xp = get_namespace(xdata_ref.data)  # TODO use dask?
     d.fit(xdata_ref.data)
+    del xdata_ref
+
     xdata.data = d.transform(xdata.data)
     xdata_ref = xdata.query(obs=reference_query)
 

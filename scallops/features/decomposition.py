@@ -143,7 +143,8 @@ class PCA:
         components_ = d.components_
         mean_ = d.mean_
         variance = d.explained_variance_
-
+        if isinstance(X, da.Array) and not isinstance(components_, da.Array):
+            components_ = da.from_array(components_)
         if mean_ is not None:
             X = X - mean_
         X_transformed = X @ components_.T  # (n_components, n_features)
