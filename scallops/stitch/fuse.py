@@ -144,9 +144,23 @@ def _fuse(
                 np.dtype("float").itemsize * 2 * fused_y_size * fused_x_size
             )
         gc.collect()
-        available_mem = 0.7 * psutil.virtual_memory().available - (
-            _cpu_count() * size_z * n_channels * ysize * xsize * target_dtype.itemsize
-        )
+        available_mem = None
+        if os.environ.get("SCALLOPS_MEMORY") is not None:
+            try:
+                available_mem = int(os.environ["SCALLOPS_MEMORY"])
+            except ValueError:
+                logger.warning(
+                    "Unable to determine available memory from SCALLOPS_MEMORY environment variable."
+                )
+        if available_mem is None:
+            available_mem = 0.7 * psutil.virtual_memory().available - (
+                _cpu_count()
+                * size_z
+                * n_channels
+                * ysize
+                * xsize
+                * target_dtype.itemsize
+            )
         channels_per_batch = max(1, int(available_mem / size_per_channel))
         n_batches = math.ceil(len(output_channels) / channels_per_batch)
         channels_per_batch = max(1, int(len(output_channels) / n_batches))
