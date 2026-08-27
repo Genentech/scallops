@@ -268,7 +268,7 @@ def test_dark_bases_two_color(experiment_c):
 
 
 @pytest.mark.basecalls
-def test_polar_4ch(experiment_c):
+def test_polar_4ch(experiment_c, dask_A1_102_cells):
     """4-channel polar: no dark base; baseline-corrected argmax.
 
     Expected (notebook polar_basecalling.ipynb, Exp C tile A1-102, watershed cells):
@@ -280,7 +280,7 @@ def test_polar_4ch(experiment_c):
         decode_polar,
     )
 
-    cells = np.load("scallops/tests/data/experimentC/cells.npy")  # watershed cell mask
+    cells = dask_A1_102_cells  # watershed cell mask
     n_cells = int(cells.max())
 
     image = experiment_c.images["A1-102"]
