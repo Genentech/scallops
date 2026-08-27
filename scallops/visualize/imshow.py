@@ -22,7 +22,6 @@ import xarray as xr
 from matplotlib import patches
 from matplotlib import pyplot as plt
 from natsort import natsorted
-from numpy import ndarray
 from pydantic import ValidationError
 from skimage.measure import regionprops_table
 from skimage.transform import resize
@@ -34,57 +33,6 @@ from scallops.visualize.grid_layout import _grid_indices, _well_grid
 from scallops.visualize.utils import _infer_positions
 
 logger = logging.getLogger("scallops")
-
-
-def imshow_plane(
-    image: ndarray | DataArray,
-    ax: None | plt.Axes = None,
-    title: None | str = None,
-    **kwargs,
-) -> plt.Axes:
-    """Plot a 2-d image array from an image stack. If ax is passed, the function will be plotted in
-    the provided axis. Additional kwargs are passed to :py:func:`plt.imshow`.
-
-    :param image: 2-d image array from an image stack to plot.
-    :param ax: Axes to plot on. If not passed, defaults to the current axes.
-    :param title: Title to assign the Axes being plotted on.
-    :param kwargs: Additional keyword arguments to pass to plt.imshow.
-    :return: The matplotlib Axes containing the plot.
-
-    :example:
-
-        .. code-block:: python
-
-            import numpy as np
-            import matplotlib.pyplot as plt
-            from scallops.visualize.imshow import imshow_plane
-
-            # Generate a synthetic 2D image array
-            image_array = np.random.rand(512, 512)
-
-            # Plot the image using imshow_plane
-            fig, ax = plt.subplots()
-            imshow_plane(image_array, ax=ax, title="Synthetic Image", cmap="viridis")
-
-            plt.show()
-    """
-    if ax is None:
-        ax = plt.gca()
-
-    if title is not None:
-        ax.set_title(title)
-    if image.ndim > 2:
-        logger.warning("Image is not 2D, sub-setting to the last two dimensions")
-        data = image[::-2].squeeze()
-    else:
-        data = image
-    # set imshow default kwargs
-    if "cmap" not in kwargs:
-        kwargs["cmap"] = plt.cm.gray
-
-    ax.imshow(data, **kwargs)
-    ax.axis("off")
-    return ax
 
 
 def plot_plate(

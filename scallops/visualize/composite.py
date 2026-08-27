@@ -19,9 +19,9 @@ from scipy import ndimage as ndi
 
 from scallops.experiment.elements import Experiment
 from scallops.visualize.utils import (
-    _create_color_map_for_rgb,
     _get_image_crop_slice,
     _wrap_cols,
+    create_color_map_for_rgb,
 )
 
 
@@ -146,7 +146,7 @@ def _imcomposite_image(
     for j in range(dim_size):
         cmap_j = cmap[j % len(cmap)] if isinstance(cmap, Sequence) else cmap
         if cmap_j is None:
-            cmap_j = _create_color_map_for_rgb(rgbs[j % len(rgbs)])
+            cmap_j = create_color_map_for_rgb(rgbs[j % len(rgbs)])
         if isinstance(cmap_j, str):
             cmap_j = plt.get_cmap(cmap_j)
         dim_index_to_cmap[j] = cmap_j
@@ -173,6 +173,7 @@ def _imcomposite_image(
             denom = vmax_j - vmin_j
             if denom == 0:
                 denom = 1
+
             image_values = (image_values - vmin_j) / denom
             image_values[image_values > 1] = 1
             image_values[image_values < 0] = 0
@@ -374,7 +375,14 @@ def imcomposite(
             ax = imcomposite(image.isel(t=0, z=0), labels, figsize=(8, 8), dim="c")
             plt.show()
     """
-
+    if labels is not None and labels.dtype in (np.uint16, np.uint8):
+        labels = labels.astype(np.uint32, copy=False)
+    if (
+        labels_contour is not None
+        and not isinstance(labels_contour, bool)
+        and labels_contour.dtype in (np.uint16, np.uint8)
+    ):
+        labels_contour = labels_contour.astype(np.uint32, copy=False)
     if col_facet is not None or row_facet is not None:
         col_facet_values = (
             image.coords[col_facet].values if col_facet is not None else [None]
