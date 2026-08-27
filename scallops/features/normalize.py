@@ -13,9 +13,9 @@ from flox import rechunk_for_blockwise
 from flox.lib import _issorted
 from scipy.linalg import fractional_matrix_power
 from scipy.stats import median_abs_deviation
+from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
-from scallops.features.decomposition import PCA
 from scallops.features.util import (
     _get_names_from_pd_query,
     _slice_anndata,
@@ -508,12 +508,17 @@ def typical_variation_normalization(
         stds = xdata_ref.std(dim="obs")
         xdata = (xdata - means) / stds
         xdata_ref = xdata.query(obs=reference_query)
-    d = PCA(**pca_kwargs if pca_kwargs is not None else {})
+    default_pca_kwargs = dict(random_state=239753)
     if isinstance(xdata_ref.data, da.Array):
         xdata_ref.data = xdata_ref.data.compute()
+        default_pca_kwargs["copy"] = False
+    if pca_kwargs is not None:
+        default_pca_kwargs.update(pca_kwargs)
+    d = PCA(**default_pca_kwargs)
 
     d.fit(xdata_ref.data)
-    del xdata_ref
+    if isinstance(xdata.data, da.Array):
+        del xdata_ref
 
     xdata.data = d.transform(xdata.data)
     xdata_ref = xdata.query(obs=reference_query)
