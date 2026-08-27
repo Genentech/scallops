@@ -514,8 +514,9 @@ def typical_variation_normalization(
         default_pca_kwargs["copy"] = False
     if pca_kwargs is not None:
         default_pca_kwargs.update(pca_kwargs)
-    d = PCA(**default_pca_kwargs)
 
+    d = PCA(**default_pca_kwargs)
+    logger.info(f"TVN, # of labels for PCA: {xdata_ref.data.shape[0]:,}")
     d.fit(xdata_ref.data)
     if isinstance(xdata.data, da.Array):
         del xdata_ref
