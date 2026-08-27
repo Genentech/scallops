@@ -75,7 +75,7 @@ def _wrap_cols(ncol: int, col_wrap: int) -> tuple[int, int]:
     return ncol, nrow
 
 
-def _create_color_map_for_rgb(rgb: np.ndarray | list[float]) -> ListedColormap:
+def create_color_map_for_rgb(rgb: np.ndarray | list[float]) -> ListedColormap:
     """Create a colormap from an RGB array of length 3.
 
     :param rgb: An RGB array or list with three float values (one per channel).

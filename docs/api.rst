@@ -217,6 +217,7 @@ Composites
         scallops.visualize.composite.experiment_composite
         scallops.visualize.composite.imcomposite
         scallops.visualize.composite.label_montage
+        scallops.visualize.composite.montage_plot
 
 Cross-talk
 -----------
@@ -263,7 +264,6 @@ Imshow
     .. autosummary::
         :toctree: .
 
-        scallops.visualize.imshow.imshow_plane
         scallops.visualize.imshow.plot_percentile_montage
         scallops.visualize.imshow.plot_plate
         scallops.visualize.imshow.tiles_over_stitch
@@ -279,22 +279,6 @@ Napari
         scallops.visualize.napari.add_bases
         scallops.visualize.napari.radial_distortion_estimation
 
-Registration plots
--------------------
-
-    .. autosummary::
-        :toctree: .
-
-        scallops.visualize.registration.diagnose_registration
-        scallops.visualize.registration.plot_registration
-
-Segmentation plots
--------------------
-
-    .. autosummary::
-        :toctree: .
-
-        scallops.visualize.segmentation.plot_segmentation
 
 
 Visualization Utilities
