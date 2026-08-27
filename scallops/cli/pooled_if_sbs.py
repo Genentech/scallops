@@ -705,12 +705,9 @@ def merge_main(arguments: argparse.Namespace):
     :param arguments: argparse namespace containing command-line arguments.
     """
     sbs = arguments.sbs
-    dask_scheduler_url = arguments.client
-    dask_cluster_parameters = (
-        load_json(arguments.dask_cluster)
-        if arguments.dask_cluster is not None
-        else _dask_workers_threads()
-    )
+    dask_server_url = arguments.client
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     phenotype_paths = arguments.phenotype
     output_dir = arguments.output
     output_format = arguments.format
@@ -784,7 +781,7 @@ def merge_main(arguments: argparse.Namespace):
     else:
         with (
             _create_default_dask_config(),
-            _create_dask_client(dask_scheduler_url, **dask_cluster_parameters),
+            _create_dask_client(dask_server_url, **dask_cluster_parameters),
         ):
             for path in paths:
                 image_key, sbs_path, phenotype_paths, phenotype_suffix = path
@@ -830,12 +827,12 @@ def spot_detect_main(arguments: argparse.Namespace):
     force = arguments.force
     subset = arguments.subset
     expected_cycles = arguments.expected_cycles
-    dask_scheduler_url = arguments.client
+    dask_server_url = arguments.client
     dask_cluster_parameters = (
-        load_json(arguments.dask_cluster)
-        if arguments.dask_cluster is not None
-        else _dask_workers_threads()
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     save_keys = ["peaks", "max"]
     if optional_save is not None:
         save_keys += list(optional_save)
@@ -849,7 +846,7 @@ def spot_detect_main(arguments: argparse.Namespace):
     exp_gen = _set_up_experiment(images, image_pattern, group_by, subset=subset)
     with (
         _create_default_dask_config(),
-        _create_dask_client(dask_scheduler_url, **dask_cluster_parameters),
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         delayed_results = []
         for img in exp_gen:
@@ -1214,12 +1211,12 @@ def reads_main(arguments: argparse.Namespace):
         except ValueError:
             pass
     spots = arguments.spots
-    dask_scheduler_url = arguments.client
+    dask_server_url = arguments.client
     dask_cluster_parameters = (
-        load_json(arguments.dask_cluster)
-        if arguments.dask_cluster is not None
-        else _dask_workers_threads()
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     labels = arguments.labels
     read_filter = arguments.read_quality_filter
     barcode_column = arguments.barcode_col
@@ -1269,7 +1266,7 @@ def reads_main(arguments: argparse.Namespace):
         _create_default_dask_config(
             {"distributed.admin.large-graph-warning-threshold": "250MB"}
         ),
-        _create_dask_client(dask_scheduler_url, **dask_cluster_parameters),
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         for key in image_keys:
             reads_pipeline(

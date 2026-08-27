@@ -34,6 +34,7 @@ from dask.bag import from_sequence
 from scallops.cli.util import (
     _create_dask_client,
     _create_default_dask_config,
+    _dask_workers_threads,
     _get_cli_logger,
     cli_metadata,
     load_json,
@@ -148,12 +149,13 @@ def run_illumination_correction_agg(arguments: argparse.Namespace):
     """
     image_path = arguments.images
     dask_server_url = arguments.client
-    default_dask_cluster_parameters = dict(processes=False)
+
     dask_cluster_parameters = (
-        load_json(arguments.dask_cluster)
-        if arguments.dask_cluster is not None
-        else default_dask_cluster_parameters
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads(processes=False)
 
     image_pattern = arguments.image_pattern
     group_by = arguments.groupby

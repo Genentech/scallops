@@ -36,7 +36,8 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
-
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     image_patterns = arguments.image_pattern
     output_dir = arguments.output
     merge_dir = arguments.merge
@@ -68,8 +69,6 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         raise ValueError("Please specify `mask` flag when providing `gaussian sigma`")
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
-    if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads()
 
     merge_dir_sep = None
     if merge_dir is not None:
