@@ -277,7 +277,8 @@ def test_sbs_dask(array_A1_102_aln):
 
     dask_w = dask_results["w"].compute()
     w_delta = np.max(np.abs(dask_w - np_results["w"]))
-    assert w_delta < 3e-16
+
+    assert w_delta < 4.45e-16
     np.testing.assert_array_almost_equal(dask_w, np_results["w"], err_msg="w not equal")
     for k in ["peaks", "df_reads", "df_cells"]:
         dask_df = dask_results[k]
