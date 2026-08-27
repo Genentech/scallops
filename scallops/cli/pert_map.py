@@ -135,6 +135,8 @@ def run_recall(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     output = arguments.output
     recall_thresholds = arguments.threshold
     if not force and is_parquet_file(output):
@@ -233,6 +235,8 @@ def run_set_enrichment(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     output = arguments.output
     min_genes = 10  # arguments.min_genes
     if not force and is_parquet_file(output):
@@ -286,6 +290,8 @@ def run_similarity_matrix(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     output = arguments.output
 
     if not force and is_anndata(output):
@@ -398,6 +404,8 @@ def run_tvn(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=6)
     reference_query = arguments.reference_query
     by = arguments.by
     output = arguments.output
@@ -459,6 +467,8 @@ def run_pca(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     n_components = arguments.components
     whiten = arguments.whiten
     output = arguments.output
@@ -540,6 +550,8 @@ def run_rank_features(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
 
     method = arguments.rank_method
 
@@ -654,6 +666,8 @@ def run_norm_features(arguments: argparse.Namespace):
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     reference = arguments.reference_query
     output = arguments.output
 
@@ -783,6 +797,8 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
+    if dask_server_url is None and arguments.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
     output = arguments.output
 
     if not force and is_anndata(output):

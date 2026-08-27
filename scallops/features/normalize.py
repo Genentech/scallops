@@ -511,7 +511,7 @@ def typical_variation_normalization(
     d = PCA(**pca_kwargs if pca_kwargs is not None else {})
     if isinstance(xdata_ref.data, da.Array):
         xdata_ref.data = xdata_ref.data.compute()
-    xp = get_namespace(xdata_ref.data)  # TODO use dask?
+
     d.fit(xdata_ref.data)
     del xdata_ref
 
@@ -531,7 +531,7 @@ def typical_variation_normalization(
             "PCs": components_,
         }
     }
-
+    xp = get_namespace(xdata.data)
     if by is not None:
         ref_grouped = xdata_ref.groupby("obs")
         ref_mean = ref_grouped.mean()
@@ -551,9 +551,10 @@ def typical_variation_normalization(
             n_features
         )
         target_cov = fractional_matrix_power(target_cov, 0.5)
+        if isinstance(xdata.data, da.Array):
+            target_cov = da.from_array(target_cov)
         grouped = xdata.groupby("obs")
         results = []
-
         for key, group in grouped:
             source_cov = xp.cov(
                 group.query(obs=reference_query).data, rowvar=False, ddof=1
