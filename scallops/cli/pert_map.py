@@ -405,7 +405,8 @@ def run_tvn(arguments: argparse.Namespace):
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=6)
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=12)
+
     reference_query = arguments.reference_query
     by = arguments.by
     output = arguments.output
@@ -418,7 +419,7 @@ def run_tvn(arguments: argparse.Namespace):
     if not no_version:
         metadata.update(cli_metadata())
     with (
-        _create_default_dask_config(),
+        _create_default_dask_config({"distributed.worker.memory.pause": 0.9}),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
