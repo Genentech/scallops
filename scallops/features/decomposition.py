@@ -20,6 +20,7 @@ class PCA:
         whiten: bool = False,
         progress: bool = True,
         random_state: int | None = 239753,
+        **kwargs,
     ):
         """Embed data using PCA
 
@@ -29,6 +30,7 @@ class PCA:
         :param whiten: Whether to use whitening.
         :param progress: Whether to show progress bar for incremental PCA.
         :param random_state: Random seed.
+        :param kwargs: Additional kwargs to pass to PCA.
         """
         self.n_components = n_components
         self.batch_size = batch_size
@@ -36,6 +38,7 @@ class PCA:
         self.whiten = whiten
         self.progress = progress
         self.random_state = random_state
+        self.kwargs = kwargs
 
     @property
     def components_(self):
@@ -77,10 +80,11 @@ class PCA:
                 from cuml.decomposition import IncrementalPCA
             else:
                 from sklearn.decomposition import IncrementalPCA
-
-            d = IncrementalPCA(
+            kwargs = dict(
                 n_components=self.n_components, whiten=self.whiten, copy=not is_dask
             )
+            kwargs.update(self.kwargs)
+            d = IncrementalPCA(**kwargs)
             batches = list(
                 gen_batches(
                     X.shape[0], self.batch_size, min_batch_size=self.n_components or 0
@@ -112,6 +116,7 @@ class PCA:
             kwargs = dict(n_components=self.n_components, whiten=self.whiten)
             if "random_state" in sig.parameters.keys():
                 kwargs["random_state"] = self.random_state
+            kwargs.update(self.kwargs)
             d = PCA(**kwargs)
             d.fit(X)
         self.d = d
