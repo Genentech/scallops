@@ -706,6 +706,10 @@ def merge_main(arguments: argparse.Namespace):
     """
     sbs = arguments.sbs
     dask_server_url = arguments.client
+
+    dask_cluster_parameters = (
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+    )
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
     phenotype_paths = arguments.phenotype
