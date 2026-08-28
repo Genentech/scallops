@@ -811,6 +811,14 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
     n_features = arguments.n_features
     min_feature_variance = arguments.min_feature_variance
     max_feature_variance = arguments.max_feature_variance
+    if (
+        n_features is None
+        and min_feature_variance is None
+        and max_feature_variance is None
+    ):
+        raise ValueError(
+            "Please specify --n-features, --min-feature-variance, or --max-feature-variance"
+        )
     max_cell_fraction_not_finite = arguments.max_cell_fraction_not_finite
     if min_feature_variance is not None and min_feature_variance < 0:
         min_feature_variance = None
