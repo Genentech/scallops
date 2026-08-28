@@ -26,31 +26,15 @@ def experiment_c():
     )
 
 
-@pytest.fixture(scope="module", autouse=True)
-def experiment_c_dask():
-    return read_experiment(
-        str(__experimentc_dir__.joinpath("input")),
-        "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
-        dask=True,
-    )
-
-
 @pytest.fixture(scope="module", autouse=False)
-def dask_A1_102_cells():
-    return read_image(
-        str(__processfig4_dir__.joinpath("10X_A1_Tile-102.cells.tif")), dask=True
-    )
-
-
-@pytest.fixture(scope="module", autouse=False)
-def array_A1_102_cells():
+def experiment_c_A1_102_cells():
     return read_image(
         str(__processfig4_dir__.joinpath("10X_A1_Tile-102.cells.tif")), dask=False
     )
 
 
 @pytest.fixture(scope="module", autouse=False)
-def array_A1_102_alnpheno():
+def experiment_c_A1_102_pheno_aligned():
     return read_image(
         str(__processfig4_dir__.joinpath("10X_A1_Tile-102.phenotype_aligned.tif")),
         dask=False,
@@ -58,7 +42,7 @@ def array_A1_102_alnpheno():
 
 
 @pytest.fixture(scope="module", autouse=False)
-def array_A1_102_pheno():
+def experiment_c_A1_102_pheno():
     return read_image(
         str(__pheno_dir__.joinpath("10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif")),
         dask=False,
@@ -66,30 +50,18 @@ def array_A1_102_pheno():
 
 
 @pytest.fixture(scope="module", autouse=False)
-def array_A1_103_pheno():
-    return read_image(
-        str(__pheno_dir__.joinpath("10X_c0-DAPI-p65ab_A1_Tile-103.phenotype.tif")),
-        dask=False,
-    )
+def experiment_c_A1_102_aligned():
+    return (
+        read_image(
+            str(__processfig4_dir__.joinpath("10X_A1_Tile-102.aligned.tif")), dask=False
+        )
+        .transpose(*("z", "c", "t", "y", "x"))
+        .rename({"z": "t", "t": "z"})
+    )  # ops swaps z and t in saved tif
 
 
 @pytest.fixture(scope="module", autouse=False)
-def dask_A1_102_alnpheno():
-    return read_image(
-        str(__processfig4_dir__.joinpath("10X_A1_Tile-102.phenotype_aligned.tif")),
-        dask=True,
-    )
-
-
-@pytest.fixture(scope="module", autouse=False)
-def array_A1_102_aln():
-    return read_image(
-        str(__processfig4_dir__.joinpath("10X_A1_Tile-102.aligned.tif")), dask=False
-    )
-
-
-@pytest.fixture(scope="module", autouse=False)
-def array_A1_102_nuclei():
+def experiment_c_A1_102_nuclei():
     return read_image(
         str(__processfig4_dir__.joinpath("10X_A1_Tile-102.nuclei.tif")), dask=False
     )

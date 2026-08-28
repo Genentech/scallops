@@ -147,19 +147,19 @@ def test_segment_cells_cellpose(image):
 
 
 @pytest.mark.segmentation_watershed
-def test_segment_nuclei_watershed_ops(experiment_c, array_A1_102_nuclei):
+def test_segment_nuclei_watershed_ops(experiment_c, experiment_c_A1_102_nuclei):
     imagec = experiment_c.images["A1-102"]
     labels = segment_nuclei_watershed(imagec.isel(t=0, z=0))
-    nuclei = array_A1_102_nuclei.squeeze().data
+    nuclei = experiment_c_A1_102_nuclei.squeeze().data
     np.testing.assert_equal(labels, nuclei)
 
 
 @pytest.mark.segmentation_watershed
 def test_segment_cells_watershed_ops(
-    experiment_c, array_A1_102_cells, array_A1_102_nuclei
+    experiment_c, experiment_c_A1_102_cells, experiment_c_A1_102_nuclei
 ):
     imagec = experiment_c.images["A1-102"].isel(z=0)
-    nuclei = array_A1_102_nuclei.squeeze().data
+    nuclei = experiment_c_A1_102_nuclei.squeeze().data
     labels, _ = segment_cells_watershed(
         imagec,
         nuclei=nuclei,
@@ -168,7 +168,7 @@ def test_segment_cells_watershed_ops(
         watershed_method="binary",
     )
     labels = remove_boundary_labels(labels)
-    known_good_labels = array_A1_102_cells.squeeze().data
+    known_good_labels = experiment_c_A1_102_cells.squeeze().data
     n = (labels.astype(bool) != known_good_labels.astype(bool)).sum()
     # slight differences due to versions of skimage
     assert n <= 10
@@ -257,9 +257,9 @@ def run_segment_nuclei_cmd(tmp_path, segment_method, extra_args=None):
 
 
 @pytest.mark.segmentation_watershed
-def test_segment_cells_cmd(experiment_c_dask, tmp_path):
+def test_segment_cells_cmd(experiment_c, tmp_path):
     tmp_path = str(tmp_path / "test.zarr")
-    imagec = experiment_c_dask.images["A1-102"].isel(t=0, z=0)
+    imagec = experiment_c.images["A1-102"].isel(t=0, z=0)
     nuclei_labels = segment_nuclei_watershed(imagec)
     exp = Experiment()
     exp.labels["A1-102-nuclei"] = nuclei_labels

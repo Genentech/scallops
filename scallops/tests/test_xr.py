@@ -4,30 +4,23 @@ import xarray as xr
 from scallops.xr import apply_data_array
 
 
-@pytest.fixture
-def image(array_A1_102_aln):
-    return array_A1_102_aln.transpose(*("z", "c", "t", "y", "x")).rename(
-        {"z": "t", "t": "z"}
-    )  # ops swaps z and t in saved tif
-
-
 @pytest.mark.io
-def test_data_array(image):
+def test_data_array(experiment_c_A1_102_aligned):
     def add_data_array(x: xr.DataArray, y: float):
         return x + y
 
-    _apply_data_array(add_data_array, image)
+    _apply_data_array(add_data_array, experiment_c_A1_102_aligned)
 
 
 @pytest.mark.io
-def test_numpy(image):
+def test_numpy(experiment_c_A1_102_aligned):
     def add_numpy(x: xr.DataArray, y: float):
         return (x + y).values
 
-    _apply_data_array(add_numpy, image)
+    _apply_data_array(add_numpy, experiment_c_A1_102_aligned)
 
 
-def _apply_data_array(f, image):
-    result = apply_data_array(image, ["t", "c"], f, **dict(y=2))
-    assert result.sizes == image.sizes
-    assert ((result - 2) != image).sum() == 0
+def _apply_data_array(f, experiment_c_A1_102_aligned):
+    result = apply_data_array(experiment_c_A1_102_aligned, ["t", "c"], f, **dict(y=2))
+    assert result.sizes == experiment_c_A1_102_aligned.sizes
+    assert ((result - 2) != experiment_c_A1_102_aligned).sum() == 0

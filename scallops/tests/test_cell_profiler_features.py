@@ -33,8 +33,8 @@ from scallops.segmentation.util import relabel_sequential
 
 
 @pytest.mark.features
-def test_neighbors(array_A1_102_cells):
-    label_image = array_A1_102_cells.squeeze().data
+def test_neighbors(experiment_c_A1_102_cells):
+    label_image = experiment_c_A1_102_cells.squeeze().data
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
     features_cp = measureobjectneighbors(
@@ -57,17 +57,12 @@ def test_neighbors(array_A1_102_cells):
 
 
 @pytest.mark.features
-def test_intensity(array_A1_102_cells, array_A1_102_pheno):
-    label_image = array_A1_102_cells.squeeze().data
+def test_intensity(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
+    label_image = experiment_c_A1_102_cells.squeeze().data
     intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
+        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
+
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
     c = [0, 1]
@@ -131,18 +126,12 @@ def test_intensity(array_A1_102_cells, array_A1_102_pheno):
 
 
 @pytest.mark.features
-def test_colocalization(array_A1_102_cells, array_A1_102_pheno):
-    label_image = array_A1_102_cells.squeeze().data
+def test_colocalization(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
+    label_image = experiment_c_A1_102_cells.squeeze().data
     label_image = relabel_sequential(label_image)
 
     intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
+        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
 
     unique_labels = np.unique(label_image)
@@ -225,16 +214,10 @@ def test_colocalization(array_A1_102_cells, array_A1_102_pheno):
 
 
 @pytest.mark.features
-def test_haralick_features(array_A1_102_cells, array_A1_102_pheno):
-    label_image = array_A1_102_cells.squeeze().data
+def test_haralick_features(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
+    label_image = experiment_c_A1_102_cells.squeeze().data
     intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
+        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
@@ -265,18 +248,13 @@ def test_haralick_features(array_A1_102_cells, array_A1_102_pheno):
 
 
 @pytest.mark.features
-def test_intensity_distribution(array_A1_102_cells, array_A1_102_pheno):
-    label_image = relabel_sequential(array_A1_102_cells.squeeze().data)
+def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
+    label_image = relabel_sequential(experiment_c_A1_102_cells.squeeze().data)
 
     intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
+        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
+
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
     c = [0, 1]
@@ -317,16 +295,10 @@ def test_intensity_distribution(array_A1_102_cells, array_A1_102_pheno):
 
 
 @pytest.mark.features
-def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
-    label_image = array_A1_102_cells.squeeze().data
+def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
+    label_image = experiment_c_A1_102_cells.squeeze().data
     intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
+        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
     label_image_dask = da.from_array(label_image, chunks=(200, 200))
     intensity_image_dask = da.from_array(intensity_image, chunks=(200, 200, 1))

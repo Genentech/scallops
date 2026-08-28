@@ -36,15 +36,13 @@ __data__ = __tests__.joinpath("data")
 
 @pytest.mark.parametrize("mask", [True, False])
 @pytest.mark.features
-def test_extract_crops_cmd(tmp_path, array_A1_102_cells, array_A1_102_alnpheno, mask):
-    image = (
-        array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x")).rename(
-            {"z": "t", "t": "z"}
-        )
-    ).isel(t=0, z=0)  # ops swaps z and t in saved tif
+def test_extract_crops_cmd(
+    tmp_path, experiment_c_A1_102_cells, experiment_c_A1_102_pheno_aligned, mask
+):
+    image = experiment_c_A1_102_pheno_aligned.isel(t=0, z=0)
 
     image.data = da.from_array(image.data, chunks=(1, 200, 200))
-    labels = array_A1_102_cells.squeeze().copy()
+    labels = experiment_c_A1_102_cells.squeeze().copy()
     labels.values[labels.values != 1523] = 0
 
     zarr_path = str(tmp_path / "test.zarr")
@@ -87,13 +85,11 @@ def test_extract_crops_cmd(tmp_path, array_A1_102_cells, array_A1_102_alnpheno, 
 
 
 @pytest.mark.features
-def test_to_label_crops(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
-    label_image = da.from_array(array_A1_102_cells.squeeze().data)
-    intensity_image = (
-        array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x"))
-        .rename({"z": "t", "t": "z"})
-        .isel(t=0, z=0)
-    ).data  # ops swaps z and t in saved tif
+def test_to_label_crops(
+    tmp_path, experiment_c_A1_102_cells, experiment_c_A1_102_pheno_aligned
+):
+    label_image = da.from_array(experiment_c_A1_102_cells.squeeze().data)
+    intensity_image = experiment_c_A1_102_pheno_aligned.isel(t=0, z=0).data
     output_dir_dask = str(tmp_path / "crops-mask-dask")
     output_dir_zarr = str(tmp_path / "crops-mask-zarr")
     output_dir_no_mask = str(tmp_path / "crops-dask")
@@ -181,18 +177,12 @@ def _label_features(
 
 
 @pytest.mark.features
-def test_features_dask(array_A1_102_cells, array_A1_102_pheno):
-    label_image = array_A1_102_cells.squeeze().data
+def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
+    label_image = experiment_c_A1_102_cells.squeeze().data
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
     intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
+        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
 
     region_props_features = [
@@ -477,15 +467,13 @@ def test_create_funcs():
 
 
 @pytest.mark.features
-def test_features_cli_multi_images(tmp_path, array_A1_102_cells, array_A1_102_alnpheno):
+def test_features_cli_multi_images(
+    tmp_path, experiment_c_A1_102_cells, experiment_c_A1_102_pheno_aligned
+):
     # test that multiple images are stacked
-    image = (
-        array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x")).rename(
-            {"z": "t", "t": "z"}
-        )
-    ).isel(t=0, z=0)  # ops swaps z and t in saved tif
+    image = experiment_c_A1_102_pheno_aligned.isel(t=0, z=0)
 
-    labels = array_A1_102_cells.squeeze().copy()
+    labels = experiment_c_A1_102_cells.squeeze().copy()
     labels.values[labels.values != 17] = 0
     zarr_path1 = tmp_path.joinpath("test1.zarr")
     zarr_path2 = tmp_path.joinpath("test2.zarr")
@@ -548,8 +536,8 @@ def test_features_cli_multi_images(tmp_path, array_A1_102_cells, array_A1_102_al
 
 
 @pytest.mark.features
-def test_features_cli(tmp_path, array_A1_102_cells):
-    labels = array_A1_102_cells.squeeze().copy()
+def test_features_cli(tmp_path, experiment_c_A1_102_cells):
+    labels = experiment_c_A1_102_cells.squeeze().copy()
     labels.values[labels.values != 17] = 0
     rng = np.random.default_rng(1)
     image = xr.DataArray(
@@ -615,14 +603,14 @@ def test_features_cli(tmp_path, array_A1_102_cells):
 
 
 @pytest.mark.features
-def test_phenotype_ops(array_A1_102_cells, array_A1_102_alnpheno, array_A1_102_nuclei):
-    cells = array_A1_102_cells.squeeze().data
-    nuclei = array_A1_102_nuclei.squeeze().data
-    pheno_aligned = (
-        array_A1_102_alnpheno.transpose(*("z", "c", "t", "y", "x")).rename(
-            {"z": "t", "t": "z"}
-        )
-    ).isel(t=0, z=0)  # ops swaps z and t in saved tif
+def test_phenotype_ops(
+    experiment_c_A1_102_cells,
+    experiment_c_A1_102_pheno_aligned,
+    experiment_c_A1_102_nuclei,
+):
+    cells = experiment_c_A1_102_cells.squeeze().data
+    nuclei = experiment_c_A1_102_nuclei.squeeze().data
+    pheno_aligned = experiment_c_A1_102_pheno_aligned.isel(t=0, z=0)
     labels = dict(cell=cells, nuclei=nuclei)
     features = dict(
         cell=["sizeshape"],
@@ -704,16 +692,10 @@ def diff_pheno(df_test):
 
 
 @pytest.mark.features
-def test_pftas_features(array_A1_102_cells, array_A1_102_pheno):
-    label_image = array_A1_102_cells.squeeze().data
+def test_pftas_features(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
+    label_image = experiment_c_A1_102_cells.squeeze().data
     intensity_image = (
-        (
-            array_A1_102_pheno.transpose(*("z", "c", "t", "y", "x"))
-            .rename({"z": "t", "t": "z"})
-            .isel(t=0, z=0)
-        )
-        .transpose(*("y", "x", "c"))
-        .data
+        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
@@ -810,13 +792,13 @@ def test_distance_from_bounding_box_to_edge():
 
 
 @pytest.mark.features
-def test_fish_spots(array_A1_102_cells):
+def test_fish_spots(experiment_c_A1_102_cells):
     pytest.importorskip("ufish")
     image = read_image(
         "scallops/tests/data/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
     )
     image = image.squeeze().transpose(*("y", "x", "c")).data
-    cells = array_A1_102_cells.squeeze().data
+    cells = experiment_c_A1_102_cells.squeeze().data
     cells = cells[500:550, 500:550]
     image = image[500:550, 500:550]
     unique_labels = np.unique(cells)
