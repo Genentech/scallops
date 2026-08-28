@@ -626,9 +626,9 @@ def test_stitch_z_stack(tmp_path):
 
 
 @pytest.mark.io
-def test_stitch_align_across_channels(tmp_path, array_A1_102_pheno):
+def test_stitch_align_across_channels(tmp_path, experiment_c_A1_102_pheno):
     input_path = tmp_path / "input"
-    data = array_A1_102_pheno.squeeze().data
+    data = experiment_c_A1_102_pheno.squeeze().data
 
     img = data[0]
     img = np.stack((img, img))

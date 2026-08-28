@@ -66,7 +66,7 @@ def create_itk_param_file(tmp_path):
 
 
 @pytest.mark.registration
-def test_register_cross_correlation_cli(tmp_path, array_A1_102_aln):
+def test_register_cross_correlation_cli(tmp_path, experiment_c_A1_102_aligned):
     output_dir = os.path.join(tmp_path, "cross-correlation-output.zarr")
     cmd = [
         "python",
@@ -88,11 +88,9 @@ def test_register_cross_correlation_cli(tmp_path, array_A1_102_aln):
         "--output=" + output_dir,
     ]
     subprocess.check_call(cmd)
-    aligned = array_A1_102_aln.transpose(*("z", "c", "t", "y", "x")).rename(
-        {"z": "t", "t": "z"}
-    )  # ops swaps z and t in saved tif
+
     registered_image = read_image(os.path.join(output_dir, "images", "A1-102"))
-    np.testing.assert_equal(registered_image.data, aligned.data)
+    np.testing.assert_equal(registered_image.data, experiment_c_A1_102_aligned.data)
 
 
 @pytest.mark.registration
@@ -139,7 +137,7 @@ def test_register_itk_cli_known_shift(tmp_path):
 
 
 @pytest.mark.registration
-def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
+def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
     param_file = create_itk_param_file(tmp_path)
     transform_output_dir = os.path.join(tmp_path, "transform")
     elastix_output_dir = os.path.join(tmp_path, "elastix-output.zarr")
@@ -149,8 +147,8 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
     exp = Experiment()
     reference_t = 2
     test_t = 10
-    array_A1_102_nuclei = array_A1_102_nuclei.squeeze()
-    exp.labels[f"A1-102-{reference_t}-mask"] = array_A1_102_nuclei
+    experiment_c_A1_102_nuclei = experiment_c_A1_102_nuclei.squeeze()
+    exp.labels[f"A1-102-{reference_t}-mask"] = experiment_c_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
 
     cmd = [
@@ -227,7 +225,7 @@ def test_register_itk_cli_t_reference(tmp_path, array_A1_102_nuclei):
     )
     # test load and apply saved transform for labels
     warped_labels = itk_transform_labels(
-        image=array_A1_102_nuclei,
+        image=experiment_c_A1_102_nuclei,
         transform_parameter_object=transform_parameter_object,
         image_spacing=(1, 1),
     )
@@ -361,7 +359,7 @@ def test_register_transform_labels_moving_only(tmp_path):
 
 
 @pytest.mark.registration
-def test_register_itk_cli(tmp_path, array_A1_102_nuclei):
+def test_register_itk_cli(tmp_path, experiment_c_A1_102_nuclei):
     st = SimilarityTransform(translation=[100, 20])
     image = read_image(
         "scallops/tests/data/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
@@ -387,7 +385,7 @@ def test_register_itk_cli(tmp_path, array_A1_102_nuclei):
     )
     moving_image = moving_image.isel(c=[0, 1, 2])
 
-    moving_labels = array_A1_102_nuclei.squeeze().values
+    moving_labels = experiment_c_A1_102_nuclei.squeeze().values
     moving_labels = warp(moving_labels, st, order=0, preserve_range=True)
     moving_labels = xr.DataArray(
         resize(

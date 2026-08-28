@@ -9,7 +9,7 @@ from scallops.registration.crosscorrelation import align_image, align_images
 
 
 @pytest.mark.registration
-def test_align_images(array_A1_102_alnpheno):
+def test_align_images(experiment_c_A1_102_pheno_aligned):
     pheno_image = read_image(
         "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
@@ -18,18 +18,15 @@ def test_align_images(array_A1_102_alnpheno):
         "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
     ).images["A1-102"]
     aligned_pheno_image = align_images(image.isel(t=0, z=0), pheno_image.isel(t=0, z=0))
-    known_good_aligned_pheno_image = array_A1_102_alnpheno.transpose(
-        *("z", "c", "t", "y", "x")
-    ).rename({"z": "t", "t": "z"})  # ops swaps z and t in saved tif
 
     np.testing.assert_equal(
-        known_good_aligned_pheno_image.data.squeeze(),
+        experiment_c_A1_102_pheno_aligned.data.squeeze(),
         aligned_pheno_image.data.squeeze(),
     )
 
 
 @pytest.mark.registration
-def test_align_image(experiment_c, array_A1_102_aln):
+def test_align_image(experiment_c, experiment_c_A1_102_aligned):
     align_between_time_channel = 0  # DAPI
     image = experiment_c.images["A1-102"]
 
@@ -42,10 +39,8 @@ def test_align_image(experiment_c, array_A1_102_aln):
         align_between_time_channel=align_between_time_channel,
         filter_percentiles=[0, 90],
     )
-    aligned = array_A1_102_aln.transpose(*("z", "c", "t", "y", "x")).rename(
-        {"z": "t", "t": "z"}
-    )  # ops swaps z and t in saved tif
-    np.testing.assert_equal(aligned_image.data, aligned.data)
+
+    np.testing.assert_equal(aligned_image.data, experiment_c_A1_102_aligned.data)
     np.testing.assert_equal(aligned_image.isel(t=0).data, image.isel(t=0).data)
 
 
