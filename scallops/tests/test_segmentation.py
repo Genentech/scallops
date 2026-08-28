@@ -259,12 +259,13 @@ def run_segment_nuclei_cmd(tmp_path, segment_method, extra_args=None):
 @pytest.mark.segmentation_watershed
 def test_segment_cells_cmd(experiment_c, tmp_path):
     tmp_path = str(tmp_path / "test.zarr")
-    imagec = experiment_c.images["A1-102"].isel(t=0, z=0)
-    nuclei_labels = segment_nuclei_watershed(imagec)
+    image = experiment_c.images["A1-102"].isel(t=0, z=0)
+    image.data = da.from_array(image.data)
+    nuclei_labels = segment_nuclei_watershed(image)
     exp = Experiment()
     exp.labels["A1-102-nuclei"] = nuclei_labels
     exp.save(tmp_path)
-    cell_labels, _ = segment_cells_watershed(imagec, nuclei=nuclei_labels)
+    cell_labels, _ = segment_cells_watershed(image, nuclei=nuclei_labels)
 
     seg_args = [
         "scallops",
