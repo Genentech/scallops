@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scallops.io import read_barcodes, read_experiment, read_image
+from scallops.io import read_experiment, read_image
 
 __root__ = Path(__file__).parent
 __data_dir__ = __root__.joinpath("data")
@@ -20,7 +20,7 @@ assert __root__.joinpath(
 ).exists(), "Test files not found. Please ensure you have Git LFS installed"
 
 
-# ── Raw experiment fixtures ───────────────────────────────────────────────
+# ── Raw experiment fixtures
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -31,60 +31,15 @@ def experiment_c():
     )
 
 
-@pytest.fixture(scope="module", autouse=True)
-def experiment_c_dask():
-    return read_experiment(
-        str(__experimentc_dir__.joinpath("input")),
-        "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
-        dask=True,
-    )
-
-
-# ── Preprocessed ExperimentC fixtures ────────────────────────────────────
-
-
-@pytest.fixture(scope="module")
-def aligned_A1_102(experiment_c):
-    """Aligned 4-ch SBS image for tile A1-102 (z=0, all time-channels)."""
-    from scallops.registration.crosscorrelation import align_image
-
-    image = experiment_c.images["A1-102"].isel(z=0)
-    return align_image(
-        image,
-        align_within_time_channels=[1, 2, 3, 4],
-        align_between_time_channel=0,
-        filter_percentiles=[0, 90],
-    )
-
-
-@pytest.fixture(scope="module")
-def barcodes_A1_102(aligned_A1_102):
-    """Barcode whitelist DataFrame for ExperimentC tile A1-102."""
-    return read_barcodes(
-        str(__experimentc_dir__.joinpath("barcodes.csv")),
-        aligned_A1_102.t.values - 1,
-    )
-
-
-# ── Image fixtures from process_fig4 ─────────────────────────────────────
-
-
 @pytest.fixture(scope="module", autouse=False)
-def dask_A1_102_cells():
-    return read_image(
-        str(__processfig4_dir__.joinpath("10X_A1_Tile-102.cells.tif")), dask=True
-    )
-
-
-@pytest.fixture(scope="module", autouse=False)
-def array_A1_102_cells():
+def experiment_c_A1_102_cells():
     return read_image(
         str(__processfig4_dir__.joinpath("10X_A1_Tile-102.cells.tif")), dask=False
     )
 
 
 @pytest.fixture(scope="module", autouse=False)
-def array_A1_102_alnpheno():
+def experiment_c_A1_102_pheno_aligned():
     return read_image(
         str(__processfig4_dir__.joinpath("10X_A1_Tile-102.phenotype_aligned.tif")),
         dask=False,
@@ -92,7 +47,7 @@ def array_A1_102_alnpheno():
 
 
 @pytest.fixture(scope="module", autouse=False)
-def array_A1_102_pheno():
+def experiment_c_A1_102_pheno():
     return read_image(
         str(__pheno_dir__.joinpath("10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif")),
         dask=False,
@@ -100,36 +55,24 @@ def array_A1_102_pheno():
 
 
 @pytest.fixture(scope="module", autouse=False)
-def array_A1_103_pheno():
-    return read_image(
-        str(__pheno_dir__.joinpath("10X_c0-DAPI-p65ab_A1_Tile-103.phenotype.tif")),
-        dask=False,
-    )
+def experiment_c_A1_102_aligned():
+    return (
+        read_image(
+            str(__processfig4_dir__.joinpath("10X_A1_Tile-102.aligned.tif")), dask=False
+        )
+        .transpose(*("z", "c", "t", "y", "x"))
+        .rename({"z": "t", "t": "z"})
+    )  # ops swaps z and t in saved tif
 
 
 @pytest.fixture(scope="module", autouse=False)
-def dask_A1_102_alnpheno():
-    return read_image(
-        str(__processfig4_dir__.joinpath("10X_A1_Tile-102.phenotype_aligned.tif")),
-        dask=True,
-    )
-
-
-@pytest.fixture(scope="module", autouse=False)
-def array_A1_102_aln():
-    return read_image(
-        str(__processfig4_dir__.joinpath("10X_A1_Tile-102.aligned.tif")), dask=False
-    )
-
-
-@pytest.fixture(scope="module", autouse=False)
-def array_A1_102_nuclei():
+def experiment_c_A1_102_nuclei():
     return read_image(
         str(__processfig4_dir__.joinpath("10X_A1_Tile-102.nuclei.tif")), dask=False
     )
 
 
-# ── NIS-seq fixtures (raw TIF data) ──────────────────────────────────────
+# ── NIS-seq fixtures (raw TIF data) ──
 
 
 @pytest.fixture(scope="module")
