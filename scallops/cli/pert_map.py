@@ -114,10 +114,16 @@ def rechunk(
     if rechunk_feature_size == "":
         rechunk_feature_size = None
     if rechunk_label_size is not None or rechunk_feature_size is not None:
-        if rechunk_label_size is not None and rechunk_label_size.isdigit():
-            rechunk_label_size = int(rechunk_label_size)
-        if rechunk_feature_size is not None and rechunk_feature_size.isdigit():
-            rechunk_feature_size = int(rechunk_feature_size)
+        if rechunk_label_size is not None:
+            try:
+                rechunk_label_size = int(rechunk_label_size)
+            except ValueError:
+                pass
+        if rechunk_feature_size is not None:
+            try:
+                rechunk_feature_size = int(rechunk_feature_size)
+            except ValueError:
+                pass
         if rechunk_label_size is None:
             rechunk_label_size = data.X.chunksize[0]
         if rechunk_feature_size is None:
