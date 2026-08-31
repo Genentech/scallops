@@ -38,11 +38,14 @@ def _xarray_by_values(data: anndata.AnnData, by: str | Sequence[str]) -> xr.Data
 
 
 def pandas_to_anndata(
-    df: pd.DataFrame | dd.DataFrame, features: Sequence[str] | None = None
+    df: pd.DataFrame | dd.DataFrame,
+    features: Sequence[str] | None = None,
+    metadata_columns: Sequence[str] | None = None,
 ) -> anndata.AnnData:
     """Convert a data frame to AnnData representation
     :param df: data frame
     :param features: Features to use. If not provided, features are inferred.
+    :param metadata_columns: Columns to use as metadata. If not provided, metadata columns are non-feature columns.
     :return: AnnData object
 
     """
@@ -56,6 +59,13 @@ def pandas_to_anndata(
     )
 
     df = df.drop(columns=features)
+    if metadata_columns is None:
+        metadata_columns = df.columns[
+            ~(df.columns.str.split("_").str[1].isin(["Neighbors", "Location"]))
+        ]
+
+    if len(metadata_columns) != len(df.columns):
+        df = df[metadata_columns]
     if isinstance(df, dd.DataFrame):
         df = df.compute()
     obs = df.reset_index(drop=df.index.name is None)
