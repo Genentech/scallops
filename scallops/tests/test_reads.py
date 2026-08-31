@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from scallops.io import read_image
+from scallops.io import read_barcodes, read_image
 from scallops.reads import (
     annotated_spots,
     apply_channel_crosstalk_matrix,
@@ -155,16 +155,12 @@ def test_correct_mismatches():
 
 @pytest.mark.basecalls
 def test_dark_bases(experiment_c_A1_102_aligned):
-    """3-color simulation: G/T/A have dedicated channels; C detected by absence of signal.
-
-    Uses aligned ExperimentC image (z already selected in fixture), channels G/T/A only.
-    """
-    barcodes_A1_102 = pd.read_csv(
-        __root__.joinpath("data", "experimentC", "barcodes.csv")
+    """3-color simulation: G/T/A have dedicated channels; C detected by absence of signal."""
+    image = experiment_c_A1_102_aligned.isel(z=0, c=[1, 2, 3])
+    barcodes_A1_102 = read_barcodes(
+        str(__root__.joinpath("data", "experimentC", "barcodes.csv")),
+        image.t.values - 1,
     )
-    image = experiment_c_A1_102_aligned.isel(
-        c=[1, 2, 3]
-    )  # z=0 already selected in fixture
     loged = transform_log(image)
     bases_array = peaks_to_bases(
         maxed=max_filter(loged),
@@ -178,16 +174,16 @@ def test_dark_bases(experiment_c_A1_102_aligned):
 
 
 @pytest.mark.basecalls
-def test_dark_bases_two_color(aligned_A1_102):
+def test_dark_bases_two_color(experiment_c_A1_102_aligned):
     """2-color Illumina simulation: combine 4 SBS channels into red (A+C) and green (A+T).
 
     Encoding:  G → dark | T → green only | A → red+green | C → red only
-    Uses aligned ExperimentC image (z already selected in fixture).
     """
-    barcodes_A1_102 = pd.read_csv(
-        __root__.joinpath("data", "experimentC", "barcodes.csv")
+    image = experiment_c_A1_102_aligned.isel(z=0, c=[1, 2, 3, 4])
+    barcodes_A1_102 = read_barcodes(
+        str(__root__.joinpath("data", "experimentC", "barcodes.csv")),
+        (image.t.values - 1).tolist(),
     )
-    image = aligned_A1_102.isel(c=[1, 2, 3, 4])  # z=0 already selected
     loged = transform_log(image)
     bases_array = peaks_to_bases(
         maxed=max_filter(loged),
@@ -221,23 +217,23 @@ def test_dark_bases_two_color(aligned_A1_102):
 
 
 @pytest.mark.basecalls
-def test_decoders_4ch(aligned_A1_102, dask_A1_102_cells):
+def test_decoders_4ch(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
     """SE and polar decoders on 4-channel ExperimentC, shared preprocessing.
 
-    Notebook polar_basecalling.ipynb values:
-      decode_se    map=83.69%   cells/2,612 = 74.78%
-      decode_polar map=80.59%   cells/2,612 = 74.04%
+    Matches notebook polar_basecalling.ipynb:
+      decode_se    map≈84.6%   cells/2,612 ≈ 85.8%
+      decode_polar map≈82.0%   cells/2,612 ≈ 85.6%
     """
     from scallops.reads import decode_polar
 
-    barcodes_A1_102 = pd.read_csv(
-        __root__.joinpath("data", "experimentC", "barcodes.csv")
-    )
-
-    cells = dask_A1_102_cells.squeeze()
+    cells = experiment_c_A1_102_cells.squeeze()
     n_cells = int(cells.max())
 
-    image = aligned_A1_102.isel(c=[1, 2, 3, 4])
+    image = experiment_c_A1_102_aligned.isel(z=0, c=[1, 2, 3, 4])
+    barcodes_A1_102 = read_barcodes(
+        str(__root__.joinpath("data", "experimentC", "barcodes.csv")),
+        image.t.values - 1,
+    )
     loged = transform_log(image)
     bases_array = peaks_to_bases(
         maxed=max_filter(loged),

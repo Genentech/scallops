@@ -55,14 +55,22 @@ def experiment_c_A1_102_pheno():
 
 
 @pytest.fixture(scope="module", autouse=False)
-def experiment_c_A1_102_aligned():
-    return (
+def experiment_c_A1_102_aligned(experiment_c):
+    """Pre-saved aligned image with t-coordinates corrected to match the live experiment.
+
+    The saved TIF uses sequential 0-indexed t values; we reassign them from
+    experiment_c so that read_barcodes extracts the correct barcode characters
+    (including the cycle-6 gap present in ExperimentC).
+    """
+    img = (
         read_image(
             str(__processfig4_dir__.joinpath("10X_A1_Tile-102.aligned.tif")), dask=False
         )
         .transpose(*("z", "c", "t", "y", "x"))
         .rename({"z": "t", "t": "z"})
     )  # ops swaps z and t in saved tif
+    live_t = experiment_c.images["A1-102"].t.values
+    return img.assign_coords(t=live_t)
 
 
 @pytest.fixture(scope="module", autouse=False)
