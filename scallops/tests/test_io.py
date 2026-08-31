@@ -405,8 +405,8 @@ def test_experiment(experiment_c):
 
 
 @pytest.mark.io
-def test_read_write_labels(tmp_path, array_A1_102_nuclei):
-    nuclei = array_A1_102_nuclei.squeeze().data
+def test_read_write_labels(tmp_path, experiment_c_A1_102_nuclei):
+    nuclei = experiment_c_A1_102_nuclei.squeeze().data
 
     _write_zarr_labels(
         name="test", root=open_ome_zarr(str(tmp_path), "w"), labels=nuclei

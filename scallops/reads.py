@@ -331,7 +331,12 @@ def _crosstalk_median_ratio(a: np.ndarray) -> np.ndarray:
     return median_array
 
 
-def _agg_barcodes(df: pd.DataFrame, sort_by: str | list[str]) -> pd.DataFrame:
+def _agg_barcodes(
+    df: pd.DataFrame,
+    sort_by: str | list[str],
+    agg_columns: list[str],
+    top2_columns: list[str],
+) -> pd.DataFrame:
     """Aggregate barcode counts/intensities from a dataframe.
 
     :param df: Dataframe containing `label`, `barcode`, and `peak` columns.
@@ -347,13 +352,6 @@ def _agg_barcodes(df: pd.DataFrame, sort_by: str | list[str]) -> pd.DataFrame:
         mismatch = True
     if len(df) == 0:
         return pd.DataFrame()
-
-    peak_sum = df["peak"].sum()
-    count_sum = len(df)
-    q_mean_sum = df["Q_mean"].sum()
-    q_min_sum = df["Q_min"].sum()
-    label = df.iloc[0]["label"]
-
     barcode_groupby = df.groupby(
         "barcode", as_index=True, group_keys=True, sort=False, dropna=False
     )
@@ -361,29 +359,27 @@ def _agg_barcodes(df: pd.DataFrame, sort_by: str | list[str]) -> pd.DataFrame:
     top2 = barcode_groupby.agg("sum").nlargest(n=2, columns=sort_by)
     barcode_0 = top2.iloc[0].name
     barcode_1 = top2.iloc[1].name if len(top2) > 1 else ""
+    d = {
+        "label": [df.iloc[0]["label"]],
+        "barcode_0": [barcode_0],
+        "barcode_1": [barcode_1],
+        "mismatch": [mismatch],
+        "barcode_count": [len(df)],
+        "barcode_count_0": [barcode_sizes.loc[barcode_0]],
+    }
+    # barcode 0
+    for c in agg_columns + top2_columns:
+        d[f"barcode_{c}_0"] = [top2.iloc[0][c]]
 
-    return pd.DataFrame.from_dict(
-        {
-            "label": [label],
-            "mismatch": [mismatch],
-            "barcode_Q_mean": [q_mean_sum],
-            "barcode_Q_min": [q_min_sum],
-            "barcode_peak": [peak_sum],
-            "barcode_count": [count_sum],
-            "barcode_0": [barcode_0],
-            "barcode_Q_mean_0": [top2.iloc[0]["Q_mean"]],
-            "barcode_Q_min_0": [top2.iloc[0]["Q_min"]],
-            "barcode_peak_0": [top2.iloc[0]["peak"]],
-            "barcode_count_0": [barcode_sizes.loc[barcode_0]],
-            "barcode_Q_0": [top2.iloc[0]["Q"]],
-            "barcode_1": [barcode_1],
-            "barcode_Q_mean_1": [top2.iloc[1]["Q_mean"] if len(top2) > 1 else 0],
-            "barcode_Q_min_1": [top2.iloc[1]["Q_min"] if len(top2) > 1 else 0],
-            "barcode_peak_1": [top2.iloc[1]["peak"] if len(top2) > 1 else np.nan],
-            "barcode_count_1": [barcode_sizes.loc[barcode_1] if len(top2) > 1 else 0],
-            "barcode_Q_1": [top2.iloc[1]["Q"] if len(top2) > 1 else None],
-        }
-    )
+    # barcode 1
+    d["barcode_count_1"] = [barcode_sizes.loc[barcode_1] if len(top2) > 1 else 0]
+    default_values = {"Q_min": 0, "Q_mean": 0, "peak": np.nan}
+    for c in agg_columns + top2_columns:
+        d[f"barcode_{c}_1"] = [
+            top2.iloc[1][c] if len(top2) > 1 else default_values.get(c)
+        ]
+
+    return pd.DataFrame.from_dict(d)
 
 
 def assign_barcodes_to_labels(
@@ -396,35 +392,44 @@ def assign_barcodes_to_labels(
     :param sort_by: Which column(s) to sort aggregated barcodes by.
     :return: Table of all labels containing sequencing reads.
     """
+    apply_args = dict()
+    top2_columns = ["Q"]
+    agg_columns = ["Q_mean", "Q_min", "peak"]
+    agg_columns = [c for c in agg_columns if c in df_reads.columns]
+    top2_columns = [c for c in top2_columns if c in df_reads.columns]
+    if isinstance(df_reads, dd.DataFrame):
+        columns = []
+        columns.append(("label", df_reads["label"].dtype))
+        columns.append(("barcode_0", str))
+        columns.append(("barcode_1", str))
+        columns.append(("mismatch", bool))
+        columns.append(("barcode_count", np.int64))
+        columns.append(("barcode_count_0", np.int64))
 
-    columns = []
-    columns.append(("label", df_reads["label"].dtype))
-    columns.append(("mismatch", bool))
-    columns.append(("barcode_Q_mean", np.float64))
-    columns.append(("barcode_Q_min", np.float64))
-    columns.append(("barcode_peak", np.float64))
-    columns.append(("barcode_count", np.int64))
+        # barcode 0
+        for c in agg_columns:
+            columns.append((f"barcode_{c}_0", np.float64))
+        for c in top2_columns:
+            columns.append((f"barcode_{c}_0", str))
 
-    for i in range(2):
-        columns.append((f"barcode_{i}", object))
-        columns.append((f"barcode_Q_mean_{i}", np.float64))
-        columns.append((f"barcode_Q_min_{i}", np.float64))
-        columns.append((f"barcode_peak_{i}", np.float64))
-        columns.append((f"barcode_count_{i}", np.int64))
-        columns.append((f"barcode_Q_{i}", object))
+        # barcode 1
+        columns.append(("barcode_count_1", np.int64))
+        for c in agg_columns:
+            columns.append((f"barcode_{c}_1", np.float64))
+        for c in top2_columns:
+            columns.append((f"barcode_{c}_1", str))
+        apply_args["meta"] = dd.utils.make_meta(columns)
 
-    apply_args = (
-        dict(meta=dd.utils.make_meta(columns))
-        if isinstance(df_reads, dd.DataFrame)
-        else dict()
-    )
     apply_args["sort_by"] = sort_by
-    reads_columns = ["label", "peak", "barcode", "Q", "Q_min", "Q_mean"]
+    columns_needed = ["label", "barcode"] + agg_columns + top2_columns
+
     if "mismatches" in df_reads.columns:
-        reads_columns.append("mismatches")
+        columns_needed.append("mismatches")
     return df_reads.groupby("label", group_keys=False, sort=False, dropna=False)[
-        reads_columns
-    ].apply(_agg_barcodes, **apply_args)
+        columns_needed
+    ].apply(
+        _agg_barcodes, agg_columns=agg_columns, top2_columns=top2_columns, **apply_args
+    )
 
 
 def correct_mismatches(

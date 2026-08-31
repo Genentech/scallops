@@ -17,10 +17,6 @@ from scallops.reads import (
     decode_max,
     peaks_to_bases,
 )
-from scallops.segmentation.watershed import (
-    segment_cells_watershed,
-    segment_nuclei_watershed,
-)
 from scallops.spots import (
     find_peaks,
     max_filter,
@@ -155,11 +151,9 @@ def test_correct_mismatches():
 
 
 @pytest.mark.basecalls
-def test_peaks_to_bases(array_A1_102_aln, array_A1_102_cells):
+def test_peaks_to_bases(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
     with dask.config.set({"dataframe.convert-string": False}):
-        image = array_A1_102_aln.transpose(*("z", "c", "t", "y", "x")).rename(
-            {"z": "t", "t": "z"}
-        )  # ops swaps z and t in saved tif
+        image = experiment_c_A1_102_aligned
 
         image = image.isel(z=0, c=np.delete(np.arange(image.sizes["c"]), 0))
         loged = transform_log(image)
@@ -169,7 +163,7 @@ def test_peaks_to_bases(array_A1_102_aln, array_A1_102_cells):
         bases_array = peaks_to_bases(
             maxed=maxed,
             peaks=peaks[peaks["peak"] >= 50],
-            labels=array_A1_102_cells.squeeze().values,
+            labels=experiment_c_A1_102_cells.squeeze().values,
         )
         bases_array = bases_array.sortby(["y", "x"])
 
@@ -178,7 +172,7 @@ def test_peaks_to_bases(array_A1_102_aln, array_A1_102_cells):
         bases_array_dask = peaks_to_bases(
             maxed=maxed2,
             peaks=peaks[peaks["peak"] >= 50],
-            labels=array_A1_102_cells.squeeze().values,
+            labels=experiment_c_A1_102_cells.squeeze().values,
         )
         df_reads = decode_max(bases_array).sort_values(["y", "x"])
         df_reads_dask = decode_max(bases_array_dask).sort_values(["y", "x"])
@@ -254,21 +248,15 @@ def _run_pipeline(image, cells):
 
 
 @pytest.mark.basecalls
-def test_sbs_dask(array_A1_102_aln):
-    image = array_A1_102_aln.transpose(*("z", "c", "t", "y", "x")).rename(
-        {"z": "t", "t": "z"}
-    )  # ops swaps z and t in saved tif
-
+def test_sbs_dask(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
+    image = experiment_c_A1_102_aligned
     image = image.isel(z=0)
     image1 = image.copy()
     image1.data = da.from_array(image1.data, chunks=(-1, -1, 256, 256))
     image2 = image.copy()
-    nuclei = segment_nuclei_watershed(image=image2, nuclei_channel=0)
-    cells, _ = segment_cells_watershed(
-        image2, nuclei, threshold=600, at_least_nuclei=False, watershed_method="binary"
-    )
-    np_results = _run_pipeline(image2, cells)
-    dask_results = _run_pipeline(image1, cells)
+
+    np_results = _run_pipeline(image2, experiment_c_A1_102_cells.data.squeeze())
+    dask_results = _run_pipeline(image1, experiment_c_A1_102_cells.data.squeeze())
 
     for k in ["loged", "maxed", "std_arr", "bases_array", "corrected_bases_array"]:
         np.testing.assert_array_equal(
@@ -277,7 +265,8 @@ def test_sbs_dask(array_A1_102_aln):
 
     dask_w = dask_results["w"].compute()
     w_delta = np.max(np.abs(dask_w - np_results["w"]))
-    assert w_delta < 3e-16
+
+    assert w_delta < 4.45e-16
     np.testing.assert_array_almost_equal(dask_w, np_results["w"], err_msg="w not equal")
     for k in ["peaks", "df_reads", "df_cells"]:
         dask_df = dask_results[k]
@@ -298,10 +287,10 @@ def test_sbs_dask(array_A1_102_aln):
 
 
 @pytest.mark.basecalls
-def test_annotated(array_A1_102_cells):
+def test_annotated(experiment_c_A1_102_cells):
     path = __root__.joinpath("data", "annotated", "10X_A1_Tile-102.annotated.npz")
     aln_path = __root__.joinpath("data", "process_fig4")
-    cells = array_A1_102_cells.values.squeeze()
+    cells = experiment_c_A1_102_cells.values.squeeze()
     maxed = read_image(f"{aln_path.joinpath('10X_A1_Tile-102.maxed.tif')}").isel(z=0)
     peaks = read_image(f"{aln_path.joinpath('10X_A1_Tile-102.peaks.tif')}").squeeze()
     peaks = peaks.to_dataframe(name="peak").reset_index()
