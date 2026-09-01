@@ -60,11 +60,14 @@ def pandas_to_anndata(
 
     df = df.drop(columns=features)
     if metadata_columns is None:
-        metadata_columns = df.columns[
-            ~(df.columns.str.split("_").str[1].isin(["Neighbors", "Location"]))
+        split_columns = df.columns.str.split("_")
+        drop_columns = df.columns[
+            (split_columns.str[0].isin(["Cells", "Nuclei", "Cytoplasm"]))
+            & (split_columns.str[1].isin(["Neighbors", "Location"]))
         ]
-
-    if len(metadata_columns) != len(df.columns):
+        if len(drop_columns) > 0:
+            df = df.drop(columns=drop_columns)
+    if metadata_columns is not None and len(metadata_columns) != len(df.columns):
         df = df[metadata_columns]
     if isinstance(df, dd.DataFrame):
         df = df.compute()
