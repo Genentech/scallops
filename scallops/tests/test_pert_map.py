@@ -27,6 +27,8 @@ def test_map_filter(tmp_path, test_feature_table, input_format):
         dataset_path,
         "--output",
         str(output_path),
+        "--min-feature-variance",
+        "-1",
     ]
     check_call(cmd)
     assert output_path.exists()
