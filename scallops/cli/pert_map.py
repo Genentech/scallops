@@ -45,7 +45,13 @@ from scallops.features.util import (
     _slice_anndata,
     pandas_to_anndata,
 )
-from scallops.io import _to_parquet, is_anndata, is_parquet_file, read_anndata
+from scallops.io import (
+    _to_parquet,
+    is_anndata,
+    is_parquet_file,
+    read_anndata,
+    write_anndata_zarr,
+)
 from scallops.utils import _fix_json
 
 logger = _get_cli_logger()
@@ -386,7 +392,7 @@ def run_aggregate(arguments: argparse.Namespace):
         fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
         if output.lower().endswith(".zarr"):
-            data.write_zarr(output, convert_strings_to_categoricals=False)
+            write_anndata_zarr(data, output)
         else:
             data.write_h5ad(output, convert_strings_to_categoricals=False)
 
@@ -535,7 +541,8 @@ def _write_anndata(data, output, metadata, rechunk_label_size, rechunk_feature_s
     data.uns["scallops"] = _fix_json(metadata)
     data = rechunk(data, rechunk_label_size, rechunk_feature_size)
     if output.lower().endswith(".zarr"):
-        data.write_zarr(output, convert_strings_to_categoricals=False)
+        write_anndata_zarr(data, output)
+
     else:
         data.write_h5ad(output, convert_strings_to_categoricals=False)
 

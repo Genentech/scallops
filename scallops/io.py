@@ -1546,6 +1546,20 @@ def is_anndata(store: StoreLike) -> bool:
         return False
 
 
+def write_anndata_zarr(data: anndata.AnnData, store: StoreLike, **kwargs):
+    """Write anndata to zarr with defaults of `convert_strings_to_categoricals=False` and `chunks=data.chunks`
+        for dask arrays.
+
+    :param data: AnnData object.
+    :param store: Store to read from.
+    """
+    write_zarr_kwargs = dict(convert_strings_to_categoricals=False)
+    if isinstance(data.X, da.Array):
+        write_zarr_kwargs["chunks"] = data.X.chunks
+    write_zarr_kwargs.update(kwargs)
+    data.write_zarr(store, **write_zarr_kwargs)
+
+
 def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
     """Read from a hierarchical Zarr or HDF5 array store.
 

@@ -48,6 +48,7 @@ from scallops.io import (
     _to_parquet,
     is_anndata,
     is_parquet_file,
+    write_anndata_zarr,
 )
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
@@ -649,7 +650,7 @@ def merge_sbs_phenotype_pipeline(
             name=image_key,
         )
         data.uns["scallops"] = _fix_json(metadata)
-        data.write_zarr(output_file, convert_strings_to_categoricals=False)
+        write_anndata_zarr(data, output_file)
 
     elif isinstance(merged_df, pd.DataFrame):
         table = pa.Table.from_pandas(merged_df, preserve_index=True)
