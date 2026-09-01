@@ -106,11 +106,12 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
             )
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         if centering or scaling:
-            chunks = list(data.X.chunksize)
-            feature_chunk_size = 10
-            if chunks[1] != feature_chunk_size:
-                chunks[1] = feature_chunk_size
-                data.X = data.X.rechunk(tuple(chunks))
+            if isinstance(data.X, da.Array):
+                chunks = list(data.X.chunksize)
+                feature_chunk_size = 10
+                if chunks[1] != feature_chunk_size:
+                    chunks[1] = feature_chunk_size
+                    data.X = data.X.rechunk(tuple(chunks))
             data = normalize_features(
                 data,
                 reference,
@@ -126,7 +127,9 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
             logger.info("No normalization")
 
         if output_format == "zarr":
-            if not da.core._check_regular_chunks(data.X.chunks):
+            if isinstance(data.X, da.Array) and not da.core._check_regular_chunks(
+                data.X.chunks
+            ):
                 # need uniform chunks to save to zarr
                 chunks = list(data.X.chunksize)
                 chunks[0] = "auto"
@@ -135,7 +138,8 @@ def run_pipeline_norm_features(arguments: argparse.Namespace):
             data.write_zarr(norm_output, convert_strings_to_categoricals=False)
 
         else:
-            data.X = data.X.compute()
+            if isinstance(data.X, da.Array):
+                data.X = data.X.compute()
             df = data.to_df().join(data.obs)
             table = pa.Table.from_pandas(df, preserve_index=True)
             table = table.replace_schema_metadata(
