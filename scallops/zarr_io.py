@@ -27,7 +27,6 @@ from anndata._io.specs import _REGISTRY
 from anndata._io.specs.methods import (
     suppress_autoshard_warning,
     zarr_v3_compressor_compat,
-    zarr_v3_sharding,
 )
 from anndata._io.specs.registry import IOSpec, Writer
 from anndata.compat import DaskArray
@@ -931,10 +930,7 @@ def write_basic_dask_dask_dense(
         g = f.require_dataset(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
     else:
         dataset_kwargs = zarr_v3_compressor_compat(dataset_kwargs)
-        with zarr_v3_sharding(
-            dataset_kwargs, format=f.metadata.zarr_format
-        ) as dataset_kwargs:
-            g = f.require_array(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
+        g = f.require_array(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
 
     if isinstance(f, h5py.Group):
         da.store(elem, g, scheduler="threads")
