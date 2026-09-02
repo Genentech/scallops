@@ -122,6 +122,18 @@ def test_to_parquet_complete(tmp_path):
 
 
 @pytest.mark.io
+def test_to_parquet_remove_old_files(tmp_path):
+    df = dd.from_pandas(pd.DataFrame({"a": np.arange(2), "b": np.arange(2)}))
+    path = tmp_path / "test.parquet"
+    path.mkdir()
+    old_path = path / "foo.parquet"
+    old_path.touch()
+    assert old_path.exists()
+    _to_parquet(df, str(path), compute=True)
+    assert not old_path.exists()
+
+
+@pytest.mark.io
 def test_match_images():
     img1 = xr.DataArray(
         np.random.random((1, 1, 1, 10, 10)), dims=["t", "c", "z", "y", "x"]
