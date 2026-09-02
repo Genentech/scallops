@@ -1,7 +1,6 @@
 import warnings
 
 import anndata
-import zarr
 
 from scallops.zarr_io import write_basic_dask_dask_dense  # noqa: F401
 
@@ -12,4 +11,4 @@ warnings.filterwarnings(
     message="Unclosed client.* | client_session.*",
 )
 anndata.settings.auto_shard_zarr_v3 = False
-zarr.config.set({"array.rectilinear_chunks": True})
+# zarr.config.set({"array.rectilinear_chunks": True})
