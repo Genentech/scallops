@@ -23,6 +23,7 @@ from scallops.stitch.shift_utils import _zncc, convert_stage_positions
 from scallops.stitch.utils import (
     _download_path,
     _init_tiles,
+    _n_timepoints,
     _stage_positions_from_image_metadata,
     get_pixel_size,
     read_stage_positions,
@@ -75,8 +76,12 @@ def _single_stitch(
     channel_window: int | None,
     channel_filter_percentiles: tuple[float, float] | None,
     t_index: int | None = None,
+    split_t: bool = False,
 ):
     """Process a single cycle of images."""
+    assert not (split_t and t_index is not None), (
+        "Cannot set both `t_index` and `split_t`."
+    )
     _, image_filepaths, image_metadata = image_tuple
 
     image_key = (
@@ -85,10 +90,16 @@ def _single_stitch(
         else image_metadata["id"]
     )
     image_key = image_key.replace("/", "_")
+    # When splitting embedded timepoints into separate outputs, use round 0's key
+    # as a stand-in for "has this image_key already been stitched" since there is
+    # no single output written under the bare image_key.
+    image_check_key = f"{image_key}-0" if split_t else image_key
     if not force:
         if not no_save_image:
             try:
-                if is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
+                if is_ome_zarr_array(
+                    image_output_root.get(f"images/{image_check_key}")
+                ):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
             except:  # noqa: E722
@@ -118,13 +129,17 @@ def _single_stitch(
         "random_seed": random_seed,
     }
 
+    # Tile positions are the same for every round, so alignment is computed once
+    # against a single reference timepoint (round 0 when splitting) and reused
+    # for every timepoint written below.
+    align_t_index = t_index if t_index is not None else (0 if split_t else None)
     init = _init_tiles(
         image_filepaths=image_filepaths,
         image_metadata=image_metadata,
         channel=channel,
         z_index=z_index,
         expected_images=expected_images,
-        t_index=t_index,
+        t_index=align_t_index,
     )
     z_index = init["z_index"]
 
@@ -192,7 +207,7 @@ def _single_stitch(
         flip_y_axis=flip_y_axis,
         flip_x_axis=flip_x_axis,
         swap_axes=swap_axes,
-        t_index=t_index,
+        t_index=align_t_index,
     )
 
     max_shift = stitch_result["max_shift"]
@@ -385,30 +400,91 @@ def _single_stitch(
         math.ceil(fused_y_size / n_partitions_y),
         math.ceil(fused_x_size / n_partitions_x),
     )
-    _write_arrays(
-        stitch_positions_df,
-        stitch_positions_df_local,
-        blend,
-        image_output_root,
-        image_key,
-        fused_tile_shape,
-        chunk_size,
-        no_save_labels,
-        no_save_image,
-        ffp_path,
-        dfp_path,
-        z_index,
-        output_channels,
-        fuse_crop_width,
-        radial_correction_k,
-        output_metadata,
-        channel_names,
-        channel_reference=channel_reference,
-        channel_cross_correlation_upsample=channel_cross_correlation_upsample,
-        channel_window=channel_window,
-        channel_filter_percentiles=channel_filter_percentiles,
-        t_index=t_index,
-    )
+    if split_t:
+        # Tile geometry (and therefore labels) is shared across rounds, so write
+        # it once under the bare image_key, then write each round's fused image
+        # separately under its own "{image_key}-{t}" key, mirroring the layout
+        # used when rounds are split across separate files via a `{t}` pattern
+        # token (e.g. the iss pipeline).
+        _write_arrays(
+            stitch_positions_df,
+            stitch_positions_df_local,
+            blend,
+            image_output_root,
+            image_key,
+            fused_tile_shape,
+            chunk_size,
+            no_save_labels,
+            True,
+            ffp_path,
+            dfp_path,
+            z_index,
+            output_channels,
+            fuse_crop_width,
+            radial_correction_k,
+            output_metadata,
+            channel_names,
+            channel_reference=channel_reference,
+            channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+            channel_window=channel_window,
+            channel_filter_percentiles=channel_filter_percentiles,
+        )
+        n_t = _n_timepoints(
+            filepaths[0],
+            fileattrs[0] if fileattrs is not None else None,
+            scene_id=0 if n_scenes is not None else None,
+        )
+        logger.info(f"Writing {n_t} timepoints separately for {image_key}.")
+        for t in range(n_t):
+            _write_arrays(
+                stitch_positions_df,
+                stitch_positions_df_local,
+                blend,
+                image_output_root,
+                f"{image_key}-{t}",
+                fused_tile_shape,
+                chunk_size,
+                True,
+                no_save_image,
+                ffp_path,
+                dfp_path,
+                z_index,
+                output_channels,
+                fuse_crop_width,
+                radial_correction_k,
+                output_metadata,
+                channel_names,
+                channel_reference=channel_reference,
+                channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+                channel_window=channel_window,
+                channel_filter_percentiles=channel_filter_percentiles,
+                t_index=t,
+            )
+    else:
+        _write_arrays(
+            stitch_positions_df,
+            stitch_positions_df_local,
+            blend,
+            image_output_root,
+            image_key,
+            fused_tile_shape,
+            chunk_size,
+            no_save_labels,
+            no_save_image,
+            ffp_path,
+            dfp_path,
+            z_index,
+            output_channels,
+            fuse_crop_width,
+            radial_correction_k,
+            output_metadata,
+            channel_names,
+            channel_reference=channel_reference,
+            channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+            channel_window=channel_window,
+            channel_filter_percentiles=channel_filter_percentiles,
+            t_index=t_index,
+        )
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
