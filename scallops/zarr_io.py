@@ -10,7 +10,6 @@ Authors:
 
 import logging
 from collections.abc import Callable, Hashable, Mapping
-from importlib.metadata import version
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -41,7 +40,6 @@ from ome_zarr.format import Format, FormatV04
 from ome_zarr.io import parse_url
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image, write_multiscale
-from packaging.version import Version
 from xarray.core.coordinates import DataArrayCoordinates
 from zarr.storage import StoreLike
 
@@ -919,10 +917,16 @@ def write_basic_dask_dask_dense(
     _writer: Writer,
     dataset_kwargs: Mapping[str, Any] = MappingProxyType({}),
 ):
-    # https://github.com/scverse/anndata/pull/2584
+    # Removes hard-coded scheduler and respects dask chunk sizes
     import dask.array as da
 
     dataset_kwargs = dict(dataset_kwargs)
+    if "chunks" not in dataset_kwargs:
+        min_chunk_value = 0 if isinstance(f, h5py.Group) else 1
+        # zarr requires min chunk size 1
+        dataset_kwargs["chunks"] = tuple(
+            max(c[0], min_chunk_value) for c in elem.chunks
+        )
     if isinstance(f, h5py.Group):
         g = f.require_dataset(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
     else:
@@ -931,8 +935,8 @@ def write_basic_dask_dask_dense(
             dataset_kwargs, format=f.metadata.zarr_format
         ) as dataset_kwargs:
             g = f.require_array(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
-    # use threaded scheduler with dask<=2025.3.0 avoid "Could not serialize object of type HighLevelGraph" error
-    if isinstance(f, h5py.Group) or Version(version("dask")) <= Version("2025.3.0"):
+
+    if isinstance(f, h5py.Group):
         da.store(elem, g, scheduler="threads")
     else:
         da.store(elem, g)
