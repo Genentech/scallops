@@ -264,6 +264,11 @@ def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
         "as the source.",
         nargs="*",
     )
+    parser.add_argument(
+        "--pca-batch-size",
+        type=int,
+        help="Run incremental PCA with samples for each batch.",
+    )
     filter_args(parser)
 
     common_args(parser, pre_rechunk=True, post_rechunk=True)

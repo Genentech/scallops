@@ -411,7 +411,10 @@ def run_tvn(arguments: argparse.Namespace):
     post_rechunk_feature_size = arguments.post_rechunk_features
     force = arguments.force
     no_version = arguments.no_version
-
+    pca_batch_size = arguments.pca_batch_size
+    pca_kwargs = dict()
+    if pca_batch_size is not None:
+        pca_kwargs["batch_size"] = pca_batch_size
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
@@ -449,9 +452,7 @@ def run_tvn(arguments: argparse.Namespace):
             )
         logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
         data = typical_variation_normalization(
-            data=data,
-            reference_query=reference_query,
-            by=by,
+            data=data, reference_query=reference_query, by=by, pca_kwargs=pca_kwargs
         )
 
         _write_anndata(
