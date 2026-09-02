@@ -6,8 +6,9 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
-from scallops.io import read_image
+from scallops.io import read_barcodes, read_image
 from scallops.reads import (
     annotated_spots,
     apply_channel_crosstalk_matrix,
@@ -15,7 +16,9 @@ from scallops.reads import (
     channel_crosstalk_matrix,
     correct_mismatches,
     decode_max,
+    decode_se,
     peaks_to_bases,
+    read_statistics,
 )
 from scallops.spots import (
     find_peaks,
@@ -148,6 +151,194 @@ def test_correct_mismatches():
     pd.testing.assert_frame_equal(
         corrected_reads[expected_result.columns], expected_result
     )
+
+
+@pytest.mark.basecalls
+def test_dark_bases(experiment_c_A1_102_aligned):
+    """3-color simulation: G/T/A have dedicated channels; C detected by absence of signal."""
+    image = experiment_c_A1_102_aligned.isel(z=0, c=[1, 2, 3])
+    barcodes_A1_102 = read_barcodes(
+        str(__root__.joinpath("data", "experimentC", "barcodes.csv")),
+        image.t.values - 1,
+    )
+    loged = transform_log(image)
+    bases_array = peaks_to_bases(
+        maxed=max_filter(loged),
+        peaks=find_peaks(std(loged))[lambda p: p["peak"] >= 50],
+        bases=["G", "T", "A"],
+    )
+    df_reads = decode_se(bases_array, barcodes=barcodes_A1_102, dark_bases=["C"])
+    df_reads["label"] = 0
+    stats = read_statistics(df_reads)
+    assert stats["mapping_rate"] > 0.40  # ~0.47 on raw (non-xtalk-corrected) data
+
+
+@pytest.mark.basecalls
+def test_dark_bases_two_color(experiment_c_A1_102_aligned):
+    """2-color Illumina simulation: combine 4 SBS channels into red (A+C) and green (A+T).
+
+    Encoding:  G → dark | T → green only | A → red+green | C → red only
+    """
+    image = experiment_c_A1_102_aligned.isel(z=0, c=[1, 2, 3, 4])
+    barcodes_A1_102 = read_barcodes(
+        str(__root__.joinpath("data", "experimentC", "barcodes.csv")),
+        (image.t.values - 1).tolist(),
+    )
+    loged = transform_log(image)
+    bases_array = peaks_to_bases(
+        maxed=max_filter(loged),
+        peaks=find_peaks(std(loged))[lambda p: p["peak"] >= 50],
+        bases=["G", "T", "A", "C"],
+    )
+    w = channel_crosstalk_matrix(bases_array)
+    bases_array_c = apply_channel_crosstalk_matrix(bases_array, w)
+
+    spots = bases_array_c.values  # (read, t, 4): G=0, T=1, A=2, C=3
+    red = np.maximum(spots[..., 2], spots[..., 3])  # max(A, C)
+    green = np.maximum(spots[..., 2], spots[..., 1])  # max(A, T)
+    two_color_array = xr.DataArray(
+        np.stack([red, green], axis=-1),
+        dims=bases_array.dims,
+        coords={k: v for k, v in bases_array.coords.items() if k != "c"},
+    ).assign_coords(c=["red", "green"])
+
+    E = np.array(
+        [[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float
+    )  # G, T, A, C × red, green
+    df_reads = decode_se(
+        two_color_array,
+        barcodes=barcodes_A1_102,
+        encoding=E,
+        base_labels=["G", "T", "A", "C"],
+    )
+    df_reads["label"] = 0
+    stats = read_statistics(df_reads)
+    assert stats["mapping_rate"] > 0.40  # ~0.48 on xtalk-corrected 2-col data
+
+
+@pytest.mark.basecalls
+def test_decoders_4ch(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
+    """SE and polar decoders on 4-channel ExperimentC, shared preprocessing.
+
+    Matches notebook polar_basecalling.ipynb:
+      decode_se    map≈84.6%   cells/2,612 ≈ 85.8%
+      decode_polar map≈82.0%   cells/2,612 ≈ 85.6%
+    """
+    from scallops.reads import decode_polar
+
+    cells = experiment_c_A1_102_cells.squeeze()
+    n_cells = int(cells.max())
+
+    image = experiment_c_A1_102_aligned.isel(z=0, c=[1, 2, 3, 4])
+    barcodes_A1_102 = read_barcodes(
+        str(__root__.joinpath("data", "experimentC", "barcodes.csv")),
+        image.t.values - 1,
+    )
+    loged = transform_log(image)
+    bases_array = peaks_to_bases(
+        maxed=max_filter(loged),
+        peaks=find_peaks(std(loged))[lambda p: p["peak"] >= 50],
+        bases=["G", "T", "A", "C"],
+        labels=cells,
+    )
+    thr_x = peak_thresholds_from_bases(bases_array=bases_array).iloc[0]["threshold"]
+    w = channel_crosstalk_matrix(bases_array.where(bases_array.peak > thr_x, drop=True))
+    corrected = apply_channel_crosstalk_matrix(bases_array, w)
+    df_sm = decode_max(corrected, barcodes=barcodes_A1_102)
+    thr_r = peak_thresholds_from_reads(df_sm.query("barcode_match")).iloc[0][
+        "threshold"
+    ]
+
+    def s(df):
+        return read_statistics(df.query(f"peak>{thr_r}"))
+
+    se_stats = s(decode_se(corrected, barcodes=barcodes_A1_102))
+    pol_stats = s(decode_polar(corrected, barcodes=barcodes_A1_102))
+
+    assert se_stats["mapping_rate"] > 0.80  # notebook: ~83.69%
+    assert se_stats["labels_with_mapped_reads"] / n_cells > 0.71
+    assert pol_stats["mapping_rate"] > 0.77  # notebook: ~80.59%
+    assert pol_stats["labels_with_mapped_reads"] / n_cells > 0.70
+
+
+@pytest.mark.basecalls
+def test_decoders_3ch_nis_seq(nis_seq_fixtures):
+    """SE and polar decoders on NIS-seq 3-channel (G dark), shared xtalk-corrected input.
+
+    Notebook polar_basecalling.ipynb values:
+      decode_se    map=44.90%   nuclei/1,001 = 84.58%
+      decode_polar map=43.84%   nuclei/1,001 = 85.39%
+    """
+    from scallops.reads import decode_polar
+
+    f = nis_seq_fixtures
+
+    def s(df):
+        return read_statistics(df.query(f"peak>{f.thr_r3}"))
+
+    se_stats = s(decode_se(f.cor3, barcodes=f.df_bcn, dark_bases=["G"]))
+    pol_stats = s(decode_polar(f.cor3, barcodes=f.df_bcn, dark_bases=["G"], w_cor=f.w3))
+
+    assert se_stats["mapping_rate"] > 0.43  # notebook: ~45.1%
+    assert se_stats["labels_with_mapped_reads"] / f.n_nuc > 0.82  # notebook: ~84.2%
+    assert pol_stats["mapping_rate"] > 0.42  # notebook: ~44.0%
+    assert pol_stats["labels_with_mapped_reads"] / f.n_nuc > 0.83  # notebook: ~85.2%
+
+
+@pytest.mark.basecalls
+def test_decoders_2col_nis_seq(nis_seq_fixtures):
+    """SE and polar decoders on synthesised 2-colour NIS-seq (G dark, non-orthogonal).
+
+    Channels: ch0=max(A,C), ch1=max(A,T).  Notebook polar_basecalling.ipynb values:
+      decode_se    map=17.66%   nuclei/1,001 = 71.07%
+      decode_polar map=29.46%   nuclei/1,001 = 84.08%   (recommended — atan2 is amplitude-independent)
+    Polar outperforms SE because θ=atan2(ch1,ch0) resolves the A/C score ambiguity.
+    """
+    from scallops.reads import decode_polar
+
+    f = nis_seq_fixtures
+    sp3 = f.cor3.values  # (n, T, 3): A=0, T=1, C=2
+    ch0 = np.maximum(sp3[..., 0], sp3[..., 2])  # max(A, C)
+    ch1 = np.maximum(sp3[..., 0], sp3[..., 1])  # max(A, T)
+    spots_2col = xr.DataArray(
+        np.stack([ch0, ch1], axis=-1),
+        dims=["read", "t", "c"],
+        coords={
+            "read": f.cor3.read.values,
+            "t": f.cor3.t.values,
+            "c": ["ch0", "ch1"],
+            "peak": ("read", f.cor3.peak.values),
+            "label": ("read", f.cor3.label.values),
+            "y": ("read", f.cor3.y.values),
+            "x": ("read", f.cor3.x.values),
+        },
+    )
+    E2 = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float)
+
+    def s(df):
+        return read_statistics(
+            df.query(f"peak>{f.thr_r2}")
+        )  # 2-col uses its own threshold
+
+    se_stats = s(
+        decode_se(
+            spots_2col, barcodes=f.df_bcn, encoding=E2, base_labels=["G", "T", "A", "C"]
+        )
+    )
+    pol_stats = s(
+        decode_polar(
+            spots_2col,
+            barcodes=f.df_bcn,
+            encoding=E2,
+            base_labels=["G", "T", "A", "C"],
+            w_cor=f.w3,
+        )
+    )
+
+    assert se_stats["mapping_rate"] > 0.15  # notebook: ~17.7%
+    assert se_stats["labels_with_mapped_reads"] / f.n_nuc > 0.68  # notebook: ~70.9%
+    assert pol_stats["mapping_rate"] > 0.27  # notebook: ~29.5%
+    assert pol_stats["labels_with_mapped_reads"] / f.n_nuc > 0.81  # notebook: ~83.9%
 
 
 @pytest.mark.basecalls
