@@ -1547,15 +1547,12 @@ def is_anndata(store: StoreLike) -> bool:
 
 
 def write_anndata_zarr(data: anndata.AnnData, store: StoreLike, **kwargs):
-    """Write anndata to zarr with defaults of `convert_strings_to_categoricals=False` and `chunks=data.chunks`
-        for dask arrays.
+    """Write anndata to zarr with defaults of `convert_strings_to_categoricals=False`.
 
     :param data: AnnData object.
     :param store: Store to read from.
     """
     write_zarr_kwargs = dict(convert_strings_to_categoricals=False)
-    if isinstance(data.X, da.Array):
-        write_zarr_kwargs["chunks"] = data.X.chunks
     write_zarr_kwargs.update(kwargs)
     data.write_zarr(store, **write_zarr_kwargs)
 
