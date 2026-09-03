@@ -14,6 +14,7 @@ Differences from original ashlar code:
 """
 
 import argparse
+import os
 import shutil
 from collections.abc import Sequence
 from typing import Literal
@@ -112,7 +113,15 @@ def single_stitch_preview(
         )
 
     if stage_positions is None:
-        stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
+        try:
+            stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
+        except ValueError:  # check for Araceli JSON
+            fs, path = fsspec.url_to_fs(primary_filepaths[0])
+            json_paths = fs.glob(
+                os.path.dirname(path) + fs.sep + "_DataManifest_*.json"
+            )
+            if len(json_paths) == 1:
+                stage_positions_path = json_paths[0]
     logger.info(f"Previewing {image_key} with {len(stage_positions):,} tiles")
 
     read_images = _get_read_images(

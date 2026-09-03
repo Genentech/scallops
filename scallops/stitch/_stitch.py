@@ -159,8 +159,15 @@ def _single_stitch(
         )
 
     if stage_positions is None:
-        stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
-
+        try:
+            stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
+        except ValueError:  # check for Araceli JSON
+            fs, path = fsspec.url_to_fs(primary_filepaths[0])
+            json_paths = fs.glob(
+                os.path.dirname(path) + fs.sep + "_DataManifest_*.json"
+            )
+            if len(json_paths) == 1:
+                stage_positions_path = json_paths[0]
     if image_spacing is None:
         image_spacing = get_pixel_size(primary_filepaths, stage_positions_path)
 

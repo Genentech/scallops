@@ -287,17 +287,15 @@ def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str)
     with fs.open(json_path, "r") as f:
         d = json.load(f)
 
-    # BP65_s1_w1_z-_20250305T000146Z_7fd6580c-3fae-4271-8330-ae7c121d7a96.tiff
-
     stage_positions = np.zeros((len(filepaths), 2))
-    wells = d["Wells"]
-    # convert milimeters to micrometers
+    wells = d["Wells"]  # e.g. A1, A2, ...
+    # convert millimeters to micrometers
     factor = ureg.parse_expression("millimeter").to("micrometer").magnitude
     for i in range(len(filepaths)):
+        # e.g. A1_s756_w4_z4_20260413T193825Z_d5ff09e9-2dbf-4dac-a84d-b13f90f614c5.tiff
         tokens = os.path.basename(filepaths[i]).split("_")
         well = wells[tokens[0]]
-        s1 = well["Sites"]["s1"]
-
+        s1 = well["Sites"][tokens[1]]
         stage_positions[i, 0] = s1["YPosition"] * factor
         stage_positions[i, 1] = s1["XPosition"] * factor
     return stage_positions
@@ -400,6 +398,8 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
             logger.info("Unknown stage coordinate size units. Assuming µm")
     else:
         logger.info("Unknown stage coordinate size units. Assuming µm")
+    if values is None:
+        raise ValueError("Unable to find positions.")
     position_microns = np.array(values, dtype=float)
     return position_microns
 
