@@ -46,7 +46,9 @@ from scallops.io import (
     _images2fov,
     _set_up_experiment,
     _to_parquet,
+    is_anndata,
     is_parquet_file,
+    write_anndata_zarr,
 )
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
@@ -77,7 +79,6 @@ from scallops.zarr_io import (
     _get_sep,
     _get_store_path,
     _write_zarr_image,
-    is_anndata_zarr,
     open_ome_zarr,
     read_ome_zarr_array,
 )
@@ -519,7 +520,7 @@ def merge_sbs_phenotype_pipeline(
     output_file = f"{output_dir}{image_key}.{output_format}"
     if not force and (
         (output_format == "parquet" and is_parquet_file(output_file))
-        or (output_format == "zarr" and is_anndata_zarr(output_file))
+        or (output_format == "zarr" and is_anndata(output_file))
     ):
         logger.info(f"Skipping merge for {image_key}")
         return []
@@ -649,7 +650,7 @@ def merge_sbs_phenotype_pipeline(
             name=image_key,
         )
         data.uns["scallops"] = _fix_json(metadata)
-        data.write_zarr(output_file, convert_strings_to_categoricals=False)
+        write_anndata_zarr(data, output_file)
 
     elif isinstance(merged_df, pd.DataFrame):
         table = pa.Table.from_pandas(merged_df, preserve_index=True)

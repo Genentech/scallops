@@ -13,17 +13,39 @@ from anndata.typing import Index
 from pandas.core.computation.parsing import BACKTICK_QUOTED_STRING, tokenize_string
 
 from scallops.features.constants import _metadata_columns_whitelist_str
-from scallops.io import read_anndata_zarr
 
 logger = logging.getLogger("scallops")
 
 
+def _trim_by(by: str | Sequence[str]) -> str | Sequence[str]:
+    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if by_multi:
+        by = list(by)
+        if len(by) == 1:
+            by = by[0]
+    return by
+
+
+def _xarray_by_values(data: anndata.AnnData, by: str | Sequence[str]) -> xr.DataArray:
+    by_multi = not isinstance(by, str) and isinstance(by, Sequence)
+    if by_multi:
+        by = list(by)
+        if len(by) == 1:
+            by = by[0]
+            by_multi = False
+
+    return data.obs[by].apply(tuple, axis=1) if by_multi else data.obs[by].values
+
+
 def pandas_to_anndata(
-    df: pd.DataFrame | dd.DataFrame, features: Sequence[str] | None = None
+    df: pd.DataFrame | dd.DataFrame,
+    features: Sequence[str] | None = None,
+    metadata_columns: Sequence[str] | None = None,
 ) -> anndata.AnnData:
     """Convert a data frame to AnnData representation
     :param df: data frame
     :param features: Features to use. If not provided, features are inferred.
+    :param metadata_columns: Columns to use as metadata. If not provided, metadata columns are non-feature columns.
     :return: AnnData object
 
     """
@@ -37,6 +59,16 @@ def pandas_to_anndata(
     )
 
     df = df.drop(columns=features)
+    if metadata_columns is None:
+        split_columns = df.columns.str.split("_")
+        drop_columns = df.columns[
+            (split_columns.str[0].isin(["Cells", "Nuclei", "Cytoplasm"]))
+            & (split_columns.str[1].isin(["Neighbors", "Location"]))
+        ]
+        if len(drop_columns) > 0:
+            df = df.drop(columns=drop_columns)
+    if metadata_columns is not None and len(metadata_columns) != len(df.columns):
+        df = df[metadata_columns]
     if isinstance(df, dd.DataFrame):
         df = df.compute()
     obs = df.reset_index(drop=df.index.name is None)
@@ -184,33 +216,6 @@ def _join_metadata(
         join_df = join_df.compute()
     join_df = join_df.set_index(on)
     data.obs = data.obs.join(join_df, on=on)
-
-
-def _read_data(
-    paths: Sequence[str] | str, features: Sequence[str] | None = None
-) -> anndata.AnnData:
-    if isinstance(paths, str):
-        paths = [paths]
-    assert len(paths) == len(set(paths)), "Duplicate path"
-    data_arrays = []
-    for path in paths:
-        if path.lower().endswith(".parquet") or path.lower().endswith(".pq"):
-            df = pd.read_parquet(path)
-            d = pandas_to_anndata(df, features)
-        else:
-            d = read_anndata_zarr(path, dask=True)
-            if features is not None and len(features) > 0:
-                d = d[:, features]
-        data_arrays.append(d)
-    if len(data_arrays) == 0:
-        raise RuntimeError("No data found.")
-
-    data = (
-        data_arrays[0]
-        if len(data_arrays) == 1
-        else anndata.concat(data_arrays, index_unique="-")
-    )
-    return data
 
 
 def _get_names_from_pd_query(source) -> set[str]:

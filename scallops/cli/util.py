@@ -89,6 +89,7 @@ DEFAULT_DASK_CONFIG = {
     "distributed.admin.system-monitor.interval": "1 minute",
     "distributed.comm.timeouts.connect": "120s",
     "distributed.comm.timeouts.tcp": "60s",
+    "distributed.scheduler.locks.lease-timeout": "60s",
     "distributed.scheduler.worker-ttl": "10 minutes",
     "logging.distributed": "error",
 }
