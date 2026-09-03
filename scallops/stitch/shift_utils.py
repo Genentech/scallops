@@ -2,11 +2,14 @@ import itertools
 import logging
 import math
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 
 import dask
+import dask.array as da
 import igraph as ig
 import numpy as np
 from dask import delayed
+from dask.diagnostics import ProgressBar
 from numba import njit
 from scipy import ndimage as ndi
 from scipy.fft import fftfreq, fftn, ifftn
@@ -34,6 +37,50 @@ def _collect_stats(ref, mov):
             sum_x2 += x * x
             sum_y2 += y * y
     return mean_x, mean_y, sum_xy, sum_x2, sum_y2
+
+
+def _eval_pair(
+    ref: np.ndarray,
+    mov: np.ndarray,
+    shift: np.ndarray,
+):
+    sy, sx = ref.shape
+    dy = round(shift[0])
+    dx = round(shift[1])
+    ref_crop, mov_crop = _get_crops(ref, mov, dy, dx, sy, sx)
+    mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref_crop, mov_crop)
+    s_pixels = float(ref_crop.size)
+    zncc_val = _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels)
+    return np.array([zncc_val, mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels])
+
+
+def evaluate_shifts(
+    pairs: np.ndarray,
+    shifts: np.ndarray,
+    tiles: Sequence[np.ndarray | da.Array],
+    progress: bool = True,
+) -> tuple[float, np.ndarray]:
+    """Compute overall ZNCC and ZNCCs for specified pairs
+
+    :param pairs: Pair indices in tiles
+    :param shifts: Array of pairwise shifts.
+    :param tiles: Sequence of tiles corresponding to each pair
+    :param progress: Whether to show progress bar.
+    :return: tuple of overall ZNCC and ZNCCs for specified pairs.
+    """
+    _eval_pair_delayed = delayed(_eval_pair)
+    results = []
+    for i in range(len(pairs)):
+        ref = tiles[pairs[i][0]]
+        mov = tiles[pairs[i][1]]
+        results.append(_eval_pair_delayed(ref=ref, mov=mov, shift=shifts[i]))
+    bar = ProgressBar if progress else nullcontext
+    with bar():
+        results = dask.compute(*results)
+    results = np.array(results)
+    mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels = results[:, 1:].sum(axis=0)
+    zncc_val = _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels)
+    return zncc_val, results[:, 0].copy()
 
 
 @njit
@@ -667,9 +714,20 @@ def _find_all_overlap(coords, tile_shape, frac_thre=0.0):
     return fracs, pairs, shifts
 
 
-def find_overlaps(coords, tile_shape, frac_thre=0.0):
+def find_overlaps(
+    coords: np.ndarray, tile_shape: tuple[int, int], fraction_overlap: float = 0.0
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Find overlaps between tiles
+
+    :param coords: Tile coordinates.
+    :param tile_shape: Tile shape.
+    :param fraction_overlap: Only return overlaps with area > `fraction_overlap`.
+    return: tuple of fractions, pairs, and shifts.
+    """
     # Only return overlaps with area > frac_thre
-    fracs, pairs, shifts = _find_all_overlap(coords, tile_shape, frac_thre=frac_thre)
+    fracs, pairs, shifts = _find_all_overlap(
+        coords, tile_shape, frac_thre=fraction_overlap
+    )
     return np.array(fracs), np.array(pairs), np.array(shifts)
 
 
