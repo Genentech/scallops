@@ -14,15 +14,13 @@ from scallops.stitch._radial_optim import (
     parallel_find_radial_K,
 )
 from scallops.stitch.shift_utils import (
-    _calc_zncc,
-    _collect_stats,
     _estimate_crop_width,
-    _get_crops,
     _zncc,
     calc_best_shift,
     calc_mu_sigma_null,
     convert_stage_positions,
     determine_layout,
+    evaluate_shifts,
     find_overlaps,
     get_stitched_positions,
     sample_null,
@@ -81,40 +79,6 @@ def _all_zncc_shifts(
     ncc_values = np.array([x[0] for x in results])
     shifts = np.array([x[1] for x in results])
     return ncc_values, shifts
-
-
-def _eval_pair(
-    ref: np.ndarray,
-    mov: np.ndarray,
-    shift: np.ndarray,
-):
-    sy, sx = ref.shape
-    dy = round(shift[0])
-    dx = round(shift[1])
-    ref_crop, mov_crop = _get_crops(ref, mov, dy, dx, sy, sx)
-    mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref_crop, mov_crop)
-    s_pixels = float(ref_crop.size)
-    zncc_val = _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels)
-    return np.array([zncc_val, mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels])
-
-
-def _eval_all_shifts(
-    pairs: np.ndarray,
-    shifts: np.ndarray,
-    read_images: Sequence,
-) -> tuple[float, np.ndarray]:
-    _eval_pair_delayed = delayed(_eval_pair)
-    results = []
-    for i in range(len(pairs)):
-        ref = read_images[pairs[i][0]]
-        mov = read_images[pairs[i][1]]
-        results.append(_eval_pair_delayed(ref=ref, mov=mov, shift=shifts[i]))
-    with ProgressBar():
-        results = dask.compute(*results)
-    results = np.array(results)
-    mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels = results[:, 1:].sum(axis=0)
-    zncc_val = _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels)
-    return zncc_val, results[:, 0].copy()
 
 
 def _get_read_images(
@@ -402,10 +366,11 @@ def stitch_align(
         logger.info(
             f"Evaluating stitching quality using {len(pairs_after_stitching):,} overlaps."
         )
-        zncc_val, zncc_values = _eval_all_shifts(
+
+        zncc_val, zncc_values = evaluate_shifts(
             pairs=pairs_after_stitching,
             shifts=shifts_after_stitching,
-            read_images=read_images,
+            tiles=read_images,
         )
         logger.info(f"ZNCC: {zncc_val:.4f}.")
 
