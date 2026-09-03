@@ -311,8 +311,9 @@ def test_experiment_file_list():
     gen = list(_set_up_experiment(image_paths, group_by=("*",)))
     assert len(gen) == 1
     x = gen[0]
-    assert x[2]["id"] == "image", "Image id should be `image`"
+    assert x[0] == ("image",)
     assert len(x[1]) == 2, "Should have 2 files"
+    assert x[2]["id"] == "image", "Image id should be `image`"
 
 
 @pytest.mark.io

@@ -1648,9 +1648,7 @@ def _set_up_experiment(
     scenes: bool | list[str] = False,
     file_sort_order: Sequence[str] | None = None,
     case_sensitive: bool = False,
-) -> Generator[
-    tuple[tuple[Any, ...], fsspec.AbstractFileSystem, Sequence[str], dict], None, None
-]:
+) -> Generator[tuple[tuple[str, ...], Sequence[str], dict], None, None]:
     """Identify files based on `files_pattern` and return groups based on `group_by`.
 
     The function generates a tuple for each unique group containing the group names
@@ -1665,7 +1663,8 @@ def _set_up_experiment(
     :param scenes: Whether to read all scenes in an image or a list of scene ids
     :param file_sort_order: Order of files within a group
     :param case_sensitive: Whether to use case-sensitive patterns
-    :return Tuple of group names, file paths, and group metadata.
+    :return Tuple of group ids, file paths, and dict metadata with keys `file_metadata`,
+        `scene_id`, `id`, `group_metadata`, `src`, and  `common_src`.
     """
     if file_sort_order is not None and len(file_sort_order) == 0:
         file_sort_order = None
