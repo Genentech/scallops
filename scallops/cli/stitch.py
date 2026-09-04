@@ -14,7 +14,6 @@ Differences from original ashlar code:
 """
 
 import argparse
-import os
 import shutil
 from collections.abc import Sequence
 from typing import Literal
@@ -44,6 +43,7 @@ from scallops.stitch.shift_utils import (
     determine_layout,
 )
 from scallops.stitch.utils import (
+    _autodetect_stage_positions_from_araceli_json,
     _init_tiles,
     _select_t_index,
     _stage_positions_from_image_metadata,
@@ -115,13 +115,14 @@ def single_stitch_preview(
     if stage_positions is None:
         try:
             stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
-        except ValueError:  # check for Araceli JSON
-            fs, path = fsspec.url_to_fs(primary_filepaths[0])
-            json_paths = fs.glob(
-                os.path.dirname(path) + fs.sep + "_DataManifest_*.json"
+        except:  # noqa: E722
+            # check for Araceli JSON
+            stage_positions, stage_positions_path = (
+                _autodetect_stage_positions_from_araceli_json(original_filepaths)
             )
-            if len(json_paths) == 1:
-                stage_positions_path = json_paths[0]
+
+    if stage_positions is None:
+        raise ValueError("Unable to find stage positions.")
     logger.info(f"Previewing {image_key} with {len(stage_positions):,} tiles")
 
     read_images = _get_read_images(

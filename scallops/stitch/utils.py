@@ -282,6 +282,20 @@ def read_stage_positions(filepaths: Sequence[str], stage_positions_path: str):
     return stage_positions
 
 
+def _autodetect_stage_positions_from_araceli_json(filepaths: Sequence[str]):
+    fs, original_filepath = fsspec.url_to_fs(filepaths[0])
+    json_paths = fs.glob(
+        os.path.dirname(original_filepath) + fs.sep + "_DataManifest_*.json"
+    )
+    if len(json_paths) == 1:
+        stage_positions_path = fs.unstrip_protocol(json_paths[0])
+        stage_positions = _stage_positions_from_araceli_json(
+            filepaths, stage_positions_path
+        )
+        return stage_positions, stage_positions_path
+    return None, None
+
+
 def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str):
     fs = fsspec.url_to_fs(json_path)[0]
     with fs.open(json_path, "r") as f:
