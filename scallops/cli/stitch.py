@@ -118,7 +118,9 @@ def single_stitch_preview(
         except:  # noqa: E722
             # check for Araceli JSON
             stage_positions, stage_positions_path = (
-                _autodetect_stage_positions_from_araceli_json(original_filepaths)
+                _autodetect_stage_positions_from_araceli_json(
+                    [paths[0] for paths in original_filepaths]
+                )
             )
 
     if stage_positions is None:
