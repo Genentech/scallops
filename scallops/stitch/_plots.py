@@ -234,7 +234,7 @@ def _qc_report(
     shifts_before_stitching: np.ndarray | None,
     final_shifts: np.ndarray,
     final_positions: np.ndarray,
-    zncc_val: float,
+    zncc_val: float | None,
     no_version: bool,
     zncc_values: np.ndarray,
     pairs_after_stitching: np.ndarray | None,
@@ -252,6 +252,9 @@ def _qc_report(
 
     with fs.open(path, "wb") as f:
         with PdfPages(f) as pdf:
+            if zncc_val is not None:
+                d = pdf.infodict()
+                d["zncc"] = zncc_val
             fig = _title_plot(
                 zncc_val=zncc_val,
                 radial_correction_k=radial_correction_k,
