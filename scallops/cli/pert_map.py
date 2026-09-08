@@ -497,12 +497,6 @@ def run_pca(arguments: argparse.Namespace):
     if not no_version:
         metadata.update(cli_metadata())
     dask_config = {}
-    if (
-        batch_size is None
-        and rechunk_label_size is not None
-        or rechunk_feature_size is not None
-    ):
-        dask_config = {"array.rechunk.method": "tasks"}  # for dask PCA
     with (
         _create_default_dask_config(dask_config),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
@@ -524,7 +518,7 @@ def run_pca(arguments: argparse.Namespace):
         pca = PCA(n_components=n_components, whiten=whiten, batch_size=batch_size)
         train_data = data
         if reference_query is not None and reference_query != "":
-            train_data = _slice_anndata(data.obs.query(reference_query).index)
+            train_data = _slice_anndata(data, data.obs.query(reference_query).index)
             logger.info(f"# labels for training: {train_data.shape[0]:,}")
         pca.fit(train_data.X)
         X_transformed = pca.transform(data.X)
