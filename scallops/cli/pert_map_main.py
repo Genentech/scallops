@@ -231,7 +231,7 @@ def _create_aggregate_parser(
     )
     filter_args(parser)
 
-    common_args(parser, dask_client_value="none", pre_rechunk=True, post_rechunk=True)
+    common_args(parser, dask_client_value="none", pre_rechunk=True, post_rechunk=False)
     parser.set_defaults(func=_run_aggregate)
 
 
