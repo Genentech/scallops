@@ -43,6 +43,7 @@ from scallops.stitch.shift_utils import (
     determine_layout,
 )
 from scallops.stitch.utils import (
+    _autodetect_stage_positions_from_araceli_json,
     _init_tiles,
     _select_t_index,
     _stage_positions_from_image_metadata,
@@ -112,7 +113,18 @@ def single_stitch_preview(
         )
 
     if stage_positions is None:
-        stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
+        try:
+            stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
+        except:  # noqa: E722
+            # check for Araceli JSON
+            stage_positions, stage_positions_path = (
+                _autodetect_stage_positions_from_araceli_json(
+                    [paths[0] for paths in original_filepaths]
+                )
+            )
+
+    if stage_positions is None:
+        raise ValueError("Unable to find stage positions.")
     logger.info(f"Previewing {image_key} with {len(stage_positions):,} tiles")
 
     read_images = _get_read_images(
