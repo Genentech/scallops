@@ -80,6 +80,8 @@ def normalize_features(
     centroid_column_names = list(centroid_column_names)
     is_dask = isinstance(data.X, da.Array)
     use_map_blocks = False
+    if max_value is not None and not scaling:
+        raise ValueError("max_value only applied when scaling")
     if by is not None:
         by = _trim_by(by)
         by_values = _xarray_by_values(data, by)
@@ -171,7 +173,7 @@ def normalize_features(
                 if scaling:
                     values = values / stds.sel(obs=key).data
 
-                    if max_value is not None:
+                    if max_value is not None:  # only clip when scaling
                         values = xp.clip(values, -max_value, max_value)
                 results.append(values)
                 indices.append(grouped_values.groups[key])
@@ -193,8 +195,8 @@ def normalize_features(
                 grouped_values = grouped_values - means
             if scaling:
                 grouped_values = grouped_values / stds
-            if max_value is not None:
-                grouped_values = grouped_values.clip(-max_value, max_value)
+                if max_value is not None:
+                    grouped_values = grouped_values.clip(-max_value, max_value)
             return anndata.AnnData(
                 X=grouped_values.data,
                 obs=data.obs.copy(),
