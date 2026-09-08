@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 import bioio
@@ -17,7 +17,7 @@ import shapely
 import xarray as xr
 import zarr
 from dask import delayed
-from ome_types import OME, from_xml
+from ome_types import from_xml
 from pint import UndefinedUnitError, UnitRegistry
 from skimage.util import img_as_float, img_as_ubyte, img_as_uint
 
@@ -376,7 +376,8 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> np.ndarray
             physical_size_x_unit = img.pixels.planes[0].position_x_unit.value
     if (
         values is None
-        and isinstance(image.metadata, OME)
+        and hasattr(image.metadata, "attributes")
+        and isinstance(image.metadata.attributes, Mapping)
         and "multiscales" in image.metadata.attributes
     ):
         metadata = image.metadata.attributes["multiscales"][0]["metadata"]
@@ -385,7 +386,7 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> np.ndarray
         physical_size_x_unit = metadata["position_x_unit"]
     elif values is None:
         attrs = image.xarray_dask_data.attrs
-        if "unprocessed" in attrs:
+        if isinstance(attrs, Mapping) and "unprocessed" in attrs:
             if 51123 in attrs["unprocessed"]:
                 attrs = attrs["unprocessed"][51123]
                 return np.array([attrs["YPositionUm"], attrs["XPositionUm"]])
