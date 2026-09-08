@@ -158,6 +158,6 @@ def filter_data(
         )
         variance_indices = variance_indices[keep_variance_indices]
         if n_features is not None:
-            variance_indices = variance_indices[:n_features]
+            variance_indices = variance_indices[-n_features:]
 
     return _slice_anndata(data, keep_cells, variance_indices)
