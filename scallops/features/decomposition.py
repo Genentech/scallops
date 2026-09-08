@@ -65,6 +65,7 @@ class PCA:
         """
 
         is_dask = isinstance(X, da.Array)
+        gpu = False
         if self.gpu is None:
             try:
                 import torch
