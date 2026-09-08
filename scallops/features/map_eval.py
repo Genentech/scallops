@@ -154,6 +154,8 @@ def set_benchmark(
             "pvalue",
         ],
     )
+    if len(df) == 0:
+        return df
     df["FDR"] = multipletests(df["pvalue"].values, method="fdr_bh")[1]
     return df
 
