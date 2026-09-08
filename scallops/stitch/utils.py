@@ -315,13 +315,13 @@ def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str)
     return stage_positions
 
 
-def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> np.ndarray:
+def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> np.ndarray | None:
     # get from image metadata
     if len(filepaths) == 1:
         img = _create_image(filepaths[0])
         ome_metadata = _get_ome(img)
         if ome_metadata is None:
-            raise ValueError(f"Could not extract OME metadata from {filepaths[0]}.")
+            return None
         n_images = len(ome_metadata.images)
         stage_positions = np.zeros((n_images, 2))
         for i in range(n_images):
@@ -354,7 +354,7 @@ def _get_ome(image: bioio.BioImage):
     return None
 
 
-def get_tile_position(image: bioio.BioImage, image_index: int = 0):
+def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> np.ndarray | None:
     ome_metadata = _get_ome(image)
     physical_size_y_unit = None
     physical_size_x_unit = None
@@ -373,7 +373,7 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
         values = [metadata["position_y"], metadata["position_x"]]
         physical_size_y_unit = metadata["position_y_unit"]
         physical_size_x_unit = metadata["position_x_unit"]
-    else:
+    elif values is None:
         attrs = image.xarray_dask_data.attrs
         if "unprocessed" in attrs:
             if 51123 in attrs["unprocessed"]:
@@ -398,6 +398,8 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
                         return np.array([stage_y, stage_x])
                 except:  # noqa: E722
                     pass
+    if values is None:
+        return None
     if physical_size_y_unit is not None and physical_size_x_unit is not None:
         try:
             values[0] = (
@@ -412,10 +414,8 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
             logger.info("Unknown stage coordinate size units. Assuming µm")
     else:
         logger.info("Unknown stage coordinate size units. Assuming µm")
-    if values is None:
-        raise ValueError("Unable to find positions.")
-    position_microns = np.array(values, dtype=float)
-    return position_microns
+
+    return np.array(values, dtype=float)
 
 
 def _pixel_size_from_araceli_json(json_path: str):
