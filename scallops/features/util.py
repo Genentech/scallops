@@ -67,7 +67,7 @@ def pandas_to_anndata(
         ]
         if len(drop_columns) > 0:
             df = df.drop(columns=drop_columns)
-    if metadata_columns is not None and len(metadata_columns) != len(df.columns):
+    if metadata_columns is not None:
         df = df[metadata_columns]
     if isinstance(df, dd.DataFrame):
         df = df.compute()
