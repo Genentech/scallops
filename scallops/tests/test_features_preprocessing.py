@@ -5,7 +5,53 @@ import pandas as pd
 import pytest
 from sklearn.preprocessing import PowerTransformer
 
-from scallops.features.preprocessing import filter_data, transform_features_yj
+from scallops.features.preprocessing import (
+    feature_variance,
+    filter_data,
+    transform_features_yj,
+)
+
+
+@pytest.mark.parametrize("use_dask", [True, False])
+@pytest.mark.features
+def test_feature_variance(use_dask):
+    rng = np.random.default_rng(0)
+    X = rng.random((20, 2))
+    adata = anndata.AnnData(
+        da.from_array(X) if use_dask else X,
+        obs=pd.DataFrame(
+            data=dict(
+                pert=["pert1", "pert2"] * 10,
+                well=["well1", "well2"] * 10,
+            )
+        ),
+        var=pd.DataFrame(index=["gene1", "gene2"]),
+    )
+    if use_dask:
+        adata2 = adata.copy()
+        adata2.X = adata2.X.compute()
+        df = adata2.to_df().join(adata2.obs)
+    else:
+        df = adata.to_df().join(adata.obs)
+
+    def single_group(x):
+        x = x.copy()
+        for gene in ["gene1", "gene2"]:
+            value = (x[gene].values - np.min(x[gene])) / (
+                np.max(x[gene]) - np.min(x[gene])
+            )
+            value = np.var(value)
+            x[gene] = value
+
+        return x.drop_duplicates(["gene1", "gene2"])
+
+    result_df = (
+        df.groupby("well").apply(single_group, include_groups=False).reset_index()
+    )
+    result = feature_variance(adata, by="well", scale=True)
+    if use_dask:
+        result = result.compute()
+    np.testing.assert_almost_equal(result.data, result_df[["gene1", "gene2"]].values)
 
 
 @pytest.mark.parametrize("by", [None, "well"])
@@ -29,18 +75,32 @@ def test_filter_data(use_dask, by):
     adata.X[0, 0] = np.nan
     # np.var(adata.X, axis=0) array([nan,  5.], dtype=float32)
     test_nan_filter = filter_data(
-        adata, max_fraction_not_finite=0, min_variance=None, max_variance=None
+        adata,
+        max_fraction_not_finite=0,
+        min_variance=None,
+        max_variance=None,
+        scale=False,
     )
     assert test_nan_filter.shape == (3, 2)
     # np.var(adata.X, axis=0) # array([nan,  5.]
     # np.var(adata[adata.obs['well'] == 'well1'].X, axis=0)  # array([nan,  4.])
     # np.var(adata[adata.obs['well'] == 'well2'].X, axis=0)  # array([2209.,    4.]
     d1 = filter_data(
-        adata, max_fraction_not_finite=None, min_variance=0, max_variance=None, by=by
+        adata,
+        max_fraction_not_finite=None,
+        min_variance=0,
+        max_variance=None,
+        by=by,
+        scale=False,
     )
     # np.var(adata[1:].X, axis=0)  array([2006.2222, 2.6666667]
     d2 = filter_data(
-        adata, max_fraction_not_finite=0, min_variance=5, max_variance=None, by=by
+        adata,
+        max_fraction_not_finite=0,
+        min_variance=5,
+        max_variance=None,
+        by=by,
+        scale=False,
     )
 
     assert d1.shape == (4, 1)

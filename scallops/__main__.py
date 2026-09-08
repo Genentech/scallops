@@ -41,9 +41,8 @@ from scallops.cli import (
     features_main,
     find_objects_main,
     illumination_correction_main,
-    norm_features_main,
+    pert_map_main,
     pooled_if_sbs_main,
-    rank_features_main,
     register_main,
     segment_main,
     stitch_main,
@@ -67,8 +66,7 @@ def create_parsers(default_help: bool = False) -> argparse.ArgumentParser:
     segment_main._create_parser(subparsers, default_help)
     illumination_correction_main._create_parser(subparsers, default_help)
     dialout_main._create_parser(subparsers, default_help)
-    norm_features_main._create_parser(subparsers, default_help)
-    rank_features_main._create_parser(subparsers, default_help)
+    pert_map_main._create_parser(subparsers, default_help)
     register_main._create_parser(subparsers, default_help)
     stitch_main._create_stitch_parser(subparsers, default_help)
     stitch_main._create_stitch_preview_parser(subparsers, default_help)

@@ -10,6 +10,8 @@ from array_api_compat import get_namespace
 from dask.array.numpy_compat import NUMPY_GE_200
 from statsmodels.stats.weightstats import DescrStatsW
 
+from scallops.features.util import _trim_by, _xarray_by_values
+
 
 def _weighted_median(x, weights):
     d = DescrStatsW(data=x, weights=weights).quantile(probs=0.5, return_pandas=False)
@@ -31,18 +33,11 @@ def agg_features(
     :return: Aggregated data
     """
     assert agg_func in ("mean", "median")
-
+    by = _trim_by(by)
     group_by_multi = not isinstance(by, str) and isinstance(by, Sequence)
-    if group_by_multi:
-        by = list(by)
-        if len(by) == 1:
-            by = by[0]
-            group_by_multi = False
 
-    if not group_by_multi:
-        coords = {"obs": data.obs[by]}
-    else:
-        coords = {"obs": data.obs[by].apply(tuple, axis=1)}
+    coords = dict(obs=_xarray_by_values(data, by))
+
     if weights_col is not None:
         coords[weights_col] = ("obs", data.obs[weights_col])
     xdata = xr.DataArray(data=data.X, dims=("obs", "var"), coords=coords, name="")
@@ -114,16 +109,15 @@ def agg_features(
         index=groups,
     )
     obs = result.coords["obs"].to_dataframe()
-    obs = obs.join(group_counts, rsuffix="_1").reset_index(drop=True)
+    obs = obs.join(group_counts, rsuffix="_1")
+    # both index and column set
     if group_by_multi:
-        new_obs = pd.DataFrame(obs["obs"].tolist(), columns=by)
-        for c in obs.columns:
-            if c.startswith("count") and c not in new_obs.columns:
-                new_obs[c] = obs[c]
-        obs = new_obs
+        obs[by] = obs["obs"].apply(pd.Series)
+        obs.index = obs["obs"].map(lambda x: "-".join(map(str, x)))
+        obs = obs.drop("obs", axis=1)
     else:
         obs = obs.rename({"obs": by}, axis=1)
-    obs = obs.set_index(pd.RangeIndex(len(obs)).astype(str))
+
     return anndata.AnnData(
         X=X,
         obs=obs,
