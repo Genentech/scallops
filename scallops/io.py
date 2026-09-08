@@ -1604,7 +1604,7 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
             # Preventing recursing inside of these types
             return read_elem(elem)
         elif iospec.encoding_type == "array":
-            return da.from_zarr(elem)
+            return da.from_zarr(elem) if not is_h5 else da.from_array(elem, elem.chunks)
 
             # try:
             #     return da.from_zarr(elem)
