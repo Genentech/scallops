@@ -160,15 +160,14 @@ def _single_stitch(
         )
 
     if stage_positions is None:
-        try:
-            stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
-        except:  # noqa: E722
-            # check for Araceli JSON
-            stage_positions, stage_positions_path = (
-                _autodetect_stage_positions_from_araceli_json(
-                    [paths[0] for paths in original_filepaths]
-                )
+        stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
+
+    if stage_positions is None:
+        stage_positions, stage_positions_path = (
+            _autodetect_stage_positions_from_araceli_json(
+                [paths[0] for paths in original_filepaths]
             )
+        )
     if stage_positions is None:
         raise ValueError("Unable to find stage positions.")
     if image_spacing is None:
