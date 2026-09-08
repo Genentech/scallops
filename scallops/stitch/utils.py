@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 import bioio
@@ -315,24 +315,30 @@ def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str)
     return stage_positions
 
 
-def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> np.ndarray:
+def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> np.ndarray | None:
     # get from image metadata
     if len(filepaths) == 1:
         img = _create_image(filepaths[0])
         ome_metadata = _get_ome(img)
         if ome_metadata is None:
-            raise ValueError(f"Could not extract OME metadata from {filepaths[0]}.")
+            return None
         n_images = len(ome_metadata.images)
         stage_positions = np.zeros((n_images, 2))
         for i in range(n_images):
-            y, x = get_tile_position(img, i)
+            pos = get_tile_position(img, i)
+            if pos is None:
+                return None
+            y, x = pos
             stage_positions[i, 0] = y
             stage_positions[i, 1] = x
     else:
         stage_positions = np.zeros((len(filepaths), 2))
         for i in range(len(filepaths)):
             img = _create_image(filepaths[i])
-            y, x = get_tile_position(img)
+            pos = get_tile_position(img)
+            if pos is None:
+                return None
+            y, x = pos
             stage_positions[i, 0] = y
             stage_positions[i, 1] = x
     return stage_positions
@@ -354,7 +360,7 @@ def _get_ome(image: bioio.BioImage):
     return None
 
 
-def get_tile_position(image: bioio.BioImage, image_index: int = 0):
+def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> np.ndarray | None:
     ome_metadata = _get_ome(image)
     physical_size_y_unit = None
     physical_size_x_unit = None
@@ -368,14 +374,19 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
             ]
             physical_size_y_unit = img.pixels.planes[0].position_y_unit.value
             physical_size_x_unit = img.pixels.planes[0].position_x_unit.value
-    if values is None and "multiscales" in image.metadata.attributes:
+    if (
+        values is None
+        and hasattr(image.metadata, "attributes")
+        and isinstance(image.metadata.attributes, Mapping)
+        and "multiscales" in image.metadata.attributes
+    ):
         metadata = image.metadata.attributes["multiscales"][0]["metadata"]
         values = [metadata["position_y"], metadata["position_x"]]
         physical_size_y_unit = metadata["position_y_unit"]
         physical_size_x_unit = metadata["position_x_unit"]
-    else:
+    elif values is None:
         attrs = image.xarray_dask_data.attrs
-        if "unprocessed" in attrs:
+        if isinstance(attrs, Mapping) and "unprocessed" in attrs:
             if 51123 in attrs["unprocessed"]:
                 attrs = attrs["unprocessed"][51123]
                 return np.array([attrs["YPositionUm"], attrs["XPositionUm"]])
@@ -398,6 +409,8 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
                         return np.array([stage_y, stage_x])
                 except:  # noqa: E722
                     pass
+    if values is None:
+        return None
     if physical_size_y_unit is not None and physical_size_x_unit is not None:
         try:
             values[0] = (
@@ -412,10 +425,8 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0):
             logger.info("Unknown stage coordinate size units. Assuming µm")
     else:
         logger.info("Unknown stage coordinate size units. Assuming µm")
-    if values is None:
-        raise ValueError("Unable to find positions.")
-    position_microns = np.array(values, dtype=float)
-    return position_microns
+
+    return np.array(values, dtype=float)
 
 
 def _pixel_size_from_araceli_json(json_path: str):
