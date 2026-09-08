@@ -325,14 +325,20 @@ def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> np.ndarray
         n_images = len(ome_metadata.images)
         stage_positions = np.zeros((n_images, 2))
         for i in range(n_images):
-            y, x = get_tile_position(img, i)
+            pos = get_tile_position(img, i)
+            if pos is None:
+                return None
+            y, x = pos
             stage_positions[i, 0] = y
             stage_positions[i, 1] = x
     else:
         stage_positions = np.zeros((len(filepaths), 2))
         for i in range(len(filepaths)):
             img = _create_image(filepaths[i])
-            y, x = get_tile_position(img)
+            pos = get_tile_position(img)
+            if pos is None:
+                return None
+            y, x = pos
             stage_positions[i, 0] = y
             stage_positions[i, 1] = x
     return stage_positions
