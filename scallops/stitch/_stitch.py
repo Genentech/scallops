@@ -21,6 +21,7 @@ from scallops.stitch._plots import _qc_report
 from scallops.stitch.fuse import _fuse
 from scallops.stitch.shift_utils import _zncc, convert_stage_positions
 from scallops.stitch.utils import (
+    _autodetect_stage_positions_from_araceli_json,
     _download_path,
     _init_tiles,
     _stage_positions_from_image_metadata,
@@ -161,6 +162,14 @@ def _single_stitch(
     if stage_positions is None:
         stage_positions = _stage_positions_from_image_metadata(primary_filepaths)
 
+    if stage_positions is None:
+        stage_positions, stage_positions_path = (
+            _autodetect_stage_positions_from_araceli_json(
+                [paths[0] for paths in original_filepaths]
+            )
+        )
+    if stage_positions is None:
+        raise ValueError("Unable to find stage positions.")
     if image_spacing is None:
         image_spacing = get_pixel_size(primary_filepaths, stage_positions_path)
 

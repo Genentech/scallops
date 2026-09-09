@@ -217,7 +217,7 @@ Composites
         scallops.visualize.composite.experiment_composite
         scallops.visualize.composite.imcomposite
         scallops.visualize.composite.label_montage
-        scallops.visualize.composite.montage_plot
+
 
 Cross-talk
 -----------

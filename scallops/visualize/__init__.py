@@ -13,8 +13,6 @@ Submodules:
 - histogram: Histogram plotting for channel and barcode analysis.
 - imshow: General image display utilities.
 - napari: Integration with the Napari viewer for interactive exploration.
-- registration: Visualization of image registration results.
-- segmentation: Visualization of segmentation results.
 - utils: General utility functions for visualization tasks.
 """
 
