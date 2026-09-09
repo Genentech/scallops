@@ -102,11 +102,11 @@ def _remove_incomplete_file(path: str):
 
 def _to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
     compute = kwargs.pop("compute", True)
-    fs, path = fsspec.url_to_fs(path)
+    fs, fs_path = fsspec.url_to_fs(path)
 
-    if fs.exists(path):
+    if fs.exists(fs_path):
         # Delete in chunks of 1,000
-        files_to_delete = fs.glob(path + fs.sep + "*.parquet")
+        files_to_delete = fs.glob(fs_path + fs.sep + "*.parquet")
         for i in range(0, len(files_to_delete), 1000):
             fs.rm(files_to_delete[i : i + 1000])
     _write_incomplete_file(path)
