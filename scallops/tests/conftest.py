@@ -1,7 +1,5 @@
-import types
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -69,8 +67,7 @@ def experiment_c_A1_102_aligned(experiment_c):
         .transpose(*("z", "c", "t", "y", "x"))
         .rename({"z": "t", "t": "z"})
     )  # ops swaps z and t in saved tif
-    live_t = experiment_c.images["A1-102"].t.values
-    return img.assign_coords(t=live_t)
+    return img.assign_coords(t=experiment_c.images["A1-102"].t.values)
 
 
 @pytest.fixture(scope="module", autouse=False)
@@ -136,112 +133,3 @@ def nis_seq_barcodes():
     df = pd.concat([bru, scr], ignore_index=True)
     df["barcode"] = df["full_barcode"].map(rc).str[:14]
     return df
-
-
-@pytest.fixture(scope="module")
-def nis_seq_fixtures(nis_seq_experiment, nis_seq_nuclear_mask, nis_seq_barcodes):
-    """Fully preprocessed NIS-seq fixtures: aligned, xtalk-corrected spots,
-    nuclear labels, whitelist and thresholds.
-
-    Attributes
-    ----------
-    iss : xr.DataArray
-        Raw aligned NIS-seq image (well C10, tile 0040).
-    nuclei : np.ndarray
-        2D CellPose nuclear label mask.
-    df_bcn : pd.DataFrame
-        Whitelist with column 'barcode' (14-mer RC).
-    ba3 : xr.DataArray
-        peaks_to_bases output (3 SBS channels, labels=nuclei).
-    cor3 : xr.DataArray
-        Xtalk-corrected peaks_to_bases output.
-    w3 : np.ndarray
-        Xtalk correction matrix (3×3).
-    thr_r3 : float
-        Secondary peak threshold for 3-ch.
-    n_nuc : int
-        Number of nuclei in the mask.
-    """
-    from scallops.reads import (
-        apply_channel_crosstalk_matrix,
-        channel_crosstalk_matrix,
-        decode_max,
-        peaks_to_bases,
-    )
-    from scallops.registration.crosscorrelation import align_image
-    from scallops.spots import (
-        find_peaks,
-        max_filter,
-        peak_thresholds_from_bases,
-        peak_thresholds_from_reads,
-        std,
-        transform_log,
-    )
-
-    nuclei = nis_seq_nuclear_mask
-    df_bcn = nis_seq_barcodes
-    n_nuc = int(nuclei.max())
-
-    # Align across cycles (no within-cycle channel alignment for NIS-seq)
-    iss = nis_seq_experiment.images["C10-0040"].squeeze()
-    iss = align_image(
-        iss,
-        align_within_time_channels=None,
-        align_between_time_channel=0,
-        filter_percentiles=[0, 90],
-    )
-
-    # Channels 1,2,3 → ch03(C), ch04(A), ch06(T)
-    loged3 = transform_log(iss.isel(c=[1, 2, 3]))
-    ba3 = peaks_to_bases(
-        maxed=max_filter(loged3, width=5),
-        peaks=find_peaks(std(loged3)),
-        labels=nuclei,
-        bases=["A", "T", "C"],
-    )
-    thr_x3 = peak_thresholds_from_bases(ba3).iloc[0]["threshold"]
-    w3 = channel_crosstalk_matrix(ba3.where(ba3.peak > thr_x3, drop=True))
-    cor3 = apply_channel_crosstalk_matrix(ba3, w3)
-
-    df_tmp = decode_max(cor3, barcodes=df_bcn)
-    thr_r3 = peak_thresholds_from_reads(df_tmp.query("barcode_match")).iloc[0][
-        "threshold"
-    ]
-
-    # 2-col secondary threshold (from synthesised ch0=max(A,C), ch1=max(A,T) baseline)
-    sp3 = np.clip(cor3.data, 0, None)
-    bl2 = np.array(["G", "T", "A", "C"])
-    ch0 = np.maximum(sp3[..., 0], sp3[..., 2])
-    ch1 = np.maximum(sp3[..., 0], sp3[..., 1])
-    sp2 = np.stack([ch0, ch1], axis=-1)
-    above2 = sp2.max(axis=2) > 0.20 * sp2.max(axis=(1, 2), keepdims=True).squeeze(-1)
-    df_t2 = pd.DataFrame(
-        {
-            "peak": cor3.peak.values,
-            "label": cor3.label.values,
-            "Q_mean": 60.0,
-            "Q_min": 60.0,
-            "barcode": [
-                "".join(bl2[r]) for r in np.where(above2, sp2.argmax(axis=2), 2)
-            ],
-        }
-    )
-    df_t2["barcode_match"] = df_t2["barcode"].isin(set(df_bcn["barcode"]))
-    try:
-        thr_r2 = peak_thresholds_from_reads(df_t2.query("barcode_match")).iloc[0][
-            "threshold"
-        ]
-    except Exception:
-        thr_r2 = 3.0
-
-    return types.SimpleNamespace(
-        iss=iss,
-        nuclei=nuclei,
-        df_bcn=df_bcn,
-        ba3=ba3,
-        cor3=cor3,
-        w3=w3,
-        thr_r3=thr_r3,
-        thr_r2=thr_r2,
-        n_nuc=n_nuc,
-    )
