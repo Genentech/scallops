@@ -10,7 +10,7 @@ Authors:
 
 import itertools
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from itertools import product
 from typing import Literal, Tuple
 
@@ -31,6 +31,8 @@ from sklearn.neighbors import NearestNeighbors
 from scallops.io import CYAN, GRAY, GREEN, MAGENTA, RED, save_stack_imagej
 
 logger = logging.getLogger("scallops")
+
+DEFAULT_MIN_P_ERROR = 1e-6
 
 
 def _hamming_distance(
@@ -134,7 +136,9 @@ def summarize_base_call_mismatches(
     return df
 
 
-def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
+def quality_softmax(
+    x: np.ndarray, min_error: float = DEFAULT_MIN_P_ERROR
+) -> np.ndarray:
     """Computes the phred quality score of transformed data using the softmax function.
 
     :param x: Array with transformed data (read, cycle, channel).
@@ -556,19 +560,53 @@ def _decode_max_chunk(
     meta_df: pd.DataFrame,
     offset: slice | None,
     whitelist: list[str] | None,
+    thresholded_bases: Sequence[dict] | None = None,
 ) -> pd.DataFrame:
-    """Decode the maximum intensity chunk from the input spot data and compute base
-    quality scores.
-
-    :param spots: Spot data.
-    :param bases: List of bases.
-    :param meta_df: Metadata dataframe.
-    :param offset: Offset into metadata.
-    :param whitelist: List of whitelisted barcodes.
-    :return: A pandas DataFrame with decoded barcode sequences and quality metrics.
-    """
     Q = quality_softmax(spots)
     channel_calls = np.argmax(spots, axis=2)
+    if thresholded_bases is not None:
+        min_error = DEFAULT_MIN_P_ERROR
+        bases = list(bases)
+        n_bases = len(bases)
+        for thresholded_base_index in range(len(thresholded_bases)):
+            thresholded_base = thresholded_bases[thresholded_base_index]
+            base = thresholded_base["base"]
+            channels = thresholded_base["channels"]
+            threshold = thresholded_base["threshold"]
+            direction = thresholded_base["direction"]
+            base_offset = thresholded_base_index + n_bases
+
+            max_spots = np.max(spots[..., channels], axis=2)  # (read, t)
+            max_spots_per_read = np.max(max_spots, axis=1)  # (read,)
+            cutoff = max_spots_per_read * threshold  # (read,)
+
+            # create fake 2 channel data with cutoff and max for p value
+            p_thresholded = softmax(
+                np.concatenate(
+                    (
+                        np.expand_dims(max_spots, axis=2),
+                        np.repeat(
+                            np.expand_dims(np.expand_dims(cutoff, axis=1), axis=2),
+                            max_spots.shape[1],
+                            axis=1,
+                        ),
+                    ),
+                    axis=2,
+                ),
+                axis=2,
+            )  # (read, t, 2)
+            p_thresholded = np.min(p_thresholded, axis=2)
+            p_thresholded_error = 1 - p_thresholded
+            p_thresholded_error[p_thresholded_error < min_error] = min_error
+            Q_thresholded = -10 * np.log10(p_thresholded_error)
+            if direction == "<":
+                base_present = max_spots < np.expand_dims(cutoff, axis=1)
+            else:
+                base_present = max_spots > np.expand_dims(cutoff, axis=1)
+            channel_calls[base_present] = base_offset
+            Q[base_present] = Q_thresholded[base_present]
+            bases.append(base)
+        bases = np.array(bases)
     calls = bases[channel_calls]
 
     df = (
@@ -586,27 +624,18 @@ def _decode_max_chunk(
     return df
 
 
-def decode_max(
-    spots: xr.DataArray,
-    barcodes: pd.DataFrame | None = None,
+def _decode(
+    spots: xr.DataArray, barcodes: pd.DataFrame | None, f: Callable, **kwargs
 ) -> pd.DataFrame | dd.DataFrame:
-    """Call reads by assigning the base with the highest intensity (softmax argmax).
-
-    :param spots: Spots returned from peaks_to_bases containing dimensions (read, t, c).
-    :param barcodes: Table of designed barcode sequences used for indicating whether a
-        barcode is an exact match. Expected to have column 'barcode'.
-    :return: The reads data frame.
-    """
     whitelist = barcodes["barcode"].values if barcodes is not None else None
     meta_df = spots["read"].to_dataframe()  # index is read
-    bases = spots.c.values
+    decode_args = dict(whitelist=whitelist, meta_df=meta_df)
+    decode_args.update(kwargs)
     if not isinstance(spots.data, da.Array):
-        df = _decode_max_chunk(
-            spots=spots.data,
-            bases=bases,
+        decode_args["spots"] = spots.data
+        df = f(
+            **decode_args,
             offset=None,
-            meta_df=meta_df,
-            whitelist=whitelist,
         )
     else:
         # no chunking in t or c dimension
@@ -629,10 +658,10 @@ def decode_max(
         if whitelist is not None:
             columns.append(("barcode_match", bool))
         meta = dd.utils.make_meta(columns)
-        _decode_max_chunk_delayed = delayed(_decode_max_chunk)
-        whitelist = delayed(whitelist)
-        bases = delayed(bases)
-        meta_df = delayed(meta_df)
+        f_delayed = delayed(f)
+        for key in decode_args.keys():
+            decode_args[key] = delayed(decode_args[key])
+
         starts = [cached_cumsum(bds, initial_zero=True) for bds in spots.data.chunks]
         ndim = len(starts)
         results = []
@@ -643,18 +672,39 @@ def decode_max(
             for i in range(ndim):
                 start.append(starts[i][key[i]])
                 stop.append(starts[i][key[i] + 1])
+            decode_args["spots"] = block
             results.append(
-                _decode_max_chunk_delayed(
-                    spots=block,
-                    whitelist=whitelist,
-                    meta_df=meta_df,
+                f_delayed(
+                    **decode_args,
                     offset=slice(start[0], stop[0]),
-                    bases=bases,
                 )
             )
         df = dd.from_delayed(results, meta=meta, verify_meta=False)
-
     return df
+
+
+def decode_max(
+    spots: xr.DataArray,
+    barcodes: pd.DataFrame | None = None,
+    thresholded_bases: Sequence[dict] | None = None,
+) -> pd.DataFrame | dd.DataFrame:
+    """Call reads by assigning the base with the highest intensity (softmax argmax).
+
+    :param spots: Spots returned from peaks_to_bases containing dimensions (read, t, c).
+    :param barcodes: Table of designed barcode sequences used for indicating whether a
+        barcode is an exact match. Expected to have column 'barcode'.
+    :param thresholded_bases: Optional list of thresholded bases when number of bases is greater than number of
+        imaged channels (e.g. NIS-Seq). For example, `dict(base="G", channels=[0,1,2], direction='<', threshold=0.2)`,
+        calls a `G` when all intensities are below 20% of the spot’s maximum intensity across all cycles
+    :return: The reads data frame.
+    """
+    return _decode(
+        spots=spots,
+        barcodes=barcodes,
+        f=_decode_max_chunk,
+        bases=spots.c.values,
+        thresholded_bases=thresholded_bases,
+    )
 
 
 def _decode_se_chunk(
@@ -750,63 +800,13 @@ def decode_se(
 
     encoding = np.asarray(encoding, dtype=float)
     base_labels = np.asarray(base_labels)
-
-    whitelist = barcodes["barcode"].values if barcodes is not None else None
-    meta_df = spots["read"].to_dataframe()
-
-    if not isinstance(spots.data, da.Array):
-        df = _decode_se_chunk(
-            spots=spots.data,
-            encoding=encoding,
-            base_labels=base_labels,
-            offset=None,
-            meta_df=meta_df,
-            whitelist=whitelist,
-        )
-    else:
-        dims = spots.dims
-        chunksize = list(spots.data.chunksize)
-        for i in range(len(dims)):
-            if dims[i] in ("c", "t") and spots.data.chunksize[i] != spots.data.shape[i]:
-                chunksize[i] = -1
-        chunksize = tuple(chunksize)
-        if chunksize != spots.data.chunksize:
-            spots.data = spots.data.rechunk(chunksize)
-
-        columns = [(col, meta_df[col].dtype) for col in meta_df.columns]
-        columns += [
-            ("barcode", object),
-            ("Q", object),
-            ("Q_mean", np.float64),
-            ("Q_min", np.float64),
-        ]
-        if whitelist is not None:
-            columns.append(("barcode_match", bool))
-        meta = dd.utils.make_meta(columns)
-        _chunk_d = delayed(_decode_se_chunk)
-        wl_d = delayed(whitelist)
-        mdf_d = delayed(meta_df)
-        enc_d = delayed(encoding)
-        bla_d = delayed(base_labels)
-        starts = [cached_cumsum(bds, initial_zero=True) for bds in spots.data.chunks]
-        results = []
-        for block in spots.data.to_delayed().ravel():
-            key = np.array(block.key[1:])
-            start = [starts[i][key[i]] for i in range(len(starts))]
-            stop = [starts[i][key[i] + 1] for i in range(len(starts))]
-            results.append(
-                _chunk_d(
-                    spots=block,
-                    encoding=enc_d,
-                    base_labels=bla_d,
-                    meta_df=mdf_d,
-                    whitelist=wl_d,
-                    offset=slice(start[0], stop[0]),
-                )
-            )
-        df = dd.from_delayed(results, meta=meta, verify_meta=False)
-
-    return df
+    return _decode(
+        spots=spots,
+        barcodes=barcodes,
+        f=_decode_se_chunk,
+        encoding=encoding,
+        base_labels=base_labels,
+    )
 
 
 def _polar_thresholds_from_wcor(
@@ -1124,82 +1124,20 @@ def decode_polar(
         else:
             r_frac = 0.11 * np.sqrt(len(channel_bases))
 
-    #  Dispatch: dask (chunked) or numpy (all at once)
-    meta_df = spots["read"].to_dataframe()
-
-    if not isinstance(spots.data, da.Array):
-        df = _decode_polar_chunk(
-            spots=spots.data,
-            E=E,
-            base_labels_arr=base_labels_arr,
-            bright_rows=bright_rows,
-            dark_rows=dark_rows,
-            has_dark=has_dark,
-            r_frac=r_frac if r_frac is not None else 0.0,
-            non_orthogonal=non_orthogonal,
-            t_lo=t_lo,
-            t_hi=t_hi,
-            meta_df=meta_df,
-            whitelist=whitelist_arr,
-            offset=None,
-        )
-    else:
-        # Mirror the decode_max dask pattern: rechunk so t and c are whole,
-        # then dispatch one delayed _decode_polar_chunk per read-chunk.
-        dims = spots.dims
-        chunksize = list(spots.data.chunksize)
-        for i, dim in enumerate(dims):
-            if dim in ("c", "t") and spots.data.chunksize[i] != spots.data.shape[i]:
-                chunksize[i] = -1
-        chunksize = tuple(chunksize)
-        if chunksize != spots.data.chunksize:
-            spots = spots.copy(data=spots.data.rechunk(chunksize))
-
-        columns = [(col, meta_df[col].dtype) for col in meta_df.columns]
-        columns += [
-            ("barcode", object),
-            ("Q", object),
-            ("Q_mean", np.float64),
-            ("Q_min", np.float64),
-        ]
-        if whitelist_arr is not None:
-            columns.append(("barcode_match", bool))
-        meta = dd.utils.make_meta(columns)
-
-        _chunk_delayed = delayed(_decode_polar_chunk)
-        meta_df_d = delayed(meta_df)
-        whitelist_d = delayed(whitelist_arr)
-        E_d = delayed(E)
-        bla_d = delayed(base_labels_arr)
-        br_d = delayed(bright_rows)
-        dr_d = delayed(dark_rows)
-
-        starts = [cached_cumsum(bds, initial_zero=True) for bds in spots.data.chunks]
-        results = []
-        for block in spots.data.to_delayed().ravel():
-            key = np.array(block.key[1:])
-            start = [starts[i][key[i]] for i in range(len(starts))]
-            stop = [starts[i][key[i] + 1] for i in range(len(starts))]
-            results.append(
-                _chunk_delayed(
-                    spots=block,
-                    E=E_d,
-                    base_labels_arr=bla_d,
-                    bright_rows=br_d,
-                    dark_rows=dr_d,
-                    has_dark=has_dark,
-                    r_frac=r_frac if r_frac is not None else 0.0,
-                    non_orthogonal=non_orthogonal,
-                    t_lo=t_lo,
-                    t_hi=t_hi,
-                    meta_df=meta_df_d,
-                    whitelist=whitelist_d,
-                    offset=slice(start[0], stop[0]),
-                )
-            )
-        df = dd.from_delayed(results, meta=meta, verify_meta=False)
-
-    return df
+    return _decode(
+        spots=spots,
+        barcodes=barcodes,
+        f=_decode_polar_chunk,
+        E=E,
+        base_labels_arr=base_labels_arr,
+        bright_rows=bright_rows,
+        dark_rows=dark_rows,
+        has_dark=has_dark,
+        r_frac=r_frac if r_frac is not None else 0.0,
+        non_orthogonal=non_orthogonal,
+        t_lo=t_lo,
+        t_hi=t_hi,
+    )
 
 
 def peaks_to_bases(
