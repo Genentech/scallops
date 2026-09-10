@@ -302,6 +302,15 @@ def _create_stitch_parser(
     )
     z_index_tile_arg(parser)
     t_index_arg(parser)
+    parser.add_argument(
+        "--split-t",
+        action="store_true",
+        help="For tiles with multiple timepoints embedded in a single file (e.g. "
+        "phenotyping rounds stored as frames within one nd2 file, rather than "
+        "one file per round), stitch each timepoint separately and write it to "
+        "its own output key (`{image_key}-{t}`), reusing tile positions computed "
+        "from timepoint 0. Mutually exclusive with `--t-index`.",
+    )
     force_arg(parser)
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
