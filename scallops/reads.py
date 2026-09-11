@@ -10,6 +10,7 @@ Authors:
 
 import itertools
 import logging
+import random
 from collections.abc import Callable, Sequence
 from itertools import product
 from typing import Literal, Tuple
@@ -822,14 +823,14 @@ def _polar_thresholds_from_wcor(
     The xtalk matrix size (``w_cor.shape[0]``) determines the signal model.
     The number of channels in the target data (``len(channel_bases)``) determines
     which polar coordinate system to use.  These may differ — for example, a
-    3-channel xtalk matrix can be used to compute 2-colour angle thresholds when
-    the 2-colour channels are synthesised from the 3 original channels via max().
+    3-channel xtalk matrix can be used to compute 2-color angle thresholds when
+    the 2-color channels are synthesised from the 3 original channels via max().
 
     :param w_cor: ``(n, n)`` xtalk correction matrix from
         :func:`channel_crosstalk_matrix`, where ``n`` is the number of physical
         channels used for correction.
     :param channel_bases: Ordered base labels for each **data** channel (may be
-        fewer than ``n`` for synthesised channels such as 2-colour Illumina).
+        fewer than ``n`` for synthesised channels such as 2-color Illumina).
     :return: Dict with keys ``t1``, ``t2`` (3-channel spherical) or ``t_lo``,
         ``t_hi`` (2-channel planar), giving angle boundaries in degrees.
     """
@@ -851,7 +852,7 @@ def _polar_thresholds_from_wcor(
         t2 = (theta2[1] + theta2[2]) / 2
         return {"t1": float(t1), "t2": float(t2)}
 
-    # Planar (2-colour Illumina): channels are synthesised as
+    # Planar (2-color Illumina): channels are synthesised as
     #   ch0 = max(A_ch, C_ch),  ch1 = max(A_ch, T_ch)
     # E_soft rows: A=0, T=1, C=2  (for 3-channel physical xtalk)
     # 2-col encoding bl=[G,T,A,C]: G=dark, T=ch1-only, A=both, C=ch0-only
@@ -1012,9 +1013,9 @@ def decode_polar(
         method, its SE formula accounts for per-channel dynamic range
         (SNR proxy) and consistently outperforms the polar dot-product argmax.
         Use ``decode_polar`` when the encoding is **non-orthogonal**, i.e. when at
-        least one bright base fires more than one channel (e.g. Illumina 2-colour
+        least one bright base fires more than one channel (e.g. Illumina 2-color
         where A appears in both the red and green channels).  In that case the
-        amplitude-independent angle :math:`\\theta` is the only reliable discriminant.
+        amplitude-independent angle :math:`\\theta` is a reliable discriminant.
 
     Separates signal into two independent properties:
 
@@ -1025,14 +1026,14 @@ def decode_polar(
     Two direction strategies, chosen automatically from the encoding matrix:
 
     **Orthogonal encoding** (each bright base fires exactly one channel,
-    e.g. 4-colour identity or 3-colour dark-base):
+    e.g. 4-color identity or 3-color dark-base):
 
     .. math::
 
         \\text{calls} = \\arg\\max_b\\; (\\mathbf{x} - \\mathbf{lo}) \\cdot E[b,:]
 
     **Non-orthogonal encoding** (some bright base fires multiple channels,
-    e.g. Illumina 2-colour where A fires both red and green):
+    e.g. Illumina 2-color where A fires both red and green):
 
     .. math::
 
@@ -1098,10 +1099,13 @@ def decode_polar(
     whitelist_arr = barcodes["barcode"].values if barcodes is not None else None
     if r_frac is None and has_dark:
         if whitelist_arr is not None:
-            # Use up to 50 k spots for the sweep; materialise only that sample
-            n_sample = min(50_000, spots.sizes["read"])
-            sp_sample = np.clip(spots.isel(read=slice(0, n_sample)).data, 0.0, None)
-            if hasattr(sp_sample, "compute"):
+            # Use up to 50 k spots for the sweep; materialize only that sample
+            rng = random.Random(239753)
+            n_reads = 50_000
+            random_reads = rng.sample(range(0, spots.sizes["read"]), n_reads)
+            random_reads = np.sort(random_reads)
+            sp_sample = np.clip(spots.isel(read=random_reads).data, 0.0, None)
+            if isinstance(sp_sample, da.Array):
                 sp_sample = sp_sample.compute()
             lo_s = sp_sample.min(axis=1, keepdims=True)
             d_s = sp_sample - lo_s
