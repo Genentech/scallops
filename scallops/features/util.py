@@ -51,6 +51,8 @@ def pandas_to_anndata(
     """
     if features is None:
         features = infer_feature_columns(df)
+        if len(features) == 0:
+            features = df.columns  # assume all columns are features
     # https://github.com/dask/dask/issues/12411
     data = (
         df[features].values
