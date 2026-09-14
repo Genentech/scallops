@@ -1604,19 +1604,22 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
             # Preventing recursing inside of these types
             return read_elem(elem)
         elif iospec.encoding_type == "array":
-            return da.from_zarr(elem) if not is_h5 else da.from_array(elem, elem.chunks)
+            if is_h5:
+                return da.from_array(elem, elem.chunks)
+            # See https://github.com/dask/dask/pull/12582
+            try:
+                return da.from_zarr(elem)
+            except NotImplementedError:
 
-            # try:
-            #     return da.from_zarr(elem)
-            # except NotImplementedError:
-            # def chunks(self):
-            #     return self.read_chunk_sizes
-            #     old_chunks = Array.chunks
-            #     # monkey patch to load zarr with irregular chunks
-            #     Array.chunks = property(chunks)
-            #     result = da.from_zarr(elem, chunks=elem.read_chunk_sizes)
-            #     Array.chunks = old_chunks
-            #     return result
+                def chunks(self):
+                    return self.read_chunk_sizes
+
+                old_chunks = zarr.Array.chunks
+                # monkey patch to load zarr with irregular chunks
+                zarr.Array.chunks = property(chunks)
+                result = da.from_zarr(elem, chunks=elem.read_chunk_sizes)
+                zarr.Array.chunks = old_chunks
+                return result
         else:
             return func(elem)
 

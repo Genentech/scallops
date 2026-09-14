@@ -302,6 +302,15 @@ def test_write_non_ome_zarr_image(tmp_path, use_dask):
 
 
 @pytest.mark.io
+def test_irregular_chunks(tmp_path):
+    x1 = da.concatenate((da.ones((3, 10)), da.ones((2, 10)), da.ones((4, 10))), axis=0)
+    anndata.AnnData(X=x1).write_zarr(tmp_path / "test.zarr")
+    d = read_anndata(tmp_path / "test.zarr", dask=True)
+    assert x1.chunks == d.X.chunks
+    np.testing.assert_array_equal(x1.compute(), d.X.compute())
+
+
+@pytest.mark.io
 def test_experiment_file_list():
     image_paths = (
         "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif",
