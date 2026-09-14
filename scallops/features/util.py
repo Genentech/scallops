@@ -52,7 +52,13 @@ def pandas_to_anndata(
     if features is None:
         features = infer_feature_columns(df)
         if len(features) == 0:
-            features = df.columns  # assume all columns are features
+            if isinstance(df, dd.DataFrame):
+                df = df.compute()
+            return anndata.AnnData(
+                obs=pd.DataFrame(index=df.index),
+                var=pd.DataFrame(index=df.columns),
+                X=df.values,
+            )
     # https://github.com/dask/dask/issues/12411
     data = (
         df[features].values
@@ -74,7 +80,6 @@ def pandas_to_anndata(
     if isinstance(df, dd.DataFrame):
         df = df.compute()
     obs = df.reset_index(drop=df.index.name is None)
-
     obs.index = obs.index.astype(str)
     for c in obs.columns:
         if not pd.api.types.is_string_dtype(obs[c]) and pd.api.types.is_object_dtype(
