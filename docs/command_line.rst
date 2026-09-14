@@ -136,7 +136,7 @@ Key Features:
 scallops pert-map
 ===================
 
-The `scallops pert-map` command provides functionality for perturbation map building.
+The `scallops pert-map` command provides tools for perturbation map building and evaluation.
 
 .. argparse::
    :module: scallops.__main__
