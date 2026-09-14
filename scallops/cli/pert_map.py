@@ -484,7 +484,7 @@ def run_pca(arguments: argparse.Namespace):
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads()
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=6)
     n_components = arguments.components
     whiten = arguments.whiten
     output = arguments.output
@@ -502,7 +502,6 @@ def run_pca(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
-
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(
@@ -678,7 +677,7 @@ def run_norm_features(arguments: argparse.Namespace):
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads()
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
     reference = arguments.reference_query
     output = arguments.output
 
@@ -698,9 +697,6 @@ def run_norm_features(arguments: argparse.Namespace):
     if batch_size < 0:
         batch_size = None
     centroid_column_names = arguments.centroid_columns
-    if dask_server_url is None and arguments.dask_cluster is None:
-        # ~64GB per worker
-        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
 
     output_ext = os.path.splitext(os.path.basename(output.lower()))[1]
     if output_ext == ".zarr":
