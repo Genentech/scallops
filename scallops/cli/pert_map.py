@@ -700,7 +700,7 @@ def run_norm_features(arguments: argparse.Namespace):
     centroid_column_names = arguments.centroid_columns
     if dask_server_url is None and arguments.dask_cluster is None:
         # ~64GB per worker
-        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=6)
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
 
     output_ext = os.path.splitext(os.path.basename(output.lower()))[1]
     if output_ext == ".zarr":
@@ -840,7 +840,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         metadata.update(cli_metadata())
     with (
         _create_default_dask_config(
-            {"distributed.scheduler.locks.lease-timeout": "inf"}
+            {"distributed.scheduler.locks.lease-timeout": "10 minutes"}
         ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
