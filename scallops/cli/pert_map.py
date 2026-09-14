@@ -200,19 +200,19 @@ def run_recall(arguments: argparse.Namespace):
             result["dataset"] = ground_truth_name
             results.append(result)
 
-            in_corum = similarity_data.obs.index.isin(ground_truth_df["a"].unique())
-            similarity_data_corum = similarity_data.X[in_corum,][:, in_corum]
-            null_distribution_corum = similarity_data_corum[
-                np.tril_indices(similarity_data_corum.shape[0], k=-1)
-            ]
-            result = recall(
-                query_distribution=query_distribution,
-                null_distribution=null_distribution_corum,
-                recall_thresholds=recall_thresholds,
-            )
-            result["null"] = "CORUM"
-            result["dataset"] = ground_truth_name
-            results.append(result)
+            # in_corum = similarity_data.obs.index.isin(ground_truth_df["a"].unique())
+            # similarity_data_corum = similarity_data.X[in_corum,][:, in_corum]
+            # null_distribution_corum = similarity_data_corum[
+            #     np.tril_indices(similarity_data_corum.shape[0], k=-1)
+            # ]
+            # result = recall(
+            #     query_distribution=query_distribution,
+            #     null_distribution=null_distribution_corum,
+            #     recall_thresholds=recall_thresholds,
+            # )
+            # result["null"] = "CORUM"
+            # result["dataset"] = ground_truth_name
+            # results.append(result)
 
         df = pd.concat(results)
         multi_threshold = False
