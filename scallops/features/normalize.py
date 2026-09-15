@@ -302,6 +302,7 @@ def normalize_features(
             centering=centering,
             scaling=scaling,
             max_value=max_value,
+            batch_size=batch_size,
         )
 
         result = da.map_blocks(
