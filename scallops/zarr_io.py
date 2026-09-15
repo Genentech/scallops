@@ -915,11 +915,12 @@ def write_basic_dask_dask_dense(
     _writer: Writer,
     dataset_kwargs: Mapping[str, Any] = MappingProxyType({}),
 ):
-    # Removes hard-coded scheduler, respects dask chunk sizes, and allows rectilinear chunks if array.rectilinear_chunks is set
+    # Removes hard-coded scheduler, respects dask chunk sizes, sets fill value, allows rectilinear chunks if array.rectilinear_chunks is set
     import dask.array as da
 
     dataset_kwargs = dict(dataset_kwargs)
-
+    if "fill_value" not in dataset_kwargs and np.isdtype(elem.dtype, "real floating"):
+        dataset_kwargs["fill_value"] = np.nan
     if (
         not isinstance(f, h5py.Group)
         and "chunks" not in dataset_kwargs
