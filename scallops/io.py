@@ -1577,8 +1577,6 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
     )
     is_h5 = is_store_arg_h5_path or is_store_arg_h5_store
 
-    if not dask:
-        return anndata.read_h5ad(store) if is_h5 else anndata.read_zarr(store)
     if not is_h5:
         import zarr
 
@@ -1593,6 +1591,13 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
         f = store
     else:
         f = h5py.File(store, mode="r")
+    if f.get("layers") is None:
+        raise ValueError(f"{store} is incomplete.")
+
+    if not dask:
+        if is_h5:
+            f.close()
+        return anndata.read_h5ad(store) if is_h5 else anndata.read_zarr(f)
 
     def callback(func, elem_name: str, elem, iospec):
         if iospec.encoding_type in (
