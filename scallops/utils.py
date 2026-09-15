@@ -50,6 +50,20 @@ def _tqdm_shim(iterator, *args, **kwargs):
     return iterator
 
 
+def tqdm_func(progress: bool | str = True):
+    progress_args = dict()
+    tqdm_ = _tqdm_shim
+    if progress != False:  # noqa: E712
+        try:
+            from tqdm import tqdm as tqdm_
+
+            if isinstance(progress, str):
+                progress_args["desc"] = progress
+        except ImportError:
+            pass
+    return tqdm_, progress_args
+
+
 def _fix_json(d):
     """Attempts to serialize and deserialize a dictionary to ensure it can be safely converted to
     JSON.

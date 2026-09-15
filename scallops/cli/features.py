@@ -49,7 +49,7 @@ from scallops.io import (
     _to_parquet,
     is_parquet_file,
     pluralize,
-    read_anndata_zarr,
+    read_anndata,
 )
 
 logger = _get_cli_logger()
@@ -79,7 +79,7 @@ def _read_merged_or_objects(
 
     area_column = f"{_label_name_to_prefix[label_name]}_AreaShape_Area"
     if merge_path.lower().endswith(".zarr"):
-        data = read_anndata_zarr(merge_path, dask=True)
+        data = read_anndata(merge_path, dask=True)
         merged_df = data.obs
         columns = {area_column}
         assert area_column in data.var.index
