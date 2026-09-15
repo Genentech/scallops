@@ -297,9 +297,8 @@ def normalize_features(
         for s in indices.shape[1:]:
             max_chunk_size = max(max_chunk_size, s)
             chunks.append((s,))
-        memory = max_chunk_size * n_neighbors * 8
-        memory_128 = 1.28e11  # TODO get worker memory limit
-        feature_chunk_size = max(10, memory_128 // memory)
+        logger.info(f"Maximum chunk size: {max_chunk_size:,}")
+        feature_chunk_size = 20  # TODO
         rechunked_data = rechunked_data.rechunk({1: feature_chunk_size})
 
         indices = da.from_array(indices, chunks=tuple(chunks))
