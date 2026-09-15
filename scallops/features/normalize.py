@@ -48,7 +48,6 @@ def normalize_features(
     max_value: float | None = None,
     centering: bool = True,
     scaling: bool = True,
-    batch_size: int | None = 25000,
     centroid_column_names: tuple[str, str] = (
         "Nuclei_AreaShape_Center_Y",
         "Nuclei_AreaShape_Center_X",
@@ -71,7 +70,6 @@ def normalize_features(
     :param centering: Whether to center the data before scaling.
     :param max_value: Truncate to this value after scaling
     :param scaling: Whether to scale the data by dividing by the standard deviation.
-    :param batch_size: Batch size to use for local z-score scaling to conserve memory.
     :param centroid_column_names: Columns for y and x centroids to use for local zscore.
     :return: Normalized data
     """
@@ -80,6 +78,7 @@ def normalize_features(
     centroid_column_names = list(centroid_column_names)
     is_dask = isinstance(data.X, da.Array)
     use_map_blocks = False
+    batch_size: int | None = (25000,)
     if max_value is not None and not scaling:
         raise ValueError("max_value only applied when scaling")
     if by is not None:
@@ -291,10 +290,16 @@ def normalize_features(
 
     if use_map_blocks:
         rechunked_data = rechunk_for_blockwise(data.X, 0, series.cat.codes.values)[1]
-        indices = np.concatenate(indices, axis=0)
         chunks = [(rechunked_data.chunks[0])]
+        max_chunk_size = 0
         for s in indices.shape[1:]:
+            max_chunk_size = max(max_chunk_size, s)
             chunks.append((s,))
+        memory = max_chunk_size * n_neighbors * 8
+        memory_128 = 1.28e11  # TODO get worker memory limit
+        feature_chunk_size = max(10, memory_128 // memory)
+        rechunked_data = rechunked_data.rechunk({1: feature_chunk_size})
+        indices = np.concatenate(indices, axis=0)
 
         indices = da.from_array(indices, chunks=tuple(chunks))
         assert indices.shape[0] == rechunked_data.shape[0]
