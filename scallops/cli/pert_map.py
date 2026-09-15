@@ -484,7 +484,7 @@ def run_pca(arguments: argparse.Namespace):
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
     if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=6)
+        dask_cluster_parameters = _dask_workers_threads(threads_per_worker=8)
     n_components = arguments.components
     whiten = arguments.whiten
     output = arguments.output
