@@ -919,8 +919,9 @@ def write_basic_dask_dask_dense(
     import dask.array as da
 
     dataset_kwargs = dict(dataset_kwargs)
-    if "fill_value" not in dataset_kwargs and np.isdtype(elem.dtype, "real floating"):
-        dataset_kwargs["fill_value"] = np.nan
+    fill_value = "fill_value" if not isinstance(f, h5py.Group) else "fillvalue"
+    if fill_value not in dataset_kwargs and np.isdtype(elem.dtype, "real floating"):
+        dataset_kwargs[fill_value] = np.nan
     if (
         not isinstance(f, h5py.Group)
         and "chunks" not in dataset_kwargs
