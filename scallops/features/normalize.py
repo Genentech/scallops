@@ -293,6 +293,7 @@ def normalize_features(
         rechunked_data = rechunk_for_blockwise(data.X, 0, series.cat.codes.values)[1]
         chunks = [(rechunked_data.chunks[0])]
         max_chunk_size = 0
+        indices = np.concatenate(indices, axis=0)
         for s in indices.shape[1:]:
             max_chunk_size = max(max_chunk_size, s)
             chunks.append((s,))
@@ -300,7 +301,6 @@ def normalize_features(
         memory_128 = 1.28e11  # TODO get worker memory limit
         feature_chunk_size = max(10, memory_128 // memory)
         rechunked_data = rechunked_data.rechunk({1: feature_chunk_size})
-        indices = np.concatenate(indices, axis=0)
 
         indices = da.from_array(indices, chunks=tuple(chunks))
         assert indices.shape[0] == rechunked_data.shape[0]
