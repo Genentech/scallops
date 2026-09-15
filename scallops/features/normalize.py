@@ -48,6 +48,7 @@ def normalize_features(
     max_value: float | None = None,
     centering: bool = True,
     scaling: bool = True,
+    batch_size: int | None = 25000,
     centroid_column_names: tuple[str, str] = (
         "Nuclei_AreaShape_Center_Y",
         "Nuclei_AreaShape_Center_X",
@@ -70,6 +71,7 @@ def normalize_features(
     :param centering: Whether to center the data before scaling.
     :param max_value: Truncate to this value after scaling
     :param scaling: Whether to scale the data by dividing by the standard deviation.
+    :param batch_size: Batch size to use for local z-score scaling to conserve memory.
     :param centroid_column_names: Columns for y and x centroids to use for local zscore.
     :return: Normalized data
     """
@@ -78,7 +80,6 @@ def normalize_features(
     centroid_column_names = list(centroid_column_names)
     is_dask = isinstance(data.X, da.Array)
     use_map_blocks = False
-    batch_size: int | None = (25000,)
     if max_value is not None and not scaling:
         raise ValueError("max_value only applied when scaling")
     if by is not None:
