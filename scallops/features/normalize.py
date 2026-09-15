@@ -95,6 +95,8 @@ def normalize_features(
             ).indices
     else:
         group_indices = {None: None}
+    if normalize == "local-zscore" and not use_map_blocks and by is not None:
+        logger.warning("Using slower code for local z-score since data is not sorted.")
     if normalize == "zscore":
         coords = {}
         if by is not None:
