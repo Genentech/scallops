@@ -130,11 +130,12 @@ def rechunk(
                 rechunk_feature_size = int(rechunk_feature_size)
             except ValueError:
                 pass
-        if rechunk_label_size is None:
-            rechunk_label_size = data.X.chunksize[0]
-        if rechunk_feature_size is None:
-            rechunk_feature_size = data.X.chunksize[1]
-        data.X = data.X.rechunk((rechunk_label_size, rechunk_feature_size))
+        d = {}
+        if rechunk_label_size is not None:
+            d[0] = rechunk_label_size
+        if rechunk_feature_size is not None:
+            d[1] = rechunk_feature_size
+        data.X = data.X.rechunk(d)
     return data
 
 
