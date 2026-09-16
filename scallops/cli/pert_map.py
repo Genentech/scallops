@@ -491,11 +491,17 @@ def run_pca(arguments: argparse.Namespace):
     if not force and is_anndata(output):
         logger.info(f"{output} already exists, skipping. Use --force to overwrite.")
         return
-
+    dask_config = {}
+    if batch_size is None and (
+        rechunk_label_size is not None or rechunk_feature_size is not None
+    ):
+        # avoid UserWarning: Cannot block reusing for graphs including a P2PBarrierTask.
+        # This may cause unexpected results. This typically happens when converting a dask DataFrame to delayed objects.
+        dask_config["array.rechunk.method"] = "tasks"
     metadata = {}
     if not no_version:
         metadata.update(cli_metadata())
-    dask_config = {}
+
     with (
         _create_default_dask_config(dask_config),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
