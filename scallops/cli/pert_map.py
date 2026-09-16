@@ -370,7 +370,7 @@ def run_aggregate(arguments: argparse.Namespace):
                 else dd.read_parquet(join_path),
                 join_fields,
             )
-        logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+        _log_data_shape(data)
 
         if center_reference_query is not None:
             data = normalize_features(
@@ -386,9 +386,7 @@ def run_aggregate(arguments: argparse.Namespace):
             by=by,
             agg_func="mean",
         )
-        logger.info(
-            f"After aggregation: # labels: {data.shape[0]:,}, # features: {data.shape[1]:,}"
-        )
+        _log_data_shape(data, "After aggregation, ")
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
         fs.makedirs(output_dir, exist_ok=True)
         data.uns["scallops"] = _fix_json(metadata)
@@ -455,7 +453,7 @@ def run_tvn(arguments: argparse.Namespace):
         data = typical_variation_normalization(
             data=data, reference_query=reference_query, by=by, pca_kwargs=pca_kwargs
         )
-
+        logger.debug(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
         _write_anndata(
             data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
         )
@@ -523,6 +521,7 @@ def run_pca(arguments: argparse.Namespace):
         pca.fit(train_data.X)
         X_transformed = pca.transform(data.X)
         data = anndata.AnnData(X_transformed, obs=data.obs)
+        logger.debug(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
         pca.add_uns(data)
         _write_anndata(
             data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
@@ -752,7 +751,9 @@ def run_norm_features(arguments: argparse.Namespace):
                 batch_size=batch_size,
                 centroid_column_names=centroid_column_names,
             )
-            _log_data_shape(data, "After normalization, ")
+            logger.debug(
+                f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}"
+            )
         else:
             logger.info("No normalization")
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
