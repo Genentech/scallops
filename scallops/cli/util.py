@@ -158,8 +158,6 @@ def _get_cli_logger() -> logging.Logger:
             ),
             datefmt="%m/%d/%Y %H:%M",
         )
-        if log_level == "DEBUG":
-            handler.addFilter(ContextFilter())
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
