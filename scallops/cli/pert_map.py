@@ -319,7 +319,7 @@ def run_similarity_matrix(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths)
-        logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+        _log_data_shape(data)
         data = anndata.AnnData(
             X=pairwise_similarities(data), obs=data.obs, var=data.obs
         )
@@ -449,7 +449,7 @@ def run_tvn(arguments: argparse.Namespace):
                 else dd.read_parquet(join_path),
                 join_fields,
             )
-        logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+        _log_data_shape(data)
         data = typical_variation_normalization(
             data=data, reference_query=reference_query, by=by, pca_kwargs=pca_kwargs
         )
@@ -511,8 +511,7 @@ def run_pca(arguments: argparse.Namespace):
                 else dd.read_parquet(join_path),
                 join_fields,
             )
-        logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-
+        _log_data_shape(data)
         pca = PCA(n_components=n_components, whiten=whiten, batch_size=batch_size)
         train_data = data
         if reference_query is not None and reference_query != "":
@@ -607,7 +606,7 @@ def run_rank_features(arguments: argparse.Namespace):
                 else dd.read_parquet(join_path),
                 join_fields,
             )
-        logger.info(f"# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
+        _log_data_shape(data)
         # columns_needed = set()
         # columns_needed.add(perturbation_column)
         # if by is not None:
