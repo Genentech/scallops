@@ -151,12 +151,7 @@ def _get_cli_logger() -> logging.Logger:
     if not logger.hasHandlers():
         handler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter(
-            (
-                "%(asctime)s - %(message)s"
-                if log_level != "DEBUG"
-                else "%(asctime)s - PID: %(process)d - %(funcName)s - %(levelname)s - %(message)s"
-            ),
-            datefmt="%m/%d/%Y %H:%M",
+            ("%(asctime)s - %(message)s"), datefmt="%m/%d/%Y %H:%M"
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
