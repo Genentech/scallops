@@ -870,7 +870,6 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         )
 
 
-def _log_data_shape(data, prefix="", log_chunk_size=True):
+def _log_data_shape(data, prefix=""):
     logger.info(f"{prefix}# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-    if log_chunk_size:
-        logger.info(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
+    logger.debug(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")

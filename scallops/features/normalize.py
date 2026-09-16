@@ -297,7 +297,7 @@ def normalize_features(
         for s in indices.shape[1:]:
             max_chunk_size = max(max_chunk_size, s)
             chunks.append((s,))
-        logger.info(f"Maximum chunk size: {max_chunk_size:,}")
+        logger.debug(f"Maximum chunk size: {max_chunk_size:,}")
         feature_chunk_size = 20  # TODO
         rechunked_data = rechunked_data.rechunk({1: feature_chunk_size})
 

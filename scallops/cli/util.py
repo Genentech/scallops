@@ -145,7 +145,7 @@ def _get_cli_logger() -> logging.Logger:
     :return: Configured logger.
     """
     logger = logging.getLogger("scallops")
-    log_level = os.environ.get("scallops_loglevel", "INFO").upper()
+    log_level = os.environ.get("SCALLOPS_LOGGING", "INFO").upper()
     logger.setLevel(log_level)
 
     if not logger.hasHandlers():
@@ -163,7 +163,7 @@ def _get_cli_logger() -> logging.Logger:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
-    if log_level == "DEBUG":
+    if os.environ.get("SCALLOPS_LOG_FUNCTION_CALLS", "0") == "1":
         _apply_logging_decorator(sys.modules[__name__])
 
     return logger
