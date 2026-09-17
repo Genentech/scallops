@@ -151,7 +151,7 @@ class PCA:
         variance = d.explained_variance_
         if isinstance(X, da.Array) and not isinstance(components_, da.Array):
             components_ = da.from_array(
-                components_, chunks=(min(20, components_.shape[0]), -1)
+                components_, chunks=(min(X.chunksize[1], components_.shape[0]), -1)
             )
         if mean_ is not None:
             X = X - mean_
