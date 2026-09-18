@@ -136,12 +136,17 @@ class PCA:
         }
 
     def transform(
-        self, X: np.ndarray | da.Array, y: None = None
+        self,
+        X: np.ndarray | da.Array,
+        y: None = None,
+        *,
+        components_chunksize: tuple[int, int] | None = None,
     ) -> np.ndarray | da.Array:
         """Apply dimensionality reduction.
 
         :param X: Data to project.
         :param y: Not used, present for API consistency by convention.
+        :param components_chunksize: Chunk size for components_ when using dask
         :return: Projection of data
         """
 
@@ -151,7 +156,10 @@ class PCA:
         variance = d.explained_variance_
         if isinstance(X, da.Array) and not isinstance(components_, da.Array):
             components_ = da.from_array(
-                components_, chunks=(min(X.chunksize[1], components_.shape[0]), -1)
+                components_,
+                chunks=(-1, -1)
+                if components_chunksize is None
+                else components_chunksize,
             )
         if mean_ is not None:
             X = X - mean_
