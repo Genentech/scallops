@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from scallops.io import read_experiment, read_image
@@ -16,6 +18,22 @@ __processfig4_dir__ = __data_dir__.joinpath("process_fig4")
 assert __root__.joinpath(
     "data", "experimentC", "input", "10X_c1-SBS-1", "10X_c1-SBS-1_A1_Tile-102.sbs.tif"
 ).exists(), "Test files not found. Please ensure you have Git LFS installed"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def test_feature_table():
+    return pd.DataFrame(
+        data=dict(
+            label=np.arange(6),
+            Cells_Intensity_feature_1=[1, 2, 4, 8, 16, 32],
+            Cells_Intensity_feature_2=[10, 20, 40, 80, 160, 320],
+            gene_symbol=["a", "NTC", "a", "NTC", "a", "NTC"],
+            well=["a", "a", "a", "b", "b", "b"],
+            plate=["a", "a", "a", "b", "b", "b"],
+            Nuclei_AreaShape_Center_Y=[1, 7, 12, 16, 19, 21],
+            Nuclei_AreaShape_Center_X=[1, 7, 12, 16, 19, 21],
+        ),
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)

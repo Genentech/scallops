@@ -65,10 +65,12 @@ def _dask_workers_threads(
     threads_per_worker: int | None = None,
     processes: bool = True,
 ) -> dict[str, int]:
+    # adopted from LocalCluster
     if n_workers is None and threads_per_worker is None:
         if processes:
             threads_per_worker = min(_cpu_count(), 4)
             n_workers = max(1, _cpu_count() // threads_per_worker)
+        # n_workers, threads_per_worker = nprocesses_nthreads(n=_cpu_count())
         else:
             n_workers = 1
             threads_per_worker = _cpu_count()
@@ -76,7 +78,7 @@ def _dask_workers_threads(
         n_workers = max(1, _cpu_count() // threads_per_worker) if processes else 1
     if n_workers and threads_per_worker is None:
         # Overcommit threads per worker, rather than undercommit
-        threads_per_worker = max(1, int(math.ceil(_cpu_count() / n_workers)))
+        threads_per_worker = max(1, math.ceil(_cpu_count() / n_workers))
 
     return dict(threads_per_worker=threads_per_worker, n_workers=n_workers)
 
@@ -89,6 +91,7 @@ DEFAULT_DASK_CONFIG = {
     "distributed.admin.system-monitor.interval": "1 minute",
     "distributed.comm.timeouts.connect": "120s",
     "distributed.comm.timeouts.tcp": "60s",
+    "distributed.scheduler.locks.lease-timeout": "60s",
     "distributed.scheduler.worker-ttl": "10 minutes",
     "logging.distributed": "error",
 }
@@ -142,25 +145,18 @@ def _get_cli_logger() -> logging.Logger:
     :return: Configured logger.
     """
     logger = logging.getLogger("scallops")
-    log_level = os.environ.get("scallops_loglevel", "INFO").upper()
+    log_level = os.environ.get("SCALLOPS_LOGGING", "INFO").upper()
     logger.setLevel(log_level)
 
     if not logger.hasHandlers():
         handler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter(
-            (
-                "%(asctime)s - %(message)s"
-                if log_level != "DEBUG"
-                else "%(asctime)s - PID: %(process)d - %(funcName)s - %(levelname)s - %(message)s"
-            ),
-            datefmt="%m/%d/%Y %H:%M",
+            ("%(asctime)s - %(message)s"), datefmt="%m/%d/%Y %H:%M"
         )
-        if log_level == "DEBUG":
-            handler.addFilter(ContextFilter())
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
-    if log_level == "DEBUG":
+    if os.environ.get("SCALLOPS_LOG_FUNCTION_CALLS", "0") == "1":
         _apply_logging_decorator(sys.modules[__name__])
 
     return logger
