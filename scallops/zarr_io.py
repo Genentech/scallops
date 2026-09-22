@@ -30,6 +30,7 @@ from ome_zarr.io import parse_url
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image, write_multiscale
 from xarray.core.coordinates import DataArrayCoordinates
+from zarr.errors import ContainsGroupError
 from zarr.storage import StoreLike
 
 from scallops.experiment.abc import _LazyLoadData
@@ -40,6 +41,30 @@ logger = logging.getLogger("scallops")
 
 def _current_format() -> Format:
     return FormatV04()
+
+
+def _require_group(parent: zarr.Group, name: str) -> zarr.Group:
+    """Get or create a child group, tolerating a concurrent writer.
+
+    :class:`zarr.Group.require_group` is check-then-create: it looks the child up and
+    creates it only when the lookup misses. Processes that share an output store --
+    one registration or stitching task per well, all writing the same zarr -- can
+    both miss, and whichever creates second fails with ``ContainsGroupError``. The
+    group the loser wanted now exists, so open it instead of failing.
+
+    An *array* at ``name`` still raises, as it does without this wrapper.
+
+    :param parent: Group to create the child under.
+    :param name: Name of the child group.
+    :return: The existing or newly created group.
+    """
+    try:
+        return parent.require_group(name, overwrite=False)
+    except ContainsGroupError:
+        logger.debug(
+            f"Group '{name}' was created concurrently; opening the existing one"
+        )
+        return parent[name]
 
 
 def _create_array_kwargs(fmt: Format | None = None) -> dict[str, Any]:
@@ -351,7 +376,7 @@ def _write_zarr_image(
         root = open_ome_zarr(root, mode="a")
     dest_grp = root
     if group is not None and name is not None:
-        images_grp = root.require_group(group, overwrite=False)
+        images_grp = _require_group(root, group)
         dest_grp = images_grp.create_group(name.replace("/", "-"), overwrite=True)
     image_attrs = None
     coords = None
@@ -599,7 +624,7 @@ def _write_zarr_labels(
     name = name.replace("/", "-")
     if isinstance(root, (str, Path)):
         root = open_ome_zarr(root, mode="a")
-    labels_grp = root.require_group("labels")
+    labels_grp = _require_group(root, "labels")
     grp = labels_grp.create_group(name, overwrite=True)
     if not isinstance(labels, xr.DataArray):
         if labels.ndim == 2:
@@ -788,7 +813,15 @@ def open_ome_zarr(url: Path | str, mode: str = "a") -> zarr.Group | None:
         loc = parse_url(url, mode=mode, fmt=fmt)
         if loc is None:
             return None
-        return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
+        try:
+            return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
+        except ContainsGroupError:
+            if mode != "a":
+                raise
+            # mode="a" is also check-then-create: another process created the root
+            # group between our read and our create. Re-opening takes the read path.
+            logger.debug(f"Root group of {url} was created concurrently; re-opening")
+            return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
     except Exception as e:
         logger.error(f"Failed to open OME-Zarr store: {url}")
         raise e

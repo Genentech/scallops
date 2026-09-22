@@ -13,6 +13,7 @@ import skimage
 import xarray as xr
 import zarr
 from dask import delayed
+from zarr.core.group import AsyncGroup
 
 from scallops.cli.util import _group_src_attrs
 from scallops.experiment.elements import Experiment
@@ -31,6 +32,7 @@ from scallops.io import (
     to_image_montage,
 )
 from scallops.zarr_io import (
+    _require_group,
     _write_zarr_image,
     _write_zarr_labels,
     is_anndata_zarr,
@@ -731,3 +733,57 @@ def test_anndata_zarr(tmp_path):
     pd.testing.assert_frame_equal(d.obs, d2.obs)
     pd.testing.assert_frame_equal(d.var, d2.var)
     assert d.uns == d2.uns
+
+
+@pytest.mark.io
+def test_require_group_loses_create_race(tmp_path, monkeypatch):
+    """A writer that loses the create race opens the winner's group."""
+    root = open_ome_zarr(tmp_path / "test.zarr", mode="a")
+    root.require_group("labels").create_group("A01")  # the winning well
+
+    original = AsyncGroup.getitem
+    missed = []
+
+    async def miss_once(self, key):
+        # Model the race: our lookup runs before the winner's write lands, so the
+        # create that follows it collides.
+        if not missed:
+            missed.append(key)
+            raise KeyError(key)
+        return await original(self, key)
+
+    monkeypatch.setattr(AsyncGroup, "getitem", miss_once)
+    group = _require_group(root, "labels")
+    assert missed == ["labels"]
+    assert list(group.keys()) == ["A01"]
+
+
+@pytest.mark.io
+def test_require_group_array_conflict_still_raises(tmp_path):
+    """An array at the requested path is a real error, not a lost race."""
+    root = open_ome_zarr(tmp_path / "test.zarr", mode="a")
+    root.create_array("labels", shape=(4,), dtype="i4")
+    with pytest.raises(TypeError):
+        _require_group(root, "labels")
+
+
+@pytest.mark.io
+def test_open_ome_zarr_loses_root_create_race(tmp_path, monkeypatch):
+    """open_ome_zarr(mode="a") tolerates another writer creating the root group."""
+    url = tmp_path / "test.zarr"
+    open_ome_zarr(url, mode="a").require_group("labels")  # the winning well
+
+    original = AsyncGroup.open
+    missed = []
+
+    @classmethod
+    async def miss_once(cls, store_path, **kwargs):
+        if not missed:
+            missed.append(store_path)
+            raise FileNotFoundError(store_path)
+        return await original.__func__(cls, store_path, **kwargs)
+
+    monkeypatch.setattr(AsyncGroup, "open", miss_once)
+    root = open_ome_zarr(url, mode="a")
+    assert len(missed) == 1
+    assert list(root.keys()) == ["labels"]
