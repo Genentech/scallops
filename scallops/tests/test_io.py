@@ -14,7 +14,9 @@ import xarray as xr
 import zarr
 from dask import delayed
 from zarr.core.group import AsyncGroup
+from zarr.errors import ContainsGroupError
 
+from scallops import zarr_io
 from scallops.cli.util import _group_src_attrs
 from scallops.experiment.elements import Experiment
 from scallops.io import (
@@ -786,4 +788,28 @@ def test_open_ome_zarr_loses_root_create_race(tmp_path, monkeypatch):
     monkeypatch.setattr(AsyncGroup, "open", miss_once)
     root = open_ome_zarr(url, mode="a")
     assert len(missed) == 1
+    assert list(root.keys()) == ["labels"]
+
+
+@pytest.mark.io
+def test_open_ome_zarr_loses_root_create_race_to_third_writer(tmp_path, monkeypatch):
+    """The retry must fall back to a plain read, or a third racer can beat it too.
+
+    A retry that re-attempts the same check-then-create ``zarr.open`` call can lose
+    to *another* concurrent creator just as easily as the first attempt did. The
+    fallback must instead do a "must exist" open (mode="r+"), which never attempts
+    to create and so cannot lose a create race.
+    """
+    url = tmp_path / "test.zarr"
+    open_ome_zarr(url, mode="a").require_group("labels")  # the winning well
+
+    original_open = zarr.open
+
+    def open_that_always_loses_create(store, *, mode, zarr_format):
+        if mode == "a":
+            raise ContainsGroupError("root group exists")
+        return original_open(store, mode=mode, zarr_format=zarr_format)
+
+    monkeypatch.setattr(zarr_io.zarr, "open", open_that_always_loses_create)
+    root = open_ome_zarr(url, mode="a")
     assert list(root.keys()) == ["labels"]
