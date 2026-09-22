@@ -241,6 +241,10 @@ def _single_stitch(
     output_metadata["fuse_crop_width"] = fuse_crop_width
     output_metadata["align_tile_shape"] = align_tile_shape
     output_metadata["tile_shape"] = tile_shape_no_crop
+    output_metadata["swap_axes"] = swap
+    output_metadata["flip_y_axis"] = flip_y
+    output_metadata["flip_x_axis"] = flip_x
+
     if z_threshold is not None:
         output_metadata["z_threshold"] = z_threshold
 
