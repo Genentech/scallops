@@ -65,16 +65,16 @@ class PCA:
         """
 
         is_dask = isinstance(X, da.Array)
-        gpu = False
-        if self.gpu is None:
+        gpu = self.gpu
+        if gpu is None:
             try:
                 import torch
 
                 gpu = torch.cuda.is_available()
-                if gpu:
-                    logger.info("Using GPU for PCA")
             except ModuleNotFoundError:
                 gpu = False
+        if gpu:
+            logger.info("Using GPU for PCA")
 
         if self.batch_size is not None:
             if gpu:
@@ -86,10 +86,15 @@ class PCA:
             )
             kwargs.update(self.kwargs)
             d = IncrementalPCA(**kwargs)
+            # when n_components is not given, IncrementalPCA infers it from the first
+            # batch, so every batch has to be at least that large
+            min_batch_size = (
+                self.n_components
+                if self.n_components is not None
+                else min(self.batch_size, X.shape[1])
+            )
             batches = list(
-                gen_batches(
-                    X.shape[0], self.batch_size, min_batch_size=self.n_components or 0
-                )
+                gen_batches(X.shape[0], self.batch_size, min_batch_size=min_batch_size)
             )
             tqdm, progress_args = tqdm_func(self.progress)
             for batch in tqdm(batches, **progress_args):
@@ -123,16 +128,19 @@ class PCA:
         self.d = d
         return self
 
-    def add_uns(self, data: AnnData):
+    def add_uns(self, data: AnnData, features: np.ndarray | None = None):
         """Add metadata for storing PCA parameters in uns slot
+
         :param data: Data to add metadata to.
+        :param features: Features the PCA was fit on. Defaults to the features in
+            `data`, which is only correct when `data` has not been transformed yet.
         """
         data.uns["pca"] = {
             "variance_ratio": self.explained_variance_ratio_,
             "variance": self.explained_variance_,
             "mean": self.mean_,
             "PCs": self.components_,
-            "features": data.var.index.values,
+            "features": data.var.index.values if features is None else features,
         }
 
     def transform(
