@@ -1632,9 +1632,10 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
                 old_chunks = zarr.Array.chunks
                 # monkey patch to load zarr with irregular chunks
                 zarr.Array.chunks = property(chunks)
-                result = da.from_zarr(elem, chunks=elem.read_chunk_sizes)
-                zarr.Array.chunks = old_chunks
-                return result
+                try:
+                    return da.from_zarr(elem, chunks=elem.read_chunk_sizes)
+                finally:
+                    zarr.Array.chunks = old_chunks
         else:
             return func(elem)
 
