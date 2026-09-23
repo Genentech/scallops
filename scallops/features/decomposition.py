@@ -157,7 +157,7 @@ class PCA:
         if isinstance(X, da.Array) and not isinstance(components_, da.Array):
             components_ = da.from_array(
                 components_,
-                chunks=(-1, -1)
+                chunks=(min(96, components_.shape[0]), -1)
                 if components_chunksize is None
                 else components_chunksize,
             )
