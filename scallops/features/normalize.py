@@ -94,9 +94,7 @@ def normalize_features(
         by = _trim_by(by)
         by_values = _xarray_by_values(data, by)
         series = pd.Series(by_values, dtype="category")
-        use_map_blocks = (
-            is_dask and len(data.X.chunks[0]) > 1 and _issorted(series.cat.codes.values)
-        )
+        use_map_blocks = is_dask and _issorted(series.cat.codes.values)
         if normalize != "zscore":
             group_indices = series.groupby(
                 series, observed=True, sort=False, dropna=False
