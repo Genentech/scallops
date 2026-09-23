@@ -81,7 +81,7 @@ def main():
         root_parser.print_help()
     else:
         if "verbose" in args and args.verbose:
-            os.environ["scallops_loglevel"] = "DEBUG"
+            os.environ["SCALLOPS_LOGGING"] = "DEBUG"
         logger = _get_cli_logger()
         logger.info(f"Scallops version: {version('scallops')}")
         cmd = ["scallops"] + sys.argv[1:]

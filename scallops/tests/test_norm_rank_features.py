@@ -210,6 +210,54 @@ def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp
     _compare_anndata(normed_data, normed_data_dask)
 
 
+@pytest.mark.parametrize("groups_per_chunk", [1, 2, 4])
+@pytest.mark.parametrize("reference", ["gene_symbol=='NTC'", None])
+@pytest.mark.parametrize("robust", [True, False])
+@pytest.mark.features
+def test_norm_local_zscore_groups_per_chunk(
+    groups_per_chunk, reference, robust, caplog
+):
+    """Blocks may hold more than one group, so neighbor indices must be per block."""
+    n_groups = 8
+    group_size = 6
+    n_features = 3
+    n_neighbors = 2
+    rng = np.random.default_rng(0)
+    n = n_groups * group_size
+    x = rng.normal(size=(n, n_features)) * 10
+    obs = pd.DataFrame(
+        data={
+            "well": np.repeat([f"well{i}" for i in range(n_groups)], group_size),
+            "gene_symbol": np.tile(["NTC", "NTC", "NTC", "a", "b", "c"], n_groups),
+            _centroid_column_names[0]: rng.normal(size=n),
+            _centroid_column_names[1]: rng.normal(size=n),
+        },
+        index=[str(i) for i in range(n)],
+    )
+    kwargs = dict(
+        reference_query=reference,
+        normalize="local-zscore",
+        robust=robust,
+        by=["well"],
+        n_neighbors=n_neighbors,
+    )
+    expected = normalize_features(
+        anndata.AnnData(X=x.copy(), obs=obs.copy()),
+        **kwargs,
+    )
+    caplog.clear()
+    dask_data = anndata.AnnData(
+        X=da.from_array(x.copy(), chunks=(group_size * groups_per_chunk, n_features)),
+        obs=obs.copy(),
+    )
+    with caplog.at_level("WARNING", logger="scallops"):
+        result = normalize_features(dask_data, **kwargs)
+    # the slow path would hide the bug this test is about
+    assert "slower code" not in caplog.text
+    result.X = result.X.compute()
+    _compare_anndata(expected, result)
+
+
 @pytest.mark.parametrize("by", [None, ["well"]])
 @pytest.mark.features
 def testrank_features(client, data, by):
