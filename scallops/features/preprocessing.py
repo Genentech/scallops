@@ -159,5 +159,7 @@ def filter_data(
         variance_indices = variance_indices[keep_variance_indices]
         if n_features is not None:
             variance_indices = variance_indices[-n_features:]
+        # keep the original feature order
+        variance_indices = np.sort(variance_indices)
 
     return _slice_anndata(data, keep_cells, variance_indices)
