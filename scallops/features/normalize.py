@@ -165,6 +165,7 @@ def normalize_features(
                 means = grouped_ref.mean(**kwargs)
             if scaling:
                 stds = grouped_ref.std(**kwargs)
+
         if by is not None:
             results = []
             indices = []
@@ -243,18 +244,17 @@ def normalize_features(
                 n_neighbors=n_neighbors,
                 metric=neighbors_metric,
             )
+            if local_reference_indices is not None:
+                reference_indices = local_reference_indices[reference_indices]
             if use_map_blocks:
-                if local_reference_indices is not None:
-                    reference_indices = local_reference_indices[reference_indices]
-                indices.append(reference_indices)
+                # make the indices relative to the whole dataset instead of the group
+                indices.append(group_indices_[reference_indices])
             else:
-                if local_reference_indices is not None:
-                    reference_indices = local_reference_indices[reference_indices]
                 if is_dask:
                     reference_indices = da.from_array(reference_indices, chunks=-1)
 
                 # memory = (x.shape[0] * x.shape[1] * n_neighbors) / batch_size + (x.shape[0] * x.shape[1])
-                # memory *= 8
+
                 result = _local_z_batched(
                     x=x,
                     reference_indices=reference_indices,  # indices into x
@@ -290,10 +290,18 @@ def normalize_features(
             obs_list.append(df)
 
     if use_map_blocks:
+        # group boundaries line up with chunk boundaries, so a group never spans blocks
         rechunked_data = rechunk_for_blockwise(data.X, 0, series.cat.codes.values)[1]
         chunks = [(rechunked_data.chunks[0])]
         max_chunk_size = 0
         indices = np.concatenate(indices, axis=0)
+        # each block is indexed independently, so shift the dataset relative indices to
+        # be relative to the start of the block they belong to
+        row_chunks = rechunked_data.chunks[0]
+        block_offsets = np.repeat(
+            np.concatenate([[0], np.cumsum(row_chunks)[:-1]]), row_chunks
+        )
+        indices = indices - block_offsets.reshape((-1,) + (1,) * (indices.ndim - 1))
         for s in indices.shape[1:]:
             max_chunk_size = max(max_chunk_size, s)
             chunks.append((s,))
