@@ -35,6 +35,7 @@ from scallops.zarr_io import (
     _create_array_kwargs,
     _create_zarr_attrs,
     _current_format,
+    _require_group,
     is_ome_zarr_array,
 )
 
@@ -241,6 +242,10 @@ def _single_stitch(
     output_metadata["fuse_crop_width"] = fuse_crop_width
     output_metadata["align_tile_shape"] = align_tile_shape
     output_metadata["tile_shape"] = tile_shape_no_crop
+    output_metadata["swap_axes"] = swap
+    output_metadata["flip_y_axis"] = flip_y
+    output_metadata["flip_x_axis"] = flip_x
+
     if z_threshold is not None:
         output_metadata["z_threshold"] = z_threshold
 
@@ -449,7 +454,7 @@ def _write_arrays(
     gc.collect()
     fmt = _current_format()
     if not no_save_labels:
-        labels_group = image_output_root.require_group("labels")
+        labels_group = _require_group(image_output_root, "labels")
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
         group.create_array(
             name="s0",
@@ -489,7 +494,7 @@ def _write_arrays(
             group.attrs.update(zarr_attrs)
     cleanup_paths = []
     if not no_save_image:
-        group = image_output_root.require_group("images").require_group(
+        group = _require_group(image_output_root, "images").require_group(
             image_key, overwrite=True
         )
 

@@ -40,6 +40,7 @@ from ome_zarr.io import parse_url
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image, write_multiscale
 from xarray.core.coordinates import DataArrayCoordinates
+from zarr.errors import ContainsGroupError
 from zarr.storage import StoreLike
 
 from scallops.experiment.abc import _LazyLoadData
@@ -50,6 +51,45 @@ logger = logging.getLogger("scallops")
 
 def _current_format() -> Format:
     return FormatV04()
+
+
+def _tolerate_concurrent_create(
+    create: Callable[[], zarr.Group], open_existing: Callable[[], zarr.Group]
+) -> zarr.Group:
+    """Call ``create``, falling back to ``open_existing`` if it loses a create race.
+
+    ``create`` is expected to be check-then-create: it looks a group up and creates
+    it only when the lookup misses. Processes that share an output store -- one
+    registration or stitching task per well, all writing the same zarr -- can all
+    miss, and every loser fails with ``ContainsGroupError``. The group they wanted
+    now exists, so ``open_existing`` should open it with a plain read (no create
+    attempt of its own), which cannot race no matter how many losers there are.
+
+    :param create: Attempts to create the group; raises ``ContainsGroupError`` if
+        another process created it first.
+    :param open_existing: Opens the group assuming it already exists.
+    :return: The existing or newly created group.
+    """
+    try:
+        return create()
+    except ContainsGroupError:
+        logger.debug("Group was created concurrently; opening the existing one")
+        return open_existing()
+
+
+def _require_group(parent: zarr.Group, name: str) -> zarr.Group:
+    """Get or create a child group, tolerating a concurrent writer.
+
+    An *array* at ``name`` still raises, as it does without this wrapper.
+
+    :param parent: Group to create the child under.
+    :param name: Name of the child group.
+    :return: The existing or newly created group.
+    """
+    return _tolerate_concurrent_create(
+        lambda: parent.require_group(name, overwrite=False),
+        lambda: parent[name],
+    )
 
 
 def _create_array_kwargs(fmt: Format | None = None) -> dict[str, Any]:
@@ -350,7 +390,7 @@ def _write_zarr_image(
         root = open_ome_zarr(root, mode="a")
     dest_grp = root
     if group is not None and name is not None:
-        images_grp = root.require_group(group, overwrite=False)
+        images_grp = _require_group(root, group)
         dest_grp = images_grp.create_group(name.replace("/", "-"), overwrite=True)
     image_attrs = None
     coords = None
@@ -598,7 +638,7 @@ def _write_zarr_labels(
     name = name.replace("/", "-")
     if isinstance(root, (str, Path)):
         root = open_ome_zarr(root, mode="a")
-    labels_grp = root.require_group("labels")
+    labels_grp = _require_group(root, "labels")
     grp = labels_grp.create_group(name, overwrite=True)
     if not isinstance(labels, xr.DataArray):
         if labels.ndim == 2:
@@ -787,7 +827,15 @@ def open_ome_zarr(url: Path | str, mode: str = "a") -> zarr.Group | None:
         loc = parse_url(url, mode=mode, fmt=fmt)
         if loc is None:
             return None
-        return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
+        if mode != "a":
+            return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
+        # mode="a" is also check-then-create: another process can create the root
+        # group between our read and our create, no matter how many processes are
+        # racing. Fall back to "r+" (must exist, no create attempt), which can't race.
+        return _tolerate_concurrent_create(
+            lambda: zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format),
+            lambda: zarr.open(loc.store, mode="r+", zarr_format=fmt.zarr_format),
+        )
     except Exception as e:
         logger.error(f"Failed to open OME-Zarr store: {url}")
         raise e
