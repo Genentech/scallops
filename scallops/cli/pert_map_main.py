@@ -190,12 +190,6 @@ def _create_similarity_matrix_parser(
         required=True,
     )
 
-    required.add_argument(
-        "--by",
-        help="Perturbation column(s) in dataset observations to aggregate by.",
-        nargs="+",
-    )
-
     common_args(parser=parser, metadata=False, pre_rechunk=False, post_rechunk=False)
     parser.set_defaults(func=_run_similarity_matrix)
 
@@ -225,6 +219,7 @@ def _create_aggregate_parser(
         "--by",
         help="Perturbation column(s) in dataset observations to aggregate by.",
         nargs="+",
+        required=True,
     )
     parser.add_argument(
         "--center-reference-query",
@@ -257,6 +252,7 @@ def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     required.add_argument(
         "--reference-query",
         help="Query to extract reference observations (e.g. gene_symbol=='NTC')",
+        required=True,
     )
     parser.add_argument(
         "--by",
@@ -299,6 +295,7 @@ def _create_set_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
         "--set",
         help="Path(s) to set(s) in GMT format",
         nargs="+",
+        required=True,
     )
 
     common_args(
@@ -336,8 +333,9 @@ def _create_recall_parser(
         "--ground-truth-corum",
         help="Path(s) to ground truth datasets from CORUM",
         nargs="+",
+        required=True,
     )
-    required.add_argument(
+    parser.add_argument(
         "--threshold",
         help="Recall threshold",
         nargs="+",
@@ -576,9 +574,10 @@ def _create_rank_parser(
     required = parser.add_argument_group("required arguments")
     input_arg(required)
 
-    required.add_argument(
+    parser.add_argument(
         "--output",
-        help="Path to Parquet file containing ranked features.",
+        help="Path to Parquet file containing ranked features. Defaults to the "
+        "basename of the first input with a .parquet extension.",
     )
     filter_args(parser)
     parser.add_argument(
