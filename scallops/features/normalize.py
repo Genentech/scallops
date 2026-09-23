@@ -9,7 +9,6 @@ import pandas as pd
 import xarray as xr
 from anndata._core.index import _normalize_index
 from array_api_compat import get_namespace
-from flox import rechunk_for_blockwise
 from flox.lib import _issorted
 from scipy.linalg import fractional_matrix_power
 from scipy.stats import median_abs_deviation
@@ -25,6 +24,15 @@ from scallops.features.util import (
 from scallops.utils import tqdm_func
 
 logger = logging.getLogger("scallops")
+
+
+def _get_group_chunks(values):
+    """Chunk sizes that put each run of equal `values` in its own chunk."""
+    # a boundary at i means the split is after row i, so the chunk sizes are the
+    # differences between successive split points
+    boundaries = np.where(values[:-1] != values[1:])[0] + 1
+    split_points = np.concatenate(([0], boundaries, [len(values)]))
+    return tuple(int(chunk) for chunk in np.diff(split_points))
 
 
 def _convert_scale(mad_scale):
@@ -211,6 +219,7 @@ def normalize_features(
     indices = [] if use_map_blocks else None
     results = [] if not use_map_blocks else None
     obs_list = [] if not use_map_blocks else None
+    obs_indices = [] if not use_map_blocks else None
     for key in group_indices.keys():
         if by is not None:
             group_indices_ = group_indices[key]
@@ -247,8 +256,7 @@ def normalize_features(
             if local_reference_indices is not None:
                 reference_indices = local_reference_indices[reference_indices]
             if use_map_blocks:
-                # make the indices relative to the whole dataset instead of the group
-                indices.append(group_indices_[reference_indices])
+                indices.append(reference_indices)
             else:
                 if is_dask:
                     reference_indices = da.from_array(reference_indices, chunks=-1)
@@ -288,28 +296,18 @@ def normalize_features(
         if not use_map_blocks:
             results.append(result)
             obs_list.append(df)
+            if by is not None:
+                obs_indices.append(group_indices_)
 
     if use_map_blocks:
-        # group boundaries line up with chunk boundaries, so a group never spans blocks
-        rechunked_data = rechunk_for_blockwise(data.X, 0, series.cat.codes.values)[1]
-        chunks = [(rechunked_data.chunks[0])]
-        max_chunk_size = 0
+        # group boundaries line up perfectly with chunk boundaries
+        chunks = _get_group_chunks(series.cat.codes.values)
         indices = np.concatenate(indices, axis=0)
-        # each block is indexed independently, so shift the dataset relative indices to
-        # be relative to the start of the block they belong to
-        row_chunks = rechunked_data.chunks[0]
-        block_offsets = np.repeat(
-            np.concatenate([[0], np.cumsum(row_chunks)[:-1]]), row_chunks
-        )
-        indices = indices - block_offsets.reshape((-1,) + (1,) * (indices.ndim - 1))
-        for s in indices.shape[1:]:
-            max_chunk_size = max(max_chunk_size, s)
-            chunks.append((s,))
-        logger.debug(f"Maximum chunk size: {max_chunk_size:,}")
         feature_chunk_size = 20  # TODO
-        rechunked_data = rechunked_data.rechunk({1: feature_chunk_size})
+        rechunked_data = data.X.rechunk({0: chunks, 1: feature_chunk_size})
 
-        indices = da.from_array(indices, chunks=tuple(chunks))
+        # one chunk per group along the labels dim, neighbors are never split
+        indices = da.from_array(indices, chunks=(chunks, -1))
         assert indices.shape[0] == rechunked_data.shape[0]
         kwargs = dict(
             robust=robust,
@@ -331,12 +329,17 @@ def normalize_features(
             obsm=data.obsm.copy(),
             varm=data.varm.copy(),
         )
+    obsm = data.obsm.copy()
+    if by is not None:
+        # rows come back in group order, so obsm has to be reordered to match
+        row_indices = np.concatenate(obs_indices)
+        obsm = {key: value[row_indices] for key, value in data.obsm.items()}
     return anndata.AnnData(
         X=get_namespace(data.X).vstack(results),
         obs=pd.concat(obs_list),
         var=data.var.copy(),
         uns=data.uns.copy(),
-        obsm=data.obsm.copy(),
+        obsm=obsm,
         varm=data.varm.copy(),
     )
 
