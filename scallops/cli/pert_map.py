@@ -111,6 +111,13 @@ def _read_data(
     return data
 
 
+def _read_metadata(join_path: str) -> dd.DataFrame:
+    """Read the metadata to join on from a Parquet or CSV file."""
+    if join_path.lower().endswith((".parquet", ".pq")):
+        return dd.read_parquet(join_path)
+    return dd.read_csv(join_path)
+
+
 def rechunk(
     data: anndata.AnnData,
     rechunk_label_size: str | None,
@@ -365,14 +372,7 @@ def run_aggregate(arguments: argparse.Namespace):
         data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
-            _join_metadata(
-                data,
-                dd.read_csv(join_path)
-                if not join_path.lower().endswith(".parquet")
-                or join_path.lower().endswith(".pq")
-                else dd.read_parquet(join_path),
-                join_fields,
-            )
+            _join_metadata(data, _read_metadata(join_path), join_fields)
         _log_data_shape(data)
 
         if center_reference_query is not None:
@@ -444,14 +444,7 @@ def run_tvn(arguments: argparse.Namespace):
         data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
-            _join_metadata(
-                data,
-                dd.read_csv(join_path)
-                if not join_path.lower().endswith(".parquet")
-                or join_path.lower().endswith(".pq")
-                else dd.read_parquet(join_path),
-                join_fields,
-            )
+            _join_metadata(data, _read_metadata(join_path), join_fields)
         _log_data_shape(data)
         data = typical_variation_normalization(
             data=data, reference_query=reference_query, by=by, pca_kwargs=pca_kwargs
@@ -512,14 +505,7 @@ def run_pca(arguments: argparse.Namespace):
         data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
-            _join_metadata(
-                data,
-                dd.read_csv(join_path)
-                if not join_path.lower().endswith(".parquet")
-                or join_path.lower().endswith(".pq")
-                else dd.read_parquet(join_path),
-                join_fields,
-            )
+            _join_metadata(data, _read_metadata(join_path), join_fields)
         _log_data_shape(data)
         pca = PCA(n_components=n_components, whiten=whiten, batch_size=batch_size)
         train_data = data
@@ -608,14 +594,7 @@ def run_rank_features(arguments: argparse.Namespace):
         data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
-            _join_metadata(
-                data,
-                dd.read_csv(join_path)
-                if not join_path.lower().endswith(".parquet")
-                or join_path.lower().endswith(".pq")
-                else dd.read_parquet(join_path),
-                join_fields,
-            )
+            _join_metadata(data, _read_metadata(join_path), join_fields)
         _log_data_shape(data)
         # columns_needed = set()
         # columns_needed.add(perturbation_column)
@@ -736,14 +715,7 @@ def run_norm_features(arguments: argparse.Namespace):
         data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
-            _join_metadata(
-                data,
-                dd.read_csv(join_path)
-                if not join_path.lower().endswith(".parquet")
-                or join_path.lower().endswith(".pq")
-                else dd.read_parquet(join_path),
-                join_fields,
-            )
+            _join_metadata(data, _read_metadata(join_path), join_fields)
         _log_data_shape(data)
         if centering or scaling:
             data = normalize_features(
@@ -852,14 +824,7 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
         data = _read_data(data_paths, feature_filter, label_filter)
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
-            _join_metadata(
-                data,
-                dd.read_csv(join_path)
-                if not join_path.lower().endswith(".parquet")
-                or join_path.lower().endswith(".pq")
-                else dd.read_parquet(join_path),
-                join_fields,
-            )
+            _join_metadata(data, _read_metadata(join_path), join_fields)
         _log_data_shape(data)
 
         data = filter_data(
