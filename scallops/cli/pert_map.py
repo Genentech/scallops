@@ -9,6 +9,7 @@ import json
 import os
 
 import anndata
+import dask.array as da
 import dask.dataframe as dd
 import fsspec
 import numpy as np
@@ -169,7 +170,8 @@ def run_recall(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         similarity_data = _read_data(data_paths)
-        similarity_data.X = similarity_data.X.compute()  # load into memory
+        if isinstance(similarity_data.X, da.Array):
+            similarity_data.X = similarity_data.X.compute()  # load into memory
         results = []
         gene_symbols = similarity_data.obs.index.values
         for ground_truth_name, ground_truth_df in ground_truth:
@@ -270,7 +272,8 @@ def run_set_enrichment(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         similarity_data = _read_data(data_paths)
-        similarity_data.X = similarity_data.X.compute()  # load into memory
+        if isinstance(similarity_data.X, da.Array):
+            similarity_data.X = similarity_data.X.compute()  # load into memory
 
         df = set_benchmark(
             data=similarity_data,
@@ -453,7 +456,7 @@ def run_tvn(arguments: argparse.Namespace):
         data = typical_variation_normalization(
             data=data, reference_query=reference_query, by=by, pca_kwargs=pca_kwargs
         )
-        logger.debug(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
+        _log_chunk_size(data)
         _write_anndata(
             data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
         )
@@ -524,10 +527,11 @@ def run_pca(arguments: argparse.Namespace):
             train_data = _slice_anndata(data, data.obs.query(reference_query).index)
             logger.info(f"# labels for training: {train_data.shape[0]:,}")
         pca.fit(train_data.X)
+        features = data.var.index.values
         X_transformed = pca.transform(data.X)
         data = anndata.AnnData(X_transformed, obs=data.obs)
-        logger.debug(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
-        pca.add_uns(data)
+        _log_chunk_size(data)
+        pca.add_uns(data, features=features)
         _write_anndata(
             data, output, metadata, post_rechunk_label_size, post_rechunk_feature_size
         )
@@ -756,9 +760,7 @@ def run_norm_features(arguments: argparse.Namespace):
                 batch_size=batch_size,
                 centroid_column_names=centroid_column_names,
             )
-            logger.debug(
-                f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}"
-            )
+            _log_chunk_size(data)
         else:
             logger.info("No normalization")
         fs, output_dir = fsspec.url_to_fs(os.path.dirname(output))
@@ -878,4 +880,9 @@ def run_filter_data(arguments: argparse.Namespace) -> None:
 
 def _log_data_shape(data, prefix=""):
     logger.info(f"{prefix}# labels: {data.shape[0]:,}, # features: {data.shape[1]:,}")
-    logger.debug(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
+    _log_chunk_size(data)
+
+
+def _log_chunk_size(data):
+    if isinstance(data.X, da.Array):
+        logger.debug(f"Chunk size: {data.X.chunksize[0]:,}, {data.X.chunksize[1]:,}")
