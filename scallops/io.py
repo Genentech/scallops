@@ -1527,6 +1527,8 @@ def is_anndata(store: StoreLike) -> bool:
 
     :param store: Store to read from.
     """
+    f = None
+    close = False
     try:
         is_store_arg_h5_store = isinstance(store, h5py.Dataset | h5py.File | h5py.Group)
         is_store_arg_h5_path = (
@@ -1548,9 +1550,13 @@ def is_anndata(store: StoreLike) -> bool:
             f = store
         else:
             f = h5py.File(store, mode="r")
+            close = True
         return f.get("layers") is not None
     except:  # noqa: E722
         return False
+    finally:
+        if close:
+            f.close()
 
 
 def write_anndata_zarr(data: anndata.AnnData, store: StoreLike, **kwargs):
@@ -1595,9 +1601,12 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
         raise ValueError(f"{store} is incomplete.")
 
     if not dask:
-        if is_h5:
-            f.close()
-        return anndata.read_h5ad(store) if is_h5 else anndata.read_zarr(f)
+        if not is_h5:
+            return anndata.read_zarr(f)
+        if is_store_arg_h5_store:  # the caller owns the handle, don't close it
+            return read_elem(f)
+        f.close()
+        return anndata.read_h5ad(store)
 
     def callback(func, elem_name: str, elem, iospec):
         if iospec.encoding_type in (
@@ -1610,7 +1619,8 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
             return read_elem(elem)
         elif iospec.encoding_type == "array":
             if is_h5:
-                return da.from_array(elem, elem.chunks)
+                # chunks is None for contiguous (non-chunked) datasets
+                return da.from_array(elem, elem.chunks or "auto")
             # See https://github.com/dask/dask/pull/12582
             try:
                 return da.from_zarr(elem)
