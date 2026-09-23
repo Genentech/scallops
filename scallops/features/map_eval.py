@@ -154,9 +154,12 @@ def set_benchmark(
             "pvalue",
         ],
     )
-    if len(df) == 0:
-        return df
-    df["FDR"] = multipletests(df["pvalue"].values, method="fdr_bh")[1]
+    # keep the schema the same regardless of whether any set passed min_genes
+    df["FDR"] = (
+        multipletests(df["pvalue"].values, method="fdr_bh")[1]
+        if len(df) > 0
+        else pd.Series(dtype=float)
+    )
     return df
 
 

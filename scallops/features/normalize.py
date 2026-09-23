@@ -27,7 +27,10 @@ logger = logging.getLogger("scallops")
 
 
 def _get_group_chunks(values):
-    """Chunk sizes that put each run of equal `values` in its own chunk."""
+    """Chunk sizes that put each run of equal `values` in its own chunk.
+
+    Should only be used with sorted input.
+    """
     # a boundary at i means the split is after row i, so the chunk sizes are the
     # differences between successive split points
     boundaries = np.where(values[:-1] != values[1:])[0] + 1
@@ -96,12 +99,18 @@ def normalize_features(
         series = pd.Series(by_values, dtype="category")
         use_map_blocks = is_dask and _issorted(series.cat.codes.values)
         if normalize != "zscore":
-            group_indices = series.groupby(
-                series, observed=True, sort=False, dropna=False
-            ).indices
+            # grouping a categorical drops missing values even with dropna=False, so
+            # group on the codes, where missing values get their own code of -1
+            codes = series.cat.codes
+            group_indices = codes.groupby(codes, sort=False).indices
     else:
         group_indices = {None: None}
-    if normalize == "local-zscore" and not use_map_blocks and by is not None:
+    if (
+        normalize == "local-zscore"
+        and is_dask
+        and not use_map_blocks
+        and by is not None
+    ):
         logger.warning("Using slower code for local z-score since data is not sorted.")
     if normalize == "zscore":
         coords = {}

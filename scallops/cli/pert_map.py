@@ -759,7 +759,7 @@ def run_norm_features(arguments: argparse.Namespace):
             fs, output_file = fsspec.url_to_fs(output)
             pq.write_table(
                 table,
-                output,
+                output_file,
                 filesystem=fs,
             )
 
