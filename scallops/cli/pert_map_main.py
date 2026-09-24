@@ -470,12 +470,7 @@ def _create_normalize_parser(
     parser.add_argument(
         "--max-value", help="Truncate to this value after scaling", type=float
     )
-    parser.add_argument(
-        "--batch-size",
-        help="Batch size to use for local z-score scaling to conserve memory",
-        default=25000,
-        type=int,
-    )
+
     parser.add_argument(
         "--centroid-columns",
         help="Columns for y and x centroids to use for local zscore.",

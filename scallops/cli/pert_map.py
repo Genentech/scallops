@@ -681,9 +681,7 @@ def run_norm_features(arguments: argparse.Namespace):
 
     robust = arguments.robust
     max_value = arguments.max_value
-    batch_size = arguments.batch_size
-    if batch_size < 0:
-        batch_size = None
+
     centroid_column_names = arguments.centroid_columns
 
     output_ext = os.path.splitext(os.path.basename(output.lower()))[1]
@@ -729,7 +727,6 @@ def run_norm_features(arguments: argparse.Namespace):
                 centering=centering,
                 scaling=scaling,
                 max_value=max_value,
-                batch_size=batch_size,
                 centroid_column_names=centroid_column_names,
             )
             _log_chunk_size(data)
