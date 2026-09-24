@@ -3,12 +3,15 @@ from collections.abc import Sequence
 from typing import Literal
 
 import anndata
+import dask
 import dask.array as da
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 import xarray as xr
 from anndata._core.index import _normalize_index
 from array_api_compat import get_namespace
+from dask.utils import parse_bytes
 from flox.lib import _issorted
 from scipy.linalg import fractional_matrix_power
 from scipy.stats import median_abs_deviation
@@ -38,6 +41,45 @@ def _get_group_chunks(values):
     return tuple(int(chunk) for chunk in np.diff(split_points))
 
 
+def _local_dtype(dtype: np.dtype) -> np.dtype:
+    """Dtype the neighborhood statistics are accumulated and returned in."""
+
+    return np.result_type(dtype, np.float32)
+
+
+def _rows_per_tile(
+    n_rows: int, n_neighbors: int, n_features: int, itemsize: int, tile_bytes: int
+) -> int:
+    """Rows per tile that keep the neighborhood gather within ``tile_bytes``."""
+
+    per_row = max(1, n_neighbors * n_features * itemsize)
+    return max(1, min(n_rows, tile_bytes // per_row))
+
+
+def _feature_chunk_size(
+    x: da.Array, max_group_rows: int, override: int | None = None
+) -> int:
+    """Features per local z-score task.
+
+    A neighborhood spans a whole group, so rows cannot be split and the only knob left
+    for task size is the feature axis. The result is snapped to a whole number of the
+    column chunks `x` already has, so the rechunk never makes a task read part of a
+    source chunk — re-reading a wide source chunk once per feature slice costs far more
+    than a larger task does.
+    """
+    n_features = x.shape[1]
+    if override is not None:
+        return max(1, min(int(override), n_features))
+    target = parse_bytes(dask.config.get("array.chunk-size"))
+    itemsize = np.dtype(_local_dtype(x.dtype)).itemsize
+    size = max(1, int(target // max(1, max_group_rows * itemsize)))
+    widths = x.chunks[1]
+    if widths and len(set(widths)) == 1:
+        width = widths[0]
+        size = max(width, (size // width) * width)
+    return max(1, min(size, n_features))
+
+
 def _convert_scale(mad_scale):
     if isinstance(mad_scale, str):
         if mad_scale.lower() == "normal":
@@ -59,11 +101,13 @@ def normalize_features(
     max_value: float | None = None,
     centering: bool = True,
     scaling: bool = True,
-    batch_size: int | None = 25000,
+    feature_chunk_size: int | None = None,
     centroid_column_names: tuple[str, str] = (
         "Nuclei_AreaShape_Center_Y",
         "Nuclei_AreaShape_Center_X",
     ),
+    tile_bytes: int = 128 * 1024 * 1024,
+    fast_moments: bool = False,
 ) -> anndata.AnnData:
     """Normalize features
 
@@ -82,10 +126,20 @@ def normalize_features(
     :param centering: Whether to center the data before scaling.
     :param max_value: Truncate to this value after scaling
     :param scaling: Whether to scale the data by dividing by the standard deviation.
-    :param batch_size: Batch size to use for local z-score scaling to conserve memory.
+    :param fast_moments: Compute local means and standard deviations from sufficient
+        statistics instead of gathering each neighborhood. Several times faster and
+        uses far less memory, at the cost of round-off: results differ from the exact
+        reduction by ~1e-12 on float64 input, and are at least as close to the true
+        value as it on float32 input. Ignored when `robust` is set.
+    :param feature_chunk_size: Features per task for the local z-score of a sorted
+        Dask array. The default derives one from the `array.chunk-size` Dask config
+        value and the largest group.
     :param centroid_column_names: Columns for y and x centroids to use for local zscore.
+    :param tile_bytes: Bytes the (rows, neighbors, features) neighborhood gather is allowed to reach in local zscore.
+        Should be small enough to stay friendly to cache and to many concurrent workers.
     :return: Normalized data
     """
+
     assert normalize in ["zscore", "local-zscore"]
     mad_scale = _convert_scale(mad_scale)
     centroid_column_names = list(centroid_column_names)
@@ -111,7 +165,10 @@ def normalize_features(
         and not use_map_blocks
         and by is not None
     ):
-        logger.warning("Using slower code for local z-score since data is not sorted.")
+        logger.warning(
+            "Using slower code for local z-score since data is not sorted. Sort the "
+            f"observations by {by} so each group lands in its own chunk."
+        )
     if normalize == "zscore":
         coords = {}
         if by is not None:
@@ -223,17 +280,34 @@ def normalize_features(
                 obsm=data.obsm.copy(),
                 varm=data.varm.copy(),
             )
-    indices = [] if use_map_blocks else None
+    # one row per observation, filled in place per group so the full index array is
+    # never duplicated by a concatenate
+    indices = (
+        np.empty(
+            (data.n_obs, n_neighbors),
+            dtype=np.int32 if data.n_obs <= np.iinfo(np.int32).max else np.int64,
+        )
+        if use_map_blocks
+        else None
+    )
     results = [] if not use_map_blocks else None
     obs_list = [] if not use_map_blocks else None
     obs_indices = [] if not use_map_blocks else None
+    resolved_feature_chunk = (
+        _feature_chunk_size(
+            data.X,
+            max((len(i) for i in group_indices.values() if i is not None), default=0)
+            or data.n_obs,
+            feature_chunk_size,
+        )
+        if is_dask
+        else None
+    )
     for key in group_indices.keys():
         if by is not None:
             group_indices_ = group_indices[key]
             if not use_map_blocks:
                 array_subset = group_indices_
-                if np.all(np.diff(group_indices_) == 1):
-                    array_subset = slice(group_indices_[0], group_indices_[-1] + 1)
                 x = data.X[array_subset]
             df = data.obs.iloc[group_indices_]
         else:
@@ -263,23 +337,36 @@ def normalize_features(
             if local_reference_indices is not None:
                 reference_indices = local_reference_indices[reference_indices]
             if use_map_blocks:
-                indices.append(reference_indices)
+                # use_map_blocks is only ever set when grouping
+                indices[group_indices_] = reference_indices
             else:
-                if is_dask:
-                    reference_indices = da.from_array(reference_indices, chunks=-1)
-
-                # memory = (x.shape[0] * x.shape[1] * n_neighbors) / batch_size + (x.shape[0] * x.shape[1])
-
-                result = _local_z_batched(
-                    x=x,
-                    reference_indices=reference_indices,  # indices into x
+                kwargs = dict(
                     robust=robust,
                     mad_scale=mad_scale,
                     centering=centering,
                     scaling=scaling,
                     max_value=max_value,
-                    batch_size=batch_size,
+                    fast_moments=fast_moments,
+                    tile_bytes=tile_bytes,
                 )
+                if is_dask:
+                    # a neighborhood spans the whole group, so the group has to be a
+                    # single row chunk; gathering through a Dask fancy index instead
+                    # would build a task per neighbor
+                    x = x.rechunk({0: -1, 1: resolved_feature_chunk})
+                    result = da.map_blocks(
+                        _local_z_batched,
+                        x,
+                        da.from_array(reference_indices, chunks=-1),
+                        **kwargs,
+                        dtype=_local_dtype(data.X.dtype),
+                    )
+                else:
+                    result = _local_z_batched(
+                        x=x,
+                        reference_indices=reference_indices,  # indices into x
+                        **kwargs,
+                    )
 
         # else:
         #     if use_map_blocks:
@@ -309,9 +396,7 @@ def normalize_features(
     if use_map_blocks:
         # group boundaries line up perfectly with chunk boundaries
         chunks = _get_group_chunks(series.cat.codes.values)
-        indices = np.concatenate(indices, axis=0)
-        feature_chunk_size = 20  # TODO
-        rechunked_data = data.X.rechunk({0: chunks, 1: feature_chunk_size})
+        rechunked_data = data.X.rechunk({0: chunks, 1: resolved_feature_chunk})
 
         # one chunk per group along the labels dim, neighbors are never split
         indices = da.from_array(indices, chunks=(chunks, -1))
@@ -322,11 +407,16 @@ def normalize_features(
             centering=centering,
             scaling=scaling,
             max_value=max_value,
-            batch_size=batch_size,
+            fast_moments=fast_moments,
+            tile_bytes=tile_bytes,
         )
 
         result = da.map_blocks(
-            _local_z_batched, rechunked_data, indices, **kwargs, dtype=np.float64
+            _local_z_batched,
+            rechunked_data,
+            indices,
+            **kwargs,
+            dtype=_local_dtype(data.X.dtype),
         )
         return anndata.AnnData(
             X=result,
@@ -351,56 +441,179 @@ def normalize_features(
     )
 
 
+def _run_tiles(func, n_rows: int, tile: int, progress: bool | str):
+    """Apply `func` to each row tile in turn.
+
+    Tiling is for memory, not parallelism: Dask parallelizes across blocks, and the
+    array library parallelizes each reduction.
+    """
+    tqdm, progress_args = tqdm_func(progress)
+    for start in tqdm(range(0, n_rows, tile), **progress_args):
+        func(start)
+
+
+def _local_moments_gather(
+    x,
+    indices,
+    means,
+    stds,
+    robust: bool,
+    mad_scale: float | None,
+    tile: int,
+    progress: bool | str = False,
+) -> None:
+    """Neighborhood statistics by gathering ``x[indices]`` one row tile at a time.
+
+    Mathematically identical to reducing the full ``(rows, neighbors, features)``
+    array, but the gather is bounded by ``tile``. The gather is only ever read, never
+    written, so it does not matter whether indexing `x` returned a copy or a view.
+    """
+    xp = get_namespace(x)
+    # the robust scale is a deviation about the median, so the median is needed even
+    # when the caller does not want the values centered
+    want_center = means is not None or (robust and stds is not None)
+
+    def _tile(start: int) -> None:
+        stop = min(start + tile, indices.shape[0])
+        block = x[indices[start:stop]]  # (rows, neighbors, features)
+        center = None
+        if want_center:
+            center = xp.median(block, axis=1) if robust else xp.mean(block, axis=1)
+            if means is not None:
+                means[start:stop] = center
+        if stds is not None:
+            if robust:
+                deviation = xp.abs(block - center[:, None, :])
+                scale = xp.median(deviation, axis=1) / mad_scale
+            else:
+                scale = xp.std(block, axis=1)
+            stds[start:stop] = scale
+
+    _run_tiles(_tile, indices.shape[0], tile, progress)
+
+
+def _local_moments_sparse(
+    x: np.ndarray,
+    indices: np.ndarray,
+    means: np.ndarray | None,
+    stds: np.ndarray | None,
+    tile: int,
+    progress: bool | str = False,
+) -> None:
+    """Neighborhood mean and standard deviation from sufficient statistics.
+
+    Averaging over neighbors is a sparse matrix product: with ``S`` the row-normalized
+    neighbor incidence matrix, the local means are ``S @ x`` and the local variances are
+    ``S @ x**2 - (S @ x)**2``. That never materializes the ``(rows, neighbors, features)``
+    gather :func:`_local_moments_gather` needs, which is what makes it several times
+    faster. ``x`` is shifted by its column means first so the one-pass variance stays
+    well conditioned.
+
+    NumPy only — it is built on :mod:`scipy.sparse`. The caller dispatches elsewhere
+    for other array types and for robust statistics.
+    """
+    n_rows, n_neighbors = indices.shape
+    dtype = _local_dtype(x.dtype)
+    shift = x.mean(axis=0, dtype=np.float64).astype(dtype)
+    centered = np.subtract(x, shift, dtype=dtype)
+    squared = centered * centered if stds is not None else None
+    weights = np.full(tile * n_neighbors, 1.0 / n_neighbors, dtype=dtype)
+    indptr = np.arange(0, tile * n_neighbors + 1, n_neighbors, dtype=indices.dtype)
+
+    def _tile(start: int) -> None:
+        stop = min(start + tile, n_rows)
+        rows = stop - start
+        operator = sp.csr_matrix(
+            (
+                weights[: rows * n_neighbors],
+                indices[start:stop].ravel(),
+                indptr[: rows + 1],
+            ),
+            shape=(rows, x.shape[0]),
+        )
+        local_mean = operator @ centered
+        if stds is not None:
+            variance = operator @ squared
+            variance -= local_mean * local_mean
+            np.maximum(variance, 0, out=variance)  # guard against round-off below zero
+            np.sqrt(variance, out=variance)
+            stds[start:stop] = variance
+        if means is not None:
+            local_mean += shift
+            means[start:stop] = local_mean
+
+    _run_tiles(_tile, n_rows, tile, progress)
+
+
 def _local_z_batched(
-    x: np.ndarray | da.Array,
-    reference_indices: np.ndarray | da.Array,
+    x,
+    reference_indices,
+    tile_bytes: int,
     scaling: bool = True,
     centering: bool = True,
     max_value: float | None = None,
     mad_scale: float | str = "normal",
     robust: bool = False,
-    batch_size: int | None = None,
+    fast_moments: bool = False,
     progress: bool | str = False,
 ):
-    if isinstance(x, da.Array):
-        batch_size = None
+    """Z-score every row of ``x`` against the neighborhood given by its row of indices.
 
-    if batch_size is None:
-        batch_size = x.shape[0]
-    result_arrays = []
-
-    tqdm, progress_args = tqdm_func(progress)
-    for batch in tqdm(range(0, x.shape[0], batch_size), **progress_args):
-        sl = slice(batch, batch + batch_size)
-        reference_indices_ = reference_indices[sl]
-        x_ = x[sl]
-        if isinstance(x, da.Array):
-            n_labels = reference_indices_.shape[0]
-            n_neighbors = reference_indices_.shape[1]
-            reference_indices_ = reference_indices_.flatten()
-            if not isinstance(reference_indices_, da.Array):
-                reference_indices_ = da.from_array(reference_indices_)
-            # (labels,neighbors,features)
-            reference_data_ = x[reference_indices_].reshape((n_labels, n_neighbors, -1))
-        else:
-            reference_data_ = x[reference_indices_]
-        result = _normalize_features_array(
-            values=x_,
-            # reference_indices=reference_data_,
-            reference_values=reference_data_,
-            robust=robust,
-            mad_scale=mad_scale,
-            centering=centering,
-            scaling=scaling,
-            max_value=max_value,
-            local_zscore=reference_indices is not None,
-        )
-        result_arrays.append(result)
-    return (
-        get_namespace(x).vstack(result_arrays)
-        if len(result_arrays) > 1
-        else result_arrays[0]
+    ``reference_indices`` has shape ``(x.shape[0], n_neighbors)`` and indexes into
+    ``x`` itself. Works for any array namespace `get_namespace` understands; the
+    NumPy-only fast paths below are guarded.
+    """
+    xp = get_namespace(x)
+    is_numpy = isinstance(x, np.ndarray)
+    mad_scale = _convert_scale(mad_scale) if robust else None
+    n_rows, n_features = x.shape
+    n_neighbors = reference_indices.shape[1]
+    dtype = _local_dtype(x.dtype)
+    tile = _rows_per_tile(
+        n_rows, n_neighbors, n_features, np.dtype(dtype).itemsize, tile_bytes
     )
+    if not is_numpy:
+        # the indices have to live wherever `x` does for it to gather them
+        reference_indices = xp.asarray(reference_indices)
+
+    # the local means are written straight into the output buffer and subtracted in
+    # place, so a matrix this size is only ever allocated twice (means and stds)
+    out = xp.empty((n_rows, n_features), dtype=dtype)
+    means = out if centering else None
+    stds = xp.empty_like(out) if scaling else None
+
+    if fast_moments and not robust and is_numpy:
+        _local_moments_sparse(x, reference_indices, means, stds, tile, progress)
+    else:
+        _local_moments_gather(
+            x,
+            reference_indices,
+            means,
+            stds,
+            robust,
+            mad_scale,
+            tile,
+            progress,
+        )
+
+    # tiled so every temporary stays bounded rather than allocating a full-size array
+    def _finalize(start: int) -> None:
+        stop = min(start + finalize_tile, n_rows)
+        block = out[start:stop]
+        if centering:
+            xp.subtract(x[start:stop], block, out=block)
+        else:
+            block[...] = x[start:stop]
+        if scaling:
+            xp.divide(block, stds[start:stop], out=block)
+            if max_value is not None:
+                xp.clip(block, -max_value, max_value, out=block)
+
+    finalize_tile = _rows_per_tile(
+        n_rows, 1, n_features, np.dtype(dtype).itemsize, tile_bytes
+    )
+    _run_tiles(_finalize, n_rows, finalize_tile, False)
+    return out
 
 
 def _normalize_features_array(
@@ -410,7 +623,6 @@ def _normalize_features_array(
     scaling: bool = True,
     centering: bool = True,
     max_value: float | None = None,
-    local_zscore: bool = False,
     mad_scale: float | str = "normal",
     robust: bool = False,
 ):
@@ -422,42 +634,20 @@ def _normalize_features_array(
         )
     means = None
     stds = None
-    if not local_zscore:
-        if robust:
-            if centering:
-                means = xp.nanmedian(reference_values, axis=0)
-            if scaling:
-                stds = (
-                    xp.nanmedian(xp.abs(reference_values - means), axis=0) / mad_scale
-                )
-        else:
-            if centering:
-                means = xp.nanmean(reference_values, axis=0)
-            if scaling:
-                stds = xp.nanstd(reference_values, axis=0)
+    if robust:
         if centering:
-            means = xp.expand_dims(means, 0)
+            means = xp.nanmedian(reference_values, axis=0)
         if scaling:
-            stds = xp.expand_dims(stds, 0)
+            stds = xp.nanmedian(xp.abs(reference_values - means), axis=0) / mad_scale
     else:
-        # reference_values dims are (labels,neighbors,features)
-        if robust:
-            means = xp.nanmedian(reference_values, axis=1)
-
-            if scaling:
-                stds = (
-                    xp.nanmedian(
-                        xp.abs(reference_values - xp.expand_dims(means, axis=1)),
-                        axis=1,
-                    )
-                    / mad_scale
-                )
-
-        else:
-            if centering:
-                means = xp.nanmean(reference_values, axis=1)
-            if scaling:
-                stds = xp.nanstd(reference_values, axis=1)
+        if centering:
+            means = xp.nanmean(reference_values, axis=0)
+        if scaling:
+            stds = xp.nanstd(reference_values, axis=0)
+    if centering:
+        means = xp.expand_dims(means, 0)
+    if scaling:
+        stds = xp.expand_dims(stds, 0)
 
     if centering:
         values = values - means
@@ -478,11 +668,15 @@ def _nearest_neighbors_indices(
     if n_neighbors > len(reference):
         raise ValueError(f"n_neighbors: {n_neighbors}, n points: {len(reference)}")
     # shape is reference.shape[0], n_neighbors
-    return (
-        NearestNeighbors(n_neighbors=n_neighbors, metric=metric)
+    indices = (
+        NearestNeighbors(n_neighbors=n_neighbors, metric=metric, n_jobs=-1)
         .fit(reference)
         .kneighbors(query, return_distance=False)
     )
+    # int64 indices are half the memory of the feature matrix itself at scale
+    if len(reference) <= np.iinfo(np.int32).max:
+        indices = indices.astype(np.int32, copy=False)
+    return indices
 
 
 def typical_variation_normalization(

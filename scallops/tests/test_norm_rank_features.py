@@ -169,7 +169,7 @@ def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp
             by=by,
             n_neighbors=n_neighbors,
             scaling=scaling,
-            batch_size=1,
+            tile_bytes=0,
         )
         _compare_anndata(normed_data, normed_data2)
 
@@ -196,7 +196,7 @@ def test_norm_features(client, data, normalize, by, robust, reference, sort, tmp
             by=by,
             n_neighbors=n_neighbors,
             scaling=scaling,
-            batch_size=1,
+            tile_bytes=0,
         )
         normed_data_dask2.X = normed_data_dask2.X.compute()
         _compare_anndata(normed_data_dask, normed_data_dask2)
@@ -256,6 +256,124 @@ def test_norm_local_zscore_groups_per_chunk(
     assert "slower code" not in caplog.text
     result.X = result.X.compute()
     _compare_anndata(expected, result)
+
+
+def _local_zscore_data(n_groups=4, group_size=30, n_features=5, dtype=np.float64):
+    rng = np.random.default_rng(0)
+    n = n_groups * group_size
+    # a large offset relative to the spread is the hard case for one-pass moments
+    x = (rng.normal(size=(n, n_features)) * 10 + 3000).astype(dtype)
+    obs = pd.DataFrame(
+        data={
+            "well": np.repeat([f"well{i}" for i in range(n_groups)], group_size),
+            "gene_symbol": np.resize(["NTC", "NTC", "NTC", "a", "b", "c"], n),
+            _centroid_column_names[0]: rng.normal(size=n),
+            _centroid_column_names[1]: rng.normal(size=n),
+        },
+        index=[str(i) for i in range(n)],
+    )
+    return anndata.AnnData(X=x, obs=obs)
+
+
+@pytest.mark.parametrize("n_neighbors", [3, 4, 10])
+@pytest.mark.parametrize("reference", ["gene_symbol=='NTC'", None])
+@pytest.mark.parametrize("robust", [True, False])
+@pytest.mark.features
+def test_norm_local_zscore_fast_moments(n_neighbors, reference, robust):
+    """`fast_moments` computes the same statistics a different, faster way."""
+    data = _local_zscore_data()
+    kwargs = dict(
+        reference_query=reference,
+        normalize="local-zscore",
+        robust=robust,
+        by=["well"],
+        n_neighbors=n_neighbors,
+    )
+    exact = normalize_features(data, **kwargs)
+    fast = normalize_features(data, fast_moments=True, **kwargs)
+    if robust:
+        # no sufficient-statistics form for the median, so it must fall back
+        _compare_anndata(exact, fast)
+    else:
+        np.testing.assert_allclose(exact.X, fast.X, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("robust", [True, False])
+@pytest.mark.features
+def test_norm_local_zscore_non_numpy_path(robust, monkeypatch):
+    """The generic namespace path (CuPy et al.) computes the same statistics.
+
+    No GPU in CI, so the NumPy-only fast paths are disabled instead — every remaining
+    operation goes through `get_namespace`, which is what a CuPy array would take.
+    """
+    data = _local_zscore_data()
+    kwargs = dict(normalize="local-zscore", by=["well"], robust=robust, n_neighbors=4)
+    expected = normalize_features(data, fast_moments=not robust, **kwargs)
+
+    monkeypatch.setattr("scallops.features.normalize._is_numpy", lambda x: False)
+    generic = normalize_features(data, fast_moments=not robust, **kwargs)
+    np.testing.assert_allclose(generic.X, expected.X, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("n_neighbors", [3, 4])
+@pytest.mark.features
+def test_norm_local_zscore_robust_matches_scipy(n_neighbors):
+    """The partitioned median and MAD are exact for both odd and even neighbor counts."""
+    data = _local_zscore_data(n_groups=1, group_size=40)
+    result = normalize_features(
+        data,
+        normalize="local-zscore",
+        robust=True,
+        n_neighbors=n_neighbors,
+    )
+    coordinates = data.obs[list(_centroid_column_names)].values
+    neighbors = data.X[
+        _nearest_neighbors_indices(coordinates, coordinates, n_neighbors)
+    ]
+    expected = (data.X - np.median(neighbors, axis=1)) / median_abs_deviation(
+        neighbors, axis=1, scale="normal"
+    )
+    np.testing.assert_array_equal(result.X, expected)
+
+
+@pytest.mark.parametrize("sorted_groups", [True, False])
+@pytest.mark.features
+def test_norm_local_zscore_feature_chunks(sorted_groups):
+    """A wide matrix is split along features, so a block holds only some of them."""
+    group_size = 30
+    data = _local_zscore_data(group_size=group_size, n_features=40)
+    kwargs = dict(normalize="local-zscore", by=["well"], n_neighbors=5)
+    expected = normalize_features(data, **kwargs)
+
+    dask_data = anndata.AnnData(
+        X=da.from_array(
+            data.X, chunks=((group_size if sorted_groups else 7), data.shape[1])
+        ),
+        obs=data.obs.copy(),
+    )
+    # 40 features in chunks of 8 gives five blocks per group
+    result = normalize_features(dask_data, feature_chunk_size=8, **kwargs)
+    assert len(result.X.chunks[1]) == 5
+    result.X = result.X.compute()
+    _compare_anndata(expected, result)
+
+
+@pytest.mark.parametrize("chunks", [None, (30, 2), (7, 2)])
+@pytest.mark.features
+def test_norm_local_zscore_preserves_dtype(chunks):
+    """A float32 matrix must not come back as float64, on any path."""
+    data = _local_zscore_data(dtype=np.float32)
+    if chunks is not None:
+        data = anndata.AnnData(
+            X=da.from_array(data.X, chunks=chunks), obs=data.obs.copy()
+        )
+    result = normalize_features(
+        data, normalize="local-zscore", by=["well"], n_neighbors=3
+    )
+    assert result.X.dtype == np.float32
+    if chunks is not None:
+        # the Dask meta must agree with what the blocks actually produce
+        assert result.X.compute().dtype == np.float32
 
 
 @pytest.mark.parametrize("by", [None, ["well"]])
