@@ -503,6 +503,13 @@ def run_pca(arguments: argparse.Namespace):
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
         data = _read_data(data_paths, feature_filter, label_filter)
+        invalid_features = (~da.isfinite(data.X)).sum(axis=0).compute()
+        keep = invalid_features == 0
+        n_keep = keep.sum()
+        if n_keep != data.shape[1]:
+            logger.info(f"Keeping: {n_keep:,} / {data.shape[1]:,} features.")
+            data = _slice_anndata(data, None, keep)
+
         data = rechunk(data, rechunk_label_size, rechunk_feature_size)
         if join_path is not None:
             _join_metadata(data, _read_metadata(join_path), join_fields)

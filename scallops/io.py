@@ -1582,7 +1582,7 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
         isinstance(store, os.PathLike | str) and Path(store).suffix == ".h5ad"
     )
     is_h5 = is_store_arg_h5_path or is_store_arg_h5_store
-
+    close = False
     if not is_h5:
         import zarr
 
@@ -1597,6 +1597,7 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
         f = store
     else:
         f = h5py.File(store, mode="r")
+        close = True
     if f.get("layers") is None:
         raise ValueError(f"{store} is incomplete.")
 
@@ -1605,7 +1606,8 @@ def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
             return anndata.read_zarr(f)
         if is_store_arg_h5_store:  # the caller owns the handle, don't close it
             return read_elem(f)
-        f.close()
+        if close:
+            f.close()
         return anndata.read_h5ad(store)
 
     def callback(func, elem_name: str, elem, iospec):
