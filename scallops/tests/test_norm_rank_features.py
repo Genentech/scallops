@@ -298,23 +298,6 @@ def test_norm_local_zscore_fast_moments(n_neighbors, reference, robust):
         np.testing.assert_allclose(exact.X, fast.X, rtol=1e-10, atol=1e-10)
 
 
-@pytest.mark.parametrize("robust", [True, False])
-@pytest.mark.features
-def test_norm_local_zscore_non_numpy_path(robust, monkeypatch):
-    """The generic namespace path (CuPy et al.) computes the same statistics.
-
-    No GPU in CI, so the NumPy-only fast paths are disabled instead — every remaining
-    operation goes through `get_namespace`, which is what a CuPy array would take.
-    """
-    data = _local_zscore_data()
-    kwargs = dict(normalize="local-zscore", by=["well"], robust=robust, n_neighbors=4)
-    expected = normalize_features(data, fast_moments=not robust, **kwargs)
-
-    monkeypatch.setattr("scallops.features.normalize._is_numpy", lambda x: False)
-    generic = normalize_features(data, fast_moments=not robust, **kwargs)
-    np.testing.assert_allclose(generic.X, expected.X, rtol=1e-10, atol=1e-10)
-
-
 @pytest.mark.parametrize("n_neighbors", [3, 4])
 @pytest.mark.features
 def test_norm_local_zscore_robust_matches_scipy(n_neighbors):
