@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from distributed import Client, LocalCluster
 
 from scallops.io import read_experiment, read_image
 
@@ -18,6 +19,16 @@ __processfig4_dir__ = __data_dir__.joinpath("process_fig4")
 assert __root__.joinpath(
     "data", "experimentC", "input", "10X_c1-SBS-1", "10X_c1-SBS-1_A1_Tile-102.sbs.tif"
 ).exists(), "Test files not found. Please ensure you have Git LFS installed"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def client():
+    # Start a local Dask cluster for the entire test module
+    cluster = LocalCluster(n_workers=1, threads_per_worker=1)
+    client = Client(cluster)
+    yield client  # Provide the client to the tests
+    client.close()
+    cluster.close()
 
 
 @pytest.fixture(scope="module", autouse=True)
