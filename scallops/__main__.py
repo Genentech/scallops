@@ -30,7 +30,6 @@ Authors:
 """
 
 import argparse
-import os
 import sys
 import time
 from importlib.metadata import version
@@ -80,8 +79,6 @@ def main():
     if "func" not in args:
         root_parser.print_help()
     else:
-        if "verbose" in args and args.verbose:
-            os.environ["SCALLOPS_LOGGING"] = "DEBUG"
         logger = _get_cli_logger()
         logger.info(f"Scallops version: {version('scallops')}")
         cmd = ["scallops"] + sys.argv[1:]

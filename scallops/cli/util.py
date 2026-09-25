@@ -303,15 +303,6 @@ def expected_images_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def verbose_arg(parser):
-    """Add the verbose argument to a parser."""
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Run in verbose mode. Useful for debugging.",
-    )
-
-
 def subset_arg(parser: argparse.ArgumentParser) -> None:
     """Add the subset argument to a parser."""
     parser.add_argument(

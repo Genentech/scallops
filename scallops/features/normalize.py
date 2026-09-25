@@ -614,49 +614,6 @@ def _local_z_batched(
     return out
 
 
-def _normalize_features_array(
-    values: np.ndarray | da.Array,
-    reference_indices: np.ndarray | da.Array | None = None,
-    reference_values: np.ndarray | da.Array | None = None,
-    scaling: bool = True,
-    centering: bool = True,
-    max_value: float | None = None,
-    mad_scale: float | str = "normal",
-    robust: bool = False,
-):
-    mad_scale = _convert_scale(mad_scale) if robust else None
-    xp = get_namespace(values)
-    if reference_values is None:
-        reference_values = (
-            values if reference_indices is None else values[reference_indices]
-        )
-    means = None
-    stds = None
-    if robust:
-        if centering:
-            means = xp.nanmedian(reference_values, axis=0)
-        if scaling:
-            stds = xp.nanmedian(xp.abs(reference_values - means), axis=0) / mad_scale
-    else:
-        if centering:
-            means = xp.nanmean(reference_values, axis=0)
-        if scaling:
-            stds = xp.nanstd(reference_values, axis=0)
-    if centering:
-        means = xp.expand_dims(means, 0)
-    if scaling:
-        stds = xp.expand_dims(stds, 0)
-
-    if centering:
-        values = values - means
-    if scaling:
-        stds[stds == 0] = 1.0
-        values = values / stds
-        if max_value is not None:
-            values = xp.clip(values, -max_value, max_value)
-    return values
-
-
 def _nearest_neighbors_indices(
     reference: np.ndarray,
     query: np.ndarray,
