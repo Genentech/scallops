@@ -19,25 +19,27 @@ from zarr.errors import ContainsGroupError
 from scallops import zarr_io
 from scallops.cli.util import _group_src_attrs
 from scallops.experiment.elements import Experiment
+from scallops.features.util import _slice_anndata
 from scallops.io import (
     _images2fov,
     _match_size,
     _set_up_experiment,
     _to_parquet,
     get_image_spacing,
+    is_anndata,
     is_parquet_file,
     is_scallops_zarr,
-    read_anndata_zarr,
+    read_anndata,
     read_experiment,
     read_image,
     save_ome_tiff,
     to_image_montage,
+    write_anndata_zarr,
 )
 from scallops.zarr_io import (
     _require_group,
     _write_zarr_image,
     _write_zarr_labels,
-    is_anndata_zarr,
     open_ome_zarr,
     read_ome_zarr_array,
 )
@@ -51,7 +53,7 @@ def test_is_scallops_zarr(tmp_path):
         var=pd.DataFrame(index=["1", "2"]),
     )
     path = os.path.join(tmp_path, "test.zarr")
-    anndata.io.write_zarr(path, data, convert_strings_to_categoricals=False)
+    write_anndata_zarr(data, path)
 
     assert not is_scallops_zarr(path)
     store = zarr.open(path, mode="r+")
@@ -66,8 +68,8 @@ def test_is_anndata_zarr(tmp_path):
         X=np.ones((2, 2)),
     )
     path1 = tmp_path / "test1.zarr"
-    d.write_zarr(path1, convert_strings_to_categoricals=False)
-    assert is_anndata_zarr(path1)
+    write_anndata_zarr(d, path1, convert_strings_to_categoricals=False)
+    assert is_anndata(path1)
 
     @delayed
     def create_array(fail):
@@ -84,10 +86,10 @@ def test_is_anndata_zarr(tmp_path):
     )
     d = anndata.AnnData(X=X)
     try:
-        d.write_zarr(path2, convert_strings_to_categoricals=False)
+        write_anndata_zarr(d, path2)
     except ValueError:
         pass
-    assert not is_anndata_zarr(path2)
+    assert not is_anndata(path2)
 
 
 @pytest.mark.io
@@ -302,6 +304,15 @@ def test_write_non_ome_zarr_image(tmp_path, use_dask):
     _write_zarr_image("image1", open_ome_zarr(ome_zarr_path), image)
     data_ome_zarr = read_image(f"{ome_zarr_path}/images/image1", dask=False)
     xr.testing.assert_identical(data_ome_zarr, image)
+
+
+@pytest.mark.io
+def test_irregular_chunks(tmp_path):
+    x1 = da.concatenate((da.ones((3, 10)), da.ones((2, 10)), da.ones((4, 10))), axis=0)
+    anndata.AnnData(X=x1).write_zarr(tmp_path / "test.zarr")
+    d = read_anndata(tmp_path / "test.zarr", dask=True)
+    assert x1.chunks == d.X.chunks
+    np.testing.assert_array_equal(x1.compute(), d.X.compute())
 
 
 @pytest.mark.io
@@ -729,8 +740,8 @@ def test_anndata_zarr(tmp_path):
         var=pd.DataFrame({"a": [4, 3, 2, 1]}),
         obs=pd.DataFrame({"b": [1, 2, 3, 4]}),
     )
-    d.write_zarr(path, convert_strings_to_categoricals=False)
-    d2 = read_anndata_zarr(path, dask=True)
+    write_anndata_zarr(d, path)
+    d2 = read_anndata(path, dask=True)
     np.testing.assert_equal(d2.X.compute(), d.X)
     pd.testing.assert_frame_equal(d.obs, d2.obs)
     pd.testing.assert_frame_equal(d.var, d2.var)
@@ -813,3 +824,44 @@ def test_open_ome_zarr_loses_root_create_race_to_third_writer(tmp_path, monkeypa
     monkeypatch.setattr(zarr_io.zarr, "open", open_that_always_loses_create)
     root = open_ome_zarr(url, mode="a")
     assert list(root.keys()) == ["labels"]
+
+
+def _assert_anndata_equal(adata1: anndata.AnnData, adata2: anndata.AnnData):
+    np.testing.assert_array_equal(adata1.X, adata2.X)
+    pd.testing.assert_frame_equal(adata1.obs, adata2.obs)
+    pd.testing.assert_frame_equal(adata1.var, adata2.var)
+    assert adata1.layers.keys() == adata2.layers.keys()
+    assert adata1.obsm.keys() == adata2.obsm.keys()
+    assert adata1.varm.keys() == adata2.varm.keys()
+    for key in adata1.layers.keys():
+        np.testing.assert_array_equal(
+            adata1.layers[key], adata2.layers[key], err_msg=f"Layer {key}"
+        )
+
+    for key in adata1.obsm.keys():
+        np.testing.assert_array_equal(
+            adata1.obsm[key], adata2.obsm[key], err_msg=f"obsm {key}"
+        )
+    for key in adata1.varm.keys():
+        np.testing.assert_array_equal(
+            adata1.varm[key], adata2.varm[key], err_msg=f"varm {key}"
+        )
+
+
+@pytest.mark.io
+def test_slice_anndata():
+    d = anndata.AnnData(
+        X=np.arange(4).reshape((2, 2)),
+        obs=pd.DataFrame(index=["1", "2"]),
+        var=pd.DataFrame(index=["1", "2"]),
+        layers={"test": np.arange(4).reshape((2, 2))},
+        obsm={"test": np.arange(4).reshape((2, 2))},
+        varm={"test": np.arange(4).reshape((2, 2))},
+    )
+    data1 = d[[1, 0], [1, 0]]
+    data2 = _slice_anndata(d, [1, 0], [1, 0])
+    _assert_anndata_equal(data1, data2)
+
+    data1 = d[d.obs.index.isin(["2"]), d.var.index.isin(["1"])]
+    data2 = _slice_anndata(d, d.obs.index.isin(["2"]), d.var.index.isin(["1"]))
+    _assert_anndata_equal(data1, data2)

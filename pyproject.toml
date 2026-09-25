@@ -32,7 +32,7 @@ classifiers = [
 
 dependencies = [
     "adjustText",
-    "anndata>=0.12.4", # https://github.com/scverse/anndata/issues/2166
+    "anndata>=0.13.0",
     "bioio>=3",
     "bioio-nd2",
     "bioio-ome-tiff",
