@@ -1,4 +1,5 @@
 import subprocess
+import types
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,11 @@ from skimage.registration import phase_cross_correlation
 from scallops.io import read_image
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.fuse import _fuse, _fuse_image
-from scallops.stitch.utils import tile_overlap_mask, tile_source_labels
+from scallops.stitch.utils import (
+    _pixel_size_from_image,
+    tile_overlap_mask,
+    tile_source_labels,
+)
 from scallops.zarr_io import _write_zarr_image
 
 
@@ -676,3 +681,49 @@ def test_stitch_align_across_channels(tmp_path, experiment_c_A1_102_pheno):
     ch2 = result_image[1]
     offset, _, _ = phase_cross_correlation(ch1, ch2)
     assert np.all(offset == 0)
+
+
+METAMORPH_TAG_270 = (
+    "<MetaData>"
+    '<prop id="spatial-calibration-x" type="float" value="0.65"/>'
+    '<prop id="spatial-calibration-y" type="float" value="0.65"/>'
+    '<prop id="spatial-calibration-units" type="string" value="um"/>'
+    "</MetaData>"
+)
+
+
+def test_pixel_size_from_plain_tiff_metadata():
+    """bioio-tifffile exposes metadata as a str; must not crash on .attributes."""
+    image = types.SimpleNamespace(
+        ome_metadata=None,
+        metadata=METAMORPH_TAG_270,  # a str -> no .attributes
+        xarray_dask_data=types.SimpleNamespace(
+            attrs={"unprocessed": {270: METAMORPH_TAG_270}}
+        ),
+        physical_pixel_sizes=types.SimpleNamespace(Y=None, X=None),
+    )
+    np.testing.assert_allclose(_pixel_size_from_image(image), [0.65, 0.65])
+
+
+def test_pixel_size_from_ome_zarr_multiscales():
+    """The guard must not disable the multiscales branch for OME-Zarr input."""
+    image = types.SimpleNamespace(
+        ome_metadata=None,
+        metadata=types.SimpleNamespace(
+            attributes={
+                "multiscales": [
+                    {
+                        "metadata": {
+                            "physical_size_y": 0.5,
+                            "physical_size_x": 0.25,
+                            "physical_size_y_unit": "micrometer",
+                            "physical_size_x_unit": "micrometer",
+                        }
+                    }
+                ]
+            }
+        ),
+        xarray_dask_data=types.SimpleNamespace(attrs={}),
+        physical_pixel_sizes=types.SimpleNamespace(Y=None, X=None),
+    )
+    np.testing.assert_allclose(_pixel_size_from_image(image), [0.5, 0.25])
