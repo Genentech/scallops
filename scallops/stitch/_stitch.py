@@ -242,9 +242,12 @@ def _single_stitch(
     output_metadata["fuse_crop_width"] = fuse_crop_width
     output_metadata["align_tile_shape"] = align_tile_shape
     output_metadata["tile_shape"] = tile_shape_no_crop
-    output_metadata["swap_axes"] = swap
-    output_metadata["flip_y_axis"] = flip_y
-    output_metadata["flip_x_axis"] = flip_x
+    output_metadata["swap_axes"] = bool(swap)
+    # ``flip_y``/``flip_x`` carry the internal sign convention (-1 flips, 1 does not),
+    # which is the opposite of the 0/1 the --flip-y-axis/--flip-x-axis options take.
+    # Record booleans so the metadata can be read back and fed to the CLI as-is.
+    output_metadata["flip_y_axis"] = bool(flip_y == -1)
+    output_metadata["flip_x_axis"] = bool(flip_x == -1)
 
     if z_threshold is not None:
         output_metadata["z_threshold"] = z_threshold
