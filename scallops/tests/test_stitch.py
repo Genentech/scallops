@@ -4,16 +4,18 @@ import types
 import numpy as np
 import pandas as pd
 import pytest
+import tifffile
 import xarray as xr
 import zarr
 from scipy.ndimage import shift
 from skimage.registration import phase_cross_correlation
 
-from scallops.io import read_image
+from scallops.io import _create_image, read_image
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.fuse import _fuse, _fuse_image
 from scallops.stitch.utils import (
     _pixel_size_from_image,
+    get_pixel_size,
     tile_overlap_mask,
     tile_source_labels,
 )
@@ -692,17 +694,21 @@ METAMORPH_TAG_270 = (
 )
 
 
-def test_pixel_size_from_plain_tiff_metadata():
+@pytest.mark.io
+def test_pixel_size_from_plain_tiff_metadata(tmp_path):
     """bioio-tifffile exposes metadata as a str; must not crash on .attributes."""
-    image = types.SimpleNamespace(
-        ome_metadata=None,
-        metadata=METAMORPH_TAG_270,  # a str -> no .attributes
-        xarray_dask_data=types.SimpleNamespace(
-            attrs={"unprocessed": {270: METAMORPH_TAG_270}}
-        ),
-        physical_pixel_sizes=types.SimpleNamespace(Y=None, X=None),
+    path = tmp_path / "tile.tif"
+    tifffile.imwrite(
+        path,
+        np.zeros((8, 8), dtype=np.uint16),
+        description=METAMORPH_TAG_270,
+        metadata=None,  # or tifffile writes its own shape JSON into tag 270
     )
-    np.testing.assert_allclose(_pixel_size_from_image(image), [0.65, 0.65])
+    # Read through the real reader rather than a stand-in: the guard exists
+    # because of what bioio-tifffile returns, so a bioio upgrade that changes
+    # it should fail here.
+    assert isinstance(_create_image(str(path)).metadata, str)
+    np.testing.assert_allclose(get_pixel_size([str(path)], None), [0.65, 0.65])
 
 
 def test_pixel_size_from_ome_zarr_multiscales():
