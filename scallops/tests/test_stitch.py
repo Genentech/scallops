@@ -1,17 +1,26 @@
+import json
 import subprocess
+import types
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
+import tifffile
 import xarray as xr
 import zarr
 from scipy.ndimage import shift
 from skimage.registration import phase_cross_correlation
 
-from scallops.io import read_image
+from scallops.io import _create_image, read_image
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.fuse import _fuse, _fuse_image
-from scallops.stitch.utils import tile_overlap_mask, tile_source_labels
+from scallops.stitch.utils import (
+    _pixel_size_from_image,
+    get_pixel_size,
+    tile_overlap_mask,
+    tile_source_labels,
+)
 from scallops.zarr_io import _write_zarr_image
 
 
@@ -543,6 +552,55 @@ def test_stitch_crop(tmp_path):
 
 
 @pytest.mark.io
+@pytest.mark.parametrize("flip_y_axis,flip_x_axis", [(1, 0), (0, 1)])
+def test_stitch_flip_metadata_matches_cli_convention(
+    tmp_path, flip_y_axis, flip_x_axis
+):
+    """The recorded flip flags must mean the same thing as the options that set them."""
+    input_path = tmp_path / "input"
+
+    # top-left, top-right, bottom-left, bottom-right
+    coords = [(0, 0), (0, 95), (95, 0), (95, 95)]
+    for i, c in enumerate(coords):
+        img = np.full((1, 100, 100), i + 1, dtype=np.uint16)
+        _write_image_with_position(
+            input_path / f"test-{i}.zarr",
+            xr.DataArray(img, dims=["c", "y", "x"]),
+            c[0],
+            c[1],
+        )
+
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-{skip}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "stitch.zarr"),
+        "--report-output",
+        str(tmp_path / "stitch"),
+        "--radial-correction-k",
+        "none",
+        "--no-save-labels",
+        "--flip-y-axis",
+        str(flip_y_axis),
+        "--flip-x-axis",
+        str(flip_x_axis),
+    ]
+
+    subprocess.check_call(cmd)
+
+    schema = pq.read_schema(str(tmp_path / "stitch" / "test-positions.parquet"))
+    metadata = json.loads(schema.metadata[b"scallops"])
+    assert metadata["flip_y_axis"] is bool(flip_y_axis)
+    assert metadata["flip_x_axis"] is bool(flip_x_axis)
+
+
+@pytest.mark.io
 def test_stitch_z_stack(tmp_path):
     input_path = tmp_path / "input"
 
@@ -676,3 +734,53 @@ def test_stitch_align_across_channels(tmp_path, experiment_c_A1_102_pheno):
     ch2 = result_image[1]
     offset, _, _ = phase_cross_correlation(ch1, ch2)
     assert np.all(offset == 0)
+
+
+METAMORPH_TAG_270 = (
+    "<MetaData>"
+    '<prop id="spatial-calibration-x" type="float" value="0.65"/>'
+    '<prop id="spatial-calibration-y" type="float" value="0.65"/>'
+    '<prop id="spatial-calibration-units" type="string" value="um"/>'
+    "</MetaData>"
+)
+
+
+@pytest.mark.io
+def test_pixel_size_from_plain_tiff_metadata(tmp_path):
+    """bioio-tifffile exposes metadata as a str; must not crash on .attributes."""
+    path = tmp_path / "tile.tif"
+    tifffile.imwrite(
+        path,
+        np.zeros((8, 8), dtype=np.uint16),
+        description=METAMORPH_TAG_270,
+        metadata=None,  # or tifffile writes its own shape JSON into tag 270
+    )
+    # Read through the real reader rather than a stand-in: the guard exists
+    # because of what bioio-tifffile returns, so a bioio upgrade that changes
+    # it should fail here.
+    assert isinstance(_create_image(str(path)).metadata, str)
+    np.testing.assert_allclose(get_pixel_size([str(path)], None), [0.65, 0.65])
+
+
+def test_pixel_size_from_ome_zarr_multiscales():
+    """The guard must not disable the multiscales branch for OME-Zarr input."""
+    image = types.SimpleNamespace(
+        ome_metadata=None,
+        metadata=types.SimpleNamespace(
+            attributes={
+                "multiscales": [
+                    {
+                        "metadata": {
+                            "physical_size_y": 0.5,
+                            "physical_size_x": 0.25,
+                            "physical_size_y_unit": "micrometer",
+                            "physical_size_x_unit": "micrometer",
+                        }
+                    }
+                ]
+            }
+        ),
+        xarray_dask_data=types.SimpleNamespace(attrs={}),
+        physical_pixel_sizes=types.SimpleNamespace(Y=None, X=None),
+    )
+    np.testing.assert_allclose(_pixel_size_from_image(image), [0.5, 0.25])

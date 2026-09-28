@@ -462,14 +462,18 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
         ]
         physical_size_y_unit = ome_metadata.images[0].pixels.physical_size_y_unit.value
         physical_size_x_unit = ome_metadata.images[0].pixels.physical_size_x_unit.value
-    elif "multiscales" in image.metadata.attributes:
+    elif (
+        hasattr(image.metadata, "attributes")
+        and isinstance(image.metadata.attributes, Mapping)
+        and "multiscales" in image.metadata.attributes
+    ):
         metadata = image.metadata.attributes["multiscales"][0]["metadata"]
         values = [metadata["physical_size_y"], metadata["physical_size_x"]]
         physical_size_y_unit = metadata["physical_size_y_unit"]
         physical_size_x_unit = metadata["physical_size_x_unit"]
     else:
         attrs = image.xarray_dask_data.attrs
-        if "unprocessed" in attrs:
+        if isinstance(attrs, Mapping) and "unprocessed" in attrs:
             attrs = attrs["unprocessed"]
             if 51123 in attrs:
                 attrs = attrs[51123]
