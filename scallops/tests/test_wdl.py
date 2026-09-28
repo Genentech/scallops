@@ -333,7 +333,7 @@ def test_pert_map_wdl(tmp_path):
 
     for name in [
         "filter.zarr",
-        "normalized.zarr",
+        "normalize.zarr",
         "pca.zarr",
         "tvn.zarr",
         "agg.zarr",
