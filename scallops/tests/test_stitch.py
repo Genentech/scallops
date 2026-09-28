@@ -1,8 +1,10 @@
+import json
 import subprocess
 import types
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 import tifffile
 import xarray as xr
@@ -547,6 +549,55 @@ def test_stitch_crop(tmp_path):
         read_image(str(tmp_path / "stitch.zarr/labels/test-mask")).squeeze().shape
     )
     assert img_shape == mask_shape, f"{img_shape} != {mask_shape}"
+
+
+@pytest.mark.io
+@pytest.mark.parametrize("flip_y_axis,flip_x_axis", [(1, 0), (0, 1)])
+def test_stitch_flip_metadata_matches_cli_convention(
+    tmp_path, flip_y_axis, flip_x_axis
+):
+    """The recorded flip flags must mean the same thing as the options that set them."""
+    input_path = tmp_path / "input"
+
+    # top-left, top-right, bottom-left, bottom-right
+    coords = [(0, 0), (0, 95), (95, 0), (95, 95)]
+    for i, c in enumerate(coords):
+        img = np.full((1, 100, 100), i + 1, dtype=np.uint16)
+        _write_image_with_position(
+            input_path / f"test-{i}.zarr",
+            xr.DataArray(img, dims=["c", "y", "x"]),
+            c[0],
+            c[1],
+        )
+
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-{skip}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "stitch.zarr"),
+        "--report-output",
+        str(tmp_path / "stitch"),
+        "--radial-correction-k",
+        "none",
+        "--no-save-labels",
+        "--flip-y-axis",
+        str(flip_y_axis),
+        "--flip-x-axis",
+        str(flip_x_axis),
+    ]
+
+    subprocess.check_call(cmd)
+
+    schema = pq.read_schema(str(tmp_path / "stitch" / "test-positions.parquet"))
+    metadata = json.loads(schema.metadata[b"scallops"])
+    assert metadata["flip_y_axis"] is bool(flip_y_axis)
+    assert metadata["flip_x_axis"] is bool(flip_x_axis)
 
 
 @pytest.mark.io
