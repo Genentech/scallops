@@ -11,7 +11,7 @@ warnings.filterwarnings(
     "ignore",
     # the message is matched with re.match, so each alternative has to match from the
     # start and must not have stray whitespace around the "|"
-    message="Unclosed client.*|.*client_session.*",
+    message="Unclosed client.*|.*client_session.*|Unclosed connector.*",
     category=ResourceWarning,
 )
 anndata.settings.auto_shard_zarr_v3 = False
