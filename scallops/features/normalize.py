@@ -163,10 +163,7 @@ def normalize_features(
         and not use_map_blocks
         and by is not None
     ):
-        logger.warning(
-            "Using slower code for local z-score since data is not sorted. Sort the "
-            f"observations by {by} so each group lands in its own chunk."
-        )
+        logger.debug("Data is not sorted for local z-score")
     if normalize == "zscore":
         coords = {}
         if by is not None:
