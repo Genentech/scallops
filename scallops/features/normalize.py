@@ -30,13 +30,31 @@ logger = logging.getLogger("scallops")
 def _get_group_chunks(values):
     """Chunk sizes that put each run of equal `values` in its own chunk.
 
-    Should only be used with sorted input.
+    Should only be used with ordered input.
     """
     # a boundary at i means the split is after row i, so the chunk sizes are the
     # differences between successive split points
     boundaries = np.where(values[:-1] != values[1:])[0] + 1
     split_points = np.concatenate(([0], boundaries, [len(values)]))
     return tuple(int(chunk) for chunk in np.diff(split_points))
+
+
+def _is_grouped(values):
+    """Tests whether entries in `values` are grouped.
+
+    Grouped means every distinct value occupies one contiguous run, so the array can be
+    split into a single chunk per group. Sorted input is always grouped; unsorted input
+    is grouped only when no value reappears after a different one.
+    """
+    values = np.asarray(values)
+    if values.size < 2:
+        return True
+    if _issorted(values):
+        return True
+    # one run per distinct value means no value was interrupted by another
+    return (int(np.count_nonzero(values[:-1] != values[1:])) + 1) == len(
+        np.unique(values)
+    )
 
 
 def _local_dtype(dtype: np.dtype) -> np.dtype:
@@ -149,7 +167,7 @@ def normalize_features(
         by = _trim_by(by)
         by_values = _xarray_by_values(data, by)
         series = pd.Series(by_values, dtype="category")
-        use_map_blocks = is_dask and _issorted(series.cat.codes.values)
+        use_map_blocks = is_dask and _is_grouped(series.cat.codes.values)
         if normalize != "zscore":
             # grouping a categorical drops missing values even with dropna=False, so
             # group on the codes, where missing values get their own code of -1
@@ -163,7 +181,7 @@ def normalize_features(
         and not use_map_blocks
         and by is not None
     ):
-        logger.debug("Data is not sorted for local z-score")
+        logger.debug("Data is not ordered for local z-score")
     if normalize == "zscore":
         coords = {}
         if by is not None:
