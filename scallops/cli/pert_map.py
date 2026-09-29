@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from natsort import natsorted
 
 from scallops.cli.util import (
     _create_dask_client,
@@ -75,13 +76,14 @@ def _read_data(
         elif feature_filter.endswith(".parquet"):
             logger.warning(f"{feature_filter} path not found.")
     results = []
+    data_paths = natsorted(data_paths)
     for data_path in data_paths:
         fs, data_path = fsspec.url_to_fs(data_path)
         if "*" in data_path:
             paths = fs.glob(data_path)
             if len(paths) == 0:
                 raise ValueError(f"No files found at {data_path}.")
-
+            paths = natsorted(paths)
         else:
             paths = [data_path]
         for path in paths:
