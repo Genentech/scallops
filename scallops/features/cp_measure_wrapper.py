@@ -8,6 +8,13 @@ from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
+from cp_measure.core.measurecolocalization import (
+    get_correlation_costes,
+    get_correlation_manders_fold,
+    get_correlation_overlap,
+    get_correlation_pearson,
+    get_correlation_rwc,
+)
 from cp_measure.core.measuregranularity import get_granularity
 from cp_measure.core.measureobjectintensity import get_intensity
 from cp_measure.core.measureobjectintensitydistribution import (
@@ -20,6 +27,16 @@ from cp_measure.core.measureobjectsizeshape import (
     get_zernike,
 )
 from cp_measure.core.measuretexture import get_texture
+from cp_measure.multimask.measureobjectneighbors import D_EXPAND, measureobjectneighbors
+
+
+def cp_neighbors(
+    label_image: np.ndarray,
+    distance: int = 5,
+    distance_method: str = D_EXPAND,
+    **kwargs,
+) -> dict[str, Any]:
+    return measureobjectneighbors(label_image, label_image, distance_method, distance)
 
 
 def cp_granularity(
@@ -39,27 +56,49 @@ def cp_granularity(
     return results
 
 
-def cp_intensity_distribution(
-    c: Sequence[int],
+def cp_colocalization(
+    c1: int,
+    c2: int,
+    channel_names: Sequence[str],
+    unique_labels: np.ndarray,
+    label_image: np.ndarray,
+    intensity_image: np.ndarray,
+) -> dict[str, np.ndarray]:
+    pass
+
+
+def _cp_colocalization_pairs(
+    c: list[tuple[int, int]],
     channel_names: Sequence[str],
     unique_labels: np.ndarray,
     label_image: np.ndarray,
     intensity_image: np.ndarray,
     **kwargs,
 ) -> dict[str, Any]:
-    """Reimplemented. Used for testing only."""
-    results = {}
-    results.update(_radial_distribution(c, channel_names, label_image, intensity_image))
-    results.update(_radial_zernikes(c, channel_names, label_image, intensity_image))
+    all_results = {}
+    for c_pair in c:
+        results = {}
+        img1 = intensity_image[..., c_pair[0]]
+        img2 = intensity_image[..., c_pair[1]]
+        channel_name1 = channel_names[c_pair[0]]
+        channel_name2 = channel_names[c_pair[1]]
+        results.update(get_correlation_costes(img1, img2, label_image))
+        results.update(get_correlation_manders_fold(img1, img2, label_image))
+        results.update(get_correlation_overlap(img1, img2, label_image))
+        results.update(get_correlation_pearson(img1, img2, label_image))
+        results.update(get_correlation_rwc(img1, img2, label_image))
+        for key in results:
+            new_key = f"{key}_{channel_name1}_{channel_name2}"
+            all_results[new_key] = results[key]
+    return all_results
 
-    return results
 
-
-def _radial_distribution(
+def cp_intensity_distribution_zernike(
     c: Sequence[int],
     channel_names: Sequence[str],
     label_image: np.ndarray,
     intensity_image: np.ndarray,
+    **kwargs,
 ) -> dict[str, Any]:
     results = {}
     for j in range(len(c)):
@@ -72,11 +111,12 @@ def _radial_distribution(
     return results
 
 
-def _radial_zernikes(
+def cp_intensity_distribution_radial(
     c: Sequence[int],
     channel_names: Sequence[str],
     label_image: np.ndarray,
     intensity_image: np.ndarray,
+    **kwargs,
 ) -> dict[str, Any]:
     results = {}
     for j in range(len(c)):
@@ -96,7 +136,6 @@ def cp_intensity(
     intensity_image: np.ndarray,
     **kwargs,
 ) -> dict[str, Any]:
-    """Reimplemented. Used for testing only."""
     results = {}
     for j in range(len(c)):
         results_ = get_intensity(label_image, intensity_image[..., c[j]])
@@ -117,7 +156,6 @@ def cp_texture(
     intensity_image: np.ndarray,
     **kwargs,
 ) -> dict[str, Any]:
-    """Reimplemented. Used for testing only."""
     results = {}
     for j in range(len(c)):
         results_ = get_texture(label_image, intensity_image[..., c[j]])
