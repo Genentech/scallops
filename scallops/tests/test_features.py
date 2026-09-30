@@ -248,12 +248,16 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         .sort_index()
     )
     np.testing.assert_array_equal(unique_labels, test_df_no_chunking.index.values)
-    # this differs due to ties
+    # these are local locations
     location_cols = [
         "Location_MaxIntensity_Y_Channel0",
         "Location_MaxIntensity_X_Channel0",
         "Location_MaxIntensity_Y_Channel1",
         "Location_MaxIntensity_X_Channel1",
+        "Location_CenterMassIntensity_X_Channel0",
+        "Location_CenterMassIntensity_Y_Channel0",
+        "Location_CenterMassIntensity_X_Channel1",
+        "Location_CenterMassIntensity_Y_Channel1",
     ]
     # columns that are not equal if computed in chunks
 
@@ -267,10 +271,7 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
     radial_dist_zernike_cols = test_df.columns[
         test_df.columns.str.contains("RadialDistribution_Zernike")
     ].tolist()
-    radial_dist_cols = test_df.columns[
-        test_df.columns.str.contains("RadialDistribution")
-        & ~test_df.columns.str.contains("RadialDistribution_Zernike")
-    ].tolist()
+
     spots_cols = test_df.columns[test_df.columns.str.contains("Spots_Count")].tolist()
 
     drop_cols = (
@@ -278,7 +279,6 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         + granularity_cols
         + zernike_cols
         + radial_dist_zernike_cols
-        + radial_dist_cols
         + location_cols
         + spots_cols
     )
@@ -291,13 +291,9 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
 
     for col in zernike_cols:
         cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
-        assert cor > 0.85, f"{col}, {cor}"
+        assert cor > 0.88, f"{col}, {cor}"
         diff = np.max(np.abs(test_df[col] - test_df_no_chunking[col]))
         assert diff < 0.025, f"{col}, {diff}"
-
-    for col in radial_dist_cols:
-        cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
-        assert cor > 0.89, f"{col}, {cor}"
 
     for col in radial_dist_zernike_cols:
         val1 = test_df[col]
@@ -307,7 +303,7 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         val2 = val2[keep]
         cor = np.corrcoef(val1, val2)[0, 1]
         if not np.isnan(cor):  # no variance
-            assert cor > 0.8, f"{col}, {cor}"
+            assert cor > 0.85, f"{col}, {cor}"
         else:
             np.testing.assert_array_equal(val1, val2)
 
@@ -345,6 +341,7 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         "Granularity_15_Channel1": 0.17777785341265878,
         "Granularity_16_Channel1": 0.19553440565319036,
     }
+
     for col in granularity_cols:
         cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
         expected_corr = granularity_corr[col] - 0.0001
