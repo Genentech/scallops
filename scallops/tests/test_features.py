@@ -451,7 +451,12 @@ def test_create_funcs():
     assert len(funcs) == 2
 
     funcs, all_required_channels = _create_funcs(["intensitydistribution_*_4"], 3)
-    assert funcs[0].keywords == {"c": (0, 1, 2), "bin_count": 4}
+    assert funcs[0].keywords == {
+        "c": (0, 1, 2),
+        "bin_count": 4,
+        "scaled": True,
+        "maximum_radius": 100,
+    }
     assert len(all_required_channels) > 0
     assert len(funcs) == 1
 
