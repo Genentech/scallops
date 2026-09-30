@@ -39,5 +39,5 @@ stardist==0.9.2
 statsmodels==0.15.0
 tensorflow==2.21.0
 tifffile==2026.9.20
-xarray==2026.9.0
+xarray==2026.7.0
 zarr==3.4.0
