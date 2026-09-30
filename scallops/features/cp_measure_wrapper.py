@@ -70,7 +70,6 @@ def cp_colocalization(
 def _cp_colocalization_pairs(
     c: list[tuple[int, int]],
     channel_names: Sequence[str],
-    unique_labels: np.ndarray,
     label_image: np.ndarray,
     intensity_image: np.ndarray,
     **kwargs,
@@ -169,26 +168,19 @@ def _radial_distribution_rename(key, channel_names, c):
     return f"{key[:index]}_{channel_names[c]}_{key[index + 1 :]}"
 
 
-def _size_shape_rename(key):
-    return f"AreaShape_{key}"
-
-
 size_shape_skip = {
-    "Area",
-    "BoundingBoxMinimum_X",
-    "BoundingBoxMaximum_X",
-    "BoundingBoxMinimum_Y",
-    "BoundingBoxMaximum_Y",
-    "Center_X",
-    "Center_Y",
+    "AreaShape_Area",
+    "AreaShape_BoundingBoxMinimum_X",
+    "AreaShape_BoundingBoxMaximum_X",
+    "AreaShape_BoundingBoxMinimum_Y",
+    "AreaShape_BoundingBoxMaximum_Y",
+    "AreaShape_Center_X",
+    "AreaShape_Center_Y",
 }
 
 
 def cp_size_shape(
-    channel_names: Sequence[str],
-    unique_labels: np.ndarray,
     label_image: np.ndarray,
-    intensity_image: np.ndarray,
     remove_objects: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
@@ -196,10 +188,10 @@ def cp_size_shape(
     results = {}
 
     for key in results_:
-        results[_size_shape_rename(key)] = results_[key]
+        results[f"AreaShape_{key}"] = results_[key]
     if remove_objects:
         for key in size_shape_skip:
-            del results[f"AreaShape_{key}"]
+            del results[key]
     results.update(_zernike(label_image))
     results.update(_feret(label_image))
     return results
@@ -209,7 +201,7 @@ def _zernike(label_image: np.ndarray) -> dict[str, Any]:
     results_ = get_zernike(label_image, None)
     results = {}
     for key in results_:
-        results[_size_shape_rename(key)] = results_[key]
+        results[f"AreaShape_{key}"] = results_[key]
     return results
 
 
@@ -217,5 +209,5 @@ def _feret(label_image: np.ndarray) -> dict[str, Any]:
     results_ = get_feret(label_image, None)
     results = {}
     for key in results_:
-        results[_size_shape_rename(key)] = results_[key]
+        results[f"AreaShape_{key}"] = results_[key]
     return results

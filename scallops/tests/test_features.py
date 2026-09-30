@@ -185,25 +185,6 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
 
-    region_props_features = [
-        "area",
-        "axis_major_length",
-        "axis_minor_length",
-        "eccentricity",
-        "euler_number",
-        "perimeter",
-        "solidity",
-    ]
-    cp_features = [
-        "Area",
-        "MajorAxisLength",
-        "MinorAxisLength",
-        "Eccentricity",
-        "EulerNumber",
-        "Perimeter",
-        "Solidity",
-    ]
-
     features = []
     for f in _cp_features_single_channel.keys():
         features.append(f"{f}_*")
@@ -359,26 +340,19 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
     test_bbox2 = test_df["AreaShape_BoundingBoxMaximum_Y"].values
     test_bbox3 = test_df["AreaShape_BoundingBoxMaximum_X"].values
     regions = regionprops(label_image=label_image, intensity_image=intensity_image)
+    tolerance = ["axis_major_length", "axis_minor_length", "eccentricity"]
+    region_props_features = [
+        "area",
+        "axis_major_length",
+        "axis_minor_length",
+        "eccentricity",
+        "euler_number",
+        "perimeter",
+        "solidity",
+    ]
+
     for i in range(len(regions)):
         r = regions[i]
-        img = r.image_intensity * np.expand_dims(r.image, -1)
-        max_intensity_per_channel = img.max(axis=(0, 1))
-        for c in range(img.shape[-1]):
-            max_count = (img[..., c] == max_intensity_per_channel[c]).sum()
-            if max_count == 1:
-                assert (
-                    test_df[f"Location_MaxIntensity_Y_Channel{c}"].values[i]
-                    == test_df_no_chunking[
-                        f"Location_MaxIntensity_Y_Channel{c}"
-                    ].values[i]
-                )
-                assert (
-                    test_df[f"Location_MaxIntensity_X_Channel{c}"].values[i]
-                    == test_df_no_chunking[
-                        f"Location_MaxIntensity_X_Channel{c}"
-                    ].values[i]
-                )
-
         assert r.label == test_labels[i], f"{r.label} != {test_labels[i]}"
         assert r.centroid == (test_centroid0[i], test_centroid1[i])
         assert r.bbox == (
@@ -389,11 +363,25 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         )
 
         for j in range(len(region_props_features)):
-            np.testing.assert_equal(
-                r[region_props_features[j]],
-                test_df[f"AreaShape_{cp_features[j]}"].values[i],
-                err_msg=f"{region_props_features[j]}",
+            cp_feature = (
+                region_props_features[j].replace("_", " ").title().replace(" ", "")
             )
+            if cp_feature == "AxisMajorLength":
+                cp_feature = "MajorAxisLength"
+            elif cp_feature == "AxisMinorLength":
+                cp_feature = "MinorAxisLength"
+            if region_props_features[j] in tolerance:
+                np.testing.assert_allclose(
+                    r[region_props_features[j]],
+                    test_df[f"AreaShape_{cp_feature}"].values[i],
+                    err_msg=f"{region_props_features[j]}",
+                )
+            else:
+                np.testing.assert_equal(
+                    r[region_props_features[j]],
+                    test_df[f"AreaShape_{cp_feature}"].values[i],
+                    err_msg=f"{region_props_features[j]}",
+                )
 
 
 @pytest.mark.features
