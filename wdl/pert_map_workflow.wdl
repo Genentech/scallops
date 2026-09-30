@@ -79,8 +79,8 @@ workflow pert_map_workflow {
         String enrichment_output_name = "enrichment.parquet"
 
         # resources
-        Int filter_cpu = 16
-        String filter_memory = "64 GiB"
+        Int filter_cpu = 32
+        String filter_memory = "256 GiB"
         String filter_disks = "local-disk 100 HDD"
 
         Int normalize_cpu = 32
@@ -95,8 +95,8 @@ workflow pert_map_workflow {
         String tvn_memory = "256 GiB"
         String tvn_disks = "local-disk 100 HDD"
 
-        Int aggregate_cpu = 8
-        String aggregate_memory = "32 GiB"
+        Int aggregate_cpu = 32
+        String aggregate_memory = "256 GiB"
         String aggregate_disks = "local-disk 100 HDD"
 
         Int similarity_matrix_cpu = 8
