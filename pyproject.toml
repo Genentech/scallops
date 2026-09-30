@@ -39,7 +39,7 @@ dependencies = [
     "bioio-ome-zarr",
     "bioio-tifffile",
     "centrosome",
-    "cp-measure>=0.1.16",
+    "cp-measure>=0.2.0",
     "dask-image",
     "dask",
     "decorator",
