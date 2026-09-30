@@ -7,7 +7,7 @@
 # Custom base image:
 #   docker build --arch amd64 --build-arg BASE_IMAGE=python:3.13-slim-bookworm -t scallops-custom  .
 
-ARG BASE_IMAGE=python:3.12-slim-bookworm
+ARG BASE_IMAGE=python:3.13-slim-bookworm
 FROM ${BASE_IMAGE}
 COPY --from=docker.io/astral/uv:0.11.30 /uv /uvx /bin/
 # Delete the PEP 668 marker file
@@ -36,7 +36,7 @@ RUN if [ "${TORCH}" = "1" ]; then \
       fi \
     fi
 
-# ufish: git-pinned tag, rarely bumped
+# ufish
 COPY requirements.ufish.txt ./
 # install ufish?
 ARG UFISH="1"
