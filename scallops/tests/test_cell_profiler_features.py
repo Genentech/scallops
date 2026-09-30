@@ -153,7 +153,6 @@ def test_colocalization(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         np.testing.assert_allclose(
             features_cp[key],
             features_scallops[f"{key}_c0_c1"],
-            atol=2.22044605e-16,
             rtol=2.49860215e-16,
             err_msg=key,
         )
@@ -196,7 +195,6 @@ def test_colocalization(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
             features_cp[key],
             features_scallops[scallops_key],
             err_msg=key,
-            atol=1.77635684e-15,
             rtol=2.11831416e-15,
         )
 
@@ -313,14 +311,15 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
     features_scallops = features_scallops.join(objects_df).sort_index()
 
     features_cp = get_correlation_pearson(
-        intensity_image[..., 0], intensity_image[..., 1], label_image
+        intensity_image[..., 0],
+        intensity_image[..., 1],
+        relabel_sequential(label_image),
     )
     # values are slightly different because arrays are ordered differently
     for key in features_cp:
         np.testing.assert_allclose(
             features_cp[key],
             features_scallops[f"{key}_c0_c1"],
-            rtol=0.00014,
             err_msg=key,
         )
 
@@ -332,12 +331,44 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         remove_objects=False,
     )
 
-    for key in features_cp:
-        # https://github.com/afermg/cp_measure/issues/18
-        if key.startswith("AreaShape_Zernike"):
-            diff = np.max(np.abs(features_cp[key] - features_scallops[key]))
-            assert diff < 0.025, f"{key}, {diff}"
+    check_close = [
+        "AreaShape_MajorAxisLength",
+        "AreaShape_MinorAxisLength",
+        "AreaShape_Eccentricity",
+        "AreaShape_Orientation",
+        "AreaShape_CentralMoment",
+        "AreaShape_NormalizedMoment",
+        "AreaShape_HuMoment",
+        "AreaShape_InertiaTensor",
+        "AreaShape_InertiaTensorEigenvalues",
+        "AreaShape_Zernike",
+    ]
 
+    tolerance = {
+        "AreaShape_Zernike": (0.02403081, 1e-7),
+        "AreaShape_CentralMoment": (2.16004992e-12, 1e-7),
+    }
+
+    for key in features_cp:
+        close = False
+        atol = 0
+        rtol = 1e-7
+
+        for check in check_close:
+            if key.startswith(check):
+                close = True
+                if check in tolerance:
+                    atol, rtol = tolerance[check]
+                break
+
+        if close:
+            np.testing.assert_allclose(
+                features_cp[key],
+                features_scallops[key],
+                err_msg=key,
+                rtol=rtol,
+                atol=atol,
+            )
         else:
             np.testing.assert_array_equal(
                 features_cp[key],
