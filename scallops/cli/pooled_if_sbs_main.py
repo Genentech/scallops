@@ -122,6 +122,8 @@ def _create_merge_parser(subparsers, default_help):
     parser.add_argument(
         "--phenotype-suffix", nargs="*", help="Suffix for phenotype columns."
     )
+    parser.add_argument("--sbs-prefix", help="Prefix for SBS columns.")
+    parser.add_argument("--barcode-prefix", help="Prefix for barcode columns.")
     parser.add_argument(
         "--format",
         help="Output file format.",
