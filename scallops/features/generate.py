@@ -576,7 +576,14 @@ def _get_params(
                             )
                         values.append(c)
             params[parameter_name] = values
-        elif annotation in (int, float, bool, str, Literal):
+        elif annotation is bool:
+            if value.lower() in ("true", "t", "1", "yes"):
+                params[parameter_name] = True
+            elif value.lower() in ("false", "f", "0", "no"):
+                params[parameter_name] = False
+            else:
+                raise ValueError(f"Invalid boolean value {value} for {name}")
+        elif annotation in (int, float, str, Literal):
             value = annotation(value)
             params[parameter_name] = value
         else:

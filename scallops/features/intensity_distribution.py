@@ -212,7 +212,9 @@ def get_radial_distribution(
                     measurement_name = feature % (bin + 1, bin_count)
                 tokens = measurement_name.split("_")  # RadialDistribution_FracAtD_1of4_
                 assert len(tokens) == 3, tokens
-                measurement_name = f"{tokens[0]}_{tokens[1]}_{channel_names[channel_index]}_{tokens[2]}"
+                measurement_name = (
+                    f"{tokens[0]}_{tokens[1]}_{channel_names[c]}_{tokens[2]}"
+                )
                 results[measurement_name] = measurement
 
     return results
@@ -315,6 +317,7 @@ def intensity_distribution_zernike(
     #
     results: dict[str, NDArray[np.floating]] = {}
     for channel_index in range(len(c)):
+        channel_name = channel_names[c[channel_index]]
         vr = vr_list[channel_index]
         vi = vi_list[channel_index]
         magnitude = np.sqrt(vr * vr + vi * vi) / counts[:, np.newaxis]
@@ -323,11 +326,9 @@ def intensity_distribution_zernike(
         phase = np.arctan2(vr, vi)
 
         for i, (n, m) in enumerate(zernike_indexes):
-            results[
-                f"{M_CATEGORY}_ZernikeMagnitude_{channel_names[channel_index]}_{n}_{m}"
-            ] = magnitude[:, i]
-            results[
-                f"{M_CATEGORY}_ZernikePhase_{channel_names[channel_index]}_{n}_{m}"
-            ] = phase[:, i]
+            results[f"{M_CATEGORY}_ZernikeMagnitude_{channel_name}_{n}_{m}"] = (
+                magnitude[:, i]
+            )
+            results[f"{M_CATEGORY}_ZernikePhase_{channel_name}_{n}_{m}"] = phase[:, i]
 
     return results

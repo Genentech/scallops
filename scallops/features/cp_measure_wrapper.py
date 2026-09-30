@@ -87,7 +87,14 @@ def _cp_colocalization_pairs(
         results.update(get_correlation_pearson(img1, img2, label_image))
         results.update(get_correlation_rwc(img1, img2, label_image))
         for key in results:
-            new_key = f"{key}_{channel_name1}_{channel_name2}"
+            # cp_measure suffixes directional measurements with _1 (first channel
+            # relative to second) or _2 (second relative to first)
+            if key.endswith("_1"):
+                new_key = f"{key[:-2]}_{channel_name1}_{channel_name2}"
+            elif key.endswith("_2"):
+                new_key = f"{key[:-2]}_{channel_name2}_{channel_name1}"
+            else:
+                new_key = f"{key}_{channel_name1}_{channel_name2}"
             all_results[new_key] = results[key]
     return all_results
 
@@ -133,13 +140,22 @@ def cp_intensity(
     channel_names: Sequence[str],
     label_image: np.ndarray,
     intensity_image: np.ndarray,
+    offset: tuple[int, int] = (0, 0),
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
     for j in range(len(c)):
         results_ = get_intensity(label_image, intensity_image[..., c[j]])
         for key in results_:
-            results[f"{key}_{channel_names[c[j]]}"] = results_[key]
+            value = results_[key]
+
+            # translate block-local locations to global image coordinates
+            if key.startswith("Location_") and offset != (0, 0):
+                if key.endswith("_Y"):
+                    value = value + offset[0]
+                elif key.endswith("_X"):
+                    value = value + offset[1]
+            results[f"{key}_{channel_names[c[j]]}"] = value
     return results
 
 
