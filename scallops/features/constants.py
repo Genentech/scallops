@@ -4,12 +4,13 @@ Authors:
     - The SCALLOPS development team
 """
 
-from scallops.features.colocalization import _colocalization_pairs, colocalization
 from scallops.features.cp_measure_wrapper import (
+    _cp_colocalization_pairs,
+    cp_colocalization,
     cp_granularity,
+    cp_intensity,
     cp_size_shape,
 )
-from scallops.features.intensity import intensity
 from scallops.features.intensity_distribution import (
     intensity_distribution_radial,
     intensity_distribution_zernike,
@@ -25,7 +26,7 @@ _cp_features_mask = {
 }
 
 _cp_features_single_channel = {
-    "intensity": intensity,
+    "intensity": cp_intensity,
     "granularity": cp_granularity,
     "intensitydistribution": intensity_distribution_radial,
     "intensitydistributionzernike": intensity_distribution_zernike,
@@ -38,7 +39,7 @@ _other_features_single_channel = {
 }
 
 _cp_features_multichannel = {
-    "colocalization": colocalization,
+    "colocalization": cp_colocalization,
 }
 
 _other_features_multichannel = {
@@ -60,7 +61,7 @@ _features.update(_cp_features_mask)
 _label_name_to_prefix = {"nuclei": "Nuclei", "cell": "Cells", "cytosol": "Cytoplasm"}
 
 _features_rewrite = {
-    "colocalization": _colocalization_pairs,
+    "colocalization": _cp_colocalization_pairs,
 }
 
 _metadata_columns_whitelist = [
