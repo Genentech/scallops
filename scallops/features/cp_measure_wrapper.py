@@ -99,7 +99,7 @@ def _cp_colocalization_pairs(
     return all_results
 
 
-def cp_intensity_distribution_zernike(
+def cp_intensity_distribution_radial(
     c: Sequence[int],
     channel_names: Sequence[str],
     label_image: np.ndarray,
@@ -117,7 +117,7 @@ def cp_intensity_distribution_zernike(
     return results
 
 
-def cp_intensity_distribution_radial(
+def cp_intensity_distribution_zernike(
     c: Sequence[int],
     channel_names: Sequence[str],
     label_image: np.ndarray,

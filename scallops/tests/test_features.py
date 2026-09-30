@@ -457,6 +457,31 @@ def test_create_funcs():
 
 
 @pytest.mark.features
+def test_intensity_matches_whole_image():
+    # per-object crops must match cp_measure on the whole image, which requires
+    # padding (edge features) and offsetting crop-local locations
+    from cp_measure.core.measureobjectintensity import get_intensity
+
+    label_image = np.zeros((40, 40), dtype=np.int32)
+    label_image[5:13, 5:13] = 1
+    label_image[20:30, 20:32] = 2
+    intensity_image = np.random.default_rng(0).random((40, 40, 1)).astype(np.float32)
+    label_image_da = da.from_array(label_image, chunks=20)
+    df = label_features(
+        find_objects(label_image_da).compute(),
+        label_image_da,
+        da.from_array(intensity_image, chunks=(20, 20, 1)),
+        ["intensity_0"],
+    ).compute()
+    expected = get_intensity(label_image, intensity_image[..., 0])
+    assert df[[c for c in df.columns if "Edge" in c]].to_numpy().all()
+    for key, value in expected.items():
+        np.testing.assert_allclose(
+            df.loc[[1, 2], f"{key}_Channel0"].values, value, rtol=1e-5, err_msg=key
+        )
+
+
+@pytest.mark.features
 def test_features_cli_multi_images(
     tmp_path, experiment_c_A1_102_cells, experiment_c_A1_102_pheno_aligned
 ):

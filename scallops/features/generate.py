@@ -272,7 +272,7 @@ def label_features(
         raise ValueError("No features to compute.")
 
     unique_func_names = {func.func.__name__ for func in funcs}
-    DEFAULT_PADDING = {"intensity": 1, "neighbors": 100}
+    DEFAULT_PADDING = {"cp_intensity": 1, "neighbors": 100}
     padding = overlap if overlap is not None else 0
     for key in DEFAULT_PADDING.keys():
         if key in unique_func_names:
