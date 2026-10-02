@@ -7,7 +7,6 @@ from scallops.cli.util import (
     force_arg,
     no_version_arg,
     output_dir_arg,
-    verbose_arg,
 )
 
 
@@ -55,7 +54,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     force_arg(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
-    verbose_arg(parser)
+
     no_version_arg(parser)
     _sort_groups(parser)
     parser.set_defaults(

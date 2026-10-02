@@ -34,6 +34,7 @@ import dask
 import dask.array as da
 import dask.dataframe as dd
 import fsspec
+import h5py
 import numpy as np
 import ome_types
 import pandas as pd
@@ -1521,18 +1522,93 @@ def _create_subset_function(
     return _subset_include
 
 
-def read_anndata_zarr(store: StoreLike, dask: bool = False) -> anndata.AnnData:
-    """Read from a hierarchical Zarr array store.
+def is_anndata(store: StoreLike) -> bool:
+    """Determines whether store is an AnnData Zarr or h5py file.
+
+    :param store: Store to read from.
+    """
+    f = None
+    close = False
+    try:
+        is_store_arg_h5_store = isinstance(store, h5py.Dataset | h5py.File | h5py.Group)
+        is_store_arg_h5_path = (
+            isinstance(store, os.PathLike | str) and Path(store).suffix == ".h5ad"
+        )
+        is_h5 = is_store_arg_h5_path or is_store_arg_h5_store
+
+        if not is_h5:
+            import zarr
+
+            if not isinstance(store, zarr.Group):
+                try:
+                    f = zarr.open_consolidated(store, mode="r")
+                except ValueError:
+                    f = zarr.open_group(store, mode="r")
+            else:
+                f = store
+        elif is_store_arg_h5_store:
+            f = store
+        else:
+            f = h5py.File(store, mode="r")
+            close = True
+        return f.get("layers") is not None
+    except:  # noqa: E722
+        return False
+    finally:
+        if close:
+            f.close()
+
+
+def write_anndata_zarr(data: anndata.AnnData, store: StoreLike, **kwargs):
+    """Write anndata to zarr with defaults of `convert_strings_to_categoricals=False`.
+
+    :param data: AnnData object.
+    :param store: Store to read from.
+    """
+    write_zarr_kwargs = dict(convert_strings_to_categoricals=False)
+    write_zarr_kwargs.update(kwargs)
+    data.write_zarr(store, **write_zarr_kwargs)
+
+
+def read_anndata(store: StoreLike, dask: bool = False) -> anndata.AnnData:
+    """Read from a hierarchical Zarr or HDF5 array store.
 
     :param store: Store to read from.
     :param dask: Whether to use dask.
     :return: AnnData object.
     """
+    is_store_arg_h5_store = isinstance(store, h5py.Dataset | h5py.File | h5py.Group)
+    is_store_arg_h5_path = (
+        isinstance(store, os.PathLike | str) and Path(store).suffix == ".h5ad"
+    )
+    is_h5 = is_store_arg_h5_path or is_store_arg_h5_store
+    close = False
+    if not is_h5:
+        import zarr
+
+        if not isinstance(store, zarr.Group):
+            try:
+                f = zarr.open_consolidated(store, mode="r")
+            except ValueError:
+                f = zarr.open_group(store, mode="r")
+        else:
+            f = store
+    elif is_store_arg_h5_store:
+        f = store
+    else:
+        f = h5py.File(store, mode="r")
+        close = True
+    if f.get("layers") is None:
+        raise ValueError(f"{store} is incomplete.")
 
     if not dask:
-        return anndata.read_zarr(store)
-
-    f = zarr.open(store, mode="r")
+        if not is_h5:
+            return anndata.read_zarr(f)
+        if is_store_arg_h5_store:  # the caller owns the handle, don't close it
+            return read_elem(f)
+        if close:
+            f.close()
+        return anndata.read_h5ad(store)
 
     def callback(func, elem_name: str, elem, iospec):
         if iospec.encoding_type in (
@@ -1544,7 +1620,24 @@ def read_anndata_zarr(store: StoreLike, dask: bool = False) -> anndata.AnnData:
             # Preventing recursing inside of these types
             return read_elem(elem)
         elif iospec.encoding_type == "array":
-            return da.from_zarr(elem)
+            if is_h5:
+                # chunks is None for contiguous (non-chunked) datasets
+                return da.from_array(elem, elem.chunks or "auto")
+            # See https://github.com/dask/dask/pull/12582
+            try:
+                return da.from_zarr(elem)
+            except NotImplementedError:
+
+                def chunks(self):
+                    return self.read_chunk_sizes
+
+                old_chunks = zarr.Array.chunks
+                # monkey patch to load zarr with irregular chunks
+                zarr.Array.chunks = property(chunks)
+                try:
+                    return da.from_zarr(elem, chunks=elem.read_chunk_sizes)
+                finally:
+                    zarr.Array.chunks = old_chunks
         else:
             return func(elem)
 
