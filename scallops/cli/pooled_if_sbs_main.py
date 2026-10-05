@@ -12,7 +12,6 @@ from scallops.cli.util import (
     no_version_arg,
     output_dir_arg,
     subset_arg,
-    verbose_arg,
     z_index_arg,
 )
 
@@ -140,7 +139,7 @@ def _create_merge_parser(subparsers, default_help):
     force_arg(parser)
     dask_client_arg(parser, "none")
     dask_cluster_arg(parser)
-    verbose_arg(parser)
+
     no_version_arg(parser)
     _sort_groups(parser)
     parser.set_defaults(func=_merge_main)
@@ -275,7 +274,7 @@ def _create_reads_parser(subparsers, default_help):
     )
 
     force_arg(parser)
-    verbose_arg(parser)
+
     no_version_arg(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
@@ -393,7 +392,7 @@ def _create_spot_detect_parser(subparsers, default_help):
         help="Validate that the specified number of cycles are provided.",
         type=int,
     )
-    verbose_arg(parser)
+
     no_version_arg(parser)
     _sort_groups(parser)
     parser.add_argument(

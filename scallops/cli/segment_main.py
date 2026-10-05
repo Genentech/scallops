@@ -15,7 +15,6 @@ from scallops.cli.util import (
     images_arg,
     no_version_arg,
     subset_arg,
-    verbose_arg,
     z_index_arg,
 )
 
@@ -150,7 +149,7 @@ def _add_nuclei_parser(subparsers: ArgumentParser, default_help: bool = True) ->
     force_arg(parser)
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
-    verbose_arg(parser)
+
     _sort_groups(parser)
     parser.set_defaults(func=_run_pipeline_segment_nuclei)
 
@@ -270,6 +269,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
     force_arg(parser)
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
-    verbose_arg(parser)
+
     _sort_groups(parser)
     parser.set_defaults(func=_run_pipeline_segment_cell)

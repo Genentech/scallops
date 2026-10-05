@@ -133,28 +133,17 @@ Key Features:
    :path: pooled-sbs
 
 
-scallops norm-features
-=======================
+scallops pert-map
+===================
 
-The `scallops norm-features` command is used to normalize features.
-
-.. argparse::
-   :module: scallops.__main__
-   :func: create_parsers
-   :prog: scallops
-   :path: rank-features
-
-
-scallops rank-features
-=======================
-
-The `scallops rank-features` command is used to compute significance from the output of `scallops norm-features`.
+The `scallops pert-map` command provides tools for perturbation map building and evaluation.
 
 .. argparse::
    :module: scallops.__main__
    :func: create_parsers
    :prog: scallops
-   :path: rank-features
+   :path: pert-map
+
 
 
 scallops registration

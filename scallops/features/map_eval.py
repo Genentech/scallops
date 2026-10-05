@@ -11,6 +11,7 @@ import pandas as pd
 from array_api_compat import get_namespace
 from scipy.stats import ks_2samp
 from sklearn.metrics.pairwise import cosine_similarity
+from statsmodels.stats.multitest import multipletests
 
 from scallops.features.util import _slice_anndata
 
@@ -142,7 +143,7 @@ def set_benchmark(
             ]
         )
 
-    return pd.DataFrame(
+    df = pd.DataFrame(
         results,
         columns=[
             "name",
@@ -153,6 +154,13 @@ def set_benchmark(
             "pvalue",
         ],
     )
+    # keep the schema the same regardless of whether any set passed min_genes
+    df["FDR"] = (
+        multipletests(df["pvalue"].values, method="fdr_bh")[1]
+        if len(df) > 0
+        else pd.Series(dtype=float)
+    )
+    return df
 
 
 def pairwise_similarities(
