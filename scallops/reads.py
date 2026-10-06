@@ -1004,6 +1004,7 @@ def decode_polar(
     dark_bases: list[str] | None = None,
     w_cor: np.ndarray | None = None,
     r_frac: float | None = None,
+    n_reads: int = 50_000,
 ) -> pd.DataFrame:
     """Call reads using polar-coordinate classification.
 
@@ -1063,6 +1064,7 @@ def decode_polar(
         When ``None`` (default) and dark bases are present, the optimal value
         is found automatically via :func:`_rfrac_from_sweep` if a barcode
         whitelist is provided, otherwise falls back to :math:`0.11\\sqrt{n_c}`.
+    :param n_reads: Number of reads to use for :func:`_rfrac_from_sweep`
     :return: DataFrame with columns ``barcode``, ``Q_mean``, ``Q_min``, and
         optionally ``barcode_match``.
     """
@@ -1099,10 +1101,11 @@ def decode_polar(
     whitelist_arr = barcodes["barcode"].values if barcodes is not None else None
     if r_frac is None and has_dark:
         if whitelist_arr is not None:
-            # Use up to 50 k spots for the sweep; materialize only that sample
+            # Use up to n_reads spots for the sweep; materialize only that sample
             rng = random.Random(239753)
-            n_reads = 50_000
-            random_reads = rng.sample(range(0, spots.sizes["read"]), n_reads)
+            random_reads = rng.sample(
+                range(0, spots.sizes["read"]), min(n_reads, spots.sizes["read"])
+            )
             random_reads = np.sort(random_reads)
             sp_sample = np.clip(spots.isel(read=random_reads).data, 0.0, None)
             if isinstance(sp_sample, da.Array):
