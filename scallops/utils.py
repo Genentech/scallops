@@ -41,21 +41,77 @@ from xarray import DataArray
 logger = logging.getLogger("scallops")
 
 
-# func(block, left_pads, starts, stops) -> DataFrame of results for the block's main region
-BlockFunc = Callable[[np.ndarray, list[int], list[int], list[int]], pd.DataFrame]
+# func(*blocks, left_pads, starts, stops, **kwargs) -> DataFrame of results for the blocks'
+# main region
+BlockFunc = Callable[..., pd.DataFrame]
+
+
+def _broadcast_block(
+    block: np.ndarray,
+    broadcast_axes: Sequence[int],
+    starts: Sequence[int],
+    stops: Sequence[int],
+    shape: Sequence[int],
+    left_pads: Sequence[int],
+    right_pads: Sequence[int],
+    boundary: Mapping[int, str | int],
+) -> np.ndarray:
+    """Stretch a block's size-1 broadcast axes to the size of the overlapped block.
+
+    :param block: Block with size 1 and no overlap along ``broadcast_axes``.
+    :param broadcast_axes: Axes to broadcast.
+    :param starts: Start of the block's main region along each axis.
+    :param stops: Stop of the block's main region along each axis.
+    :param shape: Broadcast shape of the input arrays.
+    :param left_pads: Overlap before the main region along each axis.
+    :param right_pads: Overlap after the main region along each axis.
+    :param boundary: Boundary setting along each axis used to pad the input arrays.
+    :return: Read-only view of the block, or a copy if constant padding had to be added.
+    """
+    if len(broadcast_axes) == 0:
+        return block
+    # Every boundary mode just repeats the single value along the axis, except a constant
+    # boundary, which pads with the constant at the outer edges of the array
+    target_shape = list(block.shape)
+    pad_widths = {}
+    for ax in broadcast_axes:
+        constant = not isinstance(boundary[ax], str)
+        left = 0 if constant and starts[ax] == 0 else left_pads[ax]
+        right = 0 if constant and stops[ax] == shape[ax] else right_pads[ax]
+        target_shape[ax] = left + stops[ax] - starts[ax] + right
+        if left_pads[ax] - left + right_pads[ax] - right > 0:
+            pad_widths[ax] = (left_pads[ax] - left, right_pads[ax] - right)
+    block = np.broadcast_to(block, target_shape)
+    for ax, pad_width in pad_widths.items():
+        block = np.pad(
+            block,
+            [pad_width if i == ax else (0, 0) for i in range(block.ndim)],
+            constant_values=boundary[ax],
+        )
+    return block
 
 
 def _block_wrapper(
-    func: BlockFunc, block, chunk_location, boundary: str, depth: Mapping[int, int]
+    func: BlockFunc,
+    blocks: Sequence[np.ndarray],
+    broadcast_axes: Sequence[Sequence[int]],
+    chunk_location,
+    boundary: Mapping[int, str | int],
+    depth: Mapping[int, int],
+    shape: Sequence[int],
+    kwargs: Mapping[str, Any],
 ) -> pd.DataFrame:
-    """Call ``func`` on one block, passing the location of the block's main region.
+    """Call ``func`` on one block of each array, passing the location of the blocks' main region.
 
-    :param func: Function to apply to the block (see :func:`map_overlap_ragged`).
-    :param block: The block as a NumPy array, including its overlap.
-    :param chunk_location: One slice per axis giving the block's main region in the input array
-        (e.g. ``[slice(0, 3), slice(4, 8)]``).
-    :param boundary: Boundary setting used to pad the input array.
+    :param func: Function to apply to the blocks (see :func:`map_overlap_ragged`).
+    :param blocks: The block from each input array as NumPy arrays, including their overlap.
+    :param broadcast_axes: For each block, the axes along which it is broadcast.
+    :param chunk_location: One slice per axis giving the block's main region in the broadcast
+        shape (e.g. ``[slice(0, 3), slice(4, 8)]``).
+    :param boundary: Boundary setting along each axis used to pad the input arrays.
     :param depth: Overlap depth along each axis.
+    :param shape: Broadcast shape of the input arrays.
+    :param kwargs: Extra keyword arguments to pass to ``func``.
     :return: The DataFrame returned by ``func``.
     """
 
@@ -65,86 +121,156 @@ def _block_wrapper(
     # Strip the overlap so only the block's main rows remain
     # (Note: with boundary="none", edge blocks get no padding on their outer side)
     left_pads = [
-        min(depth[ax], start) if boundary == "none" else depth[ax]
+        min(depth[ax], start) if boundary[ax] == "none" else depth[ax]
         for ax, start in enumerate(starts)
     ]
-    return func(block, left_pads, starts, stops)
+    right_pads = [
+        min(depth[ax], shape[ax] - stop) if boundary[ax] == "none" else depth[ax]
+        for ax, stop in enumerate(stops)
+    ]
+    blocks = [
+        _broadcast_block(
+            block, axes, starts, stops, shape, left_pads, right_pads, boundary
+        )
+        for block, axes in zip(blocks, broadcast_axes)
+    ]
+    return func(*blocks, left_pads, starts, stops, **kwargs)
 
 
 def map_overlap_ragged(
     func: BlockFunc,
+    *args: da.Array,
     meta: pd.DataFrame,
-    array: da.Array,
-    depth: Mapping[int, int],
-    boundary: str | int = "reflect",
+    depth: int | tuple[int, ...] | Mapping[int, int] | None = None,
+    boundary: str | int | tuple | Mapping[int, str | int] | None = "reflect",
+    **kwargs: Any,
 ) -> dd.DataFrame:
-    """Apply a function to overlapping blocks of an array and collect the results in a DataFrame.
+    """Apply a function to overlapping blocks of one or more arrays and collect the results in a
+    DataFrame.
 
     Like :func:`dask.array.map_overlap`, each block is passed to ``func`` with ``depth`` extra
     elements from its neighbors along each axis. Unlike ``map_overlap``, ``func`` returns a
     DataFrame instead of an array, so each block can produce any number of rows (e.g. one row per
     object or per element). The results for all blocks are concatenated into one Dask DataFrame.
 
-    :param func: Called as ``func(block, left_pads, starts, stops)`` for each block, where:
+    :param func: Called as ``func(*blocks, left_pads, starts, stops, **kwargs)`` for each block,
+        where:
 
-        - ``block`` is the block as a NumPy array, including its overlap.
-        - ``left_pads[ax]`` is the number of overlap elements before the block's main region
+        - ``blocks`` are the corresponding blocks of each input array as NumPy arrays, including
+          their overlap. Every block has the full number of dimensions and the same shape;
+          blocks of broadcast arrays are read-only.
+        - ``left_pads[ax]`` is the number of overlap elements before the blocks' main region
           along axis ``ax``. The main region along that axis is
           ``block[left_pads[ax] : left_pads[ax] + stops[ax] - starts[ax]]``.
-        - ``starts[ax]`` / ``stops[ax]`` give the main region's location in ``array`` along axis
-          ``ax`` (stop is exclusive). Add ``starts[ax]`` to an index within the main region to
-          get its index in ``array``.
+        - ``starts[ax]`` / ``stops[ax]`` give the main region's location in the input arrays
+          (broadcast to a common shape) along axis ``ax`` (stop is exclusive). Add
+          ``starts[ax]`` to an index within the main region to get its index in the input arrays.
 
         ``func`` must return a DataFrame with the same columns and dtypes as ``meta``. To avoid
         duplicate rows, only return results for the main region; the overlap is there to provide
         context.
+    :param args: Input dask arrays. The arrays are broadcast against each other using NumPy rules
+        (e.g. a ``(y, x)`` label image with a ``(t, c, y, x)`` image). Broadcasting happens per
+        block, so broadcast arrays are never copied along the broadcast axes. The arrays are
+        rechunked to common chunks, and chunks smaller than the overlap depth are merged with
+        their neighbors, the same way :func:`dask.array.overlap.overlap` does.
     :param meta: Empty DataFrame with the columns and dtypes that ``func`` returns.
-    :param array: Input array. Chunks smaller than the overlap depth are merged with their
-        neighbors, the same way :func:`dask.array.overlap.overlap` does.
-    :param depth: Number of overlap elements along each axis, mapping every axis to a depth (use 0
-        for no overlap).
-    :param boundary: How to pad the outer edges of the array: ``"reflect"``, ``"periodic"``,
-        ``"nearest"``, ``"none"`` (no padding, so blocks at the array's edges have no overlap on
-        their outer side), or a constant value. Applied to every axis.
+    :param depth: Number of overlap elements along each axis of the broadcast shape, as an int for
+        all axes, a tuple with one value per axis, or a dict mapping axes to depths (missing axes
+        get 0). Applied to every array.
+    :param boundary: How to pad the outer edges of the arrays: ``"reflect"``, ``"periodic"``,
+        ``"nearest"``, ``"none"`` (no padding, so blocks at the arrays' edges have no overlap on
+        their outer side), or a constant value. Either one setting for all axes, a tuple with one
+        value per axis, or a dict mapping axes to settings (missing axes get ``"none"``). Applied
+        to every array.
+    :param kwargs: Extra keyword arguments to pass to ``func``.
     :return: Dask DataFrame with one partition per block, containing the rows returned by ``func``.
+
+    :example:
+
+    .. code-block:: python
+
+        def count_labels(image, labels, left_pads, starts, stops, threshold): ...
+
+
+        ddf = map_overlap_ragged(
+            count_labels, image, labels, meta=meta, depth={2: 16, 3: 16}, threshold=0.5
+        )
     """
+    if not callable(func):
+        raise TypeError(
+            f"First argument must be callable function, not {type(func).__name__}"
+        )
+    if len(args) == 0:
+        raise ValueError("At least one array is required")
+    if not all(isinstance(a, da.Array) for a in args):
+        raise TypeError(
+            f"All variadic arguments must be dask arrays, not {[type(a).__name__ for a in args]}"
+        )
+    shape = np.broadcast_shapes(*(a.shape for a in args))
+    ndim = len(shape)
+    depth = da.overlap.coerce_depth(ndim, depth)
+    if any(isinstance(d, tuple) for d in depth.values()):
+        raise NotImplementedError("Asymmetric overlap depth is not supported")
+    boundary = da.overlap.coerce_boundary(ndim, boundary)
+    # Add missing leading axes, and find the size-1 axes each array is broadcast along
+    arrays = [a[(None,) * (ndim - a.ndim)] for a in args]
+    broadcast_axes = [
+        [ax for ax in range(ndim) if a.shape[ax] != shape[ax]] for a in arrays
+    ]
+
+    # Find common chunks so block b_id covers the same region in every array, by splitting
+    # each axis at every chunk boundary of the arrays that are not broadcast along it
+    chunks = []
+    for ax in range(ndim):
+        boundaries = sorted(
+            {
+                offset
+                for a, axes in zip(arrays, broadcast_axes)
+                if ax not in axes
+                for offset in itertools.accumulate(a.chunks[ax])
+            }
+        )
+        chunks.append(tuple(np.diff([0, *boundaries]).tolist()) or (shape[ax],))
     # Rechunk up front the same way da.overlap.overlap would (every chunk must be >= depth),
     # so the block locations below are computed from the chunks actually used
-    array = array.rechunk(
-        tuple(
-            ensure_minimum_chunksize(depth[ax], c) for ax, c in enumerate(array.chunks)
-        )
-    )
-    array_with_overlap = da.overlap.overlap(
-        array, depth=depth, boundary={ax: boundary for ax in range(array.ndim)}
+    chunks = tuple(
+        ensure_minimum_chunksize(depth[ax], c) for ax, c in enumerate(chunks)
     )
 
+    delayed_blocks = []
+    for a, axes in zip(arrays, broadcast_axes):
+        # Broadcast axes stay as one size-1 chunk with no overlap
+        a = a.rechunk(tuple(-1 if ax in axes else c for ax, c in enumerate(chunks)))
+        a_depth = {ax: 0 if ax in axes else depth[ax] for ax in range(ndim)}
+        a_boundary = {ax: boundary[ax] for ax in range(ndim) if ax not in axes}
+        delayed_blocks.append(
+            da.overlap.overlap(a, depth=a_depth, boundary=a_boundary).to_delayed()
+        )
+
     # Dask tracks array indexing schemas via x.chunks
-    # Compute the global slice of each block in the original (non-overlapped) array
-    offsets = [[0, *itertools.accumulate(c)] for c in array.chunks]
-    block_info_dict = {
-        b_id: {
-            "array-location": [
-                slice(offsets[ax][i], offsets[ax][i + 1]) for ax, i in enumerate(b_id)
-            ]
-        }
-        for b_id in np.ndindex(*array.numblocks)
-    }
+    # Compute the global slice of each block in the original (non-overlapped) arrays
+    offsets = [[0, *itertools.accumulate(c)] for c in chunks]
 
     delayed_dfs = []
     _block_wrapper_delayed = dask.delayed(_block_wrapper)
-    delayed_blocks = array_with_overlap.to_delayed()
-    for b_id in np.ndindex(*array.numblocks):
-        # Retrieve structural metadata for this block
-        chunk_slice = block_info_dict[b_id][
-            "array-location"
-        ]  # Gives list of slices per dimension
+    for b_id in np.ndindex(*(len(c) for c in chunks)):
+        # List of slices per dimension giving this block's main region
+        chunk_slice = [
+            slice(offsets[ax][i], offsets[ax][i + 1]) for ax, i in enumerate(b_id)
+        ]
         d_df = _block_wrapper_delayed(
             func,
-            delayed_blocks[b_id],
+            [
+                blocks[tuple(0 if ax in axes else i for ax, i in enumerate(b_id))]
+                for blocks, axes in zip(delayed_blocks, broadcast_axes)
+            ],
+            broadcast_axes=broadcast_axes,
             chunk_location=chunk_slice,
             depth=depth,
             boundary=boundary,
+            shape=shape,
+            kwargs=kwargs,
         )
         delayed_dfs.append(d_df)
 
