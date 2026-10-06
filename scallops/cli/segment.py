@@ -12,6 +12,7 @@ Authors:
 
 import argparse
 import importlib
+import json
 from typing import Callable, Literal, Optional
 
 import dask.array as da
@@ -29,9 +30,20 @@ from scallops.cli.util import (
     cli_metadata,
     load_json,
 )
-from scallops.io import _add_suffix, _images2fov, _set_up_experiment, get_image_spacing
+from scallops.io import (
+    _add_suffix,
+    _create_file_regex,
+    _images2fov,
+    _set_up_experiment,
+    _to_parquet,
+    get_image_spacing,
+)
 from scallops.segmentation import remove_labels_by_area
-from scallops.segmentation.util import _delete_lock_files, identify_tertiary_objects
+from scallops.segmentation.util import (
+    _delete_lock_files,
+    identify_tertiary_objects,
+    label_overlap_iou,
+)
 from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
@@ -283,12 +295,101 @@ def segment_cells(
     return root
 
 
-def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
-    """Run nuclei or cell segmentation pipeline.
+def _overlap(
+    label_tuple_1: tuple[tuple[str, ...], list[str | Group], dict],
+    label_tuple_2: tuple[tuple[str, ...], list[str | Group], dict],
+    output_dir: str,
+    output_sep: str,
+    force: bool = False,
+    no_version: bool = False,
+):
+    _, file_list_1, metadata_1 = label_tuple_1
+    _, file_list_2, metadata_2 = label_tuple_2
+    label_1 = _images2fov(file_list_1, metadata_1, dask=True)
+    label_2 = _images2fov(file_list_2, metadata_2, dask=True)
+    path = f"{output_dir}{output_sep}{metadata_1['id']}-overlap.parquet"
+    fs = fsspec.url_to_fs(path)[0]
+    if fs.exists(path):
+        if force:
+            fs.rm(path, recursive=True)
+        else:
+            logger.info(f"Skipping overlap for {metadata_1['id']}.")
+            return
+    logger.info(f"Finding overlapping objects for {metadata_1['id']}.")
+    overlap_df = label_overlap_iou(label_1, label_2)
+    _to_parquet(
+        overlap_df,
+        path,
+        write_index=True,
+        compute=True,
+        custom_metadata=dict(scallops=json.dumps(cli_metadata()))
+        if not no_version
+        else None,
+    )
+
+
+def _run_overlap_pipeline(arguments: argparse.Namespace):
+    dask_server_url = arguments.client
+    dask_cluster_parameters = (
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+    )
+
+    labels_paths = arguments.labels
+    label_pattern = arguments.label_pattern
+    label_suffix_1 = arguments.label_suffix_1
+    label_suffix_2 = arguments.label_suffix_2
+    label_pattern_1 = label_pattern + "-" + label_suffix_1
+    label_pattern_2 = label_pattern + "-" + label_suffix_2
+    subset = arguments.subset
+    no_version = arguments.no_version
+    output = arguments.output
+    force = arguments.force
+
+    outputs_fs, output = fsspec.core.url_to_fs(output)
+    outputs_fs.makedirs(output, exist_ok=True)
+    output = outputs_fs.unstrip_protocol(output)
+    paths = []
+    for path in labels_paths:
+        label_root = zarr.open(path, mode="r")
+        labels_group = label_root.get("labels")
+        if labels_group is None:
+            raise ValueError(f"Labels group not found for {path}")
+        paths.append(labels_group)
+    gen_1 = _set_up_experiment(
+        image_path=paths,
+        files_pattern=label_pattern_1,
+        group_by=list(_create_file_regex(label_pattern_1)[2]),
+        subset=subset,
+    )
+    gen_2 = _set_up_experiment(
+        image_path=paths,
+        files_pattern=label_pattern_2,
+        group_by=list(_create_file_regex(label_pattern_2)[2]),
+        subset=subset,
+    )
+    gen = zip(gen_1, gen_2)
+
+    with (
+        _create_default_dask_config(),
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
+    ):
+        [
+            _overlap(
+                label_tuple=g,
+                output_dir=output,
+                output_sep=outputs_fs.sep,
+                force=force,
+                no_version=no_version,
+            )
+            for g in gen
+        ]
+
+
+def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
+    """Run nuclei or cell segmentation
 
     :param arguments: Command line arguments.
     :param nuclei: If True, perform nuclei segmentation; otherwise, perform cell segmentation.
-    :return: None
     """
     method = arguments.method
     dask_server_url = arguments.client
@@ -409,18 +510,18 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
     _delete_lock_files()
 
 
-def run_pipeline_segment_nuclei(arguments: argparse.Namespace):
+def _run_pipeline_segment_nuclei(arguments: argparse.Namespace):
     """Run nuclei segmentation pipeline.
 
     :param arguments: Command line arguments.
     :return: None
     """
-    run_pipeline(arguments, True)
+    _run_segment_pipeline(arguments, True)
 
 
-def run_pipeline_segment_cell(arguments: argparse.Namespace):
+def _run_pipeline_segment_cell(arguments: argparse.Namespace):
     """Run cell segmentation pipeline.
 
     :param arguments: Command line arguments.
     """
-    run_pipeline(arguments, False)
+    _run_segment_pipeline(arguments, False)

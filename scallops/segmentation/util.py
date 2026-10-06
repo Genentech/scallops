@@ -22,7 +22,6 @@ import xarray as xr
 from centrosome.outline import outline
 from dask import delayed
 from dask_image import ndfilters as dask_ndi
-from scipy.sparse import issparse, sparray
 from skimage.filters.thresholding import threshold_li, threshold_otsu
 from skimage.measure import regionprops
 from skimage.measure._regionprops import RegionProperties
@@ -349,73 +348,58 @@ def _download_model(local_model_dir: Path, remote_model_file_name: str | list[st
                 fs.get(remote_path, str(local_model_file))
 
 
-def _area_overlap_chunk(x, y):
-    x = x.flatten()
-    y = y.flatten()
-    x_labels = np.unique(x)
-    x_labels = x_labels[x_labels != 0]
-    results = []
-    for x_label in x_labels:
-        x_mask = x == x_label
-        tmp_y = y[x_mask]
-        x_area = len(tmp_y)
-        y_labels = np.unique(tmp_y)
-        y_labels = y_labels[y_labels != 0]
-        for y_label in y_labels:
-            x_y_overlap = np.sum(tmp_y == y_label)
-            results.append((x_label, y_label, x_area, x_y_overlap))
-    if len(results) == 0:
-        return pd.DataFrame(
-            {
-                "x": pd.Series(dtype=x.dtype),
-                "y": pd.Series(dtype=y.dtype),
-                "area": pd.Series(dtype="int"),
-                "overlap": pd.Series(dtype="int"),
-            }
-        )
-    return pd.DataFrame(results, columns=["x", "y", "area", "overlap"])
+def _label_pair_counts_chunk(x: np.ndarray, y: np.ndarray) -> pd.DataFrame:
+    df = pd.DataFrame({"label_1": x.ravel(), "label_2": y.ravel()})
+    return (
+        df.groupby(["label_1", "label_2"], sort=False)
+        .size()
+        .rename("overlap")
+        .reset_index()
+    )
 
 
-def area_overlap(x: da.Array, y: da.Array) -> dd.DataFrame:
-    """Find labels in y that overlap with labels in x.
+def label_overlap_iou(label_image_1: da.Array, label_image_2: da.Array) -> dd.DataFrame:
+    """Compute the intersection over union (IoU) for every pair of overlapping labels.
 
-    :param x: Reference labels, typically nuclei
-    :param y: Query labels, typically cells
-    :return: Dask dataframe with the columns "x", "y", "area", and "overlap"
+    A dense contingency table is never created, so this scales to whole-well label arrays
+    with many labels.
+
+    :param label_image_1: Label array
+    :param label_image_2: Label array with the same shape as `label_image_1`
+    :return: Dask dataframe with the columns "label_1", "label_2", "overlap",
+        and "iou", with one row per pair of labels that overlap, excluding pairs where
+        either label is background (0)
     """
-    y = y.rechunk(x.chunksize)
-    results = []
-    _overlap_chunk_delayed = delayed(_area_overlap_chunk)
-    meta = dd.utils.make_meta(
-        pd.DataFrame(
-            {
-                "x": pd.Series(dtype=x.dtype),
-                "y": pd.Series(dtype=y.dtype),
-                "area": pd.Series(dtype="int"),
-                "overlap": pd.Series(dtype="int"),
-            }
+    assert label_image_1.shape == label_image_2.shape
+    label_image_2 = label_image_2.rechunk(label_image_1.chunks)
+    meta = pd.DataFrame(
+        {
+            "label_1": pd.Series(dtype=label_image_1.dtype),
+            "label_2": pd.Series(dtype=label_image_2.dtype),
+            "overlap": pd.Series(dtype="int64"),
+        }
+    )
+    _chunk_delayed = delayed(_label_pair_counts_chunk)
+    results = [
+        _chunk_delayed(x_block, y_block)
+        for x_block, y_block in zip(
+            label_image_1.to_delayed().ravel(),
+            label_image_2.to_delayed().ravel(),
+            strict=True,
         )
-    )
-    for sl in da.core.slices_from_chunks(x.chunks):
-        results.append(_overlap_chunk_delayed(x[sl], y[sl]))
+    ]
     df = dd.from_delayed(results, meta=meta, verify_meta=False)
-    df = df.groupby(["x", "y"], group_keys=False, sort=False, dropna=False).agg(
-        {"area": "sum", "overlap": "sum"}
-    )
-    df["fraction_overlap"] = df["overlap"] / df["area"]
-    return df
+    # pairs that span chunk boundaries are counted in multiple chunks
+    df = df.groupby(["label_1", "label_2"], sort=False)["overlap"].sum().reset_index()
 
-
-def overlap_to_iou(overlap: np.ndarray | sparray) -> np.ndarray | sparray:
-    if issparse(overlap):  # no keepdims
-        n_pixels_x = overlap.sum(axis=0)
-        n_pixels_true = overlap.sum(axis=1)
-        n_pixels_x.resize((1,) + n_pixels_x.shape)
-        n_pixels_true.resize(n_pixels_true.shape + (1,))
-    else:
-        n_pixels_x = np.sum(overlap, axis=0, keepdims=True)
-        n_pixels_true = np.sum(overlap, axis=1, keepdims=True)
-    return overlap / (n_pixels_x + n_pixels_true - overlap)
+    area_x = df.groupby("label_1", sort=False)["overlap"].sum().rename("area_1")
+    area_y = df.groupby("label_2", sort=False)["overlap"].sum().rename("area_2")
+    # areas above include pixels that overlap background in the other array
+    df = df[(df["label_1"] != 0) & (df["label_2"] != 0)]
+    df = df.merge(area_x.to_frame(), left_on="label_1", right_index=True, how="left")
+    df = df.merge(area_y.to_frame(), left_on="label_2", right_index=True, how="left")
+    df["iou"] = df["overlap"] / (df["area_1"] + df["area_2"] - df["overlap"])
+    return df.drop(columns=["area_1", "area_2"])
 
 
 def _relabel_block(label_field, in_vals, output_type=np.uint32, offset=1):

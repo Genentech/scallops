@@ -178,10 +178,11 @@ Utilities
     .. autosummary::
         :toctree: .
 
-        scallops.segmentation.util.area_overlap
+
         scallops.segmentation.util.close_labels
         scallops.segmentation.util.cyto_channel_summary
         scallops.segmentation.util.image2mask
+        scallops.segmentation.util.label_overlap_iou
         scallops.segmentation.util.remove_boundary_labels
         scallops.segmentation.util.remove_labels_by_area
         scallops.segmentation.util.remove_labels_region_props
