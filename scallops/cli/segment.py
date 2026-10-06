@@ -305,8 +305,8 @@ def _overlap(
 ):
     _, file_list_1, metadata_1 = label_tuple_1
     _, file_list_2, metadata_2 = label_tuple_2
-    label_1 = _images2fov(file_list_1, metadata_1, dask=True)
-    label_2 = _images2fov(file_list_2, metadata_2, dask=True)
+    label_1 = _images2fov(file_list_1, metadata_1, dask=True).data
+    label_2 = _images2fov(file_list_2, metadata_2, dask=True).data
     path = f"{output_dir}{output_sep}{metadata_1['id']}-overlap.parquet"
     fs = fsspec.url_to_fs(path)[0]
     if fs.exists(path):
@@ -375,7 +375,8 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     ):
         [
             _overlap(
-                label_tuple=g,
+                label_tuple_1=g[0],
+                label_tuple_2=g[1],
                 output_dir=output,
                 output_sep=outputs_fs.sep,
                 force=force,

@@ -1,9 +1,13 @@
+from subprocess import check_call
+
 import dask.array as da
 import numpy as np
+import pandas as pd
 import pytest
 from array_api_compat import get_namespace
 from scipy.sparse import coo_array, issparse, sparray
 
+from scallops import Experiment
 from scallops.segmentation.util import (
     label_overlap_iou,
 )
@@ -52,3 +56,32 @@ def test_label_overlap_iou(experiment_c_A1_102_cells, experiment_c_A1_102_nuclei
     np.testing.assert_equal(df["label_1"].values, i)
     np.testing.assert_equal(df["label_2"].values, j)
     np.testing.assert_equal(df["iou"].values, np_iou[i, j])
+
+
+@pytest.mark.features
+def test_label_overlap_iou_cli(
+    experiment_c_A1_102_cells, experiment_c_A1_102_nuclei, tmpdir
+):
+    x = da.from_array(experiment_c_A1_102_cells.squeeze().data, chunks=(50, 50))
+    y = da.from_array(experiment_c_A1_102_nuclei.squeeze().data, chunks=(40, 60))
+    labels_path = str(tmpdir / "test.zarr")
+    output_path = str(tmpdir / "output")
+    Experiment(labels={"test-nuclei": y, "test-cell": x}).save(labels_path)
+    cmd = [
+        "scallops",
+        "segment",
+        "overlap",
+        "--labels",
+        labels_path,
+        "--output",
+        output_path,
+        "--label-suffix-1",
+        "nuclei",
+        "--label-suffix-2",
+        "cell",
+        "--label-pattern",
+        "{well}",
+    ]
+    check_call(cmd)
+    df = pd.read_parquet(output_path + "/test-overlap.parquet")
+    assert df.query("label_1 == 17 and label_2 == 17")["iou"].values[0] == 67 / 99
