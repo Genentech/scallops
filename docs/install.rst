@@ -68,7 +68,7 @@ GPU support
 -----------
 
 Both the CPU and GPU images use ``python:${PYTHON_VERSION}-slim-bookworm``
-(default ``3.12``) as their base.  All CUDA libraries are installed from pip
+(default ``3.13``) as their base.  All CUDA libraries are installed from pip
 wheels — no ``nvidia/cuda`` base image is needed.  The table below summarises
 GPU availability per library:
 

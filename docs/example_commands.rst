@@ -392,10 +392,10 @@ Rank Features
 ===============
 Example::
 
-    scallops rank-features \
+    scallops pert-map rank \
     --input s3://xxx/ops/merge/A-3.parquet \
     --reference "NTC" \
-    --features Nuclei_Intensity_MedianIntensity_Channel5 \
+    --feature-filter "index=='Nuclei_Intensity_MedianIntensity_Channel5'" \
     --label-filter "barcode_Q_mean_0/barcode_Q_mean==1 & \
     Nuclei_Correlation_PearsonBox_ISS_PHENO>0.9 & \
     Nuclei_Correlation_PearsonBox_FISH_IF>0.9 & \

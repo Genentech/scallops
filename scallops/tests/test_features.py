@@ -185,25 +185,6 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
 
-    region_props_features = [
-        "area",
-        "axis_major_length",
-        "axis_minor_length",
-        "eccentricity",
-        "euler_number",
-        "perimeter",
-        "solidity",
-    ]
-    cp_features = [
-        "Area",
-        "MajorAxisLength",
-        "MinorAxisLength",
-        "Eccentricity",
-        "EulerNumber",
-        "Perimeter",
-        "Solidity",
-    ]
-
     features = []
     for f in _cp_features_single_channel.keys():
         features.append(f"{f}_*")
@@ -248,12 +229,16 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         .sort_index()
     )
     np.testing.assert_array_equal(unique_labels, test_df_no_chunking.index.values)
-    # this differs due to ties
+    # these are local locations
     location_cols = [
         "Location_MaxIntensity_Y_Channel0",
         "Location_MaxIntensity_X_Channel0",
         "Location_MaxIntensity_Y_Channel1",
         "Location_MaxIntensity_X_Channel1",
+        "Location_CenterMassIntensity_X_Channel0",
+        "Location_CenterMassIntensity_Y_Channel0",
+        "Location_CenterMassIntensity_X_Channel1",
+        "Location_CenterMassIntensity_Y_Channel1",
     ]
     # columns that are not equal if computed in chunks
 
@@ -267,10 +252,7 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
     radial_dist_zernike_cols = test_df.columns[
         test_df.columns.str.contains("RadialDistribution_Zernike")
     ].tolist()
-    radial_dist_cols = test_df.columns[
-        test_df.columns.str.contains("RadialDistribution")
-        & ~test_df.columns.str.contains("RadialDistribution_Zernike")
-    ].tolist()
+
     spots_cols = test_df.columns[test_df.columns.str.contains("Spots_Count")].tolist()
 
     drop_cols = (
@@ -278,7 +260,6 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         + granularity_cols
         + zernike_cols
         + radial_dist_zernike_cols
-        + radial_dist_cols
         + location_cols
         + spots_cols
     )
@@ -291,13 +272,9 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
 
     for col in zernike_cols:
         cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
-        assert cor > 0.85, f"{col}, {cor}"
+        assert cor > 0.88, f"{col}, {cor}"
         diff = np.max(np.abs(test_df[col] - test_df_no_chunking[col]))
         assert diff < 0.025, f"{col}, {diff}"
-
-    for col in radial_dist_cols:
-        cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
-        assert cor > 0.89, f"{col}, {cor}"
 
     for col in radial_dist_zernike_cols:
         val1 = test_df[col]
@@ -307,7 +284,7 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         val2 = val2[keep]
         cor = np.corrcoef(val1, val2)[0, 1]
         if not np.isnan(cor):  # no variance
-            assert cor > 0.8, f"{col}, {cor}"
+            assert cor > 0.85, f"{col}, {cor}"
         else:
             np.testing.assert_array_equal(val1, val2)
 
@@ -345,6 +322,7 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         "Granularity_15_Channel1": 0.17777785341265878,
         "Granularity_16_Channel1": 0.19553440565319036,
     }
+
     for col in granularity_cols:
         cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
         expected_corr = granularity_corr[col] - 0.0001
@@ -362,26 +340,19 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
     test_bbox2 = test_df["AreaShape_BoundingBoxMaximum_Y"].values
     test_bbox3 = test_df["AreaShape_BoundingBoxMaximum_X"].values
     regions = regionprops(label_image=label_image, intensity_image=intensity_image)
+    tolerance = ["axis_major_length", "axis_minor_length", "eccentricity"]
+    region_props_features = [
+        "area",
+        "axis_major_length",
+        "axis_minor_length",
+        "eccentricity",
+        "euler_number",
+        "perimeter",
+        "solidity",
+    ]
+
     for i in range(len(regions)):
         r = regions[i]
-        img = r.image_intensity * np.expand_dims(r.image, -1)
-        max_intensity_per_channel = img.max(axis=(0, 1))
-        for c in range(img.shape[-1]):
-            max_count = (img[..., c] == max_intensity_per_channel[c]).sum()
-            if max_count == 1:
-                assert (
-                    test_df[f"Location_MaxIntensity_Y_Channel{c}"].values[i]
-                    == test_df_no_chunking[
-                        f"Location_MaxIntensity_Y_Channel{c}"
-                    ].values[i]
-                )
-                assert (
-                    test_df[f"Location_MaxIntensity_X_Channel{c}"].values[i]
-                    == test_df_no_chunking[
-                        f"Location_MaxIntensity_X_Channel{c}"
-                    ].values[i]
-                )
-
         assert r.label == test_labels[i], f"{r.label} != {test_labels[i]}"
         assert r.centroid == (test_centroid0[i], test_centroid1[i])
         assert r.bbox == (
@@ -392,11 +363,25 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         )
 
         for j in range(len(region_props_features)):
-            np.testing.assert_equal(
-                r[region_props_features[j]],
-                test_df[f"AreaShape_{cp_features[j]}"].values[i],
-                err_msg=f"{region_props_features[j]}",
+            cp_feature = (
+                region_props_features[j].replace("_", " ").title().replace(" ", "")
             )
+            if cp_feature == "AxisMajorLength":
+                cp_feature = "MajorAxisLength"
+            elif cp_feature == "AxisMinorLength":
+                cp_feature = "MinorAxisLength"
+            if region_props_features[j] in tolerance:
+                np.testing.assert_allclose(
+                    r[region_props_features[j]],
+                    test_df[f"AreaShape_{cp_feature}"].values[i],
+                    err_msg=f"{region_props_features[j]}",
+                )
+            else:
+                np.testing.assert_equal(
+                    r[region_props_features[j]],
+                    test_df[f"AreaShape_{cp_feature}"].values[i],
+                    err_msg=f"{region_props_features[j]}",
+                )
 
 
 @pytest.mark.features
@@ -451,7 +436,12 @@ def test_create_funcs():
     assert len(funcs) == 2
 
     funcs, all_required_channels = _create_funcs(["intensitydistribution_*_4"], 3)
-    assert funcs[0].keywords == {"c": (0, 1, 2), "bin_count": 4}
+    assert funcs[0].keywords == {
+        "c": (0, 1, 2),
+        "bin_count": 4,
+        "scaled": True,
+        "maximum_radius": 100,
+    }
     assert len(all_required_channels) > 0
     assert len(funcs) == 1
 
@@ -464,6 +454,31 @@ def test_create_funcs():
 
     for i in range(4):
         assert funcs[i].keywords == {"c1": 0, "c2": i * 2 + 2}
+
+
+@pytest.mark.features
+def test_intensity_matches_whole_image():
+    # per-object crops must match cp_measure on the whole image, which requires
+    # padding (edge features) and offsetting crop-local locations
+    from cp_measure.core.measureobjectintensity import get_intensity
+
+    label_image = np.zeros((40, 40), dtype=np.int32)
+    label_image[5:13, 5:13] = 1
+    label_image[20:30, 20:32] = 2
+    intensity_image = np.random.default_rng(0).random((40, 40, 1)).astype(np.float32)
+    label_image_da = da.from_array(label_image, chunks=20)
+    df = label_features(
+        find_objects(label_image_da).compute(),
+        label_image_da,
+        da.from_array(intensity_image, chunks=(20, 20, 1)),
+        ["intensity_0"],
+    ).compute()
+    expected = get_intensity(label_image, intensity_image[..., 0])
+    assert df[[c for c in df.columns if "Edge" in c]].to_numpy().all()
+    for key, value in expected.items():
+        np.testing.assert_allclose(
+            df.loc[[1, 2], f"{key}_Channel0"].values, value, rtol=1e-5, err_msg=key
+        )
 
 
 @pytest.mark.features

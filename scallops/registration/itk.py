@@ -32,7 +32,12 @@ from natsort import natsorted
 from scallops.io import _download_file, _get_fs_protocol, get_image_spacing
 from scallops.registration.landmarks import _get_translation, find_landmarks
 from scallops.xr import _get_dims
-from scallops.zarr_io import _create_array_kwargs, open_ome_zarr, write_zarr
+from scallops.zarr_io import (
+    _create_array_kwargs,
+    _require_group,
+    open_ome_zarr,
+    write_zarr,
+)
 
 logger = logging.getLogger("scallops")
 
@@ -329,7 +334,7 @@ def _itk_align_reference_time_zarr(
         zarr_array = None
         group = None
         if image_root is not None:
-            images_group = image_root.require_group("images", overwrite=False)
+            images_group = _require_group(image_root, "images")
             group = images_group.create_group(
                 image_name.replace("/", "-"), overwrite=True
             )
@@ -1183,7 +1188,7 @@ def _itk_transform_image_zarr(
     transform_dims = _get_dims(image, ["t", "c", "z"])
     dim_sizes = tuple([image.sizes[d] for d in transform_dims])
 
-    group = image_root.require_group("images").require_group(
+    group = _require_group(image_root, "images").require_group(
         image_name.replace("/", "-"), overwrite=True
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))

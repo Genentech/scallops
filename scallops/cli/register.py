@@ -47,6 +47,7 @@ from scallops.xr import _z_projection
 from scallops.zarr_io import (
     _get_fs,
     _get_store_path,
+    _require_group,
     _write_zarr_image,
     is_ome_zarr_array,
     open_ome_zarr,
@@ -883,14 +884,14 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
         label_output_dir = _add_suffix(label_output_dir, ".zarr")
 
         label_output_root = open_ome_zarr(label_output_dir, mode="a")
-        label_output_root.require_group("labels", overwrite=False)
+        _require_group(label_output_root, "labels")
     image_output_root = None
     if moving_output_dir is not None:
         moving_output_dir = _add_suffix(moving_output_dir, ".zarr")
 
         image_output_root = open_ome_zarr(moving_output_dir, mode="a")
     if image_output_root is not None:
-        image_output_root.require_group("images", overwrite=False)
+        _require_group(image_output_root, "images")
     moving_image_gen = _set_up_experiment(
         moving_image_path,
         moving_image_pattern,

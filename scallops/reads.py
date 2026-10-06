@@ -1221,6 +1221,7 @@ def merge_sbs_phenotype(
     df_barcode: pd.DataFrame,
     sbs_cycles: Sequence[int],
     how: Literal["left", "right", "inner", "outer", "cross"] = "outer",
+    barcode_prefix: str | None = None,
 ) -> pd.DataFrame | dd.DataFrame:
     """Combine sequencing and phenotype tables with one row per label.
 
@@ -1238,6 +1239,7 @@ def merge_sbs_phenotype(
     :param df_barcode: Barcode information data frame
     :param sbs_cycles: List of cycles used (starting at 1)
     :param how: How to merge
+    :param barcode_prefix: Optional prefix to prepend to the barcode table columns
     :return: Combined table
     """
 
@@ -1260,6 +1262,9 @@ def merge_sbs_phenotype(
             logger.info(
                 f"Removed {n_removed:,} duplicate {pluralize('barcode', n_removed)}"
             )
+
+    if barcode_prefix:
+        df_barcode = df_barcode.rename(columns=lambda x: barcode_prefix + x)
 
     df_combined = (
         df_labels.join(df_phenotype, how=how)

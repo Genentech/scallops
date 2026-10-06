@@ -8,12 +8,13 @@ Authors:
 - The SCALLOPS development team
 """
 
+import itertools
 import json
 import logging
 import os
 from bisect import bisect_right
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from itertools import chain, product
 from pathlib import Path
@@ -22,9 +23,11 @@ from typing import Any, Optional, Union
 
 import dask
 import dask.array as da
+import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import skimage
+from dask.array.overlap import ensure_minimum_chunksize
 from dask.system import CPU_COUNT
 from decorator import decorator
 from kneed import KneeLocator
@@ -38,6 +41,116 @@ from xarray import DataArray
 logger = logging.getLogger("scallops")
 
 
+# func(block, left_pads, starts, stops) -> DataFrame of results for the block's main region
+BlockFunc = Callable[[np.ndarray, list[int], list[int], list[int]], pd.DataFrame]
+
+
+def _block_wrapper(
+    func: BlockFunc, block, chunk_location, boundary: str, depth: Mapping[int, int]
+) -> pd.DataFrame:
+    """Call ``func`` on one block, passing the location of the block's main region.
+
+    :param func: Function to apply to the block (see :func:`map_overlap_ragged`).
+    :param block: The block as a NumPy array, including its overlap.
+    :param chunk_location: One slice per axis giving the block's main region in the input array
+        (e.g. ``[slice(0, 3), slice(4, 8)]``).
+    :param boundary: Boundary setting used to pad the input array.
+    :param depth: Overlap depth along each axis.
+    :return: The DataFrame returned by ``func``.
+    """
+
+    starts = [s.start for s in chunk_location]
+    stops = [s.stop for s in chunk_location]
+
+    # Strip the overlap so only the block's main rows remain
+    # (Note: with boundary="none", edge blocks get no padding on their outer side)
+    left_pads = [
+        min(depth[ax], start) if boundary == "none" else depth[ax]
+        for ax, start in enumerate(starts)
+    ]
+    return func(block, left_pads, starts, stops)
+
+
+def map_overlap_ragged(
+    func: BlockFunc,
+    meta: pd.DataFrame,
+    array: da.Array,
+    depth: Mapping[int, int],
+    boundary: str | int = "reflect",
+) -> dd.DataFrame:
+    """Apply a function to overlapping blocks of an array and collect the results in a DataFrame.
+
+    Like :func:`dask.array.map_overlap`, each block is passed to ``func`` with ``depth`` extra
+    elements from its neighbors along each axis. Unlike ``map_overlap``, ``func`` returns a
+    DataFrame instead of an array, so each block can produce any number of rows (e.g. one row per
+    object or per element). The results for all blocks are concatenated into one Dask DataFrame.
+
+    :param func: Called as ``func(block, left_pads, starts, stops)`` for each block, where:
+
+        - ``block`` is the block as a NumPy array, including its overlap.
+        - ``left_pads[ax]`` is the number of overlap elements before the block's main region
+          along axis ``ax``. The main region along that axis is
+          ``block[left_pads[ax] : left_pads[ax] + stops[ax] - starts[ax]]``.
+        - ``starts[ax]`` / ``stops[ax]`` give the main region's location in ``array`` along axis
+          ``ax`` (stop is exclusive). Add ``starts[ax]`` to an index within the main region to
+          get its index in ``array``.
+
+        ``func`` must return a DataFrame with the same columns and dtypes as ``meta``. To avoid
+        duplicate rows, only return results for the main region; the overlap is there to provide
+        context.
+    :param meta: Empty DataFrame with the columns and dtypes that ``func`` returns.
+    :param array: Input array. Chunks smaller than the overlap depth are merged with their
+        neighbors, the same way :func:`dask.array.overlap.overlap` does.
+    :param depth: Number of overlap elements along each axis, mapping every axis to a depth (use 0
+        for no overlap).
+    :param boundary: How to pad the outer edges of the array: ``"reflect"``, ``"periodic"``,
+        ``"nearest"``, ``"none"`` (no padding, so blocks at the array's edges have no overlap on
+        their outer side), or a constant value. Applied to every axis.
+    :return: Dask DataFrame with one partition per block, containing the rows returned by ``func``.
+    """
+    # Rechunk up front the same way da.overlap.overlap would (every chunk must be >= depth),
+    # so the block locations below are computed from the chunks actually used
+    array = array.rechunk(
+        tuple(
+            ensure_minimum_chunksize(depth[ax], c) for ax, c in enumerate(array.chunks)
+        )
+    )
+    array_with_overlap = da.overlap.overlap(
+        array, depth=depth, boundary={ax: boundary for ax in range(array.ndim)}
+    )
+
+    # Dask tracks array indexing schemas via x.chunks
+    # Compute the global slice of each block in the original (non-overlapped) array
+    offsets = [[0, *itertools.accumulate(c)] for c in array.chunks]
+    block_info_dict = {
+        b_id: {
+            "array-location": [
+                slice(offsets[ax][i], offsets[ax][i + 1]) for ax, i in enumerate(b_id)
+            ]
+        }
+        for b_id in np.ndindex(*array.numblocks)
+    }
+
+    delayed_dfs = []
+    _block_wrapper_delayed = dask.delayed(_block_wrapper)
+    delayed_blocks = array_with_overlap.to_delayed()
+    for b_id in np.ndindex(*array.numblocks):
+        # Retrieve structural metadata for this block
+        chunk_slice = block_info_dict[b_id][
+            "array-location"
+        ]  # Gives list of slices per dimension
+        d_df = _block_wrapper_delayed(
+            func,
+            delayed_blocks[b_id],
+            chunk_location=chunk_slice,
+            depth=depth,
+            boundary=boundary,
+        )
+        delayed_dfs.append(d_df)
+
+    return dd.from_delayed(delayed_dfs, meta=meta)
+
+
 def _cpu_count():
     count = os.environ.get("SCALLOPS_CPU_COUNT")
     if count is not None:
@@ -48,6 +161,20 @@ def _cpu_count():
 
 def _tqdm_shim(iterator, *args, **kwargs):
     return iterator
+
+
+def tqdm_func(progress: bool | str = True):
+    progress_args = dict()
+    tqdm_ = _tqdm_shim
+    if progress != False:  # noqa: E712
+        try:
+            from tqdm import tqdm as tqdm_
+
+            if isinstance(progress, str):
+                progress_args["desc"] = progress
+        except ImportError:
+            pass
+    return tqdm_, progress_args
 
 
 def _fix_json(d):

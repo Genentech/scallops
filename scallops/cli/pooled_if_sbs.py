@@ -46,7 +46,9 @@ from scallops.io import (
     _images2fov,
     _set_up_experiment,
     _to_parquet,
+    is_anndata,
     is_parquet_file,
+    write_anndata_zarr,
 )
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
@@ -77,7 +79,6 @@ from scallops.zarr_io import (
     _get_sep,
     _get_store_path,
     _write_zarr_image,
-    is_anndata_zarr,
     open_ome_zarr,
     read_ome_zarr_array,
 )
@@ -495,6 +496,8 @@ def merge_sbs_phenotype_pipeline(
     phenotype_suffix: list[str],
     df_barcode: pd.DataFrame | None,
     output_dir: str,
+    sbs_prefix: str | None = None,
+    barcode_prefix: str | None = None,
     join_sbs: Literal["left", "right", "inner", "outer", "cross"] = "inner",
     join_phenotype: Literal["left", "right", "inner", "outer", "cross"] = "inner",
     force: bool = False,
@@ -509,6 +512,8 @@ def merge_sbs_phenotype_pipeline(
     :param phenotype_suffix: List of suffixes for phenotype columns.
     :param df_barcode: DataFrame containing barcode information.
     :param output_dir: Directory to save the merged results.
+    :param sbs_prefix: Optional prefix for SBS columns.
+    :param barcode_prefix: Optional prefix for barcode columns.
     :param join_sbs: Type of join to perform for SBS data.
     :param join_phenotype: Type of join to perform for phenotype data.
     :param force: Force overwriting of existing results.
@@ -519,7 +524,7 @@ def merge_sbs_phenotype_pipeline(
     output_file = f"{output_dir}{image_key}.{output_format}"
     if not force and (
         (output_format == "parquet" and is_parquet_file(output_file))
-        or (output_format == "zarr" and is_anndata_zarr(output_file))
+        or (output_format == "zarr" and is_anndata(output_file))
     ):
         logger.info(f"Skipping merge for {image_key}")
         return []
@@ -533,6 +538,7 @@ def merge_sbs_phenotype_pipeline(
     image_metadata = None
     sbs_cycles = None
     unique_columns = set()
+    sbs_columns = []
     if df_barcode is not None:
         unique_columns.update(df_barcode.columns.tolist())
     if sbs_path is not None:
@@ -552,7 +558,8 @@ def merge_sbs_phenotype_pipeline(
             sbs_cycles = df_labels[["barcode_0"]].head()["barcode_0"].str.len().max()
             logger.info(f"ISS cycle metadata not found. Assuming {sbs_cycles} cycles.")
             sbs_cycles = np.arange(1, sbs_cycles + 1)
-        unique_columns.update(df_labels.columns.tolist())
+        sbs_columns = df_labels.columns.tolist()
+        unique_columns.update(sbs_columns)
     df_phenotypes = []
     # can have duplicate columns if features is called in multiple batches
 
@@ -617,6 +624,7 @@ def merge_sbs_phenotype_pipeline(
             df_barcode=df_barcode,
             sbs_cycles=sbs_cycles,
             how=join_sbs,
+            barcode_prefix=barcode_prefix,
         )
     elif df_labels is not None and df_phenotype is not None:
         merged_df = df_labels.join(df_phenotype, how=join_sbs)
@@ -624,6 +632,16 @@ def merge_sbs_phenotype_pipeline(
         merged_df = df_phenotype
     else:
         raise ValueError("Nothing to merge")
+    if sbs_prefix:
+        rename_sbs = {
+            col: sbs_prefix + col for col in sbs_columns if col in merged_df.columns
+        }
+        if len(rename_sbs) > 0:
+            merged_df = merged_df.rename(columns=rename_sbs)
+    assert not merged_df.columns.has_duplicates, (
+        f"Duplicate columns: {', '.join(merged_df.columns[merged_df.columns.duplicated()].to_list())}"
+    )
+    unique_columns.update(merged_df.columns.tolist())
     if image_metadata is not None:
         for col in image_metadata.keys():
             value = image_metadata[col]
@@ -649,7 +667,7 @@ def merge_sbs_phenotype_pipeline(
             name=image_key,
         )
         data.uns["scallops"] = _fix_json(metadata)
-        data.write_zarr(output_file, convert_strings_to_categoricals=False)
+        write_anndata_zarr(data, output_file)
 
     elif isinstance(merged_df, pd.DataFrame):
         table = pa.Table.from_pandas(merged_df, preserve_index=True)
@@ -717,6 +735,8 @@ def merge_main(arguments: argparse.Namespace):
     output_format = arguments.format
     join_phenotype = arguments.join_phenotype
     phenotype_suffix = arguments.phenotype_suffix
+    sbs_prefix = arguments.sbs_prefix
+    barcode_prefix = arguments.barcode_prefix
     if phenotype_suffix is not None:
         assert len(phenotype_paths) == len(phenotype_suffix), (
             "Length of phenotype and suffix must match"
@@ -796,6 +816,8 @@ def merge_main(arguments: argparse.Namespace):
                     phenotype_suffix=phenotype_suffix,
                     df_barcode=df_barcode,
                     output_dir=output_dir + output_fs.sep,
+                    sbs_prefix=sbs_prefix,
+                    barcode_prefix=barcode_prefix,
                     join_sbs=join_sbs,
                     join_phenotype=join_phenotype,
                     force=force,

@@ -1,28 +1,19 @@
-import os.path
-import pickle
-
 import dask.array as da
 import numpy as np
 import pytest
 from cp_measure.core.measurecolocalization import (
-    get_correlation_costes,
-    get_correlation_manders_fold,
-    get_correlation_overlap,
     get_correlation_pearson,
-    get_correlation_rwc,
 )
 from cp_measure.multimask.measureobjectneighbors import measureobjectneighbors
 
-from scallops.features.colocalization import _colocalization_pairs
 from scallops.features.cp_measure_wrapper import (
-    cp_intensity,
-    cp_intensity_distribution,
+    cp_intensity_distribution_radial,
+    cp_intensity_distribution_zernike,
     cp_size_shape,
     cp_texture,
 )
 from scallops.features.find_objects import find_objects
 from scallops.features.generate import label_features
-from scallops.features.intensity import intensity
 from scallops.features.intensity_distribution import (
     intensity_distribution_radial,
     intensity_distribution_zernike,
@@ -52,163 +43,6 @@ def test_neighbors(experiment_c_A1_102_cells):
         np.testing.assert_array_equal(
             features_cp[key],
             features_scallops[key],
-            err_msg=key,
-        )
-
-
-@pytest.mark.features
-def test_intensity(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
-    label_image = experiment_c_A1_102_cells.squeeze().data
-    intensity_image = (
-        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
-    )
-
-    unique_labels = np.unique(label_image)
-    unique_labels = unique_labels[unique_labels > 0]
-    c = [0, 1]
-    channel_names = ["c0", "c1"]
-    if not os.path.exists("scallops/tests/data/features/intensity.pkl"):
-        label_image_relabel = relabel_sequential(label_image)
-        unique_labels_relabel = np.unique(label_image_relabel)
-        unique_labels_relabel = unique_labels_relabel[unique_labels_relabel > 0]
-        features_cp = cp_intensity(
-            c=[0],
-            channel_names=channel_names,
-            unique_labels=unique_labels_relabel,
-            label_image=label_image_relabel,
-            intensity_image=intensity_image,
-        )
-        with open("scallops/tests/data/features/intensity.pkl", "wb") as f:
-            pickle.dump(features_cp, f)
-    else:
-        with open("scallops/tests/data/features/intensity.pkl", "rb") as f:
-            features_cp = pickle.load(f)
-    features_scallops = intensity(
-        c=c,
-        channel_names=channel_names,
-        unique_labels=unique_labels,
-        label_image=label_image,
-        label_image_original=label_image,
-        intensity_image=intensity_image,
-        offset=(0, 0),
-    )
-    # these values are computed differently in cp-measure
-    inexact = {
-        "Std": 0.0008,
-        "LowerQuartile": 0.016,
-        "UpperQuartile": 0.16,
-        "Median": 0.065,
-        "MAD": 0.31,
-        "Location_MaxIntensity": 0.06,
-    }
-
-    for key in features_cp:
-        if key in ("Location_CenterMassIntensity_Z_c0", "Location_MaxIntensity_Z_c0"):
-            continue
-        rtol = None
-        for t in inexact.keys():
-            if key.find(t) != -1:
-                rtol = inexact[t]
-                break
-        if rtol is not None:
-            np.testing.assert_allclose(
-                features_cp[key],
-                features_scallops[key],
-                err_msg=key,
-                rtol=rtol,
-            )
-        else:
-            np.testing.assert_array_equal(
-                features_cp[key],
-                features_scallops[key],
-                err_msg=key,
-            )
-
-
-@pytest.mark.features
-def test_colocalization(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
-    label_image = experiment_c_A1_102_cells.squeeze().data
-    label_image = relabel_sequential(label_image)
-
-    intensity_image = (
-        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
-    )
-
-    unique_labels = np.unique(label_image)
-    unique_labels = unique_labels[unique_labels > 0]
-    channel_names = ["c0", "c1"]
-    features_scallops = _colocalization_pairs(
-        c=[(0, 1)],
-        channel_names=channel_names,
-        unique_labels=unique_labels,
-        label_image=label_image,
-        intensity_image=intensity_image,
-    )
-    # pearson
-    features_cp = get_correlation_pearson(
-        intensity_image[..., 0], intensity_image[..., 1], label_image
-    )
-
-    for key in features_cp:
-        np.testing.assert_allclose(
-            features_cp[key],
-            features_scallops[f"{key}_c0_c1"],
-            atol=2.22044605e-16,
-            rtol=2.49860215e-16,
-            err_msg=key,
-        )
-    # manders
-    features_cp = get_correlation_manders_fold(
-        intensity_image[..., 0], intensity_image[..., 1], label_image
-    )
-    for key in features_cp:
-        scallops_key = key.replace("_1", "_c0_c1").replace("_2", "_c1_c0")
-        np.testing.assert_array_equal(
-            features_cp[key],
-            features_scallops[scallops_key],
-            err_msg=key,
-        )
-
-    # overlap
-    features_cp = get_correlation_overlap(
-        intensity_image[..., 0], intensity_image[..., 1], label_image
-    )
-
-    for key in features_cp:
-        scallops_key = (
-            key.replace("K_1", "K_c0_c1")
-            .replace("K_2", "K_c1_c0")
-            .replace("Overlap", "Overlap_c0_c1")
-        )
-        np.testing.assert_array_equal(
-            features_cp[key],
-            features_scallops[scallops_key],
-            err_msg=key,
-        )
-
-    # rwc
-    features_cp = get_correlation_rwc(
-        intensity_image[..., 0], intensity_image[..., 1], label_image
-    )
-    for key in features_cp:
-        scallops_key = key.replace("_1", "_c0_c1").replace("_2", "_c1_c0")
-        np.testing.assert_allclose(
-            features_cp[key],
-            features_scallops[scallops_key],
-            err_msg=key,
-            atol=1.77635684e-15,
-            rtol=2.11831416e-15,
-        )
-
-    # costes
-    features_cp = get_correlation_costes(
-        intensity_image[..., 0], intensity_image[..., 1], label_image
-    )
-    for key in features_cp:
-        scallops_key = key.replace("_1", "_c0_c1").replace("_2", "_c1_c0")
-        np.testing.assert_array_equal(
-            features_cp[key],
-            features_scallops[scallops_key],
             err_msg=key,
         )
 
@@ -249,24 +83,34 @@ def test_haralick_features(experiment_c_A1_102_cells, experiment_c_A1_102_pheno)
 
 @pytest.mark.features
 def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
-    label_image = relabel_sequential(experiment_c_A1_102_cells.squeeze().data)
+    label_image = experiment_c_A1_102_cells.squeeze().data
 
+    label_image = relabel_sequential(label_image)
+    unique_labels = np.unique(label_image)
+    unique_labels = unique_labels[unique_labels > 0]
     intensity_image = (
         experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
     )
 
-    unique_labels = np.unique(label_image)
-    unique_labels = unique_labels[unique_labels > 0]
     c = [0, 1]
     channel_names = ["c0", "c1"]
 
-    features_cp = cp_intensity_distribution(
+    features_cp = cp_intensity_distribution_radial(
         c=c,
         channel_names=channel_names,
-        unique_labels=unique_labels,
+        unique_labels=None,
         label_image=label_image,
         intensity_image=intensity_image,
-        calculate_zernike=True,
+    )
+
+    features_cp.update(
+        cp_intensity_distribution_zernike(
+            c=c,
+            channel_names=channel_names,
+            unique_labels=None,
+            label_image=label_image,
+            intensity_image=intensity_image,
+        )
     )
 
     features_scallops = intensity_distribution_radial(
@@ -313,14 +157,15 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
     features_scallops = features_scallops.join(objects_df).sort_index()
 
     features_cp = get_correlation_pearson(
-        intensity_image[..., 0], intensity_image[..., 1], label_image
+        intensity_image[..., 0],
+        intensity_image[..., 1],
+        relabel_sequential(label_image),
     )
     # values are slightly different because arrays are ordered differently
     for key in features_cp:
         np.testing.assert_allclose(
             features_cp[key],
             features_scallops[f"{key}_c0_c1"],
-            rtol=0.00014,
             err_msg=key,
         )
 
@@ -332,12 +177,44 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         remove_objects=False,
     )
 
-    for key in features_cp:
-        # https://github.com/afermg/cp_measure/issues/18
-        if key.startswith("AreaShape_Zernike"):
-            diff = np.max(np.abs(features_cp[key] - features_scallops[key]))
-            assert diff < 0.025, f"{key}, {diff}"
+    check_close = [
+        "AreaShape_MajorAxisLength",
+        "AreaShape_MinorAxisLength",
+        "AreaShape_Eccentricity",
+        "AreaShape_Orientation",
+        "AreaShape_CentralMoment",
+        "AreaShape_NormalizedMoment",
+        "AreaShape_HuMoment",
+        "AreaShape_InertiaTensor",
+        "AreaShape_InertiaTensorEigenvalues",
+        "AreaShape_Zernike",
+    ]
 
+    tolerance = {
+        "AreaShape_Zernike": (0.02403081, 1e-7),
+        "AreaShape_CentralMoment": (2.16004992e-12, 1e-7),
+    }
+
+    for key in features_cp:
+        close = False
+        atol = 0
+        rtol = 1e-7
+
+        for check in check_close:
+            if key.startswith(check):
+                close = True
+                if check in tolerance:
+                    atol, rtol = tolerance[check]
+                break
+
+        if close:
+            np.testing.assert_allclose(
+                features_cp[key],
+                features_scallops[key],
+                err_msg=key,
+                rtol=rtol,
+                atol=atol,
+            )
         else:
             np.testing.assert_array_equal(
                 features_cp[key],

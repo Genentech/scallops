@@ -14,7 +14,6 @@ from scallops.cli.util import (
     groupby_arg,
     no_version_arg,
     subset_arg,
-    verbose_arg,
     z_index_arg,
 )
 
@@ -265,7 +264,7 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
     force_arg(parser)
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
-    verbose_arg(parser)
+
     no_version_arg(parser)
     _sort_groups(parser)
     parser.set_defaults(func=_run_itk_registration, output="register")

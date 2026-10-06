@@ -10,6 +10,7 @@ import pytest
 import xarray as xr
 
 from scallops import Experiment
+from scallops.features.util import pandas_to_anndata
 from scallops.io import read_image, save_ome_tiff
 from scallops.tests.test_stitch import _write_image_with_position
 
@@ -240,3 +241,105 @@ def test_ops_wdl(tmp_path):
     assert len(
         merge_features_df.query("~Nuclei_Intensity_MeanIntensity_Channel0.isna()")
     ) == len(merge_sbs_metadata_df.query("~barcode_count_0.isna()"))
+
+
+@pytest.mark.cli_e2e
+def test_pert_map_wdl(tmp_path):
+    rng = np.random.default_rng(0)
+    n_labels = 1200
+    n_features = 24
+    # `enrichment` requires at least 10 genes per set, so use two sets of 12.
+    genes = [f"GENE{i}" for i in range(24)]
+    set_genes = [genes[:12], genes[12:]]
+    feature_names = [f"Cells_Intensity_feature_{i}" for i in range(n_features)]
+    df = pd.DataFrame(
+        data=dict(
+            label=np.arange(n_labels),
+            gene_symbol=rng.choice(["NTC", "INTERGENIC"] + genes, n_labels),
+            plate=rng.choice(["p1", "p2"], n_labels),
+            well=rng.choice(["w1", "w2"], n_labels),
+            Nuclei_AreaShape_Center_Y=rng.uniform(0, 1000, n_labels),
+            Nuclei_AreaShape_Center_X=rng.uniform(0, 1000, n_labels),
+            **{name: rng.normal(size=n_labels) for name in feature_names},
+        )
+    )
+    dataset_path = tmp_path / "dataset.zarr"
+    pandas_to_anndata(df, feature_names).write_zarr(
+        str(dataset_path), convert_strings_to_categoricals=False
+    )
+
+    gmt_path = tmp_path / "sets.gmt"
+    gmt_path.write_text(
+        "".join(
+            "\t".join([f"C{i}", "na"] + set_genes[i]) + "\n"
+            for i in range(len(set_genes))
+        )
+    )
+
+    corum_path = tmp_path / "corum.txt.gz"
+    pd.DataFrame(
+        dict(
+            complex_name=[f"C{i}" for i in range(len(set_genes))],
+            subunits_gene_name=[";".join(s) for s in set_genes],
+        )
+    ).to_csv(corum_path, sep="\t", index=False, compression="gzip")
+
+    output = tmp_path / "out"
+    reference_query = "gene_symbol=='NTC' or gene_symbol=='INTERGENIC'"
+    components = 5
+    input_json = {
+        "pert_map_workflow.inputs": [str(dataset_path)],
+        "pert_map_workflow.output_directory": str(output),
+        "pert_map_workflow.by": ["plate", "well"],
+        "pert_map_workflow.aggregate_by": ["gene_symbol"],
+        "pert_map_workflow.pca_components": components,
+        "pert_map_workflow.filter_n_features": 20,
+        "pert_map_workflow.normalize_method": "local-zscore",
+        "pert_map_workflow.normalize_neighbors": 10,
+        "pert_map_workflow.tvn_reference_query": reference_query,
+        "pert_map_workflow.aggregate_center_reference_query": reference_query,
+        "pert_map_workflow.recall_ground_truth_corum": [str(corum_path)],
+        "pert_map_workflow.enrichment_sets": [str(gmt_path)],
+        "pert_map_workflow.docker": "",
+        **{
+            f"pert_map_workflow.{step}_extra_arguments": "--client none"
+            for step in [
+                "filter",
+                "normalize",
+                "pca",
+                "tvn",
+                "aggregate",
+                "similarity_matrix",
+                "recall",
+                "enrichment",
+            ]
+        },
+    }
+
+    with open(tmp_path / "inputs.json", "wt") as out:
+        json.dump(input_json, out)
+
+    cmd = [
+        "miniwdl",
+        "run",
+        "-i",
+        str(tmp_path / "inputs.json"),
+        "wdl/pert_map_workflow.wdl",
+    ]
+    env = os.environ.copy()
+    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["SCALLOPS_TEST"] = "1"
+    check_call(cmd, env=env)
+
+    for name in [
+        "filter.zarr",
+        "normalize.zarr",
+        "pca.zarr",
+        "tvn.zarr",
+        "agg.zarr",
+        "sim.zarr",
+    ]:
+        assert (output / name).exists(), name
+
+    assert len(pd.read_parquet(output / "recall.parquet")) > 0
+    assert len(pd.read_parquet(output / "enrichment.parquet")) > 0

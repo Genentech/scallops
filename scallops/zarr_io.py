@@ -9,17 +9,27 @@ Authors:
 """
 
 import logging
-from collections.abc import Callable, Hashable
+import warnings
+from collections.abc import Callable, Hashable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import dask
 import dask.array as da
 import fsspec
+import h5py
 import numpy as np
 import ome_types
 import xarray as xr
 import zarr
+from anndata._core.views import DaskArrayView
+from anndata._io.specs import _REGISTRY
+from anndata._io.specs.methods import (
+    zarr_v3_compressor_compat,
+)
+from anndata._io.specs.registry import IOSpec, Writer
+from anndata.compat import DaskArray
 from dask.array import from_zarr
 from dask.delayed import Delayed
 from dask.graph_manipulation import bind
@@ -30,6 +40,7 @@ from ome_zarr.io import parse_url
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_image, write_multiscale
 from xarray.core.coordinates import DataArrayCoordinates
+from zarr.errors import ContainsGroupError
 from zarr.storage import StoreLike
 
 from scallops.experiment.abc import _LazyLoadData
@@ -40,6 +51,45 @@ logger = logging.getLogger("scallops")
 
 def _current_format() -> Format:
     return FormatV04()
+
+
+def _tolerate_concurrent_create(
+    create: Callable[[], zarr.Group], open_existing: Callable[[], zarr.Group]
+) -> zarr.Group:
+    """Call ``create``, falling back to ``open_existing`` if it loses a create race.
+
+    ``create`` is expected to be check-then-create: it looks a group up and creates
+    it only when the lookup misses. Processes that share an output store -- one
+    registration or stitching task per well, all writing the same zarr -- can all
+    miss, and every loser fails with ``ContainsGroupError``. The group they wanted
+    now exists, so ``open_existing`` should open it with a plain read (no create
+    attempt of its own), which cannot race no matter how many losers there are.
+
+    :param create: Attempts to create the group; raises ``ContainsGroupError`` if
+        another process created it first.
+    :param open_existing: Opens the group assuming it already exists.
+    :return: The existing or newly created group.
+    """
+    try:
+        return create()
+    except ContainsGroupError:
+        logger.debug("Group was created concurrently; opening the existing one")
+        return open_existing()
+
+
+def _require_group(parent: zarr.Group, name: str) -> zarr.Group:
+    """Get or create a child group, tolerating a concurrent writer.
+
+    An *array* at ``name`` still raises, as it does without this wrapper.
+
+    :param parent: Group to create the child under.
+    :param name: Name of the child group.
+    :return: The existing or newly created group.
+    """
+    return _tolerate_concurrent_create(
+        lambda: parent.require_group(name, overwrite=False),
+        lambda: parent[name],
+    )
 
 
 def _create_array_kwargs(fmt: Format | None = None) -> dict[str, Any]:
@@ -73,17 +123,6 @@ def _get_store_path(group: zarr.Group):
     if hasattr(group.store, "path"):
         return group.store.path
     return ""
-
-
-def is_anndata_zarr(store: StoreLike) -> bool:
-    """Determines whether store is an AnnData Zarr .
-
-    :param store: Zarr store
-    """
-    try:
-        return isinstance(zarr.open(store, mode="r", path="layers"), zarr.Group)
-    except:  # noqa: E722
-        return False
 
 
 def is_ome_zarr_array(node: zarr.Group) -> bool:
@@ -351,7 +390,7 @@ def _write_zarr_image(
         root = open_ome_zarr(root, mode="a")
     dest_grp = root
     if group is not None and name is not None:
-        images_grp = root.require_group(group, overwrite=False)
+        images_grp = _require_group(root, group)
         dest_grp = images_grp.create_group(name.replace("/", "-"), overwrite=True)
     image_attrs = None
     coords = None
@@ -599,7 +638,7 @@ def _write_zarr_labels(
     name = name.replace("/", "-")
     if isinstance(root, (str, Path)):
         root = open_ome_zarr(root, mode="a")
-    labels_grp = root.require_group("labels")
+    labels_grp = _require_group(root, "labels")
     grp = labels_grp.create_group(name, overwrite=True)
     if not isinstance(labels, xr.DataArray):
         if labels.ndim == 2:
@@ -788,7 +827,15 @@ def open_ome_zarr(url: Path | str, mode: str = "a") -> zarr.Group | None:
         loc = parse_url(url, mode=mode, fmt=fmt)
         if loc is None:
             return None
-        return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
+        if mode != "a":
+            return zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format)
+        # mode="a" is also check-then-create: another process can create the root
+        # group between our read and our create, no matter how many processes are
+        # racing. Fall back to "r+" (must exist, no create attempt), which can't race.
+        return _tolerate_concurrent_create(
+            lambda: zarr.open(loc.store, mode=mode, zarr_format=fmt.zarr_format),
+            lambda: zarr.open(loc.store, mode="r+", zarr_format=fmt.zarr_format),
+        )
     except Exception as e:
         logger.error(f"Failed to open OME-Zarr store: {url}")
         raise e
@@ -904,3 +951,59 @@ class _LazyLoadZarrData(_LazyLoadData):
         if self._data is None:
             self._data = read_ome_zarr_array(self._group, self._dask)
         return self._data
+
+
+@_REGISTRY.register_write(zarr.Group, DaskArrayView, IOSpec("array", "0.2.0"))
+@_REGISTRY.register_write(zarr.Group, DaskArray, IOSpec("array", "0.2.0"))
+def write_basic_dask_dask_dense(
+    f: zarr.Group | h5py.Group,
+    k: str,
+    elem: DaskArray,
+    *,
+    _writer: Writer,
+    dataset_kwargs: Mapping[str, Any] = MappingProxyType({}),
+):
+    # Removes hard-coded scheduler, respects dask chunk sizes, sets fill value, allows rectilinear chunks if array.rectilinear_chunks is set
+    import dask.array as da
+
+    dataset_kwargs = dict(dataset_kwargs)
+    fill_value = "fill_value" if not isinstance(f, h5py.Group) else "fillvalue"
+    if fill_value not in dataset_kwargs and np.isdtype(elem.dtype, "real floating"):
+        dataset_kwargs[fill_value] = np.nan
+    if (
+        not isinstance(f, h5py.Group)
+        and "chunks" not in dataset_kwargs
+        and "shards" not in dataset_kwargs
+    ):
+        # logic based on code in da.to_zarr
+        if zarr.config.get("array.rectilinear_chunks", False):
+            dataset_kwargs["chunks"] = elem.chunks
+        else:
+            if not da.core._check_regular_chunks(elem.chunks):
+                warnings.warn(
+                    "The array uses irregular chunk sizes. Rechunking to regular (uniform) chunks "
+                    "to ensure the data can be written safely. If you want to avoid this automatic "
+                    "rechunking, manually rechunk the array so that all chunks, except possibly the "
+                    "final chunk, in each dimension—have the same size (e.g., arr = arr.rechunk(...)).",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+                elem = elem.rechunk(tuple(map(max, elem.chunks)))
+            # zarr requires min chunk size 1
+
+            min_chunk_value = 0 if isinstance(f, h5py.Group) else 1
+            dataset_kwargs["chunks"] = tuple(
+                max(c[0], min_chunk_value) for c in elem.chunks
+            )
+
+    if isinstance(f, h5py.Group):
+        g = f.require_dataset(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
+    else:
+        dataset_kwargs = zarr_v3_compressor_compat(dataset_kwargs)
+        g = f.require_array(k, shape=elem.shape, dtype=elem.dtype, **dataset_kwargs)
+
+    if isinstance(f, h5py.Group):
+        da.store(elem, g, scheduler="threads")
+    else:
+        da.store(elem, g)
