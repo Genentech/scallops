@@ -1,6 +1,8 @@
+import os
 from subprocess import check_call
 
 import dask.array as da
+import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,8 +11,12 @@ from scipy.sparse import coo_array, issparse, sparray
 
 from scallops import Experiment
 from scallops.segmentation.util import (
-    label_overlap_iou,
+    assign_labels_by_overlap,
+    identify_tertiary_objects,
+    label_overlap,
+    relabel_by_assignment,
 )
+from scallops.zarr_io import read_ome_zarr_array
 
 
 def _label_overlap_to_iou(
@@ -32,7 +38,7 @@ def _label_overlap_to_iou(
 def test_label_overlap_iou(experiment_c_A1_102_cells, experiment_c_A1_102_nuclei):
     x = da.from_array(experiment_c_A1_102_cells.squeeze().data, chunks=(50, 50))
     y = da.from_array(experiment_c_A1_102_nuclei.squeeze().data, chunks=(40, 60))
-    df = label_overlap_iou(x, y).compute()
+    df = label_overlap(x, y).compute()
     df = df.sort_values(["label_1", "label_2"])
 
     assert df.query("label_1 == 17 and label_2 == 17")["iou"].values[0] == 67 / 99
@@ -50,31 +56,203 @@ def test_label_overlap_iou(experiment_c_A1_102_cells, experiment_c_A1_102_nuclei
         == 67 / 99
     )
 
+    # labels in label_image_2 without any overlaps have label_1 set to 0
+    no_overlap_df = df[df["label_1"] == 0]
+    labels_2 = np.unique(y[y != 0])
+    np.testing.assert_equal(
+        no_overlap_df["label_2"].values,
+        labels_2[np_overlap[1:, labels_2].sum(axis=0) == 0],
+    )
+    assert (no_overlap_df[["overlap", "iou", "fraction_overlap"]] == 0).all().all()
+    # labels in label_image_1 without any overlaps have label_2 set to 0
+    no_overlap_df = df[df["label_2"] == 0]
+    labels_1 = np.unique(x[x != 0])
+    np.testing.assert_equal(
+        no_overlap_df["label_1"].values,
+        labels_1[np_overlap[labels_1, 1:].sum(axis=1) == 0],
+    )
+    assert (no_overlap_df[["overlap", "iou", "fraction_overlap"]] == 0).all().all()
+    df = df[(df["label_1"] != 0) & (df["label_2"] != 0)]
+
     np_iou[0, :] = 0
     np_iou[:, 0] = 0
     i, j = np.nonzero(np_iou > 0)
     np.testing.assert_equal(df["label_1"].values, i)
     np.testing.assert_equal(df["label_2"].values, j)
     np.testing.assert_equal(df["iou"].values, np_iou[i, j])
+    np.testing.assert_allclose(
+        df["fraction_overlap"].values, np_overlap[i, j] / np_overlap.sum(axis=1)[i]
+    )
 
 
 @pytest.mark.features
-def test_label_overlap_iou_cli(
+def test_assign_labels_by_overlap():
+    overlap_df = pd.DataFrame(
+        {
+            "label_1": [1, 1, 2, 2, 2, 3],
+            "label_2": [5, 6, 7, 8, 9, 5],
+            "fraction_overlap": [10, 20, 5, 5, 3, 4],
+            "iou": [0.1, 0.2, 0.3, 0.5, 0.1, 0.4],
+        }
+    )
+    df = assign_labels_by_overlap(overlap_df)
+    # label 2 has a tie in overlap that is broken by IoU. Cells 7 and 9 only overlap
+    # label 2, which is assigned to cell 8, so they are included with label_1 set to 0
+    np.testing.assert_equal(df["label_1"].values, [1, 2, 3, 0, 0])
+    np.testing.assert_equal(df["label_2"].values, [6, 8, 5, 7, 9])
+    assert (df.query("label_1 == 0")[["iou", "fraction_overlap"]] == 0).all().all()
+
+
+@pytest.mark.features
+@pytest.mark.parametrize("npartitions", [1, 3, 7])
+def test_assign_labels_by_overlap_dask(npartitions):
+    rng = np.random.default_rng(0)
+    n = 5000
+    overlap_df = pd.DataFrame(
+        {
+            "label_1": rng.integers(1, 500, n),
+            "label_2": rng.integers(1, 1000, n),
+            "fraction_overlap": rng.integers(1, 10, n) / 10,
+            "iou": rng.random(n),
+        }
+    ).drop_duplicates(["label_1", "label_2"])
+    expected = assign_labels_by_overlap(overlap_df)
+    ddf = dd.from_pandas(
+        overlap_df.sample(frac=1, random_state=0), npartitions=npartitions
+    )
+    result = assign_labels_by_overlap(ddf)
+    assert isinstance(result, dd.DataFrame)
+    sort_by = ["label_1", "label_2"]
+    result = result.compute().sort_values(sort_by).reset_index(drop=True)
+    expected = expected.sort_values(sort_by).reset_index(drop=True)
+    assert (expected["label_1"] == 0).any()
+    pd.testing.assert_frame_equal(result, expected)
+
+
+@pytest.mark.features
+@pytest.mark.parametrize("use_dask", [False, True])
+def test_relabel_by_assignment(
+    experiment_c_A1_102_cells, experiment_c_A1_102_nuclei, use_dask
+):
+    cells = experiment_c_A1_102_cells.squeeze().data
+    nuclei = experiment_c_A1_102_nuclei.squeeze().data.copy()
+    # remove nuclei in cell 17 so that cell 17 doesn't overlap any nuclei
+    nuclei[np.isin(nuclei, np.unique(nuclei[cells == 17]))] = 0
+    # add a nucleus outside of any cell with the largest nucleus label
+    orphan_nucleus = int(nuclei.max()) + 1
+    nuclei[tuple(np.argwhere(cells == 0)[0])] = orphan_nucleus
+    overlap_df = label_overlap(
+        da.from_array(nuclei, chunks=(50, 50)), da.from_array(cells, chunks=(50, 50))
+    ).compute()
+    # cells without nuclei are included in label_overlap with label_1 set to 0
+    assert overlap_df.query("label_2 == 17")["label_1"].tolist() == [0]
+    assignment_df = assign_labels_by_overlap(overlap_df)
+    # every cell is included, with label_1 set to 0 if no nucleus is assigned to it
+    np.testing.assert_equal(
+        np.sort(assignment_df["label_2"].unique()), np.unique(cells)
+    )
+    assert assignment_df.query("label_2 == 17")["label_1"].tolist() == [0]
+    # nuclei outside of cells are assigned to background
+    assert assignment_df.query(f"label_1 == {orphan_nucleus}")["label_2"].tolist() == [
+        0
+    ]
+    offset = orphan_nucleus + 1
+    labels = da.from_array(cells, chunks=(40, 60)) if use_dask else cells
+    result = relabel_by_assignment(labels, assignment_df)
+    assert isinstance(result, da.Array) == use_dask
+    result = np.asarray(result)
+
+    assert result.shape == cells.shape
+    np.testing.assert_equal(result == 0, cells == 0)
+    # one-to-one mapping between old and new labels
+    pairs = np.unique(np.stack([cells.ravel(), result.ravel()]), axis=1)
+    assert len(np.unique(pairs[0])) == len(np.unique(pairs[1])) == pairs.shape[1]
+    mapping = dict(zip(pairs[0], pairs[1]))
+
+    assignment_df = (
+        assignment_df[(assignment_df["label_1"] != 0) & (assignment_df["label_2"] != 0)]
+        .sort_values(
+            ["label_2", "fraction_overlap", "label_1"], ascending=[True, False, True]
+        )
+        .drop_duplicates("label_2")
+    )
+    for label_1, label_2 in zip(assignment_df["label_1"], assignment_df["label_2"]):
+        assert mapping[label_2] == label_1
+    # cells without an assigned nucleus get new labels after the largest nucleus
+    unassigned = np.setdiff1d(np.unique(cells[cells != 0]), assignment_df["label_2"])
+    assert len(unassigned) > 0
+    np.testing.assert_equal(
+        [mapping[c] for c in unassigned], np.arange(offset, offset + len(unassigned))
+    )
+
+
+def _check_renumbered_cells(
+    cells: np.ndarray,
+    nuclei: np.ndarray,
+    renumbered_cells: np.ndarray,
+    assignment_df: pd.DataFrame,
+):
+    assert renumbered_cells.shape == cells.shape
+    np.testing.assert_equal(renumbered_cells == 0, cells == 0)
+    # one-to-one mapping between old and new cell labels
+    pairs = np.unique(np.stack([cells.ravel(), renumbered_cells.ravel()]), axis=1)
+    assert len(np.unique(pairs[0])) == len(np.unique(pairs[1])) == pairs.shape[1]
+    mapping = dict(zip(pairs[0], pairs[1]))
+    cell_labels = pairs[0][pairs[0] != 0]
+
+    # cells with a nucleus take the label of the nucleus with the highest fraction
+    # overlap, with ties broken by the smallest nucleus label
+    assigned = assignment_df.query("label_1 != 0 and label_2 != 0")
+    for cell, group in assigned.groupby("label_2"):
+        best = group[group["fraction_overlap"] == group["fraction_overlap"].max()]
+        assert mapping[cell] == best["label_1"].min()
+
+    # cells without a nucleus get unique labels after the largest nucleus label, so
+    # they don't match any nucleus
+    unassigned = np.setdiff1d(cell_labels, assigned["label_2"])
+    np.testing.assert_equal(
+        np.sort(unassigned),
+        np.sort(assignment_df.query("label_1 == 0")["label_2"].values),
+    )
+    max_nucleus = nuclei.max()
+    np.testing.assert_equal(
+        [mapping[cell] for cell in unassigned],
+        np.arange(max_nucleus + 1, max_nucleus + 1 + len(unassigned)),
+    )
+
+
+@pytest.mark.features
+def test_label_overlap_cli(
     experiment_c_A1_102_cells, experiment_c_A1_102_nuclei, tmpdir
 ):
-    x = da.from_array(experiment_c_A1_102_cells.squeeze().data, chunks=(50, 50))
-    y = da.from_array(experiment_c_A1_102_nuclei.squeeze().data, chunks=(40, 60))
+    cells = experiment_c_A1_102_cells.squeeze().data
+    nuclei = experiment_c_A1_102_nuclei.squeeze().data.copy()
+
+    # remove the nucleus in cell 19 so that cell 19 doesn't overlap any nuclei
+    nuclei[np.isin(nuclei, np.unique(nuclei[cells == 19]))] = 0
+    # add a nucleus outside of any cell with the largest nucleus label
+    nuclei[tuple(np.argwhere(cells == 0)[0])] = nuclei.max() + 1
+
+    cytosol = identify_tertiary_objects(nuclei, cells, True)
+    x = da.from_array(cells, chunks=(50, 50))
+    y = da.from_array(nuclei, chunks=(40, 60))
+    z = da.from_array(cytosol, chunks=(40, 60))
     labels_path = str(tmpdir / "test.zarr")
-    output_path = str(tmpdir / "output")
-    Experiment(labels={"test-nuclei": y, "test-cell": x}).save(labels_path)
+    output_meta_path = str(tmpdir / "output")
+    output_zarr_path = str(tmpdir / "output.zarr")
+    Experiment(labels={"test-nuclei": y, "test-cell": x, "test-cytosol": z}).save(
+        labels_path
+    )
     cmd = [
         "scallops",
         "segment",
         "overlap",
         "--labels",
         labels_path,
-        "--output",
-        output_path,
+        "--meta-output",
+        output_meta_path,
+        "--label-output",
+        output_zarr_path,
         "--label-suffix-1",
         "nuclei",
         "--label-suffix-2",
@@ -83,5 +261,55 @@ def test_label_overlap_iou_cli(
         "{well}",
     ]
     check_call(cmd)
-    df = pd.read_parquet(output_path + "/test-overlap.parquet")
+    df = pd.read_parquet(output_meta_path + "/test-overlap.parquet")
     assert df.query("label_1 == 17 and label_2 == 17")["iou"].values[0] == 67 / 99
+
+    assert ((df["label_1"] != 0) | (df["label_2"] != 0)).all()
+
+    assignment_df = pd.read_parquet(output_meta_path + "/test-assignment.parquet")
+    assert assignment_df.query("label_2 == 19")["label_1"].tolist() == [0]
+    renumbered_cells = read_ome_zarr_array(
+        os.path.join(output_zarr_path, "labels", "test-cell")
+    ).values
+    _check_renumbered_cells(
+        cells=cells,
+        nuclei=nuclei,
+        renumbered_cells=renumbered_cells,
+        assignment_df=assignment_df,
+    )
+    # cytosol labels are cell labels, so they are renumbered the same way as cells
+    assert (cytosol != 0).any()
+    np.testing.assert_equal(cytosol[cytosol != 0], cells[cytosol != 0])
+    renumbered_cytosol = read_ome_zarr_array(
+        os.path.join(output_zarr_path, "labels", "test-cytosol")
+    ).values
+    np.testing.assert_equal(
+        renumbered_cytosol, np.where(cytosol != 0, renumbered_cells, 0)
+    )
+    # all cells are included, with label_1 set to 0 if no nucleus is assigned to them
+    cells_without_nuclei = assignment_df.query("label_1 == 0")
+    assignment_df = assignment_df.query("label_1 != 0")
+    assert not cells_without_nuclei["label_2"].isin(assignment_df["label_2"]).any()
+    assert assignment_df["label_1"].is_unique
+    # all nuclei are included, with label_2 set to 0 if they don't overlap any cell
+    np.testing.assert_equal(
+        np.sort(assignment_df["label_1"].values), np.unique(nuclei[nuclei != 0])
+    )
+    np.testing.assert_equal(
+        np.sort(assignment_df.query("label_2 != 0")["label_1"].values),
+        np.unique(nuclei[(nuclei != 0) & (cells != 0)]),
+    )
+    df = df[df["label_1"] != 0].reset_index(drop=True)
+    expected = (
+        df.loc[
+            df.groupby("label_1")["fraction_overlap"].idxmax(),
+            ["label_1", "fraction_overlap"],
+        ]
+        .sort_values("label_1")
+        .reset_index(drop=True)
+    )
+    assignment_df = assignment_df.sort_values("label_1").reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(
+        assignment_df[["label_1", "fraction_overlap"]], expected, check_dtype=False
+    )

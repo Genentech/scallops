@@ -14,7 +14,6 @@ from scallops.cli.util import (
     image_pattern_arg,
     images_arg,
     no_version_arg,
-    output_dir_arg,
     subset_arg,
     z_index_arg,
 )
@@ -285,8 +284,8 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
 def _overlap_parser(subparsers: ArgumentParser, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "overlap",
-        help="Find overlaps between two labeled arrays.",
-        description="Find overlaps between two labeled arrays.",
+        help="Find the fraction of `label-1` contained within `label-2",
+        description="Find the fraction of `label-1` contained within `label-2",
         formatter_class=(
             ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
         ),
@@ -298,7 +297,16 @@ def _overlap_parser(subparsers: ArgumentParser, default_help: bool) -> None:
         nargs="+",
         help="Path to zarr directory containing labels",
     )
-    output_dir_arg(required)
+    required.add_argument(
+        "--meta-output",
+        required=True,
+        help="Path to output directory containing label overlap statistics and mappings",
+    )
+    required.add_argument(
+        "--label-output",
+        required=True,
+        help="Path to label zarr directory.",
+    )
     required.add_argument(
         "--label-pattern",
         required=True,
@@ -307,12 +315,18 @@ def _overlap_parser(subparsers: ArgumentParser, default_help: bool) -> None:
     parser.add_argument(
         "--label-suffix-1",
         default="nuclei",
-        help="Label suffix to include",
+        help="Label 1 suffix",
     )
     parser.add_argument(
         "--label-suffix-2",
         default="cell",
-        help="Label suffix to ",
+        help="Label 2 suffix",
+    )
+    parser.add_argument(
+        "--additional-suffix",
+        default=["cytosol"],
+        nargs="*",
+        help="Additional labels suffixes to rewrite",
     )
 
     parser.add_argument(

@@ -17,8 +17,6 @@ import dask.array
 import dask.array as da
 import fsspec
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 import xarray as xr
 import zarr
 from dask.delayed import Delayed
@@ -44,9 +42,10 @@ from scallops.features.find_objects import find_objects
 from scallops.features.generate import label_features, normalize_features
 from scallops.features.util import _get_names_from_pd_query
 from scallops.io import (
+    _dd_to_parquet,
     _images2fov,
+    _pd_to_parquet,
     _set_up_experiment,
-    _to_parquet,
     is_parquet_file,
     pluralize,
     read_anndata,
@@ -289,7 +288,7 @@ def single_feature(
             objects_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
             merged_df.index.name = "label"
             merged_df.columns = f"{label_prefix}_" + merged_df.columns
-            _to_parquet(
+            _dd_to_parquet(
                 merged_df,
                 objects_path,
                 write_index=True,
@@ -395,23 +394,14 @@ def single_feature(
             df.columns = f"{label_prefix}_" + df.columns
 
             if isinstance(df, pd.DataFrame):
-                table = pa.Table.from_pandas(df, preserve_index=True)
-                if not no_version:
-                    table = table.replace_schema_metadata(
-                        {
-                            "scallops".encode(): json.dumps(cli_metadata()).encode(),
-                            **table.schema.metadata,
-                        }
-                    )
-                fs, output_file = fsspec.url_to_fs(output_parquet_path)
-                pq.write_table(
-                    table,
+                _pd_to_parquet(
+                    df,
                     output_parquet_path,
-                    filesystem=fs,
+                    cli_metadata() if not no_version else dict(),
                 )
 
             else:
-                _to_parquet(
+                _dd_to_parquet(
                     df,
                     output_parquet_path,
                     write_index=True,

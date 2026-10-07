@@ -1,11 +1,8 @@
-import json
 from typing import Literal
 
 import dask.array as da
 import fsspec
 import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
 from array_api_compat import get_namespace
 from skimage.util import img_as_ubyte
 from zarr import Group
@@ -20,6 +17,7 @@ from scallops.features.constants import (
 )
 from scallops.io import (
     _images2fov,
+    _pd_to_parquet,
     is_parquet_file,
     to_label_crops,
 )
@@ -151,19 +149,6 @@ def single_crop(
         gaussian_sigma=gaussian_sigma,
     )
 
-    output_metadata = cli_metadata() if not no_version else dict()
-
-    table = pa.Table.from_pandas(merged_df, preserve_index=True)
-    table = table.replace_schema_metadata(
-        {
-            "scallops".encode(): json.dumps(output_metadata).encode(),
-            **table.schema.metadata,
-        }
-    )
-
-    fs, output_parquet_path = fsspec.url_to_fs(output_parquet_path)
-    pq.write_table(
-        table,
-        output_parquet_path,
-        filesystem=fs,
+    _pd_to_parquet(
+        merged_df, output_parquet_path, cli_metadata() if not no_version else dict()
     )

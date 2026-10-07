@@ -348,39 +348,95 @@ def _download_model(local_model_dir: Path, remote_model_file_name: str | list[st
                 fs.get(remote_path, str(local_model_file))
 
 
-def _label_pair_counts_chunk(x: np.ndarray, y: np.ndarray) -> pd.DataFrame:
-    df = pd.DataFrame({"label_1": x.ravel(), "label_2": y.ravel()})
-    return (
-        df.groupby(["label_1", "label_2"], sort=False)
-        .size()
-        .rename("overlap")
-        .reset_index()
-    )
+def _label_pair_counts_chunk(
+    x: np.ndarray, y: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    # encode each pair of labels as a single 64-bit key, which is much faster to count
+    # than grouping by two columns
+    keys = (x.ravel().astype(np.uint64) << np.uint64(32)) | y.ravel().astype(np.uint64)
+    # np.unique sorts, which releases the GIL, unlike hashing (e.g. pd.value_counts)
+    return np.unique(keys, return_counts=True)
 
 
-def label_overlap_iou(label_image_1: da.Array, label_image_2: da.Array) -> dd.DataFrame:
-    """Compute the intersection over union (IoU) for every pair of overlapping labels.
+def _label_overlap_from_counts(
+    chunk_counts: list[tuple[np.ndarray, np.ndarray]],
+    dtype_1: np.dtype,
+    dtype_2: np.dtype,
+) -> pd.DataFrame:
+    keys = np.concatenate([k for k, _ in chunk_counts])
+    counts = np.concatenate([c for _, c in chunk_counts])
+    # pairs that span chunk boundaries are counted in multiple chunks
+    keys, inverse = np.unique(keys, return_inverse=True)
+    overlap = np.bincount(inverse, weights=counts).astype(np.int64)
+    label_1 = (keys >> np.uint64(32)).astype(dtype_1)
+    label_2 = (keys & np.uint64(0xFFFFFFFF)).astype(dtype_2)
 
-    A dense contingency table is never created, so this scales to whole-well label arrays
-    with many labels.
+    # areas include pixels that overlap background in the other array. keys are sorted,
+    # so label_1 is sorted
+    unique_1, start_1 = np.unique(label_1, return_index=True)
+    area_1 = np.add.reduceat(overlap, start_1)[np.searchsorted(unique_1, label_1)]
+    unique_2, inverse_2 = np.unique(label_2, return_inverse=True)
+    area_2 = np.bincount(inverse_2, weights=overlap)[inverse_2]
 
-    :param label_image_1: Label array
-    :param label_image_2: Label array with the same shape as `label_image_1`
-    :return: Dask dataframe with the columns "label_1", "label_2", "overlap",
-        and "iou", with one row per pair of labels that overlap, excluding pairs where
-        either label is background (0)
-    """
-    assert label_image_1.shape == label_image_2.shape
-    label_image_2 = label_image_2.rechunk(label_image_1.chunks)
-    meta = pd.DataFrame(
+    pair = (label_1 != 0) & (label_2 != 0)
+    # every pixel of a label that doesn't overlap any label overlaps background
+    no_overlap_1 = np.setdiff1d(unique_1[unique_1 != 0], label_1[pair])
+    no_overlap_2 = np.setdiff1d(unique_2[unique_2 != 0], label_2[pair])
+    overlap_pair = overlap[pair]
+    return pd.DataFrame(
         {
-            "label_1": pd.Series(dtype=label_image_1.dtype),
-            "label_2": pd.Series(dtype=label_image_2.dtype),
-            "overlap": pd.Series(dtype="int64"),
+            "label_1": np.concatenate(
+                [label_1[pair], np.zeros(len(no_overlap_2), dtype_1), no_overlap_1]
+            ),
+            "label_2": np.concatenate(
+                [label_2[pair], no_overlap_2, np.zeros(len(no_overlap_1), dtype_2)]
+            ),
+            "overlap": np.concatenate(
+                [
+                    overlap_pair,
+                    np.zeros(len(no_overlap_1) + len(no_overlap_2), np.int64),
+                ]
+            ),
+            "iou": np.concatenate(
+                [
+                    overlap_pair / (area_1[pair] + area_2[pair] - overlap_pair),
+                    np.zeros(len(no_overlap_1) + len(no_overlap_2)),
+                ]
+            ),
+            "fraction_overlap": np.concatenate(
+                [
+                    overlap_pair / area_1[pair],
+                    np.zeros(len(no_overlap_1) + len(no_overlap_2)),
+                ]
+            ),
         }
     )
-    _chunk_delayed = delayed(_label_pair_counts_chunk)
-    results = [
+
+
+def label_overlap(label_image_1: da.Array, label_image_2: da.Array) -> dd.DataFrame:
+    """Compute the fraction overlap and intersection over union (IoU) for every pair of overlapping labels.
+
+    :param label_image_1: Label array (typically nuclei)
+    :param label_image_2: Label array with the same shape as `label_image_1` (typically cells)
+    :return: Dask dataframe with the columns "label_1", "label_2", "overlap", "iou",
+        and "fraction_overlap", with one row per pair of labels that overlap, excluding
+        pairs where either label is background (0). "fraction_overlap" is the fraction
+        of `label_1` contained within `label_2` (e.g. the fraction of a nucleus within a
+        cell). Labels in `label_image_2` that do not overlap any label in
+        `label_image_1` (e.g. cells without a nucleus) are included with "label_1" set
+        to 0, and labels in `label_image_1` that do not overlap any label in
+        `label_image_2` (e.g. nuclei outside of cells) are included with "label_2" set
+        to 0. "overlap", "iou", and "fraction_overlap" are 0 for these rows.
+    """
+    assert label_image_1.shape == label_image_2.shape
+    for a in (label_image_1, label_image_2):
+        if not (np.issubdtype(a.dtype, np.integer) and a.dtype.itemsize <= 4):
+            raise ValueError(
+                f"Labels must be integers with at most 32 bits, not {a.dtype}"
+            )
+    label_image_2 = label_image_2.rechunk(label_image_1.chunks)
+    _chunk_delayed = delayed(_label_pair_counts_chunk, nout=2)
+    chunk_counts = [
         _chunk_delayed(x_block, y_block)
         for x_block, y_block in zip(
             label_image_1.to_delayed().ravel(),
@@ -388,18 +444,152 @@ def label_overlap_iou(label_image_1: da.Array, label_image_2: da.Array) -> dd.Da
             strict=True,
         )
     ]
-    df = dd.from_delayed(results, meta=meta, verify_meta=False)
-    # pairs that span chunk boundaries are counted in multiple chunks
-    df = df.groupby(["label_1", "label_2"], sort=False)["overlap"].sum().reset_index()
+    # one row per pair of overlapping labels, so small enough for a single partition
+    df = delayed(_label_overlap_from_counts)(
+        chunk_counts, label_image_1.dtype, label_image_2.dtype
+    )
+    meta = pd.DataFrame(
+        {
+            "label_1": pd.Series(dtype=label_image_1.dtype),
+            "label_2": pd.Series(dtype=label_image_2.dtype),
+            "overlap": pd.Series(dtype="int64"),
+            "iou": pd.Series(dtype="float64"),
+            "fraction_overlap": pd.Series(dtype="float64"),
+        }
+    )
+    return dd.from_delayed([df], meta=meta, verify_meta=False)
 
-    area_x = df.groupby("label_1", sort=False)["overlap"].sum().rename("area_1")
-    area_y = df.groupby("label_2", sort=False)["overlap"].sum().rename("area_2")
-    # areas above include pixels that overlap background in the other array
-    df = df[(df["label_1"] != 0) & (df["label_2"] != 0)]
-    df = df.merge(area_x.to_frame(), left_on="label_1", right_index=True, how="left")
-    df = df.merge(area_y.to_frame(), left_on="label_2", right_index=True, how="left")
-    df["iou"] = df["overlap"] / (df["area_1"] + df["area_2"] - df["overlap"])
-    return df.drop(columns=["area_1", "area_2"])
+
+def _drop_lower_priority_overlaps(df: pd.DataFrame) -> pd.DataFrame:
+    return df.drop_duplicates("label_1", keep="first")
+
+
+def assign_labels_by_overlap(
+    overlap_df: pd.DataFrame | dd.DataFrame,
+) -> pd.DataFrame | dd.DataFrame:
+    """Assign each label in `label_1` (e.g. nuclei) to the label in `label_2` (e.g. cells)
+    with the highest fraction overlap.
+
+    Ties in fraction overlap are broken by IoU, then by the smallest `label_2`. Labels in
+    `label_1` that do not overlap any label in `label_2` have `label_2` set to 0. Note
+    that this gives each nucleus one cell, but one cell can have more than one nucleus.
+    Labels in `label_2` that are not assigned to any label in `label_1` (e.g. cells with
+    no nucleus, or cells whose only nucleus was assigned to another cell) are included
+    with `label_1` set to 0 and "overlap", "iou", and "fraction_overlap" set to 0, so
+    every label in `label_1` and `label_2` is included.
+
+    :param overlap_df: Pandas or Dask dataframe returned by :func:`label_overlap`
+    :return: Dataframe of the same type as `overlap_df` with the same columns as
+        `overlap_df`, with one row per label in `label_1` and one row per unassigned
+        label in `label_2`
+    """
+    df = overlap_df[overlap_df["label_1"] != 0].sort_values(
+        ["label_1", "fraction_overlap", "iou", "label_2"],
+        ascending=[True, False, False, True],
+    )
+    if isinstance(df, dd.DataFrame):
+        # sorting partitions on label_1, so all rows for a label_1 are in one partition
+        df = df.map_partitions(_drop_lower_priority_overlaps)
+        concat = dd.concat
+    else:
+        df = _drop_lower_priority_overlaps(df)
+        concat = pd.concat
+    labels_2 = overlap_df.loc[overlap_df["label_2"] != 0, ["label_2"]].drop_duplicates()
+    unassigned = labels_2.merge(
+        df[["label_2"]].drop_duplicates(), on="label_2", how="left", indicator=True
+    )
+    unassigned = unassigned.loc[unassigned["_merge"] == "left_only", ["label_2"]]
+    unassigned = unassigned.assign(
+        label_1=0, overlap=0, iou=0.0, fraction_overlap=0.0
+    ).astype(overlap_df.dtypes.to_dict())[list(overlap_df.columns)]
+    return concat([df, unassigned]).reset_index(drop=True)
+
+
+# maximum label for which a lookup table is used to relabel (64 MB for uint32 labels)
+_MAX_LUT_SIZE = 2**24
+
+
+def _lut_block(block: np.ndarray, lut: np.ndarray) -> np.ndarray:
+    return lut[block]
+
+
+def _map_labels_block(
+    block: np.ndarray, in_vals: np.ndarray, out_vals: np.ndarray, dtype: np.dtype
+) -> np.ndarray:
+    return map_array(block, in_vals, out_vals, out=np.empty(block.shape, dtype=dtype))
+
+
+def relabel_by_assignment(
+    labels: np.ndarray | da.Array,
+    assignment_df: pd.DataFrame,
+) -> np.ndarray | da.Array:
+    """Relabel `label_2` (e.g. cells) to match the assigned label in `label_1` (e.g. nuclei).
+
+    Each label in `labels` that is assigned to a label in `label_1` is renamed to that
+    label. If multiple labels in `label_1` are assigned to the same label in `labels`
+    (e.g. a cell containing two nuclei), the label in `label_1` with the largest
+    fraction overlap is used, with ties broken by the smallest `label_1`. Labels that are
+    not assigned to any label in `label_1` (rows with `label_1` set to 0 in
+    :func:`assign_labels_by_overlap`) are given new sequential labels starting at one
+    more than the maximum `label_1` in `assignment_df`, including labels in `label_1`
+    without any overlaps (`label_2` set to 0), so new labels never match a label in
+    `label_1`. Background (0) is unchanged.
+
+    :param labels: Label array corresponding to `label_2` in `assignment_df`. Every
+        label in `labels` must be in `assignment_df`.
+    :param assignment_df: Dataframe returned by :func:`assign_labels_by_overlap`
+    :return: Relabeled array of the same type and shape as `labels`
+
+    :example:
+
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>> cells = np.array([[0, 5, 5, 6], [7, 7, 0, 6]])
+    >>> assignment_df = pd.DataFrame(
+    ...     {
+    ...         "label_1": [1, 2, 3, 4, 0],
+    ...         "label_2": [5, 5, 6, 0, 7],
+    ...         "fraction_overlap": [0.5, 1.0, 1.0, 0.0, 0.0],
+    ...     }
+    ... )
+    >>> relabel_by_assignment(cells, assignment_df)
+    array([[0, 2, 2, 3],
+           [5, 5, 0, 3]])
+    """
+    offset = int(assignment_df["label_1"].max()) + 1 if len(assignment_df) > 0 else 1
+    # assignment_df includes every label in labels, so labels doesn't need to be read
+    unique_labels = assignment_df["label_2"].unique()
+    assignment_df = (
+        assignment_df[(assignment_df["label_1"] != 0) & (assignment_df["label_2"] != 0)]
+        .sort_values(
+            ["label_2", "fraction_overlap", "label_1"], ascending=[True, False, True]
+        )
+        .drop_duplicates("label_2", keep="first")
+    )
+    assigned_in = assignment_df["label_2"].values
+    assigned_out = assignment_df["label_1"].values
+    unassigned_in = np.setdiff1d(unique_labels[unique_labels != 0], assigned_in)
+    unassigned_out = np.arange(offset, offset + len(unassigned_in))
+
+    in_vals = np.concatenate([[0], assigned_in, unassigned_in]).astype(labels.dtype)
+    out_vals = np.concatenate([[0], assigned_out, unassigned_out])
+    dtype = np.promote_types(labels.dtype, np.min_scalar_type(out_vals.max()))
+    out_vals = out_vals.astype(dtype)
+    max_label = int(in_vals.max())
+    if (
+        np.issubdtype(labels.dtype, np.integer)
+        and in_vals.min() >= 0
+        and max_label < _MAX_LUT_SIZE
+    ):
+        # indexing a lookup table is much faster than map_array
+        lut = np.zeros(max_label + 1, dtype=dtype)
+        lut[in_vals] = out_vals
+        func, args = _lut_block, (lut,)
+    else:
+        func, args = _map_labels_block, (in_vals, out_vals, dtype)
+    if isinstance(labels, da.Array):
+        return da.map_blocks(func, labels, *args, dtype=dtype)
+    return func(labels, *args)
 
 
 def _relabel_block(label_field, in_vals, output_type=np.uint32, offset=1):

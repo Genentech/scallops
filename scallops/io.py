@@ -11,6 +11,7 @@ structures.
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import math
 import os
@@ -38,6 +39,7 @@ import h5py
 import numpy as np
 import ome_types
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import xarray as xr
 import zarr
@@ -101,7 +103,30 @@ def _remove_incomplete_file(path: str):
     fs.rm(f"{path}.scallops")
 
 
-def _to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
+def _pd_to_parquet(
+    df: pd.DataFrame,
+    output_path: str,
+    custom_metadata: dict | None,
+    preserve_index: bool = True,
+):
+    table = pa.Table.from_pandas(df, preserve_index=preserve_index)
+    if custom_metadata is not None:
+        table = table.replace_schema_metadata(
+            {
+                "scallops".encode(): json.dumps(custom_metadata).encode(),
+                **table.schema.metadata,
+            }
+        )
+
+    fs, output_parquet_path = fsspec.url_to_fs(output_path)
+    pq.write_table(
+        table,
+        output_parquet_path,
+        filesystem=fs,
+    )
+
+
+def _dd_to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
     compute = kwargs.pop("compute", True)
     fs, fs_path = fsspec.url_to_fs(path)
 
@@ -111,14 +136,17 @@ def _to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
         for i in range(0, len(files_to_delete), 1000):
             fs.rm(files_to_delete[i : i + 1000])
     _write_incomplete_file(path)
-    parquet_delayed = df.to_parquet(path, **kwargs)
+    parquet_delayed = df.to_parquet(path, compute=compute, **kwargs)
     if compute:
         _remove_incomplete_file(path)
     else:
         _remove_incomplete_file_delayed = delayed(_remove_incomplete_file)
         rm_delayed = _remove_incomplete_file_delayed(path)
-        # Forces 'rm_delayed' to wait for 'parquet_delayed' to finish
-        return bind(rm_delayed, parquet_delayed)
+        # Forces 'rm_delayed' to wait for 'parquet_delayed' to finish. Bind to a Delayed
+        # rather than the dask-expr Scalar, whose graph layer is named by id(); ids
+        # of garbage-collected objects are reused, so layers from separate calls can
+        # collide and silently drop a write when computed together.
+        return bind(rm_delayed, parquet_delayed.to_delayed())
 
 
 def is_scallops_zarr(url: str) -> bool:
@@ -1670,22 +1698,83 @@ def _set_up_experiment(
     file_sort_order: Sequence[str] | None = None,
     case_sensitive: bool = False,
 ) -> Generator[tuple[tuple[str, ...], Sequence[str], dict], None, None]:
-    """Identify files based on `files_pattern` and return groups based on `group_by`.
+    """Find images matching `files_pattern` and yield them in groups defined by `group_by`.
 
-    The function generates a tuple for each unique group containing the group names
-    (specified by group_by), list of file paths, and group metadata.
+    `files_pattern` is a file naming pattern with ``{field}`` placeholders, for example
+    ``"{well}/{tile}-{channel}.tif"``. Each placeholder matches one or more characters,
+    or exactly ``n`` characters when written as ``{field:n}``. The placeholders
+    ``{skip}`` and ``{ignore}`` match without capturing a field. If a field name is
+    repeated, later occurrences are renamed ``field_1``, ``field_2``, etc.
 
-    :param image_path: Directories to search for images or a list of image file paths
-    :param files_pattern: File pattern for images if image_path is a directory.
-    :param subset: Image keys to include if image_path is a directory. Use * for wildcard. For example A2-* will include
-        all tiles in well A2.
-    :param group_by: Groups (in `files_pattern`) to group by. Use `()` for no grouping and `(*)` to group all images
-        together
-    :param scenes: Whether to read all scenes in an image or a list of scene ids
-    :param file_sort_order: Order of files within a group
-    :param case_sensitive: Whether to use case-sensitive patterns
-    :return Tuple of group ids, file paths, and dict metadata with keys `file_metadata`,
-        `scene_id`, `id`, `group_metadata`, `src`, and  `common_src`.
+    Images are found in each entry of `image_path`, which can be:
+
+    - A directory, searched recursively. Paths are matched against `files_pattern`
+      relative to the directory, so the pattern can include subdirectories.
+    - A single image file, matched by its full path.
+    - A Zarr group, or a path to one. If the group contains ``images`` or ``labels``,
+      the names of the groups within it are matched against `files_pattern` (e.g.
+      ``"{well}-nuclei"`` matches ``labels/A1-nuclei``). Otherwise, if it is a single
+      OME-Zarr image, its store name is matched.
+    - A CSV or Parquet file with an ``image`` column of image paths and one column per
+      field in `group_by`. `files_pattern` is not used and `group_by` must be specified.
+
+    Matched images are grouped by the values of the `group_by` fields. The image key
+    of a group is those values joined with ``-`` (e.g. ``"A1-102"`` for
+    ``group_by=("well", "tile")``), with ``/`` replaced by ``-``. When scenes are read,
+    the scene id is appended to the key. Groups are yielded in natural sort order.
+
+    :param image_path: One or more directories, image files, Zarr groups, or CSV/Parquet
+        files to search for images.
+    :param files_pattern: File naming pattern used to match images and extract fields.
+        Use ``"*"`` (the default) to match all files.
+    :param group_by: Fields in `files_pattern` to group images by. Use ``()`` to put
+        each image in its own group, with the matched path as the image key, and
+        ``("*",)`` to put all images in one group with the image key ``"image"``.
+        Raises :class:`ValueError` if a field is not in `files_pattern`.
+    :param subset: Image keys to include. Either a function that takes an image key
+        and returns whether to include it, or a list of keys or patterns, in which
+        case keys that match any entry are included. Entries may be compiled regular
+        expressions, or strings in which ``*`` is a wildcard (e.g. ``"A2-*"`` includes
+        all tiles in well A2). Strings without ``*`` must match the key exactly. Use
+        `None` to include all images.
+    :param scenes: Whether to yield a group for each scene, or a list of scene ids to
+        yield. When `True`, scene ids are read from the first image of the first group
+        and are assumed to be the same for all images.
+    :param file_sort_order: Substrings defining the order of files within a group. Files
+        are sorted naturally after replacing each substring with its index in this list,
+        e.g. ``["IF", "FISH"]`` puts files containing ``IF`` before files containing
+        ``FISH``. By default files are sorted naturally by path.
+    :param case_sensitive: Whether `files_pattern` and wildcard or regular expression
+        `subset` entries are case-sensitive.
+    :return: Generator of ``(group, file_list, metadata)`` tuples, one per group (and
+        scene), where ``group`` is the tuple of `group_by` values, ``file_list`` is the
+        list of matched image paths or Zarr groups, and ``metadata`` is a dict with the
+        keys:
+
+        - ``id``: image key
+        - ``scene_id``: scene id, or `None` if scenes are not read
+        - ``file_metadata``: list with the fields extracted from each file (or the
+          other columns of each row, for CSV/Parquet input)
+        - ``group_metadata``: dict with ``group`` (dict of `group_by` field to value),
+          ``src`` (``file_list``), and ``common_src`` (longest common subsequence of the
+          file names)
+
+    :raises ValueError: If no images are found.
+
+    :example:
+
+    .. code-block:: python
+
+        # images/A1/A1-102-DAPI.tif, images/A1/A1-102-GFP.tif, ...
+        for group, file_list, metadata in _set_up_experiment(
+            "images",
+            files_pattern="{well}/{well}-{tile}-{channel}.tif",
+            group_by=("well", "tile"),
+            subset=["A1-*"],
+        ):
+            # group = ("A1", "102"), metadata["id"] = "A1-102", and file_list contains
+            # the DAPI and GFP images for tile 102 in well A1
+            ...
     """
     if file_sort_order is not None and len(file_sort_order) == 0:
         file_sort_order = None

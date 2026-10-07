@@ -23,7 +23,7 @@ from scallops.cli.util import (
 )
 from scallops.features.constants import _label_name_to_prefix
 from scallops.features.find_objects import find_objects
-from scallops.io import _create_file_regex, _set_up_experiment, _to_parquet
+from scallops.io import _create_file_regex, _dd_to_parquet, _set_up_experiment
 
 logger = _get_cli_logger()
 
@@ -56,7 +56,7 @@ def _execute(
     prefix = _label_name_to_prefix.get(label_name)
     if prefix is not None:
         df.columns = f"{prefix}_" + df.columns
-    _to_parquet(
+    _dd_to_parquet(
         df,
         path,
         write_index=True,

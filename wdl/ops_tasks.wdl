@@ -1,5 +1,45 @@
 version 1.0
 
+task segment_overlap {
+    input {
+
+        String label_pattern
+        String labels
+
+        String meta_output_directory
+        String label_output_directory
+        String subset
+        Boolean? force
+
+
+        String docker
+        String zones
+        Int preemptible
+        String aws_queue_arn
+        Int cpu
+        String disks
+        String memory
+        Int max_retries
+    }
+
+    command <<<
+        set -ex
+
+        scallops segment overlap \
+        --labels "~{labels}" \
+        --label-pattern  "~{label_pattern}" \
+        --meta-output "~{meta_output_directory}" \
+        --label-output "~{label_output_directory}" \
+        --subset ~{subset} \
+        ~{true="--force" false="" force}
+    >>>
+
+    output {
+        String meta_output_url = "~{meta_output_directory}"
+        String label_output_url = "~{label_output_directory}"
+
+    }
+
 task segment_nuclei {
     input {
         String? method
