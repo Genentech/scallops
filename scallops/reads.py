@@ -421,7 +421,15 @@ def assign_barcodes_to_labels(
         apply_args["meta"] = dd.utils.make_meta(columns)
 
     apply_args["sort_by"] = sort_by
-    columns_needed = ["label", "barcode"] + agg_columns + top2_columns
+
+    columns_needed = list(
+        set(
+            ["label", "barcode"]
+            + agg_columns
+            + top2_columns
+            + ([sort_by] if isinstance(sort_by, str) else sort_by)
+        )
+    )
 
     if "mismatches" in df_reads.columns:
         columns_needed.append("mismatches")
