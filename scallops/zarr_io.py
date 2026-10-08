@@ -398,7 +398,7 @@ def _write_zarr_image(
             dest_grp.attrs.update(group_metadata)
     image_attrs = None
     coords = None
-
+    dims = None
     if isinstance(image, xr.DataArray):
         data = image.data
         image_attrs = image.attrs.copy()
