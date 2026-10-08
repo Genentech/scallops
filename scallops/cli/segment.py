@@ -119,7 +119,10 @@ def segment_nuclei(
 
     if min_intensity is not None or max_intensity is not None:
         ch = intensity_channel if intensity_channel is not None else dapi_channel
-        intensity_image = image.isel(c=ch, missing_dims="ignore").squeeze().values
+        intensity_image = image.isel(c=ch, missing_dims="ignore")
+        # collapse t: use first cycle (cycle 0 = pre-sequencing DAPI)
+        intensity_image = intensity_image.isel(t=0, missing_dims="ignore").squeeze()
+        intensity_image = intensity_image.values
         if isinstance(intensity_image, da.Array):
             intensity_image = intensity_image.compute()
         nuclei = remove_labels_by_intensity(
