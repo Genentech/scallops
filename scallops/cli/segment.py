@@ -355,18 +355,17 @@ def _overlap(
         for group_id, file_list, metadata in additional_tuples
     ]:
         # keep the source label's metadata (e.g. physical pixel sizes) and source image
-        label_metadata, group_metadata = _label_source_metadata(file_list)
+        label_metadata = _label_source_metadata(file_list)
         if custom_metadata is not None:
             label_metadata.update(custom_metadata)
         delayed += _write_zarr_labels(
             name=f"{image_key}-{group_id[-1]}",
             root=output_root,
             metadata=label_metadata,
-            group_metadata=group_metadata,
             labels=relabel_by_assignment(labels.data, assignment_df=assignment_df),
             compute=False,
         )
-    dask.compute(**delayed)
+    dask.compute(*delayed)
     for df, path in ((overlap_df, overlap_path), (assignment_df, assignment_path)):
         _pd_to_parquet(
             df,
