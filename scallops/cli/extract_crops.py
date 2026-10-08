@@ -150,5 +150,5 @@ def single_crop(
     )
 
     _pd_to_parquet(
-        merged_df, output_parquet_path, cli_metadata() if not no_version else dict()
+        merged_df, output_parquet_path, cli_metadata() if not no_version else None
     )

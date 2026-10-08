@@ -435,8 +435,7 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     full_label_pattern = label_pattern + "-{label_suffix}"
 
     if subset is not None:
-        for i in range(len(subset)):
-            subset[i] = subset[i] + "-*"
+        subset = [s + "-*" for s in subset]
     gen = _set_up_experiment(
         image_path=paths,
         files_pattern=full_label_pattern,

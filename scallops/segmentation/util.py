@@ -353,15 +353,19 @@ def _label_pair_counts_chunk(
     x: np.ndarray, y: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     for a in (x, y):
-        # labels wider than 32 bits are allowed as long as their values fit in 32 bits
-        if a.size > 0 and not (
+        if a.size == 0 or (
             np.issubdtype(a.dtype, np.unsignedinteger) and a.dtype.itemsize <= 4
         ):
-            if a.min() < 0 or a.max() > 0xFFFFFFFF:
-                raise ValueError(
-                    "Label values must be between 0 and 2**32 - 1, "
-                    f"not [{a.min()}, {a.max()}]"
-                )
+            continue
+        # signed labels up to 32 bits can only be out of range if negative; labels
+        # wider than 32 bits are allowed as long as their values fit in 32 bits
+        a_min = a.min()
+        a_max = a.max() if a.dtype.itemsize > 4 else None
+        if a_min < 0 or (a_max is not None and a_max > 0xFFFFFFFF):
+            raise ValueError(
+                "Label values must be between 0 and 2**32 - 1, "
+                f"not [{a_min}, {a.max() if a_max is None else a_max}]"
+            )
     # encode each pair of labels as a single 64-bit key, which is much faster to count
     # than grouping by two columns
     keys = (x.ravel().astype(np.uint64) << np.uint64(32)) | y.ravel().astype(np.uint64)

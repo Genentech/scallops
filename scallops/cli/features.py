@@ -397,7 +397,7 @@ def single_feature(
                 _pd_to_parquet(
                     df,
                     output_parquet_path,
-                    cli_metadata() if not no_version else dict(),
+                    cli_metadata() if not no_version else None,
                 )
 
             else:
