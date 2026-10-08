@@ -12,6 +12,7 @@ from numbers import Number
 from pathlib import Path
 from typing import Callable, Literal
 
+import dask
 import dask.array as da
 import dask.dataframe as dd
 import fsspec
@@ -606,7 +607,18 @@ def relabel_by_assignment(
     else:
         func, args = _map_labels_block, (in_vals, out_vals, dtype)
     if isinstance(labels, da.Array):
-        return da.map_blocks(func, labels, *args, dtype=dtype)
+        # wrap arrays in delayed so they're stored once in the graph, not in every task
+        args = tuple(
+            dask.delayed(arg, pure=True) if isinstance(arg, np.ndarray) else arg
+            for arg in args
+        )
+        return da.map_blocks(
+            func,
+            labels,
+            *args,
+            dtype=dtype,
+            meta=np.empty((0,) * labels.ndim, dtype=dtype),
+        )
     return func(labels, *args)
 
 

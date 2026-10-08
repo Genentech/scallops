@@ -393,7 +393,7 @@ def _write_zarr_image(
     dest_grp = root
     if group is not None and name is not None:
         images_grp = _require_group(root, group)
-        dest_grp = images_grp.create_group(name.replace("/", "-"), overwrite=True)
+        dest_grp = images_grp.create_group(name.replace("/", "_"), overwrite=True)
         if group_metadata is not None:
             dest_grp.attrs.update(group_metadata)
     image_attrs = None

@@ -4,7 +4,7 @@ task segment_overlap {
     input {
 
         String label_pattern
-        String labels
+        Array[String] labels
 
         String meta_output_directory
         String label_output_directory
@@ -26,7 +26,7 @@ task segment_overlap {
         set -ex
 
         scallops segment overlap \
-        --labels "~{labels}" \
+        --labels ~{sep=" " labels} \
         --label-pattern  "~{label_pattern}" \
         --meta-output "~{meta_output_directory}" \
         --label-output "~{label_output_directory}" \

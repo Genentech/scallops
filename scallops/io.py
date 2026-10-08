@@ -1720,7 +1720,7 @@ def _set_up_experiment(
 
     Matched images are grouped by the values of the `group_by` fields. The image key
     of a group is those values joined with ``-`` (e.g. ``"A1-102"`` for
-    ``group_by=("well", "tile")``), with ``/`` replaced by ``-``. When scenes are read,
+    ``group_by=("well", "tile")``), with ``/`` replaced by ``_``. When scenes are read,
     the scene id is appended to the key. Groups are yielded in natural sort order.
 
     :param image_path: One or more directories, image files, Zarr groups, or CSV/Parquet
@@ -1992,7 +1992,7 @@ def _set_up_experiment(
             image_key = group if scene_id is None else group + (scene_id,)
             image_key = "-".join(image_key)
             image_key = image_key.replace(
-                "/", "-"
+                "/", "_"
             )  # zarr does not support / in group names
 
             if not subset(image_key):  # need to filter again if filtering scene

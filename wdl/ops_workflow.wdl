@@ -337,7 +337,7 @@ workflow ops_workflow {
                 if(match_segmentation_labels) {
                     call tasks.segment_overlap {
                         input:
-                            labels= segment_cell.output_url,
+                            labels=[segment_nuclei.output_url, segment_cell.output_url],
                             label_pattern=image_pattern_after_registration,
                             meta_output_directory=segment_overlap_meta_directory,
                             label_output_directory=segment_overlap_label_directory,

@@ -12,6 +12,7 @@ Authors:
 
 import argparse
 import importlib
+import os
 from collections import defaultdict
 from typing import Callable, Literal, Optional
 
@@ -21,6 +22,7 @@ import fsspec
 import numpy as np
 import zarr
 from dask.bag import from_sequence
+from fsspec.implementations.local import LocalFileSystem
 from zarr import Group
 
 from scallops.cli.util import (
@@ -338,15 +340,13 @@ def _overlap(
     group_id2, file_list_2, metadata_2 = label_tuple_2
     label_1 = _images2fov(file_list_1, metadata_1, dask=True)
     label_2 = _images2fov(file_list_2, metadata_2, dask=True)
-    image_key = "-".join(group_id1[:-1])
+    image_key = "-".join(group_id1[:-1]).replace("/", "_")
     prefix = f"{output_parquet_path}{image_key}"
     overlap_path = f"{prefix}-overlap.parquet"
     assignment_path = f"{prefix}-assignment.parquet"
     fs = fsspec.url_to_fs(overlap_path)[0]
 
-    label_suffixes = [group_id1[-1], group_id2[-1]] + [
-        t[0][-1] for t in additional_tuples
-    ]
+    label_suffixes = [group_id2[-1]] + [t[0][-1] for t in additional_tuples]
     if all(fs.exists(path) for path in [overlap_path, assignment_path]) and all(
         is_ome_zarr_array(output_root.get(f"labels/{image_key}-{suffix}"))
         for suffix in label_suffixes
@@ -388,6 +388,14 @@ def _overlap(
         )
 
 
+def _normalize_url(url: str) -> str:
+    """Normalize a path or URL so that equivalent locations compare equal."""
+    fs, path = fsspec.core.url_to_fs(url)
+    if isinstance(fs, LocalFileSystem):
+        path = os.path.realpath(path)
+    return fs.unstrip_protocol(path)
+
+
 def _run_overlap_pipeline(arguments: argparse.Namespace):
     dask_server_url = arguments.client
     dask_cluster_parameters = (
@@ -407,10 +415,10 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     output_parquet_path = arguments.meta_output
     output_zarr_path = arguments.label_output
     output_zarr_path = _add_suffix(output_zarr_path, ".zarr")
+    normalized_output_path = _normalize_url(output_zarr_path)
     for labels_path in labels_paths:
-        assert labels_path != output_zarr_path, (
-            "Input label path should not be the same as output path"
-        )
+        if _normalize_url(labels_path) == normalized_output_path:
+            raise ValueError("Input label path should not be the same as output path")
     output_root = open_ome_zarr(output_zarr_path, mode="a")
     _require_group(output_root, "labels")
 
@@ -425,6 +433,10 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
             raise ValueError(f"Labels group not found for {path}")
         paths.append(labels_group)
     full_label_pattern = label_pattern + "-{label_suffix}"
+
+    if subset is not None:
+        for i in range(len(subset)):
+            subset[i] = subset[i] + "-*"
     gen = _set_up_experiment(
         image_path=paths,
         files_pattern=full_label_pattern,
@@ -437,8 +449,8 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     for g in gen:
         group_id, file_list, metadata = g
         # ('test', 'cell')
-        suffix = group_id[-1]
-        base_id = group_id[:-1]
+        suffix = group_id[-1].replace("/", "_")
+        base_id = group_id[:-1].replace("/", "_")
         if suffix == label_suffix_1:
             label_1_base_id_to_tuple[base_id] = g
         elif suffix == label_suffix_2:
