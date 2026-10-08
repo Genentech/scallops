@@ -351,6 +351,16 @@ def _download_model(local_model_dir: Path, remote_model_file_name: str | list[st
 def _label_pair_counts_chunk(
     x: np.ndarray, y: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
+    for a in (x, y):
+        # labels wider than 32 bits are allowed as long as their values fit in 32 bits
+        if a.size > 0 and not (
+            np.issubdtype(a.dtype, np.unsignedinteger) and a.dtype.itemsize <= 4
+        ):
+            if a.min() < 0 or a.max() > 0xFFFFFFFF:
+                raise ValueError(
+                    "Label values must be between 0 and 2**32 - 1, "
+                    f"not [{a.min()}, {a.max()}]"
+                )
     # encode each pair of labels as a single 64-bit key, which is much faster to count
     # than grouping by two columns
     keys = (x.ravel().astype(np.uint64) << np.uint64(32)) | y.ravel().astype(np.uint64)
@@ -430,10 +440,8 @@ def label_overlap(label_image_1: da.Array, label_image_2: da.Array) -> dd.DataFr
     """
     assert label_image_1.shape == label_image_2.shape
     for a in (label_image_1, label_image_2):
-        if not (np.issubdtype(a.dtype, np.integer) and a.dtype.itemsize <= 4):
-            raise ValueError(
-                f"Labels must be integers with at most 32 bits, not {a.dtype}"
-            )
+        if not np.issubdtype(a.dtype, np.integer):
+            raise ValueError(f"Labels must be integers, not {a.dtype}")
     label_image_2 = label_image_2.rechunk(label_image_1.chunks)
     _chunk_delayed = delayed(_label_pair_counts_chunk, nout=2)
     chunk_counts = [

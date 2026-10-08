@@ -410,7 +410,7 @@ def _write_zarr_image(
             dims = ["y", "x"]
         elif image.ndim == 5:
             dims = ["t", "c", "z", "y", "x"]
-        else:
+        elif zarr_format == "ome_zarr":
             raise ValueError("Unable to infer image axes.")
     return write_zarr(
         grp=dest_grp,

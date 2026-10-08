@@ -497,7 +497,7 @@ workflow ops_workflow {
                 input:
                     fixed=select_first([iss_url]),
                     fixed_channel=iss_dapi_channel,
-                    moving_label=select_all([segment_nuclei.output_url, segment_cell_url]),
+                    moving_label=segment_cell_url,
                     moving=select_all([register_pheno_to_pheno_output_url]),
                     moving_image_pattern=register_pheno_to_pheno_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
