@@ -302,13 +302,11 @@ def segment_cells(
     return root
 
 
-def _label_source_metadata(file_list: list[str | Group]) -> tuple[dict, dict]:
-    """Get the stored metadata (e.g. physical pixel sizes) and source image of a label
-        so they can be copied to relabeled labels.
+def _label_source_metadata(file_list: list[str | Group]) -> dict:
+    """Get the stored metadata (e.g. physical pixel sizes).
 
     :param file_list: List containing the label zarr group
-    :return: Tuple of label metadata, without the scallops version and command, and
-        group metadata containing the source image
+    :return: Label metadata, without the scallops version and command
     """
     group = file_list[0]
     if not isinstance(group, Group):
@@ -319,12 +317,8 @@ def _label_source_metadata(file_list: list[str | Group]) -> tuple[dict, dict]:
         for key, value in (metadata or {}).items()
         if key not in ("scallops_version", "scallops_command")
     }
-    group_metadata = (
-        {"image-label": group.attrs["image-label"]}
-        if "image-label" in group.attrs
-        else None
-    )
-    return metadata, group_metadata
+
+    return metadata
 
 
 def _overlap(
@@ -355,26 +349,22 @@ def _overlap(
             logger.info(f"Skipping overlap for {image_key}.")
             return
     logger.info(f"Finding overlapping objects for {image_key}.")
-    # nuclei and cells without any overlaps are included with label_2 or label_1 set to 0
-    overlap_df = label_overlap(label_1.data, label_2.data).compute()
-    assignment_df = assign_labels_by_overlap(overlap_df)
-    custom_metadata = cli_metadata() if not no_version else None
-    delayed = []
     write_tuples = [(group_id2, file_list_2, label_2)]
     for group_id, file_list, metadata in additional_tuples:
         labels = _images2fov(file_list, metadata, dask=True)
         write_tuples.append((group_id, file_list, labels))
-
+    overlap_df = label_overlap(label_1.data, label_2.data).compute()
+    assignment_df = assign_labels_by_overlap(overlap_df)
+    custom_metadata = cli_metadata() if not no_version else None
+    delayed = []
     for group_id, file_list, labels in write_tuples:
-        # keep the source label's metadata (e.g. physical pixel sizes) and source image
-        label_metadata, group_metadata = _label_source_metadata(file_list)
+        label_metadata = _label_source_metadata(file_list)
         if custom_metadata is not None:
             label_metadata.update(custom_metadata)
         delayed += _write_zarr_labels(
             name=f"{image_key}-{group_id[-1]}",
             root=output_root,
             metadata=label_metadata,
-            group_metadata=group_metadata,
             labels=relabel_by_assignment(labels.data, assignment_df=assignment_df),
             compute=False,
         )

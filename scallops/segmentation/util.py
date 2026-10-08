@@ -522,14 +522,31 @@ def assign_labels_by_overlap(
 _MAX_LUT_SIZE = 2**24
 
 
+def _check_relabeled_block(block: np.ndarray, out: np.ndarray) -> np.ndarray:
+    # only background maps to 0, so a nonzero label mapped to 0 is not in the assignment
+    missing = (out == 0) & (block != 0)
+    if missing.any():
+        raise ValueError(
+            "Labels not found in assignment_df: "
+            f"{np.unique(block[missing])[:10].tolist()}"
+        )
+    return out
+
+
 def _lut_block(block: np.ndarray, lut: np.ndarray) -> np.ndarray:
-    return lut[block]
+    if block.size > 0 and block.max() >= len(lut):
+        raise ValueError(
+            "Labels not found in assignment_df: "
+            f"{np.unique(block[block >= len(lut)])[:10].tolist()}"
+        )
+    return _check_relabeled_block(block, lut[block])
 
 
 def _map_labels_block(
     block: np.ndarray, in_vals: np.ndarray, out_vals: np.ndarray, dtype: np.dtype
 ) -> np.ndarray:
-    return map_array(block, in_vals, out_vals, out=np.empty(block.shape, dtype=dtype))
+    out = map_array(block, in_vals, out_vals, out=np.empty(block.shape, dtype=dtype))
+    return _check_relabeled_block(block, out)
 
 
 def relabel_by_assignment(
@@ -543,13 +560,12 @@ def relabel_by_assignment(
     (e.g. a cell containing two nuclei), the label in `label_1` with the largest
     fraction overlap is used, with ties broken by the smallest `label_1`. Labels that are
     not assigned to any label in `label_1` (rows with `label_1` set to 0 in
-    :func:`assign_labels_by_overlap`) are given new sequential labels starting at one
-    more than the maximum `label_1` in `assignment_df`, including labels in `label_1`
-    without any overlaps (`label_2` set to 0), so new labels never match a label in
-    `label_1`. Background (0) is unchanged.
+    :func:`assign_labels_by_overlap`) are given new sequential labels starting at
+    `offset`. Background (0) is unchanged.
 
     :param labels: Label array corresponding to `label_2` in `assignment_df`. Every
-        label in `labels` must be in `assignment_df`.
+        label in `labels` must be in `assignment_df`, otherwise a `ValueError` is raised
+        when the labels are computed.
     :param assignment_df: Dataframe returned by :func:`assign_labels_by_overlap`
     :return: Relabeled array of the same type and shape as `labels`
 

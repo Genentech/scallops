@@ -223,6 +223,29 @@ def _check_renumbered_cells(
 
 
 @pytest.mark.features
+@pytest.mark.parametrize("large_labels", [False, True])
+def test_relabel_by_assignment_missing_label(large_labels):
+    # large labels use map_array instead of a lookup table
+    offset = 2**30 if large_labels else 0
+    cells = np.array([[0, 5, 5, 6], [7, 7, 0, 9]])
+    cells = np.where(cells != 0, cells + offset, 0)
+    assignment_df = pd.DataFrame(
+        {
+            "label_1": [1, 2, 0],
+            "label_2": np.array([5, 6, 7]) + offset,
+            "fraction_overlap": [1.0, 1.0, 0.0],
+        }
+    )
+    with pytest.raises(ValueError, match="Labels not found in assignment_df"):
+        relabel_by_assignment(cells, assignment_df)
+    # a missing label smaller than the largest label in assignment_df
+    with pytest.raises(ValueError, match="Labels not found in assignment_df"):
+        relabel_by_assignment(
+            np.where(cells == 9 + offset, 3 + offset, cells), assignment_df
+        )
+
+
+@pytest.mark.features
 def test_label_overlap_cli(
     experiment_c_A1_102_cells, experiment_c_A1_102_nuclei, tmpdir
 ):
@@ -238,11 +261,19 @@ def test_label_overlap_cli(
     x = da.from_array(cells, chunks=(50, 50))
     y = da.from_array(nuclei, chunks=(40, 60))
     z = da.from_array(cytosol, chunks=(40, 60))
+    # all cells, including a cell removed from cells (e.g. by area)
+    cells_all = cells.copy()
+    removed_cell = int(cells.max()) + 1
+    cells_all[tuple(np.argwhere((cells == 0) & (nuclei == 0))[0])] = removed_cell
     labels_path = str(tmpdir / "test.zarr")
     output_meta_path = str(tmpdir / "output")
     output_zarr_path = str(tmpdir / "output.zarr")
     labels_root = open_ome_zarr(labels_path, mode="w")
-    for name, labels in {"test-nuclei": y, "test-cell": x, "test-cytosol": z}.items():
+    for name, labels in {
+        "test-nuclei": y,
+        "test-cell": x,
+        "test-cytosol": z,
+    }.items():
         _write_zarr_labels(
             name=name,
             root=labels_root,
@@ -266,6 +297,8 @@ def test_label_overlap_cli(
         "cell",
         "--label-pattern",
         "{well}",
+        "--additional-suffix",
+        "cytosol",
     ]
     check_call(cmd)
     df = pd.read_parquet(output_meta_path + "/test-overlap.parquet")
@@ -284,15 +317,19 @@ def test_label_overlap_cli(
         renumbered_cells=renumbered_cells,
         assignment_df=assignment_df,
     )
-    # source label metadata and image link are kept, with the version replaced
+    # source label metadata is kept, with the version replaced. The source image link
+    # is dropped since the source image isn't in the output store
     for name in ("test-cell", "test-cytosol"):
         relabeled = read_ome_zarr_array(os.path.join(output_zarr_path, "labels", name))
         assert relabeled.dims == ("y", "x")
         assert get_image_spacing(relabeled.attrs) == (0.5, 0.25)
         assert relabeled.attrs["scallops_version"] != "old"
-        assert zarr.open(
-            os.path.join(output_zarr_path, "labels", name), mode="r"
-        ).attrs["image-label"] == {"source": {"image": "../../images/test"}}
+        assert (
+            zarr.open(os.path.join(output_zarr_path, "labels", name), mode="r").attrs[
+                "image-label"
+            ]
+            == {}
+        )
 
     # cytosol labels are cell labels, so they are renumbered the same way as cells
     assert (cytosol != 0).any()
@@ -303,6 +340,7 @@ def test_label_overlap_cli(
     np.testing.assert_equal(
         renumbered_cytosol, np.where(cytosol != 0, renumbered_cells, 0)
     )
+
     # all cells are included, with label_1 set to 0 if no nucleus is assigned to them
     cells_without_nuclei = assignment_df.query("label_1 == 0")
     assignment_df = assignment_df.query("label_1 != 0")
