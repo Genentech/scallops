@@ -6,17 +6,18 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
+import zarr
 from array_api_compat import get_namespace
 from scipy.sparse import coo_array, issparse, sparray
 
-from scallops import Experiment
+from scallops.io import get_image_spacing
 from scallops.segmentation.util import (
     assign_labels_by_overlap,
     identify_tertiary_objects,
     label_overlap,
     relabel_by_assignment,
 )
-from scallops.zarr_io import read_ome_zarr_array
+from scallops.zarr_io import _write_zarr_labels, open_ome_zarr, read_ome_zarr_array
 
 
 def _label_overlap_to_iou(
@@ -240,9 +241,15 @@ def test_label_overlap_cli(
     labels_path = str(tmpdir / "test.zarr")
     output_meta_path = str(tmpdir / "output")
     output_zarr_path = str(tmpdir / "output.zarr")
-    Experiment(labels={"test-nuclei": y, "test-cell": x, "test-cytosol": z}).save(
-        labels_path
-    )
+    labels_root = open_ome_zarr(labels_path, mode="w")
+    for name, labels in {"test-nuclei": y, "test-cell": x, "test-cytosol": z}.items():
+        _write_zarr_labels(
+            name=name,
+            root=labels_root,
+            labels=labels,
+            metadata=dict(physical_pixel_sizes=[0.5, 0.25], scallops_version="old"),
+            group_metadata={"image-label": {"source": {"image": "../../images/test"}}},
+        )
     cmd = [
         "scallops",
         "segment",
@@ -277,6 +284,15 @@ def test_label_overlap_cli(
         renumbered_cells=renumbered_cells,
         assignment_df=assignment_df,
     )
+    # source label metadata and image link are kept, with the version replaced
+    for name in ("test-cell", "test-cytosol"):
+        relabeled = read_ome_zarr_array(os.path.join(output_zarr_path, "labels", name))
+        assert relabeled.dims == ("y", "x")
+        assert get_image_spacing(relabeled.attrs) == [0.5, 0.25]
+        assert relabeled.attrs["scallops_version"] != "old"
+        assert zarr.open(
+            os.path.join(output_zarr_path, "labels", name), mode="r"
+        ).attrs["image-label"] == {"source": {"image": "../../images/test"}}
     # cytosol labels are cell labels, so they are renumbered the same way as cells
     assert (cytosol != 0).any()
     np.testing.assert_equal(cytosol[cytosol != 0], cells[cytosol != 0])

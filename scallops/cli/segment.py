@@ -12,10 +12,10 @@ Authors:
 
 import argparse
 import importlib
-import json
 from collections import defaultdict
 from typing import Callable, Literal, Optional
 
+import dask
 import dask.array as da
 import fsspec
 import numpy as np
@@ -50,6 +50,7 @@ from scallops.segmentation.util import (
 from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
+    _read_zarr_attrs,
     _require_group,
     _write_zarr_labels,
     is_ome_zarr_array,
@@ -299,6 +300,25 @@ def segment_cells(
     return root
 
 
+def _label_source_metadata(file_list: list[str | Group]) -> dict:
+    """Get the stored metadata (e.g. physical pixel sizes) of a label so they can be
+        copied to relabeled labels.
+
+    :param file_list: List containing the label zarr group
+    :return: Label metadata, without the scallops version and command
+    """
+    group = file_list[0]
+    if not isinstance(group, Group):
+        group = zarr.open(group, mode="r")
+    _, metadata, _ = _read_zarr_attrs(group.attrs)
+    metadata = {
+        key: value
+        for key, value in (metadata or {}).items()
+        if key not in ("scallops_version", "scallops_command")
+    }
+    return metadata
+
+
 def _overlap(
     label_tuple_1: tuple[tuple[str, ...], list[str | Group], dict],
     label_tuple_2: tuple[tuple[str, ...], list[str | Group], dict],
@@ -311,7 +331,7 @@ def _overlap(
     group_id1, file_list_1, metadata_1 = label_tuple_1
     group_id2, file_list_2, metadata_2 = label_tuple_2
     label_1 = _images2fov(file_list_1, metadata_1, dask=True).data
-    label_2 = _images2fov(file_list_2, metadata_2, dask=True).data
+    label_2 = _images2fov(file_list_2, metadata_2, dask=True)
     image_key = "-".join(group_id1[:-1])
     prefix = f"{output_parquet_path}{image_key}"
     overlap_path = f"{prefix}-overlap.parquet"
@@ -326,33 +346,27 @@ def _overlap(
             return
     logger.info(f"Finding overlapping objects for {image_key}.")
     # nuclei and cells without any overlaps are included with label_2 or label_1 set to 0
-    overlap_df = label_overlap(label_1, label_2).compute()
+    overlap_df = label_overlap(label_1, label_2.data).compute()
     assignment_df = assign_labels_by_overlap(overlap_df)
-    custom_metadata = (
-        dict(scallops=json.dumps(cli_metadata())) if not no_version else None
-    )
-
-    _write_zarr_labels(
-        name=f"{image_key}-{group_id2[-1]}",
-        root=output_root,
-        metadata=custom_metadata,
-        group_metadata=None,
-        labels=relabel_by_assignment(label_2, assignment_df=assignment_df),
-        compute=True,
-    )
-    for additional_tuple in additional_tuples:
-        group_id, file_list, metadata = additional_tuple
-        labels = _images2fov(file_list, metadata, dask=True).data
-
-        _write_zarr_labels(
+    custom_metadata = cli_metadata() if not no_version else None
+    delayed = []
+    for group_id, file_list, labels in [(group_id2, file_list_2, label_2)] + [
+        (group_id, file_list, _images2fov(file_list, metadata, dask=True))
+        for group_id, file_list, metadata in additional_tuples
+    ]:
+        # keep the source label's metadata (e.g. physical pixel sizes) and source image
+        label_metadata, group_metadata = _label_source_metadata(file_list)
+        if custom_metadata is not None:
+            label_metadata.update(custom_metadata)
+        delayed += _write_zarr_labels(
             name=f"{image_key}-{group_id[-1]}",
             root=output_root,
-            metadata=custom_metadata,
-            group_metadata=None,
-            labels=relabel_by_assignment(labels, assignment_df=assignment_df),
-            compute=True,
+            metadata=label_metadata,
+            group_metadata=group_metadata,
+            labels=relabel_by_assignment(labels.data, assignment_df=assignment_df),
+            compute=False,
         )
-
+    dask.compute(**delayed)
     for df, path in ((overlap_df, overlap_path), (assignment_df, assignment_path)):
         _pd_to_parquet(
             df,
@@ -421,7 +435,10 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     ):
         for base_id in label_1_base_id_to_tuple:
             label_tuple_1 = label_1_base_id_to_tuple[base_id]
-            label_tuple_2 = label_2_base_id_to_tuple[base_id]
+            label_tuple_2 = label_2_base_id_to_tuple.get(base_id)
+            if label_tuple_2 is None:
+                logger.info(f"No {label_suffix_2} labels found for {base_id}.")
+                continue
             additional_tuples = additional_base_id_to_tuples[base_id]
             _overlap(
                 label_tuple_1=label_tuple_1,

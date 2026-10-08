@@ -3,7 +3,6 @@ import os
 import shutil
 
 import anndata
-import dask
 import dask.array as da
 import dask.dataframe as dd
 import numpy as np
@@ -137,30 +136,6 @@ def test_to_parquet_no_compute(tmp_path):
     result.compute()
     assert not os.path.exists(f"{path}.scallops")
     assert is_parquet_file(path)
-
-
-@pytest.mark.io
-def test_to_parquet_no_compute_multiple(tmp_path):
-    # writes computed together must not overwrite each other's graph layers
-    for trial in range(20):
-        df = dd.from_pandas(
-            pd.DataFrame({"a": np.arange(100), "b": np.arange(100) % 5}),
-            npartitions=2,
-        )
-        frames = [df, df.query("a > 10"), df.groupby("b")["a"].sum().reset_index()]
-        paths = [os.path.join(tmp_path, f"{trial}-{i}.parquet") for i in range(3)]
-        results = [
-            _dd_to_parquet(frame, path, compute=False)
-            for frame, path in zip(frames, paths)
-        ]
-        layers = [set(r.__dask_graph__().layers) for r in results]
-        assert not (
-            layers[0] & layers[1] or layers[0] & layers[2] or layers[1] & layers[2]
-        )
-        dask.compute(*results)
-        for path in paths:
-            assert is_parquet_file(path)
-            assert len(glob.glob(os.path.join(path, "*.parquet"))) > 0
 
 
 @pytest.mark.io

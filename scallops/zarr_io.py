@@ -38,7 +38,7 @@ from ome_zarr.axes import KNOWN_AXES
 from ome_zarr.format import Format, FormatV04
 from ome_zarr.io import parse_url
 from ome_zarr.types import JSONDict
-from ome_zarr.writer import write_image, write_multiscale
+from ome_zarr.writer import write_multiscale
 from xarray.core.coordinates import DataArrayCoordinates
 from zarr.errors import ContainsGroupError
 from zarr.storage import StoreLike
@@ -289,7 +289,7 @@ def _fix_attrs(d: dict) -> None:
 
 
 def _attrs_axes_scales(
-    image_attrs: dict,
+    image_attrs: dict | None,
     coords: DataArrayCoordinates,
     dims: tuple[Hashable, ...],
     image_dtype: np.dtype,
@@ -364,11 +364,12 @@ def _write_zarr_image(
     name: str | None,
     root: zarr.Group | str | Path,
     image: da.Array | np.ndarray | xr.DataArray,
-    metadata: None | dict[str, Any] = None,
+    metadata: dict[str, Any] | None = None,
     group: str | None = "images",
     zarr_format: Literal["ome_zarr", "zarr"] = "ome_zarr",
     compute: bool = True,
     storage_options: JSONDict | None = None,
+    group_metadata: dict | None = None,
 ) -> list[Delayed]:
     """Write image in zarr format.
 
@@ -382,6 +383,7 @@ def _write_zarr_image(
     :param compute: If true compute immediately otherwise a list
         of :class:`dask.delayed.Delayed` is returned.
     :param storage_options: Options to be passed on to the storage backend.
+    :param group_metadata: Optional group level metadata.
     :return: Empty list if the compute flag is True, otherwise it returns a list
         of :class:`dask.delayed.Delayed` representing the value to be computed by dask.
     """
@@ -392,9 +394,11 @@ def _write_zarr_image(
     if group is not None and name is not None:
         images_grp = _require_group(root, group)
         dest_grp = images_grp.create_group(name.replace("/", "-"), overwrite=True)
+        if group_metadata is not None:
+            dest_grp.attrs.update(group_metadata)
     image_attrs = None
     coords = None
-    dims = None
+
     if isinstance(image, xr.DataArray):
         data = image.data
         image_attrs = image.attrs.copy()
@@ -404,6 +408,10 @@ def _write_zarr_image(
         data = image
         if image.ndim == 2:
             dims = ["y", "x"]
+        elif image.ndim == 5:
+            dims = ["t", "c", "z", "y", "x"]
+        else:
+            raise ValueError("Unable to infer image axes.")
     return write_zarr(
         grp=dest_grp,
         data=data,
@@ -414,6 +422,45 @@ def _write_zarr_image(
         metadata=metadata,
         zarr_format=zarr_format,
         compute=compute,
+    )
+
+
+def _write_zarr_labels(
+    name: str,
+    root: zarr.Group | str | Path,
+    labels: np.ndarray | xr.DataArray | da.Array,
+    metadata: dict[str, Any] | None = None,
+    group_metadata: dict[str, Any] | None = None,
+    compute: bool = True,
+    storage_options: JSONDict | None = None,
+) -> list[Delayed]:
+    """Write label in zarr format.
+
+    :param name: Zarr group name to store label
+    :param root: Root zarr group.
+    :param labels: Labels to write.
+    :param metadata: Optional label metadata.
+    :param group_metadata: Optional group level metadata.
+    :param compute: If true compute immediately otherwise a list
+        of :class:`dask.delayed.Delayed` is returned.
+    :param storage_options: Optional storage options.
+    :return: Empty list if the compute flag is True, otherwise it returns a list
+        of :class:`dask.delayed.Delayed` representing the value to be computed by dask.
+    """
+
+    group_metadata = group_metadata.copy() if group_metadata is not None else dict()
+    if "image-label" not in group_metadata:
+        group_metadata["image-label"] = {}
+
+    return _write_zarr_image(
+        name=name,
+        root=root,
+        image=labels,
+        metadata=metadata,
+        group_metadata=group_metadata,
+        group="labels",
+        compute=compute,
+        storage_options=storage_options,
     )
 
 
@@ -609,67 +656,6 @@ def rechunk(image: xr.DataArray | da.Array) -> xr.DataArray | da.Array:
             image = data.rechunk("auto")
 
     return image
-
-
-def _write_zarr_labels(
-    name: str,
-    root: zarr.Group | str | Path,
-    labels: np.ndarray | xr.DataArray | da.Array,
-    metadata: dict[str, Any] = None,
-    group_metadata: dict[str, Any] = None,
-    compute: bool = True,
-    storage_options: JSONDict | None = None,
-) -> list[Delayed]:
-    """Write label in zarr format.
-
-    :param name: Zarr group name to store label
-    :param root: Root zarr group.
-    :param labels: Labels to write.
-    :param metadata: Optional label metadata.
-    :param group_metadata: Optional group level  metadata.
-    :param compute: If true compute immediately otherwise a list
-        of :class:`dask.delayed.Delayed` is returned.
-    :param storage_options: Optional storage options.
-    :return: Empty list if the compute flag is True, otherwise it returns a list
-        of :class:`dask.delayed.Delayed` representing the value to be computed by dask.
-    """
-
-    # stored in labels/key
-    name = name.replace("/", "-")
-    if isinstance(root, (str, Path)):
-        root = open_ome_zarr(root, mode="a")
-    labels_grp = _require_group(root, "labels")
-    grp = labels_grp.create_group(name, overwrite=True)
-    if not isinstance(labels, xr.DataArray):
-        if labels.ndim == 2:
-            label_axes = ["y", "x"]
-        elif labels.ndim == 5:
-            label_axes = ["t", "c", "z", "y", "x"]
-        else:
-            raise ValueError("Axes can't be inferred for 3D or 4D labels")
-    else:
-        label_axes = labels.dims
-        labels = labels.data
-
-    # need 'image-label' attr to be recognized as label
-    group_metadata = group_metadata.copy() if group_metadata is not None else dict()
-    if "image-label" not in group_metadata:
-        group_metadata["image-label"] = {}
-    grp.attrs.update(group_metadata)
-    metadata = metadata.copy() if metadata is not None else {}
-    if isinstance(labels, da.Array) or (
-        isinstance(labels, xr.DataArray) and isinstance(labels.data, da.Array)
-    ):
-        labels = rechunk(labels)
-    return write_image(
-        labels,
-        grp,
-        scale_factors=[],
-        axes=label_axes,
-        metadata=metadata,
-        compute=compute,
-        storage_options=storage_options,
-    )
 
 
 def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:

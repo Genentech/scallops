@@ -182,7 +182,7 @@ task register_elastix {
         String? moving_output_directory
         String subset
         Boolean? force
-        String? moving_label
+        Array[String]? moving_label
         String? extra_arguments
 
         String docker
@@ -198,6 +198,9 @@ task register_elastix {
     command <<<
         set -ex
 
+        # remove duplicates
+        moving_labels=$(printf "%s " ~{sep=" " moving_label} | sort -u)
+
         scallops registration elastix \
         --groupby ~{sep=" " groupby} \
         ~{if defined(moving_image_pattern) then '--moving-image-pattern "' + moving_image_pattern + '"' else ''} \
@@ -206,7 +209,8 @@ task register_elastix {
         ~{"--moving-channel " + moving_channel} \
         ~{if defined(moving_output_directory) && moving_output_directory !="" then '--moving-output "' + moving_output_directory + '"' else ''} \
         --moving ~{sep=" " moving} \
-        ~{if defined(moving_label) then '--moving-label "' + moving_label + '"' else ''} \
+        ~{if defined(moving_label) then '--moving-label ' else ''} \
+        ${moving_labels} \
         ~{if defined(fixed) then '--fixed "' + fixed + '"' else ''} \
         ~{"--fixed-channel " + fixed_channel} \
         ~{if defined(fixed_image_pattern) then '--fixed-image-pattern "' + fixed_image_pattern + '"' else ''} \

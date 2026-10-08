@@ -497,7 +497,7 @@ workflow ops_workflow {
                 input:
                     fixed=select_first([iss_url]),
                     fixed_channel=iss_dapi_channel,
-                    moving_label=segment_cell_url,
+                    moving_label=select_all([segment_nuclei.output_url, segment_cell_url]),
                     moving=select_all([register_pheno_to_pheno_output_url]),
                     moving_image_pattern=register_pheno_to_pheno_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
@@ -686,7 +686,7 @@ workflow ops_workflow {
                         nuclei_min_area = features_nuclei_min_area_,
                         nuclei_max_area = features_nuclei_max_area_,
                         features_extra_arguments=features_extra_arguments,
-                        labels= segment_cell_url,
+                        labels= segment_nuclei.output_url,
                         model_dir=model_dir,
                         groupby=groupby,
                         output_directory=nuclei_features_directory + '-' + index,
