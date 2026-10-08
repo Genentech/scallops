@@ -334,7 +334,7 @@ workflow ops_workflow {
                         max_retries = max_retries
                 }
 
-                if(match_segmentation_labels) {
+                if(match_segmentation_labels && run_nuclei_segmentation) {
                     call tasks.segment_overlap {
                         input:
                             labels=select_all([segment_nuclei.output_url, segment_cell.output_url]),

@@ -311,7 +311,10 @@ def _label_source_metadata(file_list: list[str | Group]) -> dict:
     group = file_list[0]
     if not isinstance(group, Group):
         group = zarr.open(group, mode="r")
-    _, metadata, _ = _read_zarr_attrs(group.attrs)
+    _, metadata, dims = _read_zarr_attrs(group.attrs)
+    if dims is None:
+        # not an ome-zarr with axes; metadata is the raw group attrs
+        return {}
     metadata = {
         key: value
         for key, value in (metadata or {}).items()
@@ -361,12 +364,17 @@ def _overlap(
         label_metadata = _label_source_metadata(file_list)
         if custom_metadata is not None:
             label_metadata.update(custom_metadata)
+        # storage_options = None
+        # if isinstance(label_data, np.ndarray):
+        #     storage_options = {"chunks": image.data.chunksize[-2:]}
+
         delayed += _write_zarr_labels(
             name=f"{image_key}-{group_id[-1]}",
             root=output_root,
             metadata=label_metadata,
             labels=relabel_by_assignment(labels.data, assignment_df=assignment_df),
             compute=False,
+            # storage_options=xxx
         )
     dask.compute(*delayed)
     for df, path in ((overlap_df, overlap_path), (assignment_df, assignment_path)):

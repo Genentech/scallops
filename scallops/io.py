@@ -146,7 +146,11 @@ def _dd_to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
         # rather than the dask-expr Scalar, whose graph layer is named by id(); ids
         # of garbage-collected objects are reused, so layers from separate calls can
         # collide and silently drop a write when computed together.
-        return bind(rm_delayed, parquet_delayed.to_delayed())
+        return (
+            bind(rm_delayed, parquet_delayed.to_delayed())
+            if not isinstance(parquet_delayed, Delayed)
+            else bind(rm_delayed, parquet_delayed)
+        )
 
 
 def is_scallops_zarr(url: str) -> bool:

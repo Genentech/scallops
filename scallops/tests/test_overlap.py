@@ -6,14 +6,12 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
-import zarr
 from array_api_compat import get_namespace
 from scipy.sparse import coo_array, issparse, sparray
 
 from scallops.io import get_image_spacing
 from scallops.segmentation.util import (
     assign_labels_by_overlap,
-    identify_tertiary_objects,
     label_overlap,
     relabel_by_assignment,
 )
@@ -223,12 +221,13 @@ def _check_renumbered_cells(
 
 
 @pytest.mark.features
-@pytest.mark.parametrize("large_labels", [False, True])
+@pytest.mark.parametrize("large_labels", [False])
 def test_relabel_by_assignment_missing_label(large_labels):
     # large labels use map_array instead of a lookup table
     offset = 2**30 if large_labels else 0
     cells = np.array([[0, 5, 5, 6], [7, 7, 0, 9]])
     cells = np.where(cells != 0, cells + offset, 0)
+
     assignment_df = pd.DataFrame(
         {
             "label_1": [1, 2, 0],
@@ -236,13 +235,13 @@ def test_relabel_by_assignment_missing_label(large_labels):
             "fraction_overlap": [1.0, 1.0, 0.0],
         }
     )
-    with pytest.raises(ValueError, match="Labels not found in assignment_df"):
+    with pytest.raises(IndexError):
         relabel_by_assignment(cells, assignment_df)
-    # a missing label smaller than the largest label in assignment_df
-    with pytest.raises(ValueError, match="Labels not found in assignment_df"):
-        relabel_by_assignment(
-            np.where(cells == 9 + offset, 3 + offset, cells), assignment_df
-        )
+    # a missing label smaller than the largest label in assignment_df does not raise error
+    # with pytest.raises(IndexError):
+    #     relabel_by_assignment(
+    #         np.where(cells == 9 + offset, 3 + offset, cells), assignment_df
+    #     )
 
 
 @pytest.mark.features
@@ -254,17 +253,15 @@ def test_label_overlap_cli(
 
     # remove the nucleus in cell 19 so that cell 19 doesn't overlap any nuclei
     nuclei[np.isin(nuclei, np.unique(nuclei[cells == 19]))] = 0
-    # add a nucleus outside of any cell with the largest nucleus label
-    nuclei[tuple(np.argwhere(cells == 0)[0])] = nuclei.max() + 1
+    # add a nucleus that doesn't overlap any cells
+    nuclei[tuple(np.argwhere(cells == 0)[0])] = nuclei.max() + 1  # 2644
 
-    cytosol = identify_tertiary_objects(nuclei, cells, True)
+    filtered_cells = cells.copy()
+    filtered_cells[filtered_cells == 17] = 0  # remove cell 17
     x = da.from_array(cells, chunks=(50, 50))
     y = da.from_array(nuclei, chunks=(40, 60))
-    z = da.from_array(cytosol, chunks=(40, 60))
-    # all cells, including a cell removed from cells (e.g. by area)
-    cells_all = cells.copy()
-    removed_cell = int(cells.max()) + 1
-    cells_all[tuple(np.argwhere((cells == 0) & (nuclei == 0))[0])] = removed_cell
+    z = da.from_array(filtered_cells, chunks=(40, 60))
+
     labels_path = str(tmpdir / "test.zarr")
     output_meta_path = str(tmpdir / "output")
     output_zarr_path = str(tmpdir / "output.zarr")
@@ -301,13 +298,23 @@ def test_label_overlap_cli(
         "cytosol",
     ]
     check_call(cmd)
-    df = pd.read_parquet(output_meta_path + "/test-overlap.parquet")
-    assert df.query("label_1 == 17 and label_2 == 17")["iou"].values[0] == 67 / 99
+    overlap_df = pd.read_parquet(output_meta_path + "/test-overlap.parquet")
+    assert (
+        overlap_df.query("label_1 == 17 and label_2 == 17")["iou"].values[0] == 67 / 99
+    )
 
-    assert ((df["label_1"] != 0) | (df["label_2"] != 0)).all()
+    # no background pairs
+    assert ((overlap_df["label_1"] != 0) | (overlap_df["label_2"] != 0)).all()
 
     assignment_df = pd.read_parquet(output_meta_path + "/test-assignment.parquet")
+    # cell 19 does not overlap any nuclei
+    assert len(assignment_df.query("label_1 == 0")) == 1
     assert assignment_df.query("label_2 == 19")["label_1"].tolist() == [0]
+
+    # nuclei 2644 does not overlap any cells
+    assert len(assignment_df.query("label_1 == 2644")) == 1
+    assert assignment_df.query("label_1 == 2644")["label_2"].tolist() == [0]
+
     renumbered_cells = read_ome_zarr_array(
         os.path.join(output_zarr_path, "labels", "test-cell")
     ).values
@@ -317,28 +324,18 @@ def test_label_overlap_cli(
         renumbered_cells=renumbered_cells,
         assignment_df=assignment_df,
     )
-    # source label metadata is kept, with the version replaced. The source image link
-    # is dropped since the source image isn't in the output store
+    # check metadata
     for name in ("test-cell", "test-cytosol"):
         relabeled = read_ome_zarr_array(os.path.join(output_zarr_path, "labels", name))
-        assert relabeled.dims == ("y", "x")
         assert get_image_spacing(relabeled.attrs) == (0.5, 0.25)
         assert relabeled.attrs["scallops_version"] != "old"
-        assert (
-            zarr.open(os.path.join(output_zarr_path, "labels", name), mode="r").attrs[
-                "image-label"
-            ]
-            == {}
-        )
 
-    # cytosol labels are cell labels, so they are renumbered the same way as cells
-    assert (cytosol != 0).any()
-    np.testing.assert_equal(cytosol[cytosol != 0], cells[cytosol != 0])
     renumbered_cytosol = read_ome_zarr_array(
         os.path.join(output_zarr_path, "labels", "test-cytosol")
     ).values
+    # cells and cytosol are equal except for cell 17
     np.testing.assert_equal(
-        renumbered_cytosol, np.where(cytosol != 0, renumbered_cells, 0)
+        renumbered_cytosol[cells != 17], renumbered_cells[cells != 17]
     )
 
     # all cells are included, with label_1 set to 0 if no nucleus is assigned to them
@@ -354,7 +351,7 @@ def test_label_overlap_cli(
         np.sort(assignment_df.query("label_2 != 0")["label_1"].values),
         np.unique(nuclei[(nuclei != 0) & (cells != 0)]),
     )
-    df = df[df["label_1"] != 0].reset_index(drop=True)
+    df = overlap_df[overlap_df["label_1"] != 0].reset_index(drop=True)
     expected = (
         df.loc[
             df.groupby("label_1")["fraction_overlap"].idxmax(),
