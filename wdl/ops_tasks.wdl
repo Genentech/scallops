@@ -39,7 +39,7 @@ task segment_overlap {
         String label_output_url = "~{label_output_directory}"
 
     }
-
+}
 task segment_nuclei {
     input {
         String? method
