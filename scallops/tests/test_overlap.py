@@ -285,7 +285,7 @@ def test_label_overlap_cli(
         assignment_df=assignment_df,
     )
     # source label metadata and image link are kept, with the version replaced
-    for name in ("test-nuclei", "test-cell", "test-cytosol"):
+    for name in ("test-cell", "test-cytosol"):
         relabeled = read_ome_zarr_array(os.path.join(output_zarr_path, "labels", name))
         assert relabeled.dims == ("y", "x")
         assert get_image_spacing(relabeled.attrs) == (0.5, 0.25)
@@ -293,13 +293,7 @@ def test_label_overlap_cli(
         assert zarr.open(
             os.path.join(output_zarr_path, "labels", name), mode="r"
         ).attrs["image-label"] == {"source": {"image": "../../images/test"}}
-    # nuclei are copied unchanged
-    np.testing.assert_equal(
-        read_ome_zarr_array(
-            os.path.join(output_zarr_path, "labels", "test-nuclei")
-        ).values,
-        nuclei,
-    )
+
     # cytosol labels are cell labels, so they are renumbered the same way as cells
     assert (cytosol != 0).any()
     np.testing.assert_equal(cytosol[cytosol != 0], cells[cytosol != 0])

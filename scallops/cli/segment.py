@@ -360,14 +360,12 @@ def _overlap(
     assignment_df = assign_labels_by_overlap(overlap_df)
     custom_metadata = cli_metadata() if not no_version else None
     delayed = []
-    # label_1 is copied unchanged so that all labels are in the same destination
-    for group_id, file_list, labels, relabel in [
-        (group_id1, file_list_1, label_1, False),
-        (group_id2, file_list_2, label_2, True),
-    ] + [
-        (group_id, file_list, _images2fov(file_list, metadata, dask=True), True)
-        for group_id, file_list, metadata in additional_tuples
-    ]:
+    write_tuples = [(group_id2, file_list_2, label_2)]
+    for group_id, file_list, metadata in additional_tuples:
+        labels = _images2fov(file_list, metadata, dask=True)
+        write_tuples.append((group_id, file_list, labels))
+
+    for group_id, file_list, labels in write_tuples:
         # keep the source label's metadata (e.g. physical pixel sizes) and source image
         label_metadata, group_metadata = _label_source_metadata(file_list)
         if custom_metadata is not None:
@@ -377,9 +375,7 @@ def _overlap(
             root=output_root,
             metadata=label_metadata,
             group_metadata=group_metadata,
-            labels=relabel_by_assignment(labels.data, assignment_df=assignment_df)
-            if relabel
-            else labels.data,
+            labels=relabel_by_assignment(labels.data, assignment_df=assignment_df),
             compute=False,
         )
     dask.compute(*delayed)
@@ -399,6 +395,7 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     )
 
     labels_paths = arguments.labels
+
     label_pattern = arguments.label_pattern
     label_suffix_1 = arguments.label_suffix_1
     label_suffix_2 = arguments.label_suffix_2
@@ -410,6 +407,10 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     output_parquet_path = arguments.meta_output
     output_zarr_path = arguments.label_output
     output_zarr_path = _add_suffix(output_zarr_path, ".zarr")
+    for labels_path in labels_paths:
+        assert labels_path != output_zarr_path, (
+            "Input label path should not be the same as output path"
+        )
     output_root = open_ome_zarr(output_zarr_path, mode="a")
     _require_group(output_root, "labels")
 

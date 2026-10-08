@@ -580,9 +580,19 @@ def relabel_by_assignment(
     unassigned_out = np.arange(offset, offset + len(unassigned_in))
 
     in_vals = np.concatenate([[0], assigned_in, unassigned_in]).astype(labels.dtype)
-    out_vals = np.concatenate([[0], assigned_out, unassigned_out])
-    dtype = np.promote_types(labels.dtype, np.min_scalar_type(out_vals.max()))
-    out_vals = out_vals.astype(dtype)
+    # pick dtype before concatenating, since mixing uint64 and int64 promotes to float64
+    max_out = max(
+        int(assigned_out.max()) if len(assigned_out) > 0 else 0,
+        offset + len(unassigned_in) - 1,
+    )
+    dtype = np.promote_types(labels.dtype, np.min_scalar_type(max_out))
+    out_vals = np.concatenate(
+        [
+            np.zeros(1, dtype=dtype),
+            assigned_out.astype(dtype),
+            unassigned_out.astype(dtype),
+        ]
+    )
     max_label = int(in_vals.max())
     if (
         np.issubdtype(labels.dtype, np.integer)

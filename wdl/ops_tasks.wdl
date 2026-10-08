@@ -193,7 +193,7 @@ task register_elastix {
         String? moving_output_directory
         String subset
         Boolean? force
-        String? moving_label
+        Array[String]? moving_label
         String? extra_arguments
 
         String docker
@@ -218,7 +218,7 @@ task register_elastix {
         ~{if defined(moving_output_directory) && moving_output_directory !="" then '--moving-output "' + moving_output_directory + '"' else ''} \
         --moving ~{sep=" " moving} \
         ~{if defined(moving_label) then '--moving-label ' else ''} \
-        "~{moving_label}" \
+        ~{sep=" " moving_label} \
         ~{if defined(fixed) then '--fixed "' + fixed + '"' else ''} \
         ~{"--fixed-channel " + fixed_channel} \
         ~{if defined(fixed_image_pattern) then '--fixed-image-pattern "' + fixed_image_pattern + '"' else ''} \

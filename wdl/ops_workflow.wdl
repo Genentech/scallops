@@ -77,7 +77,8 @@ workflow ops_workflow {
         Float? segment_cell_threshold_correction_factor
         String? cell_segmentation_extra_arguments
 
-        Boolean match_segmentation_labels = cell_segmentation_method!="propagation" && cell_segmentation_method!="watershed" && cell_segmentation_method!="watershed-intensity"
+        # unset method defaults to propagation in the CLI, which already produces nucleus-matched cells
+        Boolean match_segmentation_labels = select_first([cell_segmentation_method, "propagation"]) == "cellpose"
         Boolean mark_stitch_boundary_cells = true
 
         # merge
@@ -177,7 +178,8 @@ workflow ops_workflow {
         String aws_queue_arn = ""
         Int max_retries = 0
 
-        String segment_suffix = "segment.zarr"
+        String segment_nuclei_suffix = "segment-nuclei.zarr"
+        String segment_cell_suffix = "segment-cell.zarr"
         String segment_overlap_meta_suffix = "segment-overlap"
         String segment_overlap_label_suffix = "segment-overlap.zarr"
         String register_iss_suffix = "iss-registered-t0.zarr"
@@ -205,7 +207,8 @@ workflow ops_workflow {
 
 
     String output_stripped = sub(output_directory, "/+$", "") + "/"
-    String segment_directory = output_stripped + segment_suffix
+    String segment_nuclei_directory = output_stripped + segment_nuclei_suffix
+    String segment_cell_directory = output_stripped + segment_cell_suffix
     String segment_overlap_meta_directory = output_stripped + segment_overlap_meta_suffix
     String segment_overlap_label_directory = output_stripped + segment_overlap_label_suffix
     String register_iss_t0_directory = output_stripped + register_iss_suffix
@@ -255,7 +258,7 @@ workflow ops_workflow {
                 call tasks.register_elastix as register_pheno_to_pheno {
                     input:
                         moving=select_all([phenotype_url]),
-                        moving_label=phenotype_url, # transform stitch masks
+                        moving_label=[phenotype_url], # transform stitch masks
                         moving_channel=phenotype_dapi_channel_before_registration, # DAPI index in each round
                         moving_image_pattern=phenotype_image_pattern,
                         reference_time=reference_phenotype_time,
@@ -289,7 +292,7 @@ workflow ops_workflow {
                         method = nuclei_segmentation,
                         groupby=groupby,
                         dapi_channel = phenotype_dapi_channel,
-                        output_directory=segment_directory,
+                        output_directory=segment_nuclei_directory,
                         model_dir=model_dir,
                         subset = group,
                         extra_arguments=nuclei_segmentation_extra_arguments,
@@ -316,7 +319,7 @@ workflow ops_workflow {
                         nuclei_label=select_first([segment_nuclei.output_url]),
                         threshold=segment_cell_threshold,
                         threshold_correction_factor = segment_cell_threshold_correction_factor,
-                        output_directory=segment_directory,
+                        output_directory=segment_cell_directory,
                         model_dir=model_dir,
                         subset = group,
                         extra_arguments=cell_segmentation_extra_arguments,
@@ -497,7 +500,7 @@ workflow ops_workflow {
                 input:
                     fixed=select_first([iss_url]),
                     fixed_channel=iss_dapi_channel,
-                    moving_label=segment_cell_url,
+                    moving_label=select_all([segment_cell_url, segment_nuclei.output_url]),
                     moving=select_all([register_pheno_to_pheno_output_url]),
                     moving_image_pattern=register_pheno_to_pheno_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
