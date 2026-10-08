@@ -39,6 +39,17 @@ task segment_overlap {
         String label_output_url = "~{label_output_directory}"
 
     }
+
+    runtime {
+        docker:docker
+        disks: disks
+        zones: zones
+        memory: memory
+        cpu : cpu
+        preemptible: preemptible
+        queueArn: aws_queue_arn
+        maxRetries : max_retries
+    }
 }
 task segment_nuclei {
     input {
@@ -207,7 +218,7 @@ task register_elastix {
         ~{if defined(moving_output_directory) && moving_output_directory !="" then '--moving-output "' + moving_output_directory + '"' else ''} \
         --moving ~{sep=" " moving} \
         ~{if defined(moving_label) then '--moving-label ' else ''} \
-        ~{moving_label} \
+        "~{moving_label}" \
         ~{if defined(fixed) then '--fixed "' + fixed + '"' else ''} \
         ~{"--fixed-channel " + fixed_channel} \
         ~{if defined(fixed_image_pattern) then '--fixed-image-pattern "' + fixed_image_pattern + '"' else ''} \
