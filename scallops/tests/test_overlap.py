@@ -81,7 +81,7 @@ def test_label_overlap_iou(experiment_c_A1_102_cells, experiment_c_A1_102_nuclei
     np.testing.assert_equal(df["label_1"].values, i)
     np.testing.assert_equal(df["label_2"].values, j)
     np.testing.assert_equal(df["iou"].values, np_iou[i, j])
-    np.testing.assert_allclose(
+    np.testing.assert_equal(
         df["fraction_overlap"].values, np_overlap[i, j] / np_overlap.sum(axis=1)[i]
     )
 

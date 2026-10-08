@@ -450,7 +450,7 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
         group_id, file_list, metadata = g
         # ('test', 'cell')
         suffix = group_id[-1].replace("/", "_")
-        base_id = group_id[:-1].replace("/", "_")
+        base_id = group_id[:-1]
         if suffix == label_suffix_1:
             label_1_base_id_to_tuple[base_id] = g
         elif suffix == label_suffix_2:
