@@ -30,7 +30,7 @@ from scallops.cli.util import (
     load_json,
 )
 from scallops.io import _add_suffix, _images2fov, _set_up_experiment, get_image_spacing
-from scallops.segmentation import remove_labels_by_area
+from scallops.segmentation import remove_labels_by_area, remove_labels_by_intensity
 from scallops.segmentation.util import _delete_lock_files, identify_tertiary_objects
 from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
@@ -61,6 +61,9 @@ def segment_nuclei(
     no_version: bool = False,
     pmin: float | None = None,
     pmax: float | None = None,
+    min_intensity: float | None = None,
+    max_intensity: float | None = None,
+    intensity_channel: int | None = None,
 ) -> Group:
     """Segment nuclei in images.
 
@@ -80,6 +83,9 @@ def segment_nuclei(
     :param pmax: Maximum percentile for image normalization.
     :param force: Whether to overwrite existing output
     :param no_version: Whether to skip version/CLI information in output.
+    :param min_intensity: Remove labels with mean intensity below this value.
+    :param max_intensity: Remove labels with mean intensity above this value.
+    :param intensity_channel: Channel to use for intensity filtering. Defaults to dapi_channel.
     :return: The root (for dask)
     """
 
@@ -110,6 +116,18 @@ def segment_nuclei(
 
     if min_area is not None or max_area is not None:
         nuclei = remove_labels_by_area(nuclei, min_area, max_area)
+
+    if min_intensity is not None or max_intensity is not None:
+        ch = intensity_channel if intensity_channel is not None else dapi_channel
+        intensity_image = image.isel(c=ch, missing_dims="ignore")
+        # collapse t: use first cycle (cycle 0 = pre-sequencing DAPI)
+        intensity_image = intensity_image.isel(t=0, missing_dims="ignore").squeeze()
+        intensity_image = intensity_image.values
+        if isinstance(intensity_image, da.Array):
+            intensity_image = intensity_image.compute()
+        nuclei = remove_labels_by_intensity(
+            nuclei, intensity_image, min_intensity, max_intensity
+        )
 
     labels_dict = dict(nuclei=nuclei)
     if all_nuclei is not nuclei:
@@ -381,6 +399,12 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
         kwargs["clip"] = arguments.stardist_clip
         kwargs["pmin"] = arguments.stardist_pmin
         kwargs["pmax"] = arguments.stardist_pmax
+
+    if nuclei:
+        kwargs["min_intensity"] = arguments.min_intensity
+        kwargs["max_intensity"] = arguments.max_intensity
+        kwargs["intensity_channel"] = arguments.intensity_channel
+
     method = getattr(
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",

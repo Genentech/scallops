@@ -86,6 +86,28 @@ def _add_common_args(parser: ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--min-intensity",
+        type=float,
+        dest="min_intensity",
+        help="Remove labels with mean intensity below this value in the intensity channel",
+    )
+
+    parser.add_argument(
+        "--max-intensity",
+        type=float,
+        dest="max_intensity",
+        help="Remove labels with mean intensity above this value in the intensity channel",
+    )
+
+    parser.add_argument(
+        "--intensity-channel",
+        type=int,
+        dest="intensity_channel",
+        default=None,
+        help="Channel index (0-based) to use for intensity filtering. Defaults to --dapi-channel.",
+    )
+
+    parser.add_argument(
         "--chunks",
         help="Chunk size to use to perform segmentation in chunks",
         type=int,

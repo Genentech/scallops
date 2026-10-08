@@ -306,6 +306,36 @@ def remove_labels_by_area(
     )
 
 
+def remove_labels_by_intensity(
+    labels: np.ndarray,
+    image: np.ndarray,
+    intensity_min: float = -math.inf,
+    intensity_max: float = math.inf,
+    relabel: bool = False,
+) -> np.ndarray:
+    """Keep labels whose mean intensity falls within [intensity_min, intensity_max].
+
+    :param labels: An array of labels, which must be non-negative integers.
+    :param image: 2D intensity image used to compute per-label mean intensity.
+    :param intensity_min: Lower bound (inclusive) on mean intensity.
+    :param intensity_max: Upper bound (inclusive) on mean intensity.
+    :param relabel: Whether to relabel the labels.
+    :return: Filtered labels.
+    """
+    if intensity_min is None:
+        intensity_min = -math.inf
+    if intensity_max is None:
+        intensity_max = math.inf
+    regions = regionprops(labels, intensity_image=image)
+
+    def _intensity_filter(r):
+        return intensity_min <= r.intensity_mean <= intensity_max
+
+    return remove_labels_region_props(
+        labels=labels, regions=regions, func=_intensity_filter, relabel=relabel
+    )
+
+
 def _delete_lock_files():
     """Delete the lock files used for preventing errors when multiple processes load models using
     HDF5 simultaneously."""

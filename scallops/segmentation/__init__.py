@@ -17,4 +17,5 @@ from .util import (  # noqa: F401
     cyto_channel_summary,
     remove_boundary_labels,
     remove_labels_by_area,
+    remove_labels_by_intensity,
 )
