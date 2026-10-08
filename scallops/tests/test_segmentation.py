@@ -13,6 +13,7 @@ from scallops.segmentation.util import (
     close_labels,
     dask_relabel_sequential,
     identify_tertiary_objects,
+    remove_labels_by_intensity,
     remove_masked_regions,
 )
 from scallops.segmentation.watershed import (
@@ -230,6 +231,19 @@ def test_segment_cmd_stardist(tmp_path):
     run_segment_nuclei_cmd(tmp_path, "stardist")
 
 
+@pytest.mark.segmentation_stardist
+def test_segment_nuclei_cmd_intensity_filter(tmp_path):
+    """--max-intensity 0 must remove all nuclei: DAPI minimum in the test tile is 380."""
+    pytest.importorskip("tensorflow")
+    pytest.importorskip("stardist")
+    run_segment_nuclei_cmd(tmp_path, "stardist", ["--max-intensity", "0"])
+    experiment = read_experiment(str(tmp_path / "test.zarr"))
+    labels = experiment.labels["A1-102-nuclei"].squeeze().values
+    assert labels.max() == 0, (
+        f"Expected all labels removed with --max-intensity 0, got {labels.max()} max label"
+    )
+
+
 def run_segment_nuclei_cmd(tmp_path, segment_method, extra_args=None):
     if extra_args is None:
         extra_args = []
@@ -309,6 +323,45 @@ def test_adaptive_threshold(image):
         assert (cell_labels == 0).sum() == 115347
     else:
         assert (cell_labels == 0).sum() == 129566
+
+
+@pytest.mark.utils
+def test_remove_labels_by_intensity(
+    experiment_c_A1_102_nuclei, experiment_c_A1_102_pheno_aligned
+):
+    """Remove nuclei whose mean DAPI intensity falls outside a given range.
+
+    Uses the pre-computed nuclei labels for tile A1-102 paired with the aligned
+    phenotype image (channel 0 = DAPI).  The 90th-percentile mean intensity
+    across all 2 643 labels is ~1 727 counts; filtering above that value should
+    remove exactly 265 labels while keeping 2 378.
+    """
+    from skimage.measure import regionprops
+
+    labels = experiment_c_A1_102_nuclei.squeeze().values.astype(np.int32)
+    dapi = (
+        experiment_c_A1_102_pheno_aligned.isel(c=0).squeeze().values.astype(np.float32)
+    )
+
+    regions = regionprops(labels, intensity_image=dapi)
+    means = np.array([r.intensity_mean for r in regions])
+    threshold = np.percentile(means, 90)  # ~1 727 counts
+
+    # max_intensity: keep only dim nuclei, drop the bright ones (top 10 %)
+    result = remove_labels_by_intensity(labels, dapi, intensity_max=threshold)
+    n_kept = len(np.unique(result[result > 0]))
+    n_removed = labels.max() - n_kept
+    assert n_kept == 2378, f"Expected 2378 kept labels, got {n_kept}"
+    assert n_removed == 265, f"Expected 265 removed labels, got {n_removed}"
+
+    # min_intensity: keep only bright nuclei, drop the dim ones
+    result_bright = remove_labels_by_intensity(labels, dapi, intensity_min=threshold)
+    n_kept_bright = len(np.unique(result_bright[result_bright > 0]))
+    assert n_kept_bright == 265, f"Expected 265 bright labels kept, got {n_kept_bright}"
+
+    # no bounds: all labels survive
+    result_all = remove_labels_by_intensity(labels, dapi)
+    np.testing.assert_array_equal(result_all, labels)
 
 
 @pytest.mark.utils
