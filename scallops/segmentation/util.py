@@ -494,7 +494,8 @@ def assign_labels_by_overlap(
     :param overlap_df: Pandas or Dask dataframe returned by :func:`label_overlap`
     :return: Dataframe of the same type as `overlap_df` with the same columns as
         `overlap_df`, with one row per label in `label_1` and one row per unassigned
-        label in `label_2`
+        label in `label_2`. For Dask input, the index is reset within each partition
+        and therefore is not unique.
     """
     df = overlap_df[overlap_df["label_1"] != 0].sort_values(
         ["label_1", "fraction_overlap", "iou", "label_2"],
