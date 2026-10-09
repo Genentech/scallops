@@ -614,14 +614,14 @@ def _transform_labels(
     if output_names is None:
         output_names = [os.path.basename(key) for key in matching_keys]
     # if keys clash, keep the last one
-    unique_names = set()
+    unique_outputs = set()
     for i in range(len(matching_keys) - 1, -1, -1):
         key = matching_keys[i]
         name = os.path.basename(key)
-        if name in unique_names:
+        if output_names[i] in unique_outputs:
             logger.info(f"Skipping transforming {key}")
             continue
-        unique_names.add(name)
+        unique_outputs.add(output_names[i])
         array = read_ome_zarr_array(key)
 
         if attrs is not None:
