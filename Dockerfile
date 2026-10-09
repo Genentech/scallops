@@ -44,7 +44,7 @@ RUN if [ "${UFISH}" = "1" ]; then uv pip install -r requirements.ufish.txt; fi
 
 # cellpose 3.x: declares numpy<2.1 but is runtime-compatible with numpy 2.x;
 ARG CELLPOSE_VERSION="3.1.1.2"
-RUN if [ "${CELLPOSE_VERSION}" != "" ]]; then uv pip install --no-deps cellpose==${CELLPOSE_VERSION}; fi
+RUN if [ "${CELLPOSE_VERSION}" != "" ]]; then uv pip install cellpose==${CELLPOSE_VERSION}; fi
 
 # 26.6.0
 ARG RAPIDS_VERSION=""
