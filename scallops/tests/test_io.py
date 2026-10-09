@@ -21,10 +21,10 @@ from scallops.cli.util import _group_src_attrs
 from scallops.experiment.elements import Experiment
 from scallops.features.util import _slice_anndata
 from scallops.io import (
+    _dd_to_parquet,
     _images2fov,
     _match_size,
     _set_up_experiment,
-    _to_parquet,
     get_image_spacing,
     is_anndata,
     is_parquet_file,
@@ -111,7 +111,7 @@ def test_to_parquet_incomplete(tmp_path):
     )
     path = os.path.join(tmp_path, "test.parquet")
     try:
-        _to_parquet(df, path, compute=True)
+        _dd_to_parquet(df, path, compute=True)
     except ValueError:
         assert os.path.exists(f"{path}.scallops")
         assert not is_parquet_file(path)
@@ -121,8 +121,20 @@ def test_to_parquet_incomplete(tmp_path):
 def test_to_parquet_complete(tmp_path):
     df = dd.from_pandas(pd.DataFrame({"a": np.arange(2), "b": np.arange(2)}))
     path = os.path.join(tmp_path, "test.parquet")
-    _to_parquet(df, path, compute=True)
+    _dd_to_parquet(df, path, compute=True)
     assert not os.path.exists(f".#{path}.scallops")
+    assert is_parquet_file(path)
+
+
+@pytest.mark.io
+def test_to_parquet_no_compute(tmp_path):
+    df = dd.from_pandas(pd.DataFrame({"a": np.arange(2), "b": np.arange(2)}))
+    path = os.path.join(tmp_path, "test.parquet")
+    result = _dd_to_parquet(df, path, compute=False)
+    assert not os.path.exists(path) or len(os.listdir(path)) == 0
+    assert os.path.exists(f"{path}.scallops")
+    result.compute()
+    assert not os.path.exists(f"{path}.scallops")
     assert is_parquet_file(path)
 
 
@@ -134,7 +146,7 @@ def test_to_parquet_remove_old_files(tmp_path):
     old_path = path / "foo.parquet"
     old_path.touch()
     assert old_path.exists()
-    _to_parquet(df, str(path), compute=True)
+    _dd_to_parquet(df, str(path), compute=True)
     assert not old_path.exists()
 
 

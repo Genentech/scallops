@@ -23,7 +23,7 @@ from scallops.cli.util import (
 )
 from scallops.features.constants import _label_name_to_prefix
 from scallops.features.find_objects import find_objects
-from scallops.io import _create_file_regex, _set_up_experiment, _to_parquet
+from scallops.io import _create_file_regex, _dd_to_parquet, _set_up_experiment
 
 logger = _get_cli_logger()
 
@@ -36,9 +36,16 @@ def _execute(
     no_version: bool = False,
 ):
     group, file_list, metadata = label_tuple
-    assert len(file_list) == 1
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
+    if len(file_list) > 1:
+        message = []
+        for i in range(0, len(file_list) - 1):
+            message.append(str(file_list[i]))
+        logger.info(f"Skipping duplicate labels at {', '.join(message)}.")
+        file_list = file_list[-1:]
+    assert len(file_list) == 1
+
     path = (
         f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
     )
@@ -56,7 +63,7 @@ def _execute(
     prefix = _label_name_to_prefix.get(label_name)
     if prefix is not None:
         df.columns = f"{prefix}_" + df.columns
-    _to_parquet(
+    _dd_to_parquet(
         df,
         path,
         write_index=True,

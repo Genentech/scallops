@@ -77,6 +77,8 @@ workflow ops_workflow {
         Float? segment_cell_threshold_correction_factor
         String? cell_segmentation_extra_arguments
 
+        # unset method defaults to propagation in the CLI, which already produces nucleus-matched cells
+        Boolean match_segmentation_labels = select_first([cell_segmentation_method, "propagation"]) == "cellpose"
         Boolean mark_stitch_boundary_cells = true
 
         # merge
@@ -100,6 +102,8 @@ workflow ops_workflow {
         Boolean force_register_pheno_to_iss_qc = false
         Boolean force_register_iss_to_iss_qc = false
         Boolean force_register_pheno_to_pheno_qc = false
+        Boolean force_segment_overlap = false
+
 
         # general options
         Array[String]? subset
@@ -113,6 +117,10 @@ workflow ops_workflow {
         Int segment_cell_cpu = 32
         String segment_cell_memory = "256 GiB"
         String segment_cell_disks = "local-disk 20 HDD"
+
+        Int segment_overlap_cpu = 16
+        String segment_overlap_memory = "32 GiB"
+        String segment_overlap_disks = "local-disk 20 HDD"
 
         Int register_iss_cpu = 32
         String register_iss_disks = "local-disk 20 HDD"
@@ -171,6 +179,9 @@ workflow ops_workflow {
         Int max_retries = 0
 
         String segment_suffix = "segment.zarr"
+
+        String segment_overlap_meta_suffix = "segment-overlap"
+        String segment_overlap_label_suffix = "segment-overlap.zarr"
         String register_iss_suffix = "iss-registered-t0.zarr"
         String register_iss_transforms_suffix = "iss-transforms-t0"
         String register_pheno_to_iss_suffix = "pheno-to-iss-registered.zarr"
@@ -197,6 +208,8 @@ workflow ops_workflow {
 
     String output_stripped = sub(output_directory, "/+$", "") + "/"
     String segment_directory = output_stripped + segment_suffix
+    String segment_overlap_meta_directory = output_stripped + segment_overlap_meta_suffix
+    String segment_overlap_label_directory = output_stripped + segment_overlap_label_suffix
     String register_iss_t0_directory = output_stripped + register_iss_suffix
     String register_iss_t0_transforms_directory = output_stripped + register_iss_transforms_suffix
     String register_pheno_to_iss_directory = output_stripped + register_pheno_to_iss_suffix
@@ -244,7 +257,7 @@ workflow ops_workflow {
                 call tasks.register_elastix as register_pheno_to_pheno {
                     input:
                         moving=select_all([phenotype_url]),
-                        moving_label=phenotype_url, # transform stitch masks
+                        moving_label=select_all([phenotype_url]), # transform stitch masks
                         moving_channel=phenotype_dapi_channel_before_registration, # DAPI index in each round
                         moving_image_pattern=phenotype_image_pattern,
                         reference_time=reference_phenotype_time,
@@ -319,9 +332,30 @@ workflow ops_workflow {
                         cpu = segment_cell_cpu,
                         max_retries = max_retries
                 }
+
+                if(match_segmentation_labels && run_nuclei_segmentation) {
+                    call tasks.segment_overlap {
+                        input:
+                            labels=select_all([segment_cell.output_url]),
+                            label_pattern=image_pattern_after_registration,
+                            meta_output_directory=segment_overlap_meta_directory,
+                            label_output_directory=segment_overlap_label_directory,
+                            subset = group,
+                            force = force_segment_overlap,
+                            docker=docker,
+                            zones = zones,
+                            preemptible = preemptible,
+                            aws_queue_arn = aws_queue_arn,
+                            disks = segment_overlap_disks,
+                            memory = segment_overlap_memory,
+                            cpu = segment_overlap_cpu,
+                            max_retries = max_retries
+                    }
+                }
+                String segment_cell_url = select_first([segment_overlap.label_output_url, segment_cell.output_url])
                 call tasks.find_objects as find_objects_cell {
                     input:
-                        labels= segment_cell.output_url,
+                        labels= segment_cell_url,
                         label_pattern=image_pattern_after_registration,
                         suffix="cell",
                         output_directory=cell_objects_directory,
@@ -339,7 +373,7 @@ workflow ops_workflow {
 
                 call tasks.find_objects as find_objects_cytosol {
                     input:
-                        labels=segment_cell.output_url,
+                        labels=segment_cell_url,
                         label_pattern=image_pattern_after_registration,
                         suffix="cytosol",
                         output_directory=cytosol_objects_directory,
@@ -367,7 +401,7 @@ workflow ops_workflow {
                         # reference time mask is not transformed
                         # use mask from stitch output
                         input:
-                            labels=segment_cell.output_url,
+                            labels=segment_cell_url,
                             images=phenotype_url_stripped + '/labels/',
                             image_pattern=image_pattern_after_registration + output_prefix + reference_phenotype_time_ + '-mask',
                             output_directory=cell_intersects_boundary_directory,
@@ -390,7 +424,7 @@ workflow ops_workflow {
                             # non-reference time masks are transformed
                             # use masks from registration output
                             input:
-                                labels= segment_cell.output_url,
+                                labels= segment_cell_url,
                                 images=register_pheno_to_pheno.moving_output_url + '/labels/',
                                 image_pattern=phenotype_image_pattern + '-mask',
                                 output_directory=cell_intersects_boundary_directory_non_reference_t,
@@ -465,7 +499,7 @@ workflow ops_workflow {
                 input:
                     fixed=select_first([iss_url]),
                     fixed_channel=iss_dapi_channel,
-                    moving_label=segment_cell.output_url,
+                    moving_label=if(match_segmentation_labels) then select_all([segment_cell.output_url, segment_cell_url]) else  select_all([segment_cell.output_url]), # 2nd directory overrides 1st
                     moving=select_all([register_pheno_to_pheno_output_url]),
                     moving_image_pattern=register_pheno_to_pheno_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
@@ -654,7 +688,7 @@ workflow ops_workflow {
                         nuclei_min_area = features_nuclei_min_area_,
                         nuclei_max_area = features_nuclei_max_area_,
                         features_extra_arguments=features_extra_arguments,
-                        labels= segment_cell.output_url,
+                        labels= segment_nuclei.output_url,
                         model_dir=model_dir,
                         groupby=groupby,
                         output_directory=nuclei_features_directory + '-' + index,
@@ -689,7 +723,7 @@ workflow ops_workflow {
                         cell_min_area = features_cell_min_area_,
                         cell_max_area = features_cell_max_area_,
                         features_extra_arguments=features_extra_arguments,
-                        labels= segment_cell.output_url,
+                        labels= segment_cell_url,
                         model_dir=model_dir,
                         groupby=groupby,
                         output_directory=cell_features_directory + '-' + index,
@@ -723,7 +757,7 @@ workflow ops_workflow {
                         cytosol_features = phenotype_cytosol_features_[index],
                         cytosol_min_area = features_cytosol_min_area_,
                         cytosol_max_area = features_cytosol_max_area_,
-                        labels = segment_cell.output_url,
+                        labels = segment_cell_url,
                         features_extra_arguments=features_extra_arguments,
                         model_dir=model_dir,
                         groupby=groupby,
@@ -769,6 +803,7 @@ workflow ops_workflow {
     output {
         Array[String?] segment_nuclei_output_url = segment_nuclei.output_url
         Array[String?] segment_cell_output_url = segment_cell.output_url
+        Array[String?] segment_overlap_output_url = segment_overlap.label_output_url
         Array[String?] register_iss_t0_output_url = register_iss_t0.moving_output_url
         Array[String?] register_pheno_to_iss_output_url = register_pheno_to_iss.moving_output_url
         Array[String?] register_pheno_to_iss_qc_output_url = register_pheno_to_iss_qc.output_url

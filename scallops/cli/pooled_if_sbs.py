@@ -42,10 +42,11 @@ from scallops.features.constants import _metadata_columns_whitelist_str
 from scallops.io import (
     _add_suffix,
     _create_subset_function,
+    _dd_to_parquet,
     _get_fs_protocol,
     _images2fov,
+    _pd_to_parquet,
     _set_up_experiment,
-    _to_parquet,
     is_anndata,
     is_parquet_file,
     write_anndata_zarr,
@@ -367,7 +368,7 @@ def spot_detection_pipeline(
             output_fs.rm(peaks_path, recursive=True)
 
         dask_delayed.append(
-            _to_parquet(
+            _dd_to_parquet(
                 peaks,
                 peaks_path,
                 compute=compute,
@@ -583,7 +584,8 @@ def merge_sbs_phenotype_pipeline(
         if phenotype_suffix is not None:
             df.columns = df.columns + phenotype_suffix[i]
 
-        prefixes.append(phenotype_paths[i].split("/")[-3])
+        prefix = phenotype_paths[i].split("/")[-3]
+        prefixes.append(prefix)
 
         if output_format == "zarr":  # read index and metadata
             if len(_metadata_cols) > 0:
@@ -670,19 +672,7 @@ def merge_sbs_phenotype_pipeline(
         write_anndata_zarr(data, output_file)
 
     elif isinstance(merged_df, pd.DataFrame):
-        table = pa.Table.from_pandas(merged_df, preserve_index=True)
-        table = table.replace_schema_metadata(
-            {
-                "scallops".encode(): json.dumps(metadata).encode(),
-                **table.schema.metadata,
-            }
-        )
-        fs, output_file = fsspec.url_to_fs(output_file)
-        pq.write_table(
-            table,
-            output_file,
-            filesystem=fs,
-        )
+        _pd_to_parquet(merged_df, output_file, metadata)
 
 
 def _find_phenotype_paths(
@@ -1145,7 +1135,7 @@ def reads_pipeline(
         df_bases = bases_dataset.to_dask_dataframe()
 
         delayed_results.append(
-            _to_parquet(
+            _dd_to_parquet(
                 df_bases,
                 f"{output_dir}bases{file_separator}{image_key}.parquet",
                 compute=False,
@@ -1161,7 +1151,7 @@ def reads_pipeline(
 
     if "reads" in save_keys:
         delayed_results.append(
-            _to_parquet(
+            _dd_to_parquet(
                 df_reads,
                 f"{output_dir}reads{file_separator}{image_key}.parquet",
                 compute=False,
@@ -1173,7 +1163,7 @@ def reads_pipeline(
 
     if "labels" in save_keys:
         delayed_results.append(
-            _to_parquet(
+            _dd_to_parquet(
                 df_labels,
                 f"{output_dir}labels{file_separator}{image_key}.parquet",
                 compute=False,
