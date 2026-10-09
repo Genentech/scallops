@@ -311,10 +311,8 @@ def _label_source_metadata(file_list: list[str | Group]) -> dict:
     group = file_list[0]
     if not isinstance(group, Group):
         group = zarr.open(group, mode="r")
-    _, metadata, dims = _read_zarr_attrs(group.attrs)
-    if dims is None:
-        # not an ome-zarr with axes; metadata is the raw group attrs
-        return {}
+    _, metadata, _ = _read_zarr_attrs(group.attrs)
+
     metadata = {
         key: value
         for key, value in (metadata or {}).items()

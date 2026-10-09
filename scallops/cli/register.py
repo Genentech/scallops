@@ -293,12 +293,17 @@ def single_registration(
         if landmarks_initialize:
             template_labels = None
             if len(moving_label_keys) > 0:
-                template_label_key = None
+                nuclei_key = None
+                cell_key = None
 
-                for key in reversed(sorted(moving_label_keys)):
-                    if key.endswith("-nuclei") or key.endswith("-cell"):
-                        template_label_key = key
-                        break
+                for key in reversed(moving_label_keys):
+                    if nuclei_key is None and key.endswith("-nuclei"):
+                        nuclei_key = key
+
+                    if cell_key is None and key.endswith("-cell"):
+                        cell_key = key
+
+                template_label_key = nuclei_key if nuclei_key is not None else cell_key
                 if template_label_key is not None:
                     template_labels = read_ome_zarr_array(
                         template_label_key, dask=True
