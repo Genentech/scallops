@@ -242,6 +242,24 @@ def test_ops_wdl(tmp_path):
         merge_features_df.query("~Nuclei_Intensity_MeanIntensity_Channel0.isna()")
     ) == len(merge_sbs_metadata_df.query("~barcode_count_0.isna()"))
 
+    # force matching nuclei and segmentation label-results should be identical
+    output2 = tmp_path / "out2"
+    output2.mkdir()
+    input_json["output_directory"] = str(output2.absolute())
+    input_json["match_segmentation_labels"] = True
+    input_json["phenotype_nuclei_features"] = [
+        "intensity_0 intensity_1"
+    ]  # one batch this time
+    with open(tmp_path / "inputs.json", "wt") as out:
+        json.dump(input_json, out)
+    check_call(cmd, env=env)
+    merge_sbs_metadata_df2 = pd.read_parquet(
+        output2 / "merge-sbs-metadata" / "A1-102.parquet"
+    )
+    pd.testing.assert_frame_equal(merge_sbs_metadata_df2, merge_sbs_metadata_df)
+    assert (output2 / "segment-overlap").exists()
+    assert not (output / "segment-overlap").exists()
+
 
 @pytest.mark.cli_e2e
 def test_pert_map_wdl(tmp_path):
