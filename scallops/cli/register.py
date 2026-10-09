@@ -167,7 +167,7 @@ def single_registration(
                     image_key=matching_label_prefix, image_dir=moving_label, labels=True
                 )
             )
-        moving_label_keys = sorted(moving_label_keys)
+
         if len(moving_label_keys) == 0:
             logger.warning(f"No labels found for {image_key}")
 
@@ -294,7 +294,8 @@ def single_registration(
             template_labels = None
             if len(moving_label_keys) > 0:
                 template_label_key = None
-                for key in reversed(moving_label_keys):
+
+                for key in reversed(sorted(moving_label_keys)):
                     if key.endswith("-nuclei") or key.endswith("-cell"):
                         template_label_key = key
                         break
@@ -612,9 +613,15 @@ def _transform_labels(
     """
     if output_names is None:
         output_names = [os.path.basename(key) for key in matching_keys]
-    for i in range(len(matching_keys)):
+    # if keys clash, keep the last one
+    unique_names = set()
+    for i in range(len(matching_keys) - 1, -1, -1):
         key = matching_keys[i]
         name = os.path.basename(key)
+        if name in unique_names:
+            logger.info(f"Skipping transforming {key}")
+            continue
+        unique_names.add(name)
         array = read_ome_zarr_array(key)
 
         if attrs is not None:

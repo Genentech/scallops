@@ -302,7 +302,8 @@ def test_register_itk_cli_concat_t(tmp_path):
 
 @pytest.mark.registration
 def test_register_transform_labels_moving_only(tmp_path):
-    image_zarr = tmp_path / "images.zarr"
+    input_zarr1 = tmp_path / "images1.zarr"
+    input_zarr2 = tmp_path / "images2.zarr"
     output_zarr = tmp_path / "out.zarr"
     output_transforms = tmp_path / "transforms"
 
@@ -313,24 +314,30 @@ def test_register_transform_labels_moving_only(tmp_path):
 
     rng = np.random.default_rng(0)
 
-    segmentation = rng.integers(low=0, high=10, size=(img.sizes["y"], img.sizes["x"]))
-
     Experiment(
         images={"plateA-A1-IF": img, "plateA-A1-FISH": img},
         labels={
-            "plateA-A1-IF-cell": segmentation,
+            "plateA-A1-IF-cell": np.zeros((img.sizes["y"], img.sizes["x"]), np.int32),
         },
-    ).save(image_zarr)
+    ).save(input_zarr1)
+    Experiment(
+        labels={
+            "plateA-A1-IF-cell": rng.integers(
+                low=0, high=10, size=(img.sizes["y"], img.sizes["x"])
+            ),
+        },
+    ).save(input_zarr2)
     cmd = [
         "scallops",
         "registration",
         "elastix",
         "--moving",
-        str(image_zarr),
+        str(input_zarr1),
         "--moving-image-pattern",
         "{plate}-{well}-{t}",
         "--moving-label",
-        str(image_zarr),
+        str(input_zarr1),
+        str(input_zarr2),
         "--subset",
         "plateA-A1",
         "--groupby",

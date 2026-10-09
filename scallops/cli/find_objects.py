@@ -36,9 +36,16 @@ def _execute(
     no_version: bool = False,
 ):
     group, file_list, metadata = label_tuple
-    assert len(file_list) == 1
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
+    if len(file_list) > 1:
+        message = []
+        for i in range(0, len(file_list) - 1):
+            message.append(str(file_list[i]))
+        logger.info(f"Skipping duplicate labels at {', '.join(message)}.")
+        file_list = file_list[-1:]
+    assert len(file_list) == 1
+
     path = (
         f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
     )

@@ -178,8 +178,8 @@ workflow ops_workflow {
         String aws_queue_arn = ""
         Int max_retries = 0
 
-        String segment_nuclei_suffix = "segment-nuclei.zarr"
-        String segment_cell_suffix = "segment-cell.zarr"
+        String segment_suffix = "segment.zarr"
+
         String segment_overlap_meta_suffix = "segment-overlap"
         String segment_overlap_label_suffix = "segment-overlap.zarr"
         String register_iss_suffix = "iss-registered-t0.zarr"
@@ -207,8 +207,7 @@ workflow ops_workflow {
 
 
     String output_stripped = sub(output_directory, "/+$", "") + "/"
-    String segment_nuclei_directory = output_stripped + segment_nuclei_suffix
-    String segment_cell_directory = output_stripped + segment_cell_suffix
+    String segment_directory = output_stripped + segment_suffix
     String segment_overlap_meta_directory = output_stripped + segment_overlap_meta_suffix
     String segment_overlap_label_directory = output_stripped + segment_overlap_label_suffix
     String register_iss_t0_directory = output_stripped + register_iss_suffix
@@ -292,7 +291,7 @@ workflow ops_workflow {
                         method = nuclei_segmentation,
                         groupby=groupby,
                         dapi_channel = phenotype_dapi_channel,
-                        output_directory=segment_nuclei_directory,
+                        output_directory=segment_directory,
                         model_dir=model_dir,
                         subset = group,
                         extra_arguments=nuclei_segmentation_extra_arguments,
@@ -319,7 +318,7 @@ workflow ops_workflow {
                         nuclei_label=select_first([segment_nuclei.output_url]),
                         threshold=segment_cell_threshold,
                         threshold_correction_factor = segment_cell_threshold_correction_factor,
-                        output_directory=segment_cell_directory,
+                        output_directory=segment_directory,
                         model_dir=model_dir,
                         subset = group,
                         extra_arguments=cell_segmentation_extra_arguments,
@@ -337,7 +336,7 @@ workflow ops_workflow {
                 if(match_segmentation_labels && run_nuclei_segmentation) {
                     call tasks.segment_overlap {
                         input:
-                            labels=select_all([segment_nuclei.output_url, segment_cell.output_url]),
+                            labels=select_all([segment_cell.output_url]),
                             label_pattern=image_pattern_after_registration,
                             meta_output_directory=segment_overlap_meta_directory,
                             label_output_directory=segment_overlap_label_directory,
@@ -500,7 +499,7 @@ workflow ops_workflow {
                 input:
                     fixed=select_first([iss_url]),
                     fixed_channel=iss_dapi_channel,
-                    moving_label=select_all([segment_cell_url, segment_nuclei.output_url]),
+                    moving_label=if(match_segmentation_labels) then select_all([segment_cell.output_url, segment_cell_url]) else  select_all([segment_cell.output_url]), # 2nd directory overrides 1st
                     moving=select_all([register_pheno_to_pheno_output_url]),
                     moving_image_pattern=register_pheno_to_pheno_image_pattern,
                     fixed_image_pattern=iss_image_pattern,
