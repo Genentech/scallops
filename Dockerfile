@@ -42,9 +42,10 @@ COPY requirements.ufish.txt ./
 ARG UFISH="1"
 RUN if [ "${UFISH}" = "1" ]; then uv pip install -r requirements.ufish.txt; fi
 
-# cellpose 3.x: declares numpy<2.1 but is runtime-compatible with numpy 2.x;
+# cellpose declares numpy<2.1 but is runtime-compatible with numpy 2.x;
 ARG CELLPOSE_VERSION="3.1.1.2"
-RUN if [ "${CELLPOSE_VERSION}" != "" ]]; then uv pip install --no-deps cellpose==${CELLPOSE_VERSION}; fi
+RUN echo "numpy==2.5.3" > requirements.cellpose.override.txt
+RUN if [ "${CELLPOSE_VERSION}" != "" ]]; then uv pip install --overrides requirements.cellpose.override.txt cellpose==${CELLPOSE_VERSION}; fi
 
 # 26.6.0
 ARG RAPIDS_VERSION=""
@@ -67,7 +68,7 @@ RUN if [ "${TF_CUDA}" = "1" ]; then \
       uv pip install tensorflow==${TF_VERSION}; \
     fi
 # core deps: tensorflow is installed in prior step, so strip it from requirements.txt
-COPY requirements.txt ./
+
 RUN grep -v '^tensorflow' requirements.txt | uv pip install -r /dev/stdin
 
 # extra optional deps
