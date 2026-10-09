@@ -258,7 +258,7 @@ workflow ops_workflow {
                 call tasks.register_elastix as register_pheno_to_pheno {
                     input:
                         moving=select_all([phenotype_url]),
-                        moving_label=[phenotype_url], # transform stitch masks
+                        moving_label=select_all([phenotype_url]), # transform stitch masks
                         moving_channel=phenotype_dapi_channel_before_registration, # DAPI index in each round
                         moving_image_pattern=phenotype_image_pattern,
                         reference_time=reference_phenotype_time,
