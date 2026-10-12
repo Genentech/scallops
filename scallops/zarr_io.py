@@ -275,7 +275,7 @@ def _fix_attrs(d: dict) -> None:
         elif isinstance(value, ome_types.OME):
             # Hack to prevent OverflowError:
             # Overlong 4 byte UTF-8 sequence detected when encoding string
-            d[key] = d[key].dict()
+            d[key] = d[key].model_dump()
         elif isinstance(value, zarr.Group):
             d[key] = str(value)
         elif isinstance(value, list):

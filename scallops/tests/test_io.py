@@ -293,7 +293,7 @@ def test_write_non_ome_zarr_image(tmp_path, use_dask):
     )
     image.attrs = {"test": "1"}
     image.attrs["physical_pixel_sizes"] = (1, 1, 1)
-    image.attrs["physical_pixel_units"] = ("mm", "mm", "mm")
+    image.attrs["physical_pixel_units"] = ("millimeter", "millimeter", "millimeter")
     image.name = None
     zarr_path = str(tmp_path / "test1.zarr")
     _write_zarr_image("image1", open_ome_zarr(zarr_path), image, zarr_format="zarr")
