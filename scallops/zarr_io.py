@@ -561,7 +561,14 @@ def write_zarr(
             return dask_delayed
     else:
         image_attrs = {"metadata": image_attrs}
-
+        # ome-zarr>=0.21 takes the axis order from scale.keys(), so every axis
+        # must be present and in order, and units must be passed via axes_units
+        axes_units = None
+        if axes is not None:
+            scale_dict = {
+                a["name"]: (scale_dict or {}).get(a["name"], 1.0) for a in axes
+            }
+            axes_units = {a["name"]: a["unit"] for a in axes if "unit" in a} or None
         return write_multiscale(
             pyramid=[data],
             group=grp,
@@ -569,6 +576,7 @@ def write_zarr(
             storage_options=[storage_options] if storage_options is not None else None,
             scale_factors=[1.0],
             axes=axes,
+            axes_units=axes_units,
             compute=compute,
             scale=scale_dict,
             **image_attrs,
