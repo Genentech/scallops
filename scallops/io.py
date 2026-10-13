@@ -1967,6 +1967,7 @@ def _set_up_experiment(
         return x
 
     for group in natsorted(group_to_matches):
+        # sorting is important if channels are stored in different files
         matches = natsorted(group_to_matches[group], key=file_sort_key)
 
         file_list = []
