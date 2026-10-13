@@ -169,7 +169,8 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
     parser.add_argument(
         "--sort",
         nargs="+",
-        help="Custom sort order for `time`. Example: IF FISH",
+        help="Custom sort order for `t` values. Values must exactly match `t` in the "
+        "image pattern. Example: IF FISH puts t=IF before t=FISH.",
     )
 
     parser.add_argument(

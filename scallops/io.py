@@ -1744,8 +1744,11 @@ def _set_up_experiment(
     :param scenes: Whether to yield a group for each scene, or a list of scene ids to
         yield. When `True`, scene ids are read from the first image of the first group
         and are assumed to be the same for all images.
-    :param file_sort_order: Dictionary mapping metadata field to sort order
-        e.g. ``{"t":["IF", "FISH"]}`` puts ``IF`` before ``FISH``.
+    :param file_sort_order: Dictionary mapping a field to the sort order of its values
+        within a group, e.g. ``{"t": ["IF", "FISH"]}`` puts ``t=IF`` before
+        ``t=FISH``. Entries must exactly match the field values; values that match no
+        entry are sorted naturally. Files are sorted by these fields first, then by
+        ``t``, ``c``, ``z``, and file path.
     :param case_sensitive: Whether `files_pattern` and wildcard or regular expression
         `subset` entries are case-sensitive.
     :return: Generator of ``(group, file_list, metadata)`` tuples, one per group (and
@@ -1955,28 +1958,32 @@ def _set_up_experiment(
     if isinstance(scenes, list):
         scene_ids = scenes
         scenes = False
+
     if file_sort_order is not None:
-        file_sort_order_ = dict()
-        for key in file_sort_order.keys():
-            sort_order = file_sort_order[key]
-            sort_order_dict = dict()
-            for i in range(len(sort_order)):
-                sort_order_dict[sort_order[i]] = i
-            file_sort_order_[key] = sort_order_dict
-        file_sort_order = file_sort_order_
+        file_sort_order = {
+            k: {v: i for i, v in enumerate(order)}
+            for k, order in file_sort_order.items()
+        }
+
+    sort_dims = ["t", "c", "z"]
+    if file_sort_order is not None:
+        sort_dims = list(file_sort_order.keys())
+        for d in ["t", "c", "z"]:
+            if d not in sort_dims:
+                sort_dims.append(d)
 
     def file_sort_key(x):
         path = x[0].name if isinstance(x[0], (zarr.Group, zarr.Array)) else x[0]
         metadata = x[1]
         values = []
-        for c in ["c", "t", "z"]:
-            if c in metadata:
-                val = metadata[c]
-                if file_sort_order is not None:
-                    order = file_sort_order.get(c)
-                    if order is not None:
-                        val = order.get(val, val)  # e.g. DAPI->0
-                values.append(val)
+        for c in sort_dims:
+            # use a placeholder for missing values so that keys have the same length
+            val = metadata.get(c, "")
+            if file_sort_order is not None:
+                order = file_sort_order.get(c)
+                if order is not None:
+                    val = order.get(val, val)  # e.g. DAPI->0
+            values.append(val)
         values.append(path)
         return tuple(values)
 
