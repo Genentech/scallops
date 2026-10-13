@@ -13,6 +13,7 @@ from scallops.segmentation.util import (
     close_labels,
     dask_relabel_sequential,
     identify_tertiary_objects,
+    remove_labels,
     remove_masked_regions,
 )
 from scallops.segmentation.watershed import (
@@ -230,6 +231,19 @@ def test_segment_cmd_stardist(tmp_path):
     run_segment_nuclei_cmd(tmp_path, "stardist")
 
 
+@pytest.mark.segmentation_stardist
+def test_segment_nuclei_cmd_intensity_filter(tmp_path):
+    """--max-intensity 0 must remove all nuclei: DAPI minimum in the test tile is 380."""
+    pytest.importorskip("tensorflow")
+    pytest.importorskip("stardist")
+    run_segment_nuclei_cmd(tmp_path, "stardist", ["--max-intensity", "0"])
+    experiment = read_experiment(str(tmp_path / "test.zarr"))
+    labels = experiment.labels["A1-102-nuclei"].squeeze().values
+    assert labels.max() == 0, (
+        f"Expected all labels removed with --max-intensity 0, got {labels.max()} max label"
+    )
+
+
 def run_segment_nuclei_cmd(tmp_path, segment_method, extra_args=None):
     if extra_args is None:
         extra_args = []
@@ -309,6 +323,21 @@ def test_adaptive_threshold(image):
         assert (cell_labels == 0).sum() == 115347
     else:
         assert (cell_labels == 0).sum() == 129566
+
+
+@pytest.mark.utils
+@pytest.mark.parametrize("relabel", [True, False])
+def test_remove_labels(relabel):
+    labels = np.array([[1, 2, 3], [4, 5, 2]])
+    filtered_labels = remove_labels(labels, [2, 4], relabel=relabel)
+    expected = (
+        np.array([[1, 0, 2], [0, 3, 0]])
+        if relabel
+        else np.array([[1, 0, 3], [0, 5, 0]])
+    )
+    np.testing.assert_array_equal(expected, filtered_labels)
+    # input is not modified
+    np.testing.assert_array_equal(np.array([[1, 2, 3], [4, 5, 2]]), labels)
 
 
 @pytest.mark.utils

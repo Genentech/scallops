@@ -12,17 +12,21 @@ Authors:
 
 import argparse
 import importlib
+import math
 import os
 from collections import defaultdict
+from functools import partial
 from typing import Callable, Literal, Optional
 
 import dask
 import dask.array as da
 import fsspec
 import numpy as np
+import xarray as xr
 import zarr
 from dask.bag import from_sequence
 from fsspec.implementations.local import LocalFileSystem
+from skimage.measure import regionprops
 from zarr import Group
 
 from scallops.cli.util import (
@@ -41,13 +45,13 @@ from scallops.io import (
     _set_up_experiment,
     get_image_spacing,
 )
-from scallops.segmentation import remove_labels_by_area
 from scallops.segmentation.util import (
     _delete_lock_files,
     assign_labels_by_overlap,
     identify_tertiary_objects,
     label_overlap,
     relabel_by_assignment,
+    remove_labels_regionprops,
 )
 from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
@@ -61,6 +65,63 @@ from scallops.zarr_io import (
 )
 
 logger = _get_cli_logger()
+
+
+def _create_filter(f, vmin, vmax):
+    if vmin is None:
+        vmin = -math.inf
+    if vmax is None:
+        vmax = math.inf
+    return partial(f, vmin=vmin, vmax=vmax)
+
+
+def _area_filter(r, vmin, vmax):
+    return vmin < r.area < vmax
+
+
+def _intensity_filter(r, vmin, vmax):
+    return vmin < r.intensity_mean < vmax
+
+
+def _filter_labels(
+    labels: np.ndarray | da.Array,
+    intensity_image: xr.DataArray,
+    intensity_channel: int | None,
+    min_area: float | None,
+    max_area: float | None,
+    min_intensity: float | None,
+    max_intensity: float | None,
+):
+    if (
+        min_area is not None
+        or max_area is not None
+        or min_intensity is not None
+        or max_intensity is not None
+    ):
+        filters = []
+
+        if min_area is not None or max_area is not None:
+            filters.append(_create_filter(_area_filter, min_area, max_area))
+        intensity_image_ = None
+        if min_intensity is not None or max_intensity is not None:
+            intensity_image = intensity_image.isel(
+                c=intensity_channel, t=0, missing_dims="ignore"
+            ).squeeze()
+            intensity_image_ = intensity_image.values
+            filters.append(
+                _create_filter(_intensity_filter, min_intensity, max_intensity)
+            )
+
+        def filter_func(r):
+            return all(f(r) for f in filters)
+
+        return remove_labels_regionprops(
+            labels=labels,
+            regions=regionprops(labels, intensity_image=intensity_image_),
+            func=filter_func,
+            relabel=False,
+        )
+    return labels
 
 
 def segment_nuclei(
@@ -80,6 +141,9 @@ def segment_nuclei(
     no_version: bool = False,
     pmin: float | None = None,
     pmax: float | None = None,
+    min_intensity: float | None = None,
+    max_intensity: float | None = None,
+    intensity_channel: int | None = None,
 ) -> Group:
     """Segment nuclei in images.
 
@@ -99,6 +163,9 @@ def segment_nuclei(
     :param pmax: Maximum percentile for image normalization.
     :param force: Whether to overwrite existing output
     :param no_version: Whether to skip version/CLI information in output.
+    :param min_intensity: Remove labels with mean intensity below this value.
+    :param max_intensity: Remove labels with mean intensity above this value.
+    :param intensity_channel: Channel to use for intensity filtering. Defaults to dapi_channel.
     :return: The root (for dask)
     """
 
@@ -124,14 +191,30 @@ def segment_nuclei(
         if chunk_overlap is not None:
             nuclei_seg_args["depth"] = chunk_overlap
 
+    all_nuclei = None
     nuclei = method(image=image, nuclei_channel=dapi_channel, **nuclei_seg_args)
-    all_nuclei = nuclei
-
-    if min_area is not None or max_area is not None:
-        nuclei = remove_labels_by_area(nuclei, min_area, max_area)
-
+    if (
+        min_area is not None
+        or max_area is not None
+        or min_intensity is not None
+        or max_intensity is not None
+    ):
+        if isinstance(nuclei, da.Array):
+            nuclei = nuclei.compute()
+        all_nuclei = nuclei
+        nuclei = _filter_labels(
+            labels=nuclei,
+            intensity_image=image,
+            intensity_channel=intensity_channel
+            if intensity_channel is not None
+            else dapi_channel,
+            min_area=min_area,
+            max_area=max_area,
+            min_intensity=min_intensity,
+            max_intensity=max_intensity,
+        )
     labels_dict = dict(nuclei=nuclei)
-    if all_nuclei is not nuclei:
+    if all_nuclei is not None:
         labels_dict["nuclei.all"] = all_nuclei
     spacing = get_image_spacing(image.attrs)
     label_metadata = dict()
@@ -169,8 +252,6 @@ def segment_cells(
     method: Callable,
     root: Group,
     z_index: int | str,
-    min_area: float | None = None,
-    max_area: float | None = None,
     chunks: None | tuple[int, int] = None,
     chunk_overlap: None | int = None,
     nuclei_image_root: Group = None,
@@ -183,8 +264,16 @@ def segment_cells(
     force: bool = False,
     shrink_primary: bool = False,
     no_version: bool = False,
+    min_area: float | None = None,
+    max_area: float | None = None,
+    min_intensity: float | None = None,
+    max_intensity: float | None = None,
+    intensity_channel: int | None = None,
     nuclei_min_area: float | None = None,
     nuclei_max_area: float | None = None,
+    nuclei_min_intensity: float | None = None,
+    nuclei_max_intensity: float | None = None,
+    nuclei_intensity_channel: int | None = None,
     watershed_method: Literal["binary", "distance", "intensity"] = "distance",
 ) -> Group:
     """Segment cells in images.
@@ -234,8 +323,18 @@ def segment_cells(
             image.sizes["y"],
             image.sizes["x"],
         ), "Size mismatch between nuclei and image"
-        if nuclei_min_area is not None or nuclei_max_area is not None:
-            nuclei = remove_labels_by_area(nuclei, nuclei_min_area, nuclei_max_area)
+        nuclei = _filter_labels(
+            labels=nuclei,
+            intensity_image=image,
+            intensity_channel=nuclei_intensity_channel
+            if nuclei_intensity_channel is not None
+            else dapi_channel,
+            min_area=nuclei_min_area,
+            max_area=nuclei_max_area,
+            min_intensity=nuclei_min_intensity,
+            max_intensity=nuclei_max_intensity,
+        )
+
         cell_seg_args["nuclei"] = nuclei
         cell_seg_args["threshold_correction_factor"] = threshold_correction_factor
         cell_seg_args["threshold"] = cell_segmentation_threshold
@@ -257,14 +356,30 @@ def segment_cells(
         cells = result
         cell_threshold = None
 
-    all_cells = cells
-    if min_area is not None or max_area is not None:
+    all_cells = None
+    if (
+        min_area is not None
+        or max_area is not None
+        or min_intensity is not None
+        or max_intensity is not None
+    ):
         if isinstance(cells, da.Array):
             cells = cells.compute()
-        cells = remove_labels_by_area(cells, min_area, max_area, relabel=False)
+        all_cells = cells
+        cells = _filter_labels(
+            labels=cells,
+            intensity_image=image,
+            intensity_channel=intensity_channel
+            if intensity_channel is not None
+            else dapi_channel,
+            min_area=min_area,
+            max_area=max_area,
+            min_intensity=min_intensity,
+            max_intensity=max_intensity,
+        )
 
     labels_dict = dict(cell=cells)
-    if all_cells is not cells:
+    if all_cells is not None:
         labels_dict["cell.all"] = all_cells
     if nuclei is not None:
         cytosol = identify_tertiary_objects(nuclei, cells, shrink_primary)
@@ -277,8 +392,6 @@ def segment_cells(
         label_metadata.update(cli_metadata())
     spacing = get_image_spacing(image.attrs)
     if spacing is not None:
-        if label_metadata is None:
-            label_metadata = dict()
         for key in labels_dict.keys():
             label_metadata[key] = dict(physical_pixel_sizes=spacing)
 
@@ -526,6 +639,9 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
     if not nuclei:
         kwargs["nuclei_min_area"] = arguments.nuclei_min_area
         kwargs["nuclei_max_area"] = arguments.nuclei_max_area
+        kwargs["nuclei_min_intensity"] = arguments.nuclei_min_intensity
+        kwargs["nuclei_max_intensity"] = arguments.nuclei_max_intensity
+        kwargs["nuclei_intensity_channel"] = arguments.nuclei_intensity_channel
         kwargs["cyto_channel"] = arguments.cyto_channel
         kwargs["shrink_primary"] = arguments.shrink_nuclei
         threshold = arguments.threshold.lower()
@@ -571,6 +687,11 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
         kwargs["clip"] = arguments.stardist_clip
         kwargs["pmin"] = arguments.stardist_pmin
         kwargs["pmax"] = arguments.stardist_pmax
+
+    kwargs["min_intensity"] = arguments.min_intensity
+    kwargs["max_intensity"] = arguments.max_intensity
+    kwargs["intensity_channel"] = arguments.intensity_channel
+
     method = getattr(
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",

@@ -81,15 +81,31 @@ def _add_common_args(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--min-area",
         type=float,
-        dest="min_area",
         help="Filter labels with area < `min-area`",
     )
 
     parser.add_argument(
         "--max-area",
         type=float,
-        dest="max_area",
-        help="Filter labels with area > `-max-area`",
+        help="Filter labels with area > `max-area`",
+    )
+
+    parser.add_argument(
+        "--min-intensity",
+        type=float,
+        help="Filter labels with mean intensity < `min-intensity` in `intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--max-intensity",
+        type=float,
+        help="Filter labels with mean intensity > `max-intensity` in `intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--intensity-channel",
+        type=int,
+        help="Channel index (0-based) to use for intensity filtering. Defaults to `dapi-channel`",
     )
 
     parser.add_argument(
@@ -213,7 +229,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
         "--cyto-channel",
         type=int,
         nargs="*",
-        dest="cyto_channel",
         help="Channel index (0-based) to infer cell segmentation from. Default is all non-DAPI channels. If more than"
         " one channel specified, use minimum across time (cycles) then mean over channels, or if only one time "
         "point is present, use mean over channels.",
@@ -221,18 +236,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
     image_pattern_arg(parser)
     groupby_arg(parser)
     _add_common_args(parser)
-
-    parser.add_argument(
-        "--nuclei-min-area",
-        type=float,
-        help="Filter nuclei labels with area < `min-area`",
-    )
-
-    parser.add_argument(
-        "--nuclei-max-area",
-        type=float,
-        help="Filter nuclei labels with area > `-max-area`",
-    )
 
     parser.add_argument(
         "--rolling-ball",
@@ -252,7 +255,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
 
     parser.add_argument(
         "--closing-radius",
-        dest="closing_radius",
         help="Disk radius to use for binary closing cell labels post segmentation",
         default=None,
         type=int,
@@ -270,6 +272,36 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
         help="Shrink nuclei prior to subtraction of nuclei from cells to identify the "
         "cytosol.",
         action="store_true",
+    )
+
+    parser.add_argument(
+        "--nuclei-min-area",
+        type=float,
+        help="Filter nuclei with area < `nuclei-min-area`",
+    )
+
+    parser.add_argument(
+        "--nuclei-max-area",
+        type=float,
+        help="Filter nuclei with area > `nuclei-max-area`",
+    )
+
+    parser.add_argument(
+        "--nuclei-min-intensity",
+        type=float,
+        help="Filter nuclei with mean intensity < `nuclei-min-intensity` in `nuclei-intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--nuclei-max-intensity",
+        type=float,
+        help="Filter nuclei with mean intensity > `nuclei-max-intensity` in `nuclei-intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--nuclei-intensity-channel",
+        type=int,
+        help="Channel index (0-based) to use for intensity filtering. Defaults to `dapi-channel`",
     )
 
     subset_arg(parser)

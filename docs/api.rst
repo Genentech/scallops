@@ -186,8 +186,8 @@ Utilities
         scallops.segmentation.util.assign_labels_by_overlap
         scallops.segmentation.util.relabel_by_assignment
         scallops.segmentation.util.remove_boundary_labels
-        scallops.segmentation.util.remove_labels_by_area
-        scallops.segmentation.util.remove_labels_region_props
+        scallops.segmentation.util.remove_labels
+        scallops.segmentation.util.remove_labels_regionprops
         scallops.segmentation.util.remove_masked_regions
         scallops.segmentation.util.remove_small_objects_std
         scallops.segmentation.util.threshold_quantile
