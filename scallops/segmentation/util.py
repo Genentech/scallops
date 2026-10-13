@@ -4,9 +4,9 @@ Authors:
     - The SCALLOPS development team
 """
 
-import math
 import os
 from collections import Counter
+from collections.abc import Sequence
 from functools import partial
 from numbers import Number
 from pathlib import Path
@@ -24,7 +24,6 @@ from dask import delayed
 from dask_image import ndfilters as dask_ndi
 from scipy.sparse import issparse, sparray
 from skimage.filters.thresholding import threshold_li, threshold_otsu
-from skimage.measure import regionprops
 from skimage.measure._regionprops import RegionProperties
 from skimage.morphology import closing, disk, remove_small_objects
 from skimage.restoration import rolling_ball as apply_rolling_ball
@@ -207,13 +206,13 @@ def remove_boundary_labels(labels: np.ndarray, relabel: bool = False) -> np.ndar
     return labels
 
 
-def remove_labels_region_props(
+def remove_labels_regionprops(
     labels: np.ndarray,
     regions: list[RegionProperties],
     func: Callable[[RegionProperties], bool],
     relabel: bool = False,
 ) -> np.ndarray:
-    """Filter labels using region props.
+    """Filter labels using region properties.
 
     :param labels: An array of labels, which must be non-negative integers.
     :param regions: List of region props from `skimage.measure.regionprops`.
@@ -222,11 +221,7 @@ def remove_labels_region_props(
     :return: Filtered labels
     """
     cut = [r.label for r in regions if not func(r)]
-    labels = labels.copy()
-    labels.flat[np.isin(labels.flat[:], cut)] = 0
-    if relabel:
-        labels = relabel_sequential(labels)
-    return labels
+    return remove_labels(labels, cut, relabel)
 
 
 def remove_masked_regions(
@@ -243,6 +238,18 @@ def remove_masked_regions(
     """
     cut = np.unique(labels[mask == 0])
     cut = cut[cut > 0]
+    return remove_labels(labels, cut, relabel)
+
+
+def remove_labels(labels: np.ndarray, cut: Sequence[int], relabel: bool = False):
+    """Remove labels in `cut`.
+
+    :param labels: An array of labels, which must be non-negative integers.
+    :param cut: List of labels to remove.
+    :param relabel: Whether to relabel the labels
+    :return: Filtered labels
+    """
+
     labels = labels.copy()
     labels.flat[np.isin(labels.flat[:], cut)] = 0
     if relabel:
@@ -275,64 +282,6 @@ def identify_tertiary_objects(
         np.where(primary_mask, secondary_labels, 0)
         if not isinstance(secondary_labels, da.Array)
         else da.where(primary_mask, secondary_labels, 0)
-    )
-
-
-def remove_labels_by_area(
-    labels: np.ndarray,
-    area_min: float = -math.inf,
-    area_max: float = math.inf,
-    relabel: bool = False,
-) -> np.ndarray:
-    """Keep labels with `area_min` < area < `area_max`
-
-    :param labels: An array of labels, which must be non-negative integers.
-    :param area_min: Minimum area to include
-    :param area_max: Maximum area to include
-    :param relabel: Whether to relabel the labels
-    :return: Filtered labels
-    """
-    if area_min is None:
-        area_min = -math.inf
-    if area_max is None:
-        area_max = math.inf
-    regions = regionprops(labels)
-
-    def _area_filter(r):
-        return area_min < r.area < area_max
-
-    return remove_labels_region_props(
-        labels=labels, regions=regions, func=_area_filter, relabel=relabel
-    )
-
-
-def remove_labels_by_intensity(
-    labels: np.ndarray,
-    image: np.ndarray,
-    intensity_min: float = -math.inf,
-    intensity_max: float = math.inf,
-    relabel: bool = False,
-) -> np.ndarray:
-    """Keep labels whose mean intensity falls within [intensity_min, intensity_max].
-
-    :param labels: An array of labels, which must be non-negative integers.
-    :param image: 2D intensity image used to compute per-label mean intensity.
-    :param intensity_min: Lower bound (inclusive) on mean intensity.
-    :param intensity_max: Upper bound (inclusive) on mean intensity.
-    :param relabel: Whether to relabel the labels.
-    :return: Filtered labels.
-    """
-    if intensity_min is None:
-        intensity_min = -math.inf
-    if intensity_max is None:
-        intensity_max = math.inf
-    regions = regionprops(labels, intensity_image=image)
-
-    def _intensity_filter(r):
-        return intensity_min <= r.intensity_mean <= intensity_max
-
-    return remove_labels_region_props(
-        labels=labels, regions=regions, func=_intensity_filter, relabel=relabel
     )
 
 

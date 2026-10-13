@@ -13,7 +13,7 @@ from scallops.segmentation.util import (
     close_labels,
     dask_relabel_sequential,
     identify_tertiary_objects,
-    remove_labels_by_intensity,
+    remove_labels,
     remove_masked_regions,
 )
 from scallops.segmentation.watershed import (
@@ -326,42 +326,18 @@ def test_adaptive_threshold(image):
 
 
 @pytest.mark.utils
-def test_remove_labels_by_intensity(
-    experiment_c_A1_102_nuclei, experiment_c_A1_102_pheno_aligned
-):
-    """Remove nuclei whose mean DAPI intensity falls outside a given range.
-
-    Uses the pre-computed nuclei labels for tile A1-102 paired with the aligned
-    phenotype image (channel 0 = DAPI).  The 90th-percentile mean intensity
-    across all 2 643 labels is ~1 727 counts; filtering above that value should
-    remove exactly 265 labels while keeping 2 378.
-    """
-    from skimage.measure import regionprops
-
-    labels = experiment_c_A1_102_nuclei.squeeze().values.astype(np.int32)
-    dapi = (
-        experiment_c_A1_102_pheno_aligned.isel(c=0).squeeze().values.astype(np.float32)
+@pytest.mark.parametrize("relabel", [True, False])
+def test_remove_labels(relabel):
+    labels = np.array([[1, 2, 3], [4, 5, 2]])
+    filtered_labels = remove_labels(labels, [2, 4], relabel=relabel)
+    expected = (
+        np.array([[1, 0, 2], [0, 3, 0]])
+        if relabel
+        else np.array([[1, 0, 3], [0, 5, 0]])
     )
-
-    regions = regionprops(labels, intensity_image=dapi)
-    means = np.array([r.intensity_mean for r in regions])
-    threshold = np.percentile(means, 90)  # ~1 727 counts
-
-    # max_intensity: keep only dim nuclei, drop the bright ones (top 10 %)
-    result = remove_labels_by_intensity(labels, dapi, intensity_max=threshold)
-    n_kept = len(np.unique(result[result > 0]))
-    n_removed = labels.max() - n_kept
-    assert n_kept == 2378, f"Expected 2378 kept labels, got {n_kept}"
-    assert n_removed == 265, f"Expected 265 removed labels, got {n_removed}"
-
-    # min_intensity: keep only bright nuclei, drop the dim ones
-    result_bright = remove_labels_by_intensity(labels, dapi, intensity_min=threshold)
-    n_kept_bright = len(np.unique(result_bright[result_bright > 0]))
-    assert n_kept_bright == 265, f"Expected 265 bright labels kept, got {n_kept_bright}"
-
-    # no bounds: all labels survive
-    result_all = remove_labels_by_intensity(labels, dapi)
-    np.testing.assert_array_equal(result_all, labels)
+    np.testing.assert_array_equal(expected, filtered_labels)
+    # input is not modified
+    np.testing.assert_array_equal(np.array([[1, 2, 3], [4, 5, 2]]), labels)
 
 
 @pytest.mark.utils
