@@ -668,7 +668,7 @@ def test_read_file_sort_order(tmp_path):
             img_path,
             "{well}-{t}.tiff",
             ("well",),
-            file_sort_order=["20231012_20x_6W_IF", "20231010_20x_6W_FISH"],
+            file_sort_order={"t": ["20231012_20x_6W_IF", "20231010_20x_6W_FISH"]},
         )
     )[0]
 
@@ -728,7 +728,7 @@ def test_read_experiment_csv_different_directories(tmp_path):
     assert len(gen) == 1
     group, file_list, metadata = gen[0]
     image = _images2fov(file_list, metadata)
-    np.testing.assert_array_equal(image.coords["c"].values, [0, 1])
+    np.testing.assert_array_equal(image.coords["c"].values, ["0", "1"])
     np.testing.assert_array_equal(image.isel(t=0, z=0).max(dim=("y", "x")), [0, 1])
 
 

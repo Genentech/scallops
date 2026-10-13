@@ -169,7 +169,7 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
     parser.add_argument(
         "--sort",
         nargs="+",
-        help="Custom sort order. Example: 20231012_20x_6W_IF 20231010_20x_6W_FISH",
+        help="Custom sort order for `time`. Example: IF FISH",
     )
 
     parser.add_argument(

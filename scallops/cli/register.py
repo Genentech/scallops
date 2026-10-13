@@ -817,6 +817,8 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
         dask_cluster_parameters = dict(threads_per_worker=1, n_workers=_cpu_count())
 
     sort_order = arguments.sort
+    if sort_order is not None:
+        sort_order = dict(t=sort_order)
     moving_image_path = arguments.moving
     fixed_image_path = arguments.fixed
     flip_moving_y = arguments.flip_moving_y
