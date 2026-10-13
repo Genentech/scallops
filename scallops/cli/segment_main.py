@@ -19,14 +19,20 @@ from scallops.cli.util import (
 )
 
 
+def _run_pipeline_overlap(arguments: Namespace) -> None:
+    from scallops.cli.segment import _run_overlap_pipeline
+
+    _run_overlap_pipeline(arguments)
+
+
 def _run_pipeline_segment_nuclei(arguments: Namespace) -> None:
     """Run the pipeline for nuclei segmentation.
 
     :param arguments: Parsed command-line arguments.
     """
-    from scallops.cli.segment import run_pipeline_segment_nuclei
+    from scallops.cli.segment import _run_pipeline_segment_nuclei
 
-    run_pipeline_segment_nuclei(arguments)
+    _run_pipeline_segment_nuclei(arguments)
 
 
 def _run_pipeline_segment_cell(arguments: Namespace) -> None:
@@ -34,9 +40,9 @@ def _run_pipeline_segment_cell(arguments: Namespace) -> None:
 
     :param arguments: Parsed command-line arguments.
     """
-    from scallops.cli.segment import run_pipeline_segment_cell
+    from scallops.cli.segment import _run_pipeline_segment_cell
 
-    run_pipeline_segment_cell(arguments)
+    _run_pipeline_segment_cell(arguments)
 
 
 def _create_parser(subparsers: ArgumentParser, default_help: bool) -> None:
@@ -56,6 +62,7 @@ def _create_parser(subparsers: ArgumentParser, default_help: bool) -> None:
     subparsers = parser.add_subparsers(help="sub-command help")
     _add_nuclei_parser(subparsers, default_help)
     _add_cell_parser(subparsers, default_help)
+    _overlap_parser(subparsers, default_help)
 
 
 def _add_common_args(parser: ArgumentParser) -> None:
@@ -272,3 +279,65 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
 
     _sort_groups(parser)
     parser.set_defaults(func=_run_pipeline_segment_cell)
+
+
+def _overlap_parser(subparsers: ArgumentParser, default_help: bool) -> None:
+    parser = subparsers.add_parser(
+        "overlap",
+        help="Find the fraction of `label-1` contained within `label-2",
+        description="Find the fraction of `label-1` contained within `label-2",
+        formatter_class=(
+            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
+        ),
+    )
+    required = parser.add_argument_group("required arguments")
+    required.add_argument(
+        "--labels",
+        required=True,
+        nargs="+",
+        help="Path to zarr directory containing labels",
+    )
+    required.add_argument(
+        "--meta-output",
+        required=True,
+        help="Path to output directory containing label overlap statistics and mappings",
+    )
+    required.add_argument(
+        "--label-output",
+        required=True,
+        help="Path to label zarr directory.",
+    )
+    required.add_argument(
+        "--label-pattern",
+        required=True,
+        help="Format string to extract metadata from labels (e.g. {well})",
+    )
+    parser.add_argument(
+        "--label-suffix-1",
+        default="nuclei",
+        help="Label 1 suffix",
+    )
+    parser.add_argument(
+        "--label-suffix-2",
+        default="cell",
+        help="Label 2 suffix",
+    )
+    parser.add_argument(
+        "--additional-suffix",
+        default=["cytosol"],
+        nargs="*",
+        help="Additional labels suffixes to rewrite",
+    )
+
+    parser.add_argument(
+        "-s", "--subset", nargs="*", help="Subset of labels to include."
+    )
+    force_arg(parser)
+    dask_client_arg(parser)
+    dask_cluster_arg(parser)
+
+    no_version_arg(parser)
+    _sort_groups(parser)
+    parser.set_defaults(
+        func=_run_pipeline_overlap,
+    )

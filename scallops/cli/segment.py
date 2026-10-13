@@ -12,13 +12,17 @@ Authors:
 
 import argparse
 import importlib
+import os
+from collections import defaultdict
 from typing import Callable, Literal, Optional
 
+import dask
 import dask.array as da
 import fsspec
 import numpy as np
 import zarr
 from dask.bag import from_sequence
+from fsspec.implementations.local import LocalFileSystem
 from zarr import Group
 
 from scallops.cli.util import (
@@ -29,12 +33,27 @@ from scallops.cli.util import (
     cli_metadata,
     load_json,
 )
-from scallops.io import _add_suffix, _images2fov, _set_up_experiment, get_image_spacing
+from scallops.io import (
+    _add_suffix,
+    _create_file_regex,
+    _images2fov,
+    _pd_to_parquet,
+    _set_up_experiment,
+    get_image_spacing,
+)
 from scallops.segmentation import remove_labels_by_area
-from scallops.segmentation.util import _delete_lock_files, identify_tertiary_objects
+from scallops.segmentation.util import (
+    _delete_lock_files,
+    assign_labels_by_overlap,
+    identify_tertiary_objects,
+    label_overlap,
+    relabel_by_assignment,
+)
 from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
+    _read_zarr_attrs,
+    _require_group,
     _write_zarr_labels,
     is_ome_zarr_array,
     open_ome_zarr,
@@ -283,12 +302,184 @@ def segment_cells(
     return root
 
 
-def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
-    """Run nuclei or cell segmentation pipeline.
+def _label_source_metadata(file_list: list[str | Group]) -> dict:
+    """Get the stored metadata (e.g. physical pixel sizes).
+
+    :param file_list: List containing the label zarr group
+    :return: Label metadata, without the scallops version and command
+    """
+    group = file_list[0]
+    if not isinstance(group, Group):
+        group = zarr.open(group, mode="r")
+    _, metadata, _ = _read_zarr_attrs(group.attrs)
+
+    metadata = {
+        key: value
+        for key, value in (metadata or {}).items()
+        if key not in ("scallops_version", "scallops_command")
+    }
+
+    return metadata
+
+
+def _overlap(
+    label_tuple_1: tuple[tuple[str, ...], list[str | Group], dict],
+    label_tuple_2: tuple[tuple[str, ...], list[str | Group], dict],
+    additional_tuples: list[tuple[tuple[str, ...], list[str | Group], dict]],
+    output_parquet_path: str,
+    output_root: zarr.Group,
+    force: bool = False,
+    no_version: bool = False,
+):
+    group_id1, file_list_1, metadata_1 = label_tuple_1
+    group_id2, file_list_2, metadata_2 = label_tuple_2
+    label_1 = _images2fov(file_list_1, metadata_1, dask=True)
+    label_2 = _images2fov(file_list_2, metadata_2, dask=True)
+    image_key = "-".join(group_id1[:-1]).replace("/", "_")
+    prefix = f"{output_parquet_path}{image_key}"
+    overlap_path = f"{prefix}-overlap.parquet"
+    assignment_path = f"{prefix}-assignment.parquet"
+    fs = fsspec.url_to_fs(overlap_path)[0]
+
+    label_suffixes = [group_id2[-1]] + [t[0][-1] for t in additional_tuples]
+    if all(fs.exists(path) for path in [overlap_path, assignment_path]) and all(
+        is_ome_zarr_array(output_root.get(f"labels/{image_key}-{suffix}"))
+        for suffix in label_suffixes
+    ):
+        if not force:
+            logger.info(f"Skipping overlap for {image_key}.")
+            return
+    logger.info(f"Finding overlapping objects for {image_key}.")
+    write_tuples = [(group_id2, file_list_2, label_2)]
+    for group_id, file_list, metadata in additional_tuples:
+        labels = _images2fov(file_list, metadata, dask=True)
+        write_tuples.append((group_id, file_list, labels))
+    overlap_df = label_overlap(label_1.data, label_2.data).compute()
+    assignment_df = assign_labels_by_overlap(overlap_df)
+    custom_metadata = cli_metadata() if not no_version else None
+    delayed = []
+    for group_id, file_list, labels in write_tuples:
+        label_metadata = _label_source_metadata(file_list)
+        if custom_metadata is not None:
+            label_metadata.update(custom_metadata)
+        # storage_options = None
+        # if isinstance(label_data, np.ndarray):
+        #     storage_options = {"chunks": image.data.chunksize[-2:]}
+
+        delayed += _write_zarr_labels(
+            name=f"{image_key}-{group_id[-1]}",
+            root=output_root,
+            metadata=label_metadata,
+            labels=relabel_by_assignment(labels.data, assignment_df=assignment_df),
+            compute=False,
+            # storage_options=xxx
+        )
+    dask.compute(*delayed)
+    for df, path in ((overlap_df, overlap_path), (assignment_df, assignment_path)):
+        _pd_to_parquet(
+            df,
+            path,
+            preserve_index=False,
+            custom_metadata=custom_metadata,
+        )
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize a path or URL so that equivalent locations compare equal."""
+    fs, path = fsspec.core.url_to_fs(url)
+    if isinstance(fs, LocalFileSystem):
+        path = os.path.realpath(path)
+    return fs.unstrip_protocol(path)
+
+
+def _run_overlap_pipeline(arguments: argparse.Namespace):
+    dask_server_url = arguments.client
+    dask_cluster_parameters = (
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+    )
+
+    labels_paths = arguments.labels
+
+    label_pattern = arguments.label_pattern
+    label_suffix_1 = arguments.label_suffix_1
+    label_suffix_2 = arguments.label_suffix_2
+    additional_suffixes = arguments.additional_suffix
+
+    subset = arguments.subset
+    no_version = arguments.no_version
+    force = arguments.force
+    output_parquet_path = arguments.meta_output
+    output_zarr_path = arguments.label_output
+    output_zarr_path = _add_suffix(output_zarr_path, ".zarr")
+    normalized_output_path = _normalize_url(output_zarr_path)
+    for labels_path in labels_paths:
+        if _normalize_url(labels_path) == normalized_output_path:
+            raise ValueError("Input label path should not be the same as output path")
+    output_root = open_ome_zarr(output_zarr_path, mode="a")
+    _require_group(output_root, "labels")
+
+    output_parquet_fs, output_parquet_path = fsspec.core.url_to_fs(output_parquet_path)
+    output_parquet_fs.makedirs(output_parquet_path, exist_ok=True)
+    output_parquet_path = output_parquet_fs.unstrip_protocol(output_parquet_path)
+    paths = []
+    for path in labels_paths:
+        label_root = zarr.open(path, mode="r")
+        labels_group = label_root.get("labels")
+        if labels_group is None:
+            raise ValueError(f"Labels group not found for {path}")
+        paths.append(labels_group)
+    full_label_pattern = label_pattern + "-{label_suffix}"
+
+    if subset is not None:
+        subset = [s + "-*" for s in subset]
+    gen = _set_up_experiment(
+        image_path=paths,
+        files_pattern=full_label_pattern,
+        group_by=list(_create_file_regex(full_label_pattern)[2]),
+        subset=subset,
+    )
+    label_1_base_id_to_tuple = dict()
+    label_2_base_id_to_tuple = dict()
+    additional_base_id_to_tuples = defaultdict(list)
+    for g in gen:
+        group_id, file_list, metadata = g
+        # ('test', 'cell')
+        suffix = group_id[-1].replace("/", "_")
+        base_id = group_id[:-1]
+        if suffix == label_suffix_1:
+            label_1_base_id_to_tuple[base_id] = g
+        elif suffix == label_suffix_2:
+            label_2_base_id_to_tuple[base_id] = g
+        elif suffix in additional_suffixes:
+            additional_base_id_to_tuples[base_id].append(g)
+
+    with (
+        _create_default_dask_config(),
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
+    ):
+        for base_id in label_1_base_id_to_tuple:
+            label_tuple_1 = label_1_base_id_to_tuple[base_id]
+            label_tuple_2 = label_2_base_id_to_tuple.get(base_id)
+            if label_tuple_2 is None:
+                logger.info(f"No {label_suffix_2} labels found for {base_id}.")
+                continue
+            additional_tuples = additional_base_id_to_tuples[base_id]
+            _overlap(
+                label_tuple_1=label_tuple_1,
+                label_tuple_2=label_tuple_2,
+                additional_tuples=additional_tuples,
+                output_parquet_path=output_parquet_path + output_parquet_fs.sep,
+                output_root=output_root,
+                force=force,
+                no_version=no_version,
+            )
+
+
+def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
+    """Run nuclei or cell segmentation
 
     :param arguments: Command line arguments.
     :param nuclei: If True, perform nuclei segmentation; otherwise, perform cell segmentation.
-    :return: None
     """
     method = arguments.method
     dask_server_url = arguments.client
@@ -326,11 +517,10 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
     if chunks is not None:
         chunks = (chunks, chunks)
     output = _add_suffix(output, ".zarr")
-
     fs, _ = fsspec.core.url_to_fs(output)
     fs.makedirs(output, exist_ok=True)
     output_root = open_ome_zarr(output, mode="a")
-
+    _require_group(output_root, "labels")
     kwargs = dict()
 
     if not nuclei:
@@ -409,18 +599,18 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
     _delete_lock_files()
 
 
-def run_pipeline_segment_nuclei(arguments: argparse.Namespace):
+def _run_pipeline_segment_nuclei(arguments: argparse.Namespace):
     """Run nuclei segmentation pipeline.
 
     :param arguments: Command line arguments.
     :return: None
     """
-    run_pipeline(arguments, True)
+    _run_segment_pipeline(arguments, True)
 
 
-def run_pipeline_segment_cell(arguments: argparse.Namespace):
+def _run_pipeline_segment_cell(arguments: argparse.Namespace):
     """Run cell segmentation pipeline.
 
     :param arguments: Command line arguments.
     """
-    run_pipeline(arguments, False)
+    _run_segment_pipeline(arguments, False)

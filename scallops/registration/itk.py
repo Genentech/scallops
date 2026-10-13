@@ -336,7 +336,7 @@ def _itk_align_reference_time_zarr(
         if image_root is not None:
             images_group = _require_group(image_root, "images")
             group = images_group.create_group(
-                image_name.replace("/", "-"), overwrite=True
+                image_name.replace("/", "_"), overwrite=True
             )
             zarr_array = group.create_array(
                 "s0",
@@ -1189,7 +1189,7 @@ def _itk_transform_image_zarr(
     dim_sizes = tuple([image.sizes[d] for d in transform_dims])
 
     group = _require_group(image_root, "images").require_group(
-        image_name.replace("/", "-"), overwrite=True
+        image_name.replace("/", "_"), overwrite=True
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
     data = group.create_array(
