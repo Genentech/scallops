@@ -1865,8 +1865,8 @@ def _set_up_experiment(
             ".parquet"
         ):
             df = (
-                # read group_by columns as str to preserve values such as "001"
-                pd.read_csv(image_path, dtype={g: str for g in group_by})
+                # read columns as str to preserve values such as "001"
+                pd.read_csv(image_path, dtype=str)
                 if image_path.lower().endswith(".csv")
                 else pd.read_parquet(image_path)
             )
