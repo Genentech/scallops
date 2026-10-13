@@ -712,6 +712,39 @@ def test_read_experiment_csv(tmp_path):
 
 
 @pytest.mark.io
+def test_read_experiment_csv_different_directories(tmp_path):
+    paths = []
+    for i, directory in enumerate(["zdir", "adir"]):
+        os.makedirs(tmp_path / directory)
+        path = str(tmp_path / directory / f"e100_1_t0_A1_s{i}_w{i}.tif")
+        save_ome_tiff(np.full((4, 4), i, dtype=np.uint16), uri=path)
+        paths.append(path)
+    csv_path = os.path.join(tmp_path, "test.csv")
+    pd.DataFrame(dict(image=paths, well="A1", tile="1", c=[0, 1])).to_csv(
+        csv_path, index=False
+    )
+
+    gen = list(_set_up_experiment(csv_path, files_pattern=None, group_by=("well",)))
+    assert len(gen) == 1
+    group, file_list, metadata = gen[0]
+    image = _images2fov(file_list, metadata)
+    np.testing.assert_array_equal(image.coords["c"].values, [0, 1])
+    np.testing.assert_array_equal(image.isel(t=0, z=0).max(dim=("y", "x")), [0, 1])
+
+
+@pytest.mark.io
+def test_read_experiment_csv_group_by_str(tmp_path):
+    path = str(tmp_path / "image.tif")
+    save_ome_tiff(np.zeros((4, 4), dtype=np.uint16), uri=path)
+    csv_path = os.path.join(tmp_path, "test.csv")
+    pd.DataFrame(dict(image=[path], well=["A01"], tile=["001"])).to_csv(
+        csv_path, index=False
+    )
+    exp = read_experiment(csv_path, group_by=("well", "tile"))
+    assert list(exp.images.keys()) == ["A01-001"]
+
+
+@pytest.mark.io
 def test_dask_zarr_io_component(tmp_path, recwarn):
     # this is what current version of ome_zarr does
     path = tmp_path / "test.zarr"

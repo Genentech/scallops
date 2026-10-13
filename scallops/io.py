@@ -1271,8 +1271,8 @@ def _images2fov(
     file_list: list[str] | zarr.Group,
     attrs: dict[str, str | list[str]] | None,
     dask: bool = False,
-    scene_id: str = None,
-    concat_dims: tuple[str] = ("z", "c", "t"),
+    scene_id: str | None = None,
+    concat_dims: tuple[str] | None = ("z", "c", "t"),
     tmp_dir: str | None = None,
     **kwargs,
 ) -> xr.DataArray | list[xr.DataArray]:
@@ -1865,7 +1865,8 @@ def _set_up_experiment(
             ".parquet"
         ):
             df = (
-                pd.read_csv(image_path)
+                # read group_by columns as str to preserve values such as "001"
+                pd.read_csv(image_path, dtype={g: str for g in group_by})
                 if image_path.lower().endswith(".csv")
                 else pd.read_parquet(image_path)
             )
@@ -1959,6 +1960,7 @@ def _set_up_experiment(
 
     def file_sort_key(x):
         x = x[0].name if isinstance(x[0], (zarr.Group, zarr.Array)) else x[0]
+        x = os.path.basename(x.rstrip("/"))
         if file_sort_order is not None:
             for i in range(len(file_sort_order)):
                 x = x.replace(file_sort_order[i], str(i))
