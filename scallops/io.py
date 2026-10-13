@@ -1876,7 +1876,24 @@ def _set_up_experiment(
             assert "image" in df.columns, f"'image' column not found in {image_path}."
             for g in group_by:
                 assert g in df.columns, f"'{g}' column not found in {image_path}."
+            required_columns = [
+                c
+                for c in dict.fromkeys(["image", *group_by, "t", "c", "z"])
+                if c in df.columns
+            ]
+            missing = df[required_columns].isna().any()
+            if missing.any():
+                raise ValueError(
+                    f"Missing values in column(s) "
+                    f"{', '.join(missing.index[missing])} in {image_path}."
+                )
             for d in df.to_dict(orient="records"):
+                # drop missing values in optional columns
+                d = {
+                    k: v
+                    for k, v in d.items()
+                    if not (pd.api.types.is_scalar(v) and pd.isna(v))
+                }
                 group = tuple([str(d[g]) for g in group_by])
                 image_key = "-".join(group)
                 if subset(image_key):
@@ -1959,18 +1976,12 @@ def _set_up_experiment(
         scene_ids = scenes
         scenes = False
 
+    sort_dims = list(dict.fromkeys([*(file_sort_order or {}), "t", "c", "z"]))
     if file_sort_order is not None:
         file_sort_order = {
             k: {v: i for i, v in enumerate(order)}
             for k, order in file_sort_order.items()
         }
-
-    sort_dims = ["t", "c", "z"]
-    if file_sort_order is not None:
-        sort_dims = list(file_sort_order.keys())
-        for d in ["t", "c", "z"]:
-            if d not in sort_dims:
-                sort_dims.append(d)
 
     def file_sort_key(x):
         path = x[0].name if isinstance(x[0], (zarr.Group, zarr.Array)) else x[0]
@@ -1987,12 +1998,13 @@ def _set_up_experiment(
         values.append(path)
         return tuple(values)
 
+    sort_key = natsort_keygen(file_sort_key)
     for group in natsorted(group_to_matches):
         # Sorting is important if channels are stored in different files
         # Need to handle directory input where the cycle or channel is only in the folder name
         # or in the file name.
         matches = group_to_matches[group]
-        matches.sort(key=natsort_keygen(file_sort_key))
+        matches.sort(key=sort_key)
         file_list = []
         file_metadata = []
         for m in matches:
