@@ -14,8 +14,6 @@ import dask.dataframe as dd
 import fsspec
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from natsort import natsorted
 
 from scallops.cli.util import (
@@ -48,7 +46,8 @@ from scallops.features.util import (
     pandas_to_anndata,
 )
 from scallops.io import (
-    _to_parquet,
+    _dd_to_parquet,
+    _pd_to_parquet,
     is_anndata,
     is_parquet_file,
     read_anndata,
@@ -234,20 +233,7 @@ def run_recall(arguments: argparse.Namespace):
                 break
         if multi_threshold:
             df["threshold"] = df["threshold"].astype(str)
-        table = pa.Table.from_pandas(df, preserve_index=False)
-        table = table.replace_schema_metadata(
-            {
-                "scallops".encode(): json.dumps(metadata).encode(),
-                **table.schema.metadata,
-            }
-        )
-
-        fs, output = fsspec.url_to_fs(output)
-        pq.write_table(
-            table,
-            output,
-            filesystem=fs,
-        )
+        _pd_to_parquet(df, output, metadata, preserve_index=False)
 
 
 def run_set_enrichment(arguments: argparse.Namespace):
@@ -289,21 +275,7 @@ def run_set_enrichment(arguments: argparse.Namespace):
             set_name_to_genes=set_name_to_genes,
             min_genes=min_genes,
         )
-
-        table = pa.Table.from_pandas(df, preserve_index=False)
-        table = table.replace_schema_metadata(
-            {
-                "scallops".encode(): json.dumps(metadata).encode(),
-                **table.schema.metadata,
-            }
-        )
-
-        fs, output = fsspec.url_to_fs(output)
-        pq.write_table(
-            table,
-            output,
-            filesystem=fs,
-        )
+        _pd_to_parquet(df, output, metadata, preserve_index=False)
 
 
 def run_similarity_matrix(arguments: argparse.Namespace):
@@ -629,27 +601,14 @@ def run_rank_features(arguments: argparse.Namespace):
         fs.makedirs(output_dir, exist_ok=True)
 
         if isinstance(rank_df, dd.DataFrame):
-            _to_parquet(
+            _dd_to_parquet(
                 rank_df,
                 rank_output,
                 write_index=False,
                 custom_metadata=dict(scallops=json.dumps(metadata)),
             )
         else:
-            table = pa.Table.from_pandas(rank_df, preserve_index=False)
-            table = table.replace_schema_metadata(
-                {
-                    "scallops".encode(): json.dumps(metadata).encode(),
-                    **table.schema.metadata,
-                }
-            )
-
-            fs, rank_output = fsspec.url_to_fs(rank_output)
-            pq.write_table(
-                table,
-                rank_output,
-                filesystem=fs,
-            )
+            _pd_to_parquet(rank_df, rank_output, metadata, preserve_index=False)
 
 
 def run_norm_features(arguments: argparse.Namespace):
@@ -755,19 +714,7 @@ def run_norm_features(arguments: argparse.Namespace):
         else:
             data.X = data.X.compute()
             df = data.to_df().join(data.obs)
-            table = pa.Table.from_pandas(df, preserve_index=True)
-            table = table.replace_schema_metadata(
-                {
-                    "scallops".encode(): json.dumps(metadata).encode(),
-                    **table.schema.metadata,
-                }
-            )
-            fs, output_file = fsspec.url_to_fs(output)
-            pq.write_table(
-                table,
-                output_file,
-                filesystem=fs,
-            )
+            _pd_to_parquet(df, output, metadata, preserve_index=True)
 
 
 def run_filter_data(arguments: argparse.Namespace) -> None:
