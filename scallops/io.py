@@ -1876,24 +1876,9 @@ def _set_up_experiment(
             assert "image" in df.columns, f"'image' column not found in {image_path}."
             for g in group_by:
                 assert g in df.columns, f"'{g}' column not found in {image_path}."
-            required_columns = [
-                c
-                for c in dict.fromkeys(["image", *group_by, "t", "c", "z"])
-                if c in df.columns
-            ]
-            missing = df[required_columns].isna().any()
-            if missing.any():
-                raise ValueError(
-                    f"Missing values in column(s) "
-                    f"{', '.join(missing.index[missing])} in {image_path}."
-                )
+
+            df = df.fillna("")
             for d in df.to_dict(orient="records"):
-                # drop missing values in optional columns
-                d = {
-                    k: v
-                    for k, v in d.items()
-                    if not (pd.api.types.is_scalar(v) and pd.isna(v))
-                }
                 group = tuple([str(d[g]) for g in group_by])
                 image_key = "-".join(group)
                 if subset(image_key):
