@@ -1695,8 +1695,8 @@ def _get_fs_protocol(fs: fsspec.AbstractFileSystem) -> str:
 
 def _set_up_experiment(
     image_path: str | Path | zarr.Group | Sequence[str | Path | zarr.Group],
-    files_pattern: str | re.Pattern = "*",
-    group_by: Sequence[str] = (),
+    files_pattern: str | re.Pattern | None = "*",
+    group_by: Sequence[str] | None = (),
     subset: Callable[[str], bool] | Sequence[str | re.Pattern] | None = None,
     scenes: bool | list[str] = False,
     file_sort_order: dict[str, list[str]] | None = None,
@@ -1805,10 +1805,15 @@ def _set_up_experiment(
     files_pattern_specified = files_pattern is not None and files_pattern != ""
     if files_pattern is None:
         files_pattern = "*"
+
     if isinstance(files_pattern, str):
-        file_regex, extension, keys = _create_file_regex(files_pattern, flags)
+        file_regex, extension, files_pattern_keys = _create_file_regex(
+            files_pattern, flags
+        )
         if files_pattern_specified:
-            filtered_group_by = tuple([g for g in group_by if g in keys or g == "*"])
+            filtered_group_by = tuple(
+                [g for g in group_by if g in files_pattern_keys or g == "*"]
+            )
 
             if len(filtered_group_by) != len(group_by):
                 raise ValueError(
@@ -1816,12 +1821,15 @@ def _set_up_experiment(
                 )
     else:
         file_regex = files_pattern
+        files_pattern_keys = file_regex.groupindex.keys()
         extension = ""
     _image_key_func = _get_image_key_func(group_by)
     group_to_matches = defaultdict(
         lambda: []
     )  # key is tuple -> value is tuple of group, dict
     maxdepth = None
+    unique_csv_columns = None
+    non_csv_input = False
     for image_path in image_paths:
         if isinstance(image_path, Path):
             # IF URI DO NOT PROVIDE AS PATH
@@ -1835,6 +1843,7 @@ def _set_up_experiment(
         else:
             root = image_path
         if root is not None:
+            non_csv_input = True
             if "0" not in root:  # format: "path.zarr/images/"
                 if "images" in root:
                     images_group = root["images"]
@@ -1865,23 +1874,30 @@ def _set_up_experiment(
         elif image_path.lower().endswith(".csv") or image_path.lower().endswith(
             ".parquet"
         ):
-            df = (
+            if image_path.lower().endswith(".csv"):
                 # read columns as str to preserve values such as "001"
-                pd.read_csv(image_path, dtype=str)
-                if image_path.lower().endswith(".csv")
-                else pd.read_parquet(image_path)
-            )
+                df = pd.read_csv(image_path, dtype=str)
+            else:
+                df = pd.read_parquet(image_path)
+                for column in df.columns:
+                    if not pd.api.types.is_string_dtype(df[column]):
+                        df[column] = df[column].astype("string")
             if len(group_by) == 0 or (len(group_by) == 1 and group_by[0] == "*"):
                 raise ValueError("Not implemented. Please specify groupby.")
+            if unique_csv_columns is None:
+                unique_csv_columns = set(df.columns.to_list())
+            elif unique_csv_columns != set(df.columns.to_list()):
+                raise ValueError("Inputs contain different columns")
+
             assert "image" in df.columns, f"'image' column not found in {image_path}."
             for g in group_by:
                 assert g in df.columns, f"'{g}' column not found in {image_path}."
-            required_columns = [
+            no_missing_values_columns = [
                 c
                 for c in dict.fromkeys(["image", *group_by, "t", "c", "z"])
                 if c in df.columns
             ]
-            missing = df[required_columns].isna().any()
+            missing = df[no_missing_values_columns].isna().any()
             if missing.any():
                 raise ValueError(
                     f"Missing values in column(s) "
@@ -1896,6 +1912,7 @@ def _set_up_experiment(
                     del d["image"]
                     group_to_matches[group].append((image, d))
         else:
+            non_csv_input = True
             fs, _ = fsspec.core.url_to_fs(image_path)
             if image_path in [".", "./"] and _get_fs_protocol(fs) == "file":
                 image_path = fs.info(image_path)["name"].rstrip(".")
@@ -1970,13 +1987,24 @@ def _set_up_experiment(
     if isinstance(scenes, list):
         scene_ids = scenes
         scenes = False
+    if unique_csv_columns is not None and non_csv_input:
+        unique_csv_columns_ = set(unique_csv_columns)
+        unique_csv_columns_.remove("image")
+        if unique_csv_columns_ != set(files_pattern_keys):
+            raise ValueError("Inputs contain different columns")
 
+    keys = files_pattern_keys if unique_csv_columns is None else unique_csv_columns
     sort_dims = list(dict.fromkeys([*(file_sort_order or {}), "t", "c", "z"]))
     if file_sort_order is not None:
+        for k in file_sort_order:
+            if k not in keys:
+                raise ValueError(f"No `{k}` field for sort order.")
         file_sort_order = {
             k: {v: i for i, v in enumerate(order)}
             for k, order in file_sort_order.items()
         }
+
+    sort_dims = [d for d in sort_dims if d in keys]
 
     def file_sort_key(x):
         path = x[0].name if isinstance(x[0], (zarr.Group, zarr.Array)) else x[0]
@@ -1988,7 +2016,9 @@ def _set_up_experiment(
             if file_sort_order is not None:
                 order = file_sort_order.get(c)
                 if order is not None:
-                    val = order.get(val, val)  # e.g. DAPI->0
+                    # listed values first, in the given order (e.g. DAPI->(0, 0)),
+                    # then unlisted values in natural order
+                    val = (0, order[val]) if val in order else (1, val)
             values.append(val)
         values.append(path)
         return tuple(values)
