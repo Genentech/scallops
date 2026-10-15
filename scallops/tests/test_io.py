@@ -668,13 +668,40 @@ def test_read_file_sort_order(tmp_path):
             img_path,
             "{well}-{t}.tiff",
             ("well",),
-            file_sort_order=["20231012_20x_6W_IF", "20231010_20x_6W_FISH"],
+            file_sort_order={"t": ["20231012_20x_6W_IF", "20231010_20x_6W_FISH"]},
         )
     )[0]
 
     _, file_list, metadata = image_gen
     assert os.path.basename(file_list[0]) == "A1-20231012_20x_6W_IF.tiff"
     assert os.path.basename(file_list[1]) == "A1-20231010_20x_6W_FISH.tiff"
+
+
+@pytest.mark.io
+def test_read_file_sort_order_numeric_values(tmp_path):
+    # listed values must sort before unlisted values, even numeric ones such as "0"
+    img_path = os.path.join(tmp_path, "images")
+    os.makedirs(img_path, exist_ok=True)
+    for t in ["0", "1", "10", "2", "IF"]:
+        save_ome_tiff(
+            np.zeros((4, 4), dtype=np.uint16),
+            uri=os.path.join(img_path, f"A1-{t}.tiff"),
+        )
+    _, file_list, _ = list(
+        _set_up_experiment(
+            img_path,
+            "{well}-{t}.tiff",
+            ("well",),
+            file_sort_order={"t": ["IF"]},
+        )
+    )[0]
+    assert [os.path.basename(f) for f in file_list] == [
+        "A1-IF.tiff",
+        "A1-0.tiff",
+        "A1-1.tiff",
+        "A1-2.tiff",
+        "A1-10.tiff",
+    ]
 
 
 @pytest.mark.io
@@ -709,6 +736,48 @@ def test_read_experiment_csv(tmp_path):
     assert list(exp2.images.keys()) == ["A1-102", "A1-103"]
     xr.testing.assert_equal(exp.images["A1-102"], exp2.images["A1-102"])
     xr.testing.assert_equal(exp.images["A1-103"], exp2.images["A1-103"])
+
+
+@pytest.mark.io
+def test_read_experiment_csv_different_directories(tmp_path):
+    paths = []
+    tiles = []
+    channels = []
+    for i, directory in enumerate(["zdir", "adir"]):
+        os.makedirs(tmp_path / directory)
+        for j, tile in enumerate(["1", "2"]):
+            path = str(tmp_path / directory / f"e100_1_t0_A1_s{tile}_w{i}.tif")
+            save_ome_tiff(np.full((4, 4), 10 * j + i, dtype=np.uint16), uri=path)
+            paths.append(path)
+            tiles.append(tile)
+            channels.append(i)
+    csv_path = os.path.join(tmp_path, "test.csv")
+    pd.DataFrame(dict(image=paths, well="A1", tile=tiles, c=channels)).to_csv(
+        csv_path, index=False
+    )
+
+    gen = list(
+        _set_up_experiment(csv_path, files_pattern=None, group_by=("well", "tile"))
+    )
+    assert [g[0] for g in gen] == [("A1", "1"), ("A1", "2")]
+    for j, (_, file_list, metadata) in enumerate(gen):
+        image = _images2fov(file_list, metadata)
+        np.testing.assert_array_equal(image.coords["c"].values, ["0", "1"])
+        np.testing.assert_array_equal(
+            image.isel(t=0, z=0).max(dim=("y", "x")), [10 * j, 10 * j + 1]
+        )
+
+
+@pytest.mark.io
+def test_read_experiment_csv_group_by_str(tmp_path):
+    path = str(tmp_path / "image.tif")
+    save_ome_tiff(np.zeros((4, 4), dtype=np.uint16), uri=path)
+    csv_path = os.path.join(tmp_path, "test.csv")
+    pd.DataFrame(dict(image=[path], well=["A01"], tile=["001"])).to_csv(
+        csv_path, index=False
+    )
+    exp = read_experiment(csv_path, group_by=("well", "tile"))
+    assert list(exp.images.keys()) == ["A01-001"]
 
 
 @pytest.mark.io

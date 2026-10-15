@@ -72,8 +72,7 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
     parser = subparsers.add_parser(
         "elastix",
         description="Register moving image to fixed image using ITK. "
-        "If no fixed image is provided, registers moving image to a specified timepoint. "
-        "Outputs are stored in Zarr format.",
+        "If no fixed image is provided, registers moving image to a specified timepoint.",
         formatter_class=(
             ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
         ),
@@ -154,7 +153,7 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
         "--time",
         "-t",
         default="0",
-        help="Time index (0-based) or value for alignment across timepoints",
+        help="Reference time index (0-based) or value for alignment across timepoints within moving image",
     )
     parser.add_argument(
         "--unroll-channels",
@@ -166,10 +165,12 @@ def _create_elastix_parser(subparsers: ArgumentParser, default_help: bool) -> No
     #     action="store_true",
     #     help="Register within timepoints (across channels)",
     # )
+
     parser.add_argument(
         "--sort",
         nargs="+",
-        help="Custom sort order. Example: 20231012_20x_6W_IF 20231010_20x_6W_FISH",
+        help="Custom sort order for moving image `t` values. Values must exactly match `t` in "
+        "`moving-image-pattern`. Example: IF FISH puts IF before FISH.",
     )
 
     parser.add_argument(
