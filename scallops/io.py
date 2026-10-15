@@ -1999,6 +1999,20 @@ def _set_up_experiment(
         for k in file_sort_order:
             if k not in keys:
                 raise ValueError(f"No `{k}` field for sort order.")
+        for k, order in file_sort_order.items():
+            observed = {
+                d.get(k, "")
+                for matches in group_to_matches.values()
+                for _, d in matches
+            }
+            unmatched = [v for v in order if v not in observed]
+            if len(unmatched) == len(order):
+                logger.warning(
+                    f"No `{k}` values match sort order {order}; files will be sorted "
+                    f"naturally. Found `{k}` values: {natsorted(observed)}."
+                )
+            elif unmatched:
+                logger.warning(f"Sort order values for `{k}` not found: {unmatched}.")
         file_sort_order = {
             k: {v: i for i, v in enumerate(order)}
             for k, order in file_sort_order.items()
