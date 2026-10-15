@@ -11,6 +11,7 @@ Authors:
 """
 
 import logging
+import math
 from collections.abc import Sequence
 from contextlib import redirect_stdout
 from importlib.metadata import PackageNotFoundError, version
@@ -23,11 +24,10 @@ import numpy as np
 import xarray as xr
 from filelock import FileLock
 
-from scallops.dask_relabeling.relabel import image2labels
+from scallops.segmentation.dask import segment_blocks
 from scallops.segmentation.util import (
     _download_model,
     cyto_channel_summary,
-    dask_relabel_sequential,
 )
 
 logger = logging.getLogger("scallops")
@@ -66,7 +66,7 @@ def _cellpose(
     model: object,
     nuclei_channel: int = 0,
     cyto_channel: None | int | Sequence[int] = None,
-    diameter: None | float = None,
+    diameter: float | None = None,
     chunks: None | tuple[int, int] = None,
     **kwargs: dict[str, Any],
 ) -> np.ndarray | da.Array:
@@ -107,9 +107,10 @@ def _cellpose(
         array = np.stack([cyto, nuclei]) if cyto is not None else nuclei
 
     if isinstance(array, da.Array):
-        depth = kwargs.pop("depth", 30)
-        if diameter is not None and depth is None:
-            depth = np.ceil(diameter).astype(np.int64)
+        depth = kwargs.pop("depth", None)
+        if depth is None:
+            depth = math.ceil(diameter) if diameter is not None else 30
+
         segmentation_fn_kwargs = {
             "diameter": diameter,
             "eval_kwargs": kwargs,
@@ -117,14 +118,14 @@ def _cellpose(
         }
         if cellpose_version < 4:
             kwargs["channels"] = channels
-        labels = image2labels(
+        return segment_blocks(
             array,
             seg_fn=_process_block,
-            overlaps=[depth, depth],
+            depth=depth,
             spatial_dims=2,
-            segmentation_fn_kwargs=segmentation_fn_kwargs,
+            **segmentation_fn_kwargs,
         )
-        return dask_relabel_sequential(labels)
+
     else:
         model_args = dict()
         if cellpose_version < 4:
