@@ -54,6 +54,21 @@ def _select_t_index(image: xr.DataArray, t_index: int | None) -> xr.DataArray:
     return image.isel(t=t_index if t_index is not None else 0)
 
 
+def _n_timepoints(
+    file_list: list[str] | zarr.Group,
+    attrs: dict[str, str | list[str]] | None,
+    scene_id: None | str | int = None,
+) -> int:
+    """Number of timepoints embedded in a tile's own image data.
+
+    Distinct from timepoints split across separate files via a `{t}` filename
+    pattern token (e.g. imaging rounds stored together as frames within a single
+    nd2 file, rather than one file per round).
+    """
+    img = _images2fov(file_list, attrs, dask=True, scene_id=scene_id)
+    return img.sizes.get("t", 1)
+
+
 def _read_tile(
     file_list: list[str] | zarr.Group,
     attrs: dict[str, str | list[str]],
