@@ -1988,9 +1988,9 @@ def _set_up_experiment(
         scene_ids = scenes
         scenes = False
     if unique_csv_columns is not None and non_csv_input:
-        unique_csv_columns_ = set(unique_csv_columns)
-        unique_csv_columns_.remove("image")
-        if unique_csv_columns_ != set(files_pattern_keys):
+        if (set(unique_csv_columns) - {"image"}) != (
+            set(files_pattern_keys) - {"skip", "ignore"}
+        ):
             raise ValueError("Inputs contain different columns")
 
     keys = files_pattern_keys if unique_csv_columns is None else unique_csv_columns
