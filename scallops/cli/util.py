@@ -179,6 +179,8 @@ def _group_src_attrs(
             attrs = dict(file_metadata=[])
             group_to_src[group] = sources
             group_to_attrs[group] = attrs
+        else:
+            attrs = group_to_attrs[group]
         sources.append(src[i])
         attrs["file_metadata"].append(meta)
     filelist = []

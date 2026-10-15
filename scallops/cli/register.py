@@ -201,7 +201,7 @@ def single_registration(
     else:
         logger.info(f"Running registration for {image_key}")
 
-    if not register_self:
+    if not register_self:  # register fixed t=0 to moving
         _, fixed_file_list, fixed_metadata = fixed_tuple
 
         assert fixed_metadata["id"] == moving_metadata["id"], (
@@ -816,7 +816,12 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = dict(threads_per_worker=1, n_workers=_cpu_count())
 
-    sort_order = arguments.sort
+    moving_sort_order = arguments.sort
+    if moving_sort_order is not None:
+        moving_sort_order = dict(t=moving_sort_order)
+    # fixed_sort_order = arguments.fixed_sort
+    # if fixed_sort_order is not None:
+    #     fixed_sort_order = dict(t=fixed_sort_order)
     moving_image_path = arguments.moving
     fixed_image_path = arguments.fixed
     flip_moving_y = arguments.flip_moving_y
@@ -909,7 +914,7 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
         moving_image_pattern,
         group_by,
         subset=subset,
-        file_sort_order=sort_order,
+        file_sort_order=moving_sort_order,
     )
 
     if fixed_image_path is not None:  # aligned moving image to self at specified time
@@ -918,7 +923,6 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
             fixed_image_pattern,
             group_by,
             subset=subset,
-            file_sort_order=sort_order,
         )
         image_bag = from_sequence(zip(fixed_image_gen, moving_image_gen))
 
