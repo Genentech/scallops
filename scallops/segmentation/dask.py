@@ -181,7 +181,7 @@ def segment_blocks(
     image: da.Array,
     seg_fn: Callable,
     *args: da.Array,
-    depth: int | Sequence[int] = 30,
+    depth: int | Sequence[int] = 50,
     spatial_dims: int = 2,
     iou_threshold: float = 0.5,
     dtype: np.dtype = np.int32,
