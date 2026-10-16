@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 from argparse import (
     ArgumentDefaultsHelpFormatter,
@@ -9,6 +11,7 @@ from argparse import (
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.register_main import image_spacing_arg
 from scallops.cli.util import (
+    SubParsers,
     dask_client_arg,
     dask_cluster_arg,
     expected_images_arg,
@@ -38,7 +41,7 @@ def _run_stitch_preview(arguments: Namespace) -> None:
 
 
 def _create_stitch_preview_parser(
-    subparsers: argparse._SubParsersAction, default_help: bool
+    subparsers: SubParsers, default_help: bool
 ) -> ArgumentParser:
     """Create the parser for the stitch preview command.
 
@@ -108,9 +111,7 @@ def _create_stitch_preview_parser(
     return parser
 
 
-def _create_stitch_parser(
-    subparsers: argparse._SubParsersAction, default_help: bool
-) -> ArgumentParser:
+def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> ArgumentParser:
     parser = subparsers.add_parser(
         "stitch",
         help="Stitch images",

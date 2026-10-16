@@ -18,7 +18,7 @@ import types
 from collections.abc import Sequence
 from contextlib import nullcontext
 from importlib.metadata import version
-from typing import Any
+from typing import Any, TypeAlias
 
 import dask
 import dask.array as da
@@ -32,6 +32,9 @@ from distributed import Client
 from scallops.io import save_ome_tiff
 from scallops.utils import _cpu_count
 from scallops.zarr_io import _write_zarr_image
+
+SubParsers: TypeAlias = argparse._SubParsersAction
+"""Type of the object returned by :meth:`argparse.ArgumentParser.add_subparsers`."""
 
 
 class ContextFilter(logging.Filter):

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 
 import fsspec
@@ -7,6 +9,7 @@ from dask.bag import from_sequence
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.extract_crops import single_crop
 from scallops.cli.util import (
+    SubParsers,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -124,7 +127,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         ).compute()
 
 
-def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "extract-crops",
         help="Extract crops from labeled images.",

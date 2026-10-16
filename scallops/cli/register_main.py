@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 from argparse import (
     ArgumentDefaultsHelpFormatter,
@@ -7,6 +9,7 @@ from argparse import (
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.util import (
+    SubParsers,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -51,7 +54,7 @@ def _run_itk_transform(arguments: Namespace) -> None:
     run_itk_transform(arguments)
 
 
-def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Create the main parser for image registration."""
     parser = subparsers.add_parser(
         "registration",
@@ -66,9 +69,7 @@ def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -
     _create_transform_parser(subparsers, default_help)
 
 
-def _create_elastix_parser(
-    subparsers: argparse._SubParsersAction, default_help: bool
-) -> None:
+def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Create the parser for Elastix-based registration."""
     parser = subparsers.add_parser(
         "elastix",
@@ -272,9 +273,7 @@ def _create_elastix_parser(
     parser.set_defaults(func=_run_itk_registration, output="register")
 
 
-def _create_transform_parser(
-    subparsers: argparse._SubParsersAction, default_help: bool
-) -> None:
+def _create_transform_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Create the parser for ITK-based transformations."""
     parser = subparsers.add_parser(
         "transformix",

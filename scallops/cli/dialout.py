@@ -10,6 +10,8 @@ Authors:
 Note: This module requires the BWA tool for indexing and mapping.
 """
 
+from __future__ import annotations
+
 import argparse
 import glob
 import os
@@ -29,7 +31,7 @@ from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.metrics import pairwise_distances_argmin_min
 
-from scallops.cli.util import _get_cli_logger
+from scallops.cli.util import SubParsers, _get_cli_logger
 from scallops.io import _get_fs_protocol
 
 logger = _get_cli_logger()
@@ -653,7 +655,7 @@ def run_dialout_pipeline(arguments: argparse.Namespace) -> None:
         os.remove(local_path)
 
 
-def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Sets up the argument parsers for the 'dialout' command and its subcommands.
 
     This internal function configures the command-line interface for the 'dialout' tool,

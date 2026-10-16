@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import argparse
 from types import MethodType
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.util import (
+    SubParsers,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -28,7 +31,7 @@ def _run_pipeline_compute_features(arguments: argparse.Namespace):
     run_pipeline_compute_features(arguments)
 
 
-def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Sets up the argument parser for the 'features' command and its arguments.
 
     This internal function configures the command-line interface for computing features, adding
