@@ -15,8 +15,10 @@ import zarr
 from sklearn.cluster import AgglomerativeClustering
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
-from scallops.io import is_parquet_file, read_image
+from scallops.io import _images2fov, is_parquet_file, read_image
 from scallops.stitch._align import stitch_align
+from scallops.stitch._channel_align import record as alignment_record
+from scallops.stitch._channel_align import resolve_channel_alignment, write_record
 from scallops.stitch._plots import _qc_report
 from scallops.stitch.fuse import _fuse
 from scallops.stitch.shift_utils import _zncc, convert_stage_positions
@@ -77,8 +79,14 @@ def _single_stitch(
     channel_window: int | None,
     channel_filter_percentiles: tuple[float, float] | None,
     t_index: int | None = None,
+    alignment_correction: dict | None = None,
 ):
-    """Process a single cycle of images."""
+    """Process a single cycle of images.
+
+    :param alignment_correction: Optional per-channel alignment correction:
+        ``dict(channels, params, channel_order)`` with the parsed ``--alignment-correction-channels``, the loaded
+        parameter file and ``--alignment-correction-channel-order`` (see :mod:`scallops.stitch._channel_align`).
+    """
     _, image_filepaths, image_metadata = image_tuple
 
     image_key = (
@@ -136,6 +144,26 @@ def _single_stitch(
     filepaths = init["filepaths"]
     fileattrs = init["fileattrs"]
     original_filepaths = init["original_filepaths"]
+
+    channel_alignment = None
+    if alignment_correction is not None and not no_save_image:
+        # resolve before the (long) alignment so that option and parameter-file errors stop the run early
+        tile0 = _images2fov(
+            filepaths[0],
+            fileattrs[0] if fileattrs is not None else None,
+            dask=True,  # only the shape is needed
+            scene_id=0 if n_scenes is not None else None,
+        )
+        channel_alignment = resolve_channel_alignment(
+            correction_channels=alignment_correction["channels"],
+            params=alignment_correction["params"],
+            channel_order=alignment_correction["channel_order"],
+            n_channels=tile0.sizes["c"],
+            reference_channel=channel,
+            output_channels=output_channels,
+            tile_shape=(tile0.sizes["y"], tile0.sizes["x"]),
+        )
+        del tile0
 
     separate_z = (
         "z" in metadata_fields
@@ -222,6 +250,15 @@ def _single_stitch(
     output_metadata["area_fraction"] = stitch_result["area_fraction"]
     output_metadata["null_params"] = null_params
     output_metadata["radial_correction_k"] = radial_correction_k
+    if channel_alignment is not None:
+        output_metadata["channel_alignment"] = alignment_record(
+            resolved=channel_alignment,
+            params=alignment_correction["params"],
+            channel_order=alignment_correction["channel_order"],
+            channel_names=channel_names,
+            reference_channel=channel,
+            radial_correction_k=radial_correction_k,
+        )
     output_metadata["min_overlap_fraction"] = stitch_result["min_overlap_fraction"]
     swap = stitch_result["swap"]
     flip_y = stitch_result["flip_y"]
@@ -425,7 +462,15 @@ def _single_stitch(
         channel_window=channel_window,
         channel_filter_percentiles=channel_filter_percentiles,
         t_index=t_index,
+        channel_alignment=channel_alignment,
     )
+    if channel_alignment is not None:
+        alignment_json = dict(image=image_key, **output_metadata["channel_alignment"])
+        if not no_version:
+            alignment_json.update(cli_metadata())
+        write_record(
+            f"{other_output_path}{image_key}-channel-alignment.json", alignment_json
+        )
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -453,6 +498,7 @@ def _write_arrays(
     channel_window,
     channel_filter_percentiles,
     t_index=None,
+    channel_alignment=None,
 ):
     gc.collect()
     fmt = _current_format()
@@ -566,6 +612,7 @@ def _write_arrays(
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
             t_index=t_index,
+            channel_alignment=channel_alignment,
         )
 
     # cleanup
