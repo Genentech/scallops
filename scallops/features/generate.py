@@ -611,7 +611,7 @@ def _get_params(
                 Sequence[str],
                 Union[Sequence[str], None],
             ):
-                logger.warning(
+                raise ValueError(
                     f"{parameter_name} not supported for {name} for type {annotation}"
                 )
     return method_name, params
