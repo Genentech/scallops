@@ -124,6 +124,22 @@ def _filter_labels(
     return labels
 
 
+def _update_seg_args(method_args: dict, seg_args: dict | None) -> None:
+    """Add user-supplied segmentation arguments to the method arguments.
+
+    :param method_args: Arguments set by the pipeline. Updated in place.
+    :param seg_args: Additional arguments from `--seg-args`.
+    """
+    if not seg_args:
+        return
+    duplicates = method_args.keys() & seg_args.keys()
+    if duplicates:
+        raise ValueError(
+            f"--seg-args keys already set by other options: {', '.join(sorted(duplicates))}"
+        )
+    method_args.update(seg_args)
+
+
 def segment_nuclei(
     group: str,  # NOT USED
     file_list: list[str],
@@ -144,6 +160,7 @@ def segment_nuclei(
     min_intensity: float | None = None,
     max_intensity: float | None = None,
     intensity_channel: int | None = None,
+    seg_args: dict | None = None,
 ) -> Group:
     """Segment nuclei in images.
 
@@ -166,6 +183,7 @@ def segment_nuclei(
     :param min_intensity: Remove labels with mean intensity below this value.
     :param max_intensity: Remove labels with mean intensity above this value.
     :param intensity_channel: Channel to use for intensity filtering. Defaults to dapi_channel.
+    :param seg_args: Additional arguments to pass to the segmentation method.
     :return: The root (for dask)
     """
 
@@ -190,7 +208,7 @@ def segment_nuclei(
             nuclei_seg_args["chunks"] = chunks
         if chunk_overlap is not None:
             nuclei_seg_args["depth"] = chunk_overlap
-
+    _update_seg_args(nuclei_seg_args, seg_args)
     all_nuclei = None
     nuclei = method(image=image, nuclei_channel=dapi_channel, **nuclei_seg_args)
     if (
@@ -275,6 +293,7 @@ def segment_cells(
     nuclei_max_intensity: float | None = None,
     nuclei_intensity_channel: int | None = None,
     watershed_method: Literal["binary", "distance", "intensity"] = "distance",
+    seg_args: dict | None = None,
 ) -> Group:
     """Segment cells in images.
 
@@ -300,6 +319,7 @@ def segment_cells(
     :param force: Whether to overwrite existing output
     :param shrink_primary: Whether to shrink primary labels.
     :param no_version: Whether to skip version/CLI information in output.
+    :param seg_args: Additional arguments to pass to the segmentation method.
     """
     image_key = metadata["id"]
     if not force and is_ome_zarr_array(root.get(f"labels/{image_key}-cell")):
@@ -348,6 +368,7 @@ def segment_cells(
         cell_seg_args["chunks"] = chunks
     if chunk_overlap is not None:
         cell_seg_args["depth"] = chunk_overlap
+    _update_seg_args(cell_seg_args, seg_args)
     result = method(image=image, cyto_channel=cyto_channel, **cell_seg_args)
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
         cells = result[0]
@@ -609,6 +630,7 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
             threads_per_worker=threads_per_worker
         )
 
+    seg_args = load_json(arguments.seg_args) if arguments.seg_args is not None else {}
     data_path = arguments.images
     z_index = arguments.z_index
 
@@ -691,7 +713,7 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
     kwargs["min_intensity"] = arguments.min_intensity
     kwargs["max_intensity"] = arguments.max_intensity
     kwargs["intensity_channel"] = arguments.intensity_channel
-
+    kwargs["seg_args"] = seg_args
     method = getattr(
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",
