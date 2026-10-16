@@ -532,8 +532,6 @@ def _estimate_channel_alignment(
     Tiles are read as fusion reads them (same t and z selection), without radial or illumination correction.
     Raises if a channel fails its quality checks.
     """
-    from scallops.utils import _cpu_count
-
     z_per_tile = isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(
         z_index, str
     )
@@ -572,7 +570,6 @@ def _estimate_channel_alignment(
         if spacing is not None and spacing[0] > 0
         else None,
         seed=random_seed,
-        n_workers=_cpu_count(),
     )
     raise_for_failures(
         result,

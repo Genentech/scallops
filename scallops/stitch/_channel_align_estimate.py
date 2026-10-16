@@ -45,11 +45,11 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 
+import dask
 import numpy as np
+from dask.diagnostics import ProgressBar
 from scipy import ndimage as ndi
 from scipy.optimize import least_squares
 from skimage import feature, filters, measure, morphology, segmentation
@@ -666,7 +666,6 @@ def estimate_well(
     channels: Sequence,
     pixel_size_um: float | None = None,
     seed: int = 0,
-    n_workers: int | None = None,
 ) -> dict:
     """Estimate the alignment of ``channels`` to the reference channel from one well's tiles.
 
@@ -676,10 +675,11 @@ def estimate_well(
     :param channels: Channel keys to estimate (passed to ``read_tile``).
     :param pixel_size_um: Pixel size, to scale the minimum nucleus area; ``None`` scales it with nucleus size.
     :param seed: Random seed for the tile sampling and the bootstrap.
-    :param n_workers: Threads evaluating tiles in parallel (default: CPU count).
     :return: ``dict(channels={key: summary}, settings, pool_rule, n_pool, n_tiles, ...)``; each summary has
         ``m, ty, tx``, the quality values, ``passed`` and ``failures``. Use :func:`raise_for_failures` to stop on
         failures.
+
+    Tiles are read and measured in parallel with ``dask.compute``, using the current dask scheduler.
     """
     positions = np.asarray(positions, float)
     channels = list(channels)
@@ -695,7 +695,12 @@ def estimate_well(
             "The well has no tiles to estimate the channel alignment from."
         )
 
-    radii = [nucleus_radius(read_tile(i, [])[0]) for i in first_order[:N_SCALE_TILES]]
+    def radius(i):
+        return nucleus_radius(read_tile(i, [])[0])
+
+    radii = dask.compute(
+        *[dask.delayed(radius)(i) for i in first_order[:N_SCALE_TILES]]
+    )
     radii = [r for r in radii if np.isfinite(r)]
     if not radii:
         raise ChannelAlignmentEstimationError(
@@ -706,24 +711,19 @@ def estimate_well(
     settings = scale_settings(float(np.median(radii)), pixel_size_um)
 
     tiles: dict[int, dict] = {}
-    if n_workers is None:
-        n_workers = (
-            len(os.sched_getaffinity(0))
-            if hasattr(os, "sched_getaffinity")
-            else (os.cpu_count() or 1)
-        )
 
     def evaluate(batch, keys):
         def one(i):
             ref, imgs = read_tile(i, keys)
-            return i, estimate_tile(ref, imgs, settings)
+            return estimate_tile(ref, imgs, settings)
 
-        with ThreadPoolExecutor(max(1, min(n_workers, len(batch)))) as ex:
-            for i, r in ex.map(one, batch):
-                if i in tiles:  # evaluated before for other channels: add these
-                    tiles[i]["channels"].update(r["channels"])
-                else:
-                    tiles[i] = r
+        with ProgressBar():
+            results = dask.compute(*[dask.delayed(one)(i) for i in batch])
+        for i, r in zip(batch, results):
+            if i in tiles:  # evaluated before for other channels: add these
+                tiles[i]["channels"].update(r["channels"])
+            else:
+                tiles[i] = r
 
     evaluate(first_order, channels)  # every channel needs the first draws
     shape = tiles[first_order[0]]["shape"]

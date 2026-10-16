@@ -190,7 +190,7 @@ def _well(n_side, shape=(512, 512)):
 def test_estimate_well_small_well_uses_all_tiles_and_fails_blank_channel():
     pos, read_tile = _well(5)
     result = E.estimate_well(
-        read_tile, pos, ["CY7", "blank"], pixel_size_um=None, seed=0, n_workers=2
+        read_tile, pos, ["CY7", "blank"], pixel_size_um=None, seed=0
     )
     assert result["pool_rule"].startswith("all tiles") and result["n_tiles_read"] == 25
     cy7 = result["channels"]["CY7"]
@@ -228,7 +228,7 @@ def test_no_nuclei_in_reference_is_explained():
         return z, {c: z for c in channels}
 
     with pytest.raises(E.ChannelAlignmentEstimationError, match="no detectable nuclei"):
-        E.estimate_well(read_tile, pos, ["c"], n_workers=1)
+        E.estimate_well(read_tile, pos, ["c"])
 
 
 @pytest.mark.io
