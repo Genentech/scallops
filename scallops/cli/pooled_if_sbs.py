@@ -36,7 +36,6 @@ from scallops.cli.util import (
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
-    _write_image,
     cli_metadata,
     load_json,
 )
@@ -189,7 +188,6 @@ def spot_detection_pipeline(
     sigma_log: float | list[float],
     z_index: int | Literal["max"],
     save_keys: Sequence[str] = ("max", "log", "std", "peaks"),
-    output_image_format: str = "zarr",
     cycles: None | list[int] = None,
     percentile_min: float | None = None,
     percentile_max: float | None = None,
@@ -324,14 +322,14 @@ def spot_detection_pipeline(
     metadata["image_metadata"] = image_metadata
     if "log" in save_keys and loged is not None:
         loged.attrs.update(metadata)
+
         dask_delayed.append(
-            _write_image(
+            _write_zarr_image(
                 name=f"{image_key}-log",
                 root=root,
                 image=loged,
-                output_format=output_image_format,
-                zarr_format="zarr",
                 compute=compute,
+                zarr_format="zarr",
             )
         )
     else:
@@ -339,13 +337,12 @@ def spot_detection_pipeline(
     if "std" in save_keys and std_arr is not None:
         std_arr.attrs.update(metadata)
         dask_delayed.append(
-            _write_image(
+            _write_zarr_image(
                 name=f"{image_key}-std",
                 root=root,
                 image=std_arr,
-                output_format=output_image_format,
-                metadata=dict(parent=image_key),
                 compute=compute,
+                zarr_format="zarr",
             )
         )
     else:
@@ -353,13 +350,12 @@ def spot_detection_pipeline(
     if "max" in save_keys and maxed is not None:
         maxed.attrs.update(metadata)
         dask_delayed.append(
-            _write_image(
+            _write_zarr_image(
                 name=f"{image_key}-max",
                 root=root,
                 image=maxed,
-                output_format=output_image_format,
-                zarr_format="zarr",
                 compute=compute,
+                zarr_format="zarr",
             )
         )
     else:
@@ -876,7 +872,6 @@ def spot_detect_main(arguments: argparse.Namespace):
                 iss_channels=channels,
                 output=output,
                 z_index=z_index,
-                output_image_format="zarr",
                 max_filter_width=max_filter_width,
                 sigma_log=sigma_log,
                 save_keys=save_keys,

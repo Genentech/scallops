@@ -96,7 +96,7 @@ def image2mask(
         if isinstance(image, da.Array):
 
             def process_block(x):
-                return x - apply_rolling_ball(image)
+                return x - apply_rolling_ball(x)
 
             image = da.map_overlap(
                 process_block,

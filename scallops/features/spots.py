@@ -47,14 +47,14 @@ def _load_ufish_model():
 
 def spot_count(
     c: Sequence[int],
-    intensity_threshold=0.06,
+    intensity_threshold: float = 0.06,
     channel_names: Sequence[str] | None = None,
     unique_labels: NDArray = None,
     label_image: NDArray = None,
     intensity_image: NDArray = None,
     model: Optional["ufish.api.UFish"] = None,
-    connectivity=2,
-    laplace_process=True,
+    connectivity: int = 2,
+    laplace_process: bool = True,
     axes="yx",
     return_spots_coords=False,
     **kwargs,

@@ -492,6 +492,7 @@ def save_ome_tiff(
     compute: bool = True,
     attrs: Mapping[str, Any] | None = None,
     ome_xml: str | OME = None,
+    channel_names: Sequence[str] | None = None,
 ) -> Delayed | None:
     """Save array to OME-TIFF format.
 
@@ -507,6 +508,8 @@ def save_ome_tiff(
     :param attrs: Key-values to save as map attributes
     :param ome_xml: Optional OME metadata (OME-XML string or :class:`ome_types.OME`
         instance) to write instead of the metadata generated from the data.
+    :param channel_names: Optional channel names to store in the generated OME
+        metadata. Ignored when `ome_xml` is provided.
     :return: None if the data was saved immediately, otherwise a
         :class:`dask.delayed.Delayed` representing the value to be computed by dask.
 
@@ -528,10 +531,20 @@ def save_ome_tiff(
     if isinstance(data, da.Array) and not compute:
         _save_ome_tiff_delayed = dask.delayed(_save_ome_tiff)
         return _save_ome_tiff_delayed(
-            data=data, uri=uri, dim_order=dim_order, attrs=attrs, ome_xml=ome_xml
+            data=data,
+            uri=uri,
+            dim_order=dim_order,
+            attrs=attrs,
+            ome_xml=ome_xml,
+            channel_names=channel_names,
         )
     _save_ome_tiff(
-        data=data, uri=uri, dim_order=dim_order, attrs=attrs, ome_xml=ome_xml
+        data=data,
+        uri=uri,
+        dim_order=dim_order,
+        attrs=attrs,
+        ome_xml=ome_xml,
+        channel_names=channel_names,
     )
     return None
 
@@ -542,6 +555,7 @@ def _save_ome_tiff(
     dim_order: str | list[str | None] | None = None,
     attrs: Mapping[str, Any] | None = None,
     ome_xml: str | OME = None,
+    channel_names: Sequence[str] | None = None,
 ):
     """Saves image data to an OME-TIFF file.
 
@@ -551,6 +565,7 @@ def _save_ome_tiff(
         If None, it's inferred from the DataArray (default is None).
     :param attrs: Key-values to save as map attributes
     :param ome_xml: Optional OME metadata (OME-XML string or OME instance)
+    :param channel_names: Optional channel names, ignored when `ome_xml` is provided
 
     :example:
     .. code-block:: python
@@ -568,7 +583,9 @@ def _save_ome_tiff(
         fd, local_path = tempfile.mkstemp(suffix=".tiff")
         os.close(fd)
 
-    if attrs is not None:
+    if ome_xml is None and channel_names is not None:
+        channel_names = [str(c) for c in channel_names]
+    if attrs is not None or (ome_xml is None and channel_names is not None):
         import bioio_base as biob
 
         if isinstance(ome_xml, str):
@@ -577,13 +594,19 @@ def _save_ome_tiff(
             ome_xml = OmeTiffWriter.build_ome(
                 [data.shape],
                 [data.dtype],
-                channel_names=[None],
+                channel_names=[channel_names],
                 image_name=[None],
                 physical_pixel_sizes=[biob.types.PhysicalPixelSizes(None, None, None)],
                 channel_colors=[None],
                 dimension_order=[dim_order],
             )
-        ome_xml.structured_annotations.append(MapAnnotation(value=attrs))
+        if attrs is not None:
+            # OME map annotations only support string values
+            attrs = {
+                str(k): v if isinstance(v, str) else json.dumps(v, default=str)
+                for k, v in attrs.items()
+            }
+            ome_xml.structured_annotations.append(MapAnnotation(value=attrs))
         # ome_xml.structured_annotations.append(
         #     TagAnnotation(value='', description=''))
     OmeTiffWriter.save(

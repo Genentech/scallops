@@ -164,9 +164,6 @@ def single_stitch_preview(
     fig, ax = plt.subplots()
     ax.axis("off")
     tile_shape = np.round(np.array(tile_shape_no_crop) * resolution_scale).astype(int)
-    z_index_per_tile = isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(
-        z_index, str
-    )
     z_tiles_removed = (
         "z" in metadata_fields
         and isinstance(z_index, (Sequence, np.ndarray, int))
@@ -174,6 +171,9 @@ def single_stitch_preview(
     )
     if z_tiles_removed:
         z_index = 0
+    z_index_per_tile = isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(
+        z_index, str
+    )
     mosaic_image_shape = stage_positions.max(axis=0) + tile_shape
     if show_image:
         mosaic_image = np.zeros(mosaic_image_shape, dtype=np.uint16)

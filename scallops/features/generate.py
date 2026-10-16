@@ -9,7 +9,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from functools import partial
 from inspect import Parameter, signature
-from typing import Any, Iterable, Literal, cast
+from typing import Any, Iterable, Literal, Union, cast, get_args, get_origin
 
 import dask.array as da
 import dask.dataframe as dd
@@ -592,12 +592,26 @@ def _get_params(
                 params[parameter_name] = False
             else:
                 raise ValueError(f"Invalid boolean value {value} for {name}")
-        elif annotation in (int, float, str, Literal):
+        elif annotation in (int, float, str):
             value = annotation(value)
             params[parameter_name] = value
-        else:
-            if annotation not in (np.ndarray, NDArray, Sequence[str]):
+        elif get_origin(annotation) is Literal and all(
+            isinstance(arg, str) for arg in get_args(annotation)
+        ):
+            if value not in get_args(annotation):
                 raise ValueError(
+                    f"Invalid value {value} for {parameter_name} in {name}. "
+                    f"Must be one of {get_args(annotation)}"
+                )
+            params[parameter_name] = value
+        else:
+            if annotation not in (
+                np.ndarray,
+                NDArray,
+                Sequence[str],
+                Union[Sequence[str], None],
+            ):
+                logger.warning(
                     f"{parameter_name} not supported for {name} for type {annotation}"
                 )
     return method_name, params

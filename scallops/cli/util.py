@@ -21,17 +21,11 @@ from importlib.metadata import version
 from typing import Any, Literal, TypeAlias
 
 import dask
-import dask.array as da
 import fsspec
-import xarray as xr
 import zarr
-from dask.delayed import Delayed
 from distributed import Client
-from numpy.typing import NDArray
 
-from scallops.io import save_ome_tiff
 from scallops.utils import _cpu_count
-from scallops.zarr_io import _write_zarr_image
 
 SubParsers: TypeAlias = argparse._SubParsersAction
 """Type of the object returned by :meth:`argparse.ArgumentParser.add_subparsers`."""
@@ -197,50 +191,6 @@ def _group_src_attrs(
         attrs_list.append(group_to_attrs[key])
         keys.append(key)
     return keys, filelist, attrs_list
-
-
-def _write_image(
-    name: str,
-    root: zarr.Group | str,
-    image: NDArray | xr.DataArray | da.Array,
-    output_format: str,
-    file_separator: str = "/",
-    metadata: dict | None = None,
-    compute: bool = True,
-    **kwargs,
-) -> list[Delayed] | None:
-    """Write image data to Zarr or TIFF format.
-
-    :param name: Name of the image.
-    :param root: Zarr root or directory path for saving the image.
-    :param image: Image data to be saved.
-    :param output_format: Format for saving the image ('zarr' or 'tiff').
-    :param file_separator: Separator used in file paths.
-    :param metadata: Optional metadata for the image.
-    :param compute: Whether to compute the Dask array before saving.
-    """
-    if output_format == "zarr":
-        return _write_zarr_image(
-            name=name,
-            root=root,
-            image=image,
-            metadata=metadata,
-            compute=compute,
-            **kwargs,
-        )
-    elif output_format == "tiff":
-        image_path = f"{root}{file_separator}{name}.tif"
-        if isinstance(image, xr.DataArray):
-            save_ome_tiff(
-                data=image.data,
-                uri=image_path,
-                dim_order="".join(image.dims).upper(),
-            )
-        else:
-            save_ome_tiff(data=image, uri=image_path)
-        return None
-    else:
-        raise ValueError(f"Unknown output format: {output_format}")
 
 
 def images_arg(parser: argparse.ArgumentParser) -> None:

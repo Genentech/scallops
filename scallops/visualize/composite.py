@@ -486,7 +486,7 @@ def experiment_composite(
     max_cols: int = 3,
     figsize: tuple[int, int] = (5, 5),
     **kwargs,
-) -> tuple[plt.Figure, plt.Axes | NDArray[plt.Axes]]:
+) -> tuple[plt.Figure, NDArray[plt.Axes]]:
     """Plot an experiment (one image per axis) composite using additive blending.
 
     :param figsize: Figure size
@@ -494,13 +494,17 @@ def experiment_composite(
     :param subset: List of image keys to plot, by default all present in `experiment`
     :param max_cols: Maximum number of plotting columns
     :param kwargs: Key-word arguments passed to :func:`imcomposite`
-    :return: Tuple of the figure and the array of axes (one per image)
+    :return: Tuple of the figure and the 2D array of axes (one per image)
     """
     image_keys = exp.images.keys() if subset is None else subset
     ncols = min(max_cols, len(image_keys))
-    nrows = np.round(len(image_keys) / ncols).astype(int)
+    nrows = -(-len(image_keys) // ncols)
     f, axs = plt.subplots(
-        nrows=nrows, ncols=ncols, layout="constrained", figsize=figsize
+        nrows=nrows,
+        ncols=ncols,
+        layout="constrained",
+        figsize=figsize,
+        squeeze=False,
     )
     for ax in axs.flat:
         ax.set_axis_off()

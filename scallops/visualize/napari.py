@@ -441,9 +441,8 @@ def imnapari(
             size=point_size,
         )
 
-        for feat, values in feats.items():
-            mini, maxi = min(values), max(values)
-
+        def _make_slider(feat: str, mini: float, maxi: float):
+            # factory binds feat per widget; a loop closure would see only the last
             @magicgui(
                 call_button=f"{feat} filter",
                 slider={"widget_type": "FloatSlider", "min": mini, "max": maxi},
@@ -457,7 +456,10 @@ def imnapari(
                     ["y", "x"]
                 ].values
 
-            viewer.window.add_dock_widget(slider)
+            return slider
+
+        for feat, values in feats.items():
+            viewer.window.add_dock_widget(_make_slider(feat, min(values), max(values)))
 
     return viewer
 
