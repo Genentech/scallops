@@ -104,7 +104,7 @@ def segment_cells_propagation(
         sel["t"] = t
     image = image.isel(sel, missing_dims="ignore").squeeze()
 
-    image, mask, threshold = image2mask(
+    image, mask, computed_threshold = image2mask(
         image=image,
         threshold=threshold,
         threshold_correction_factor=threshold_correction_factor,
@@ -157,7 +157,7 @@ def segment_cells_propagation(
             fill_holes=fill_holes,
             closing_radius=closing_radius,
         )
-    return labels, threshold
+    return labels, computed_threshold
 
 
 def propagate(image, labels, mask, weight):

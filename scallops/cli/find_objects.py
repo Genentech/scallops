@@ -7,6 +7,7 @@ Authors:
 
 import argparse
 import json
+from typing import cast
 
 import dask.array as da
 import fsspec
@@ -57,7 +58,8 @@ def _execute(
             logger.info(f"Skipping finding objects for {metadata['id']}.")
             return
     logger.info(f"Finding objects for {metadata['id']}.")
-    array = da.from_zarr(file_list[0][list(file_list[0].keys())[0]])
+    labels_group = cast(zarr.Group, file_list[0])
+    array = da.from_zarr(labels_group[list(labels_group.keys())[0]])
     df = find_objects(array)
     df.index.name = "label"
     prefix = _label_name_to_prefix.get(label_name)

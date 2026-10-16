@@ -124,6 +124,7 @@ def spot_count(
                 logger.warning(
                     f"Unique label {label_val} is out of expected range (1 to {max_label_val_in_unique}) or non-positive. This label will be ignored in counting."
                 )
+    assert channel_names is not None
     y_list = []
     x_list = []
     channel_list = []

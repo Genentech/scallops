@@ -38,7 +38,7 @@ except ModuleNotFoundError:
 
 
 def _load_image(
-    path: str, z: int | str, working_size: int | None
+    path: str, z: int | Literal["max", "focus"], working_size: int | None
 ) -> tuple[NDArray, tuple[int, int]]:
     """Load and preprocess an image from the given path.
 

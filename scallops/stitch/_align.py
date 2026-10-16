@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Callable, Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import dask
 import numpy as np
@@ -105,7 +105,7 @@ def _get_read_images(
             crop_width=crop_width,
             scene_id=i if n_scenes is not None else None,
             radial_correction_k=radial_correction_k,
-            z_index=z_index[i] if z_index_is_sequence else z_index,
+            z_index=cast(Sequence[int], z_index)[i] if z_index_is_sequence else z_index,
             t_index=t_index,
         )
         for i in range(n)
@@ -292,7 +292,8 @@ def stitch_align(
             fileattrs=fileattrs,
             channel=channel,
             z_index=z_index,
-            radial_correction_k=radial_correction_k,
+            # "auto" has been replaced by the computed K above
+            radial_correction_k=cast(float, radial_correction_k),
             crop_width=crop_width,
             n_scenes=n_scenes,
             t_index=t_index,

@@ -63,7 +63,7 @@ def cp_colocalization(
     unique_labels: NDArray,
     label_image: NDArray,
     intensity_image: NDArray,
-) -> dict[str, NDArray]:
+) -> dict[str, Any]:
     pass
 
 

@@ -186,13 +186,11 @@ def pairwise_channel_scatter_plot(
                 )
 
                 pad = (axis_range[1] - axis_range[0]) * 0.05
-                axis_range = list(axis_range)
-                axis_range[0] = axis_range[0] - pad
-                axis_range[1] = axis_range[1] + pad
+                padded_range = [axis_range[0] - pad, axis_range[1] + pad]
                 ax.set_xlabel(f"{channels[i]}, slope: {x_slope:.3f}", rotation=0)
                 ax.set_ylabel(f"{channels[j]}, slope: {y_slope:.3f}", rotation=90)
-                ax.set_xlim(axis_range)
-                ax.set_ylim(axis_range)
+                ax.set_xlim(padded_range)
+                ax.set_ylim(padded_range)
 
             else:
                 ax.set_xlabel(f"{channels[i]}", rotation=0)

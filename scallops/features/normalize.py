@@ -258,8 +258,10 @@ def normalize_features(
             for key, group in grouped_values:
                 values = group.data
                 if centering:
+                    assert means is not None
                     values = values - means.sel(obs=key).data
                 if scaling:
+                    assert stds is not None
                     values = values / stds.sel(obs=key).data
 
                     if max_value is not None:  # only clip when scaling
@@ -296,7 +298,7 @@ def normalize_features(
             )
     # one row per observation, filled in place per group so the full index array is
     # never duplicated by a concatenate
-    indices = (
+    neighbor_indices = (
         np.empty(
             (data.n_obs, n_neighbors),
             dtype=np.int32 if data.n_obs <= np.iinfo(np.int32).max else np.int64,
@@ -304,7 +306,7 @@ def normalize_features(
         if use_map_blocks
         else None
     )
-    results = [] if not use_map_blocks else None
+    local_results: list | None = [] if not use_map_blocks else None
     obs_list: list | None = [] if not use_map_blocks else None
     obs_indices: list | None = [] if not use_map_blocks else None
     resolved_feature_chunk = (
@@ -352,7 +354,8 @@ def normalize_features(
                 reference_indices = local_reference_indices[reference_indices]
             if use_map_blocks:
                 # use_map_blocks is only ever set when grouping
-                indices[group_indices_] = reference_indices
+                assert neighbor_indices is not None
+                neighbor_indices[group_indices_] = reference_indices
             else:
                 kwargs = dict(
                     robust=robust,
@@ -402,7 +405,10 @@ def normalize_features(
         #         )
 
         if not use_map_blocks:
-            results.append(result)
+            assert local_results is not None
+            assert obs_list is not None
+            assert obs_indices is not None
+            local_results.append(result)
             obs_list.append(df)
             if by is not None:
                 obs_indices.append(group_indices_)
@@ -413,8 +419,8 @@ def normalize_features(
         rechunked_data = data.X.rechunk({0: chunks, 1: resolved_feature_chunk})
 
         # one chunk per group along the labels dim, neighbors are never split
-        indices = da.from_array(indices, chunks=(chunks, -1))
-        assert indices.shape[0] == rechunked_data.shape[0]
+        neighbor_indices_da = da.from_array(neighbor_indices, chunks=(chunks, -1))
+        assert neighbor_indices_da.shape[0] == rechunked_data.shape[0]
         kwargs = dict(
             robust=robust,
             mad_scale=mad_scale,
@@ -428,7 +434,7 @@ def normalize_features(
         result = da.map_blocks(
             _local_z_batched,
             rechunked_data,
-            indices,
+            neighbor_indices_da,
             **kwargs,
             dtype=_local_dtype(data.X.dtype),
         )
@@ -446,7 +452,7 @@ def normalize_features(
         row_indices = np.concatenate(obs_indices)
         obsm = {key: value[row_indices] for key, value in data.obsm.items()}
     return anndata.AnnData(
-        X=get_namespace(data.X).vstack(results),
+        X=get_namespace(data.X).vstack(local_results),
         obs=pd.concat(obs_list),
         var=data.var.copy(),
         uns=data.uns.copy(),
@@ -497,6 +503,7 @@ def _local_moments_gather(
                 means[start:stop] = center
         if stds is not None:
             if robust:
+                assert center is not None
                 deviation = xp.abs(block - center[:, None, :])
                 scale = xp.median(deviation, axis=1) / mad_scale
             else:
@@ -579,7 +586,7 @@ def _local_z_batched(
     """
     xp = get_namespace(x)
     is_numpy = isinstance(x, np.ndarray)
-    mad_scale = _convert_scale(mad_scale) if robust else None
+    mad_scale_value = _convert_scale(mad_scale) if robust else None
     n_rows, n_features = x.shape
     n_neighbors = reference_indices.shape[1]
     dtype = _local_dtype(x.dtype)
@@ -605,7 +612,7 @@ def _local_z_batched(
             means,
             stds,
             robust,
-            mad_scale,
+            mad_scale_value,
             tile,
             progress,
         )
@@ -619,6 +626,7 @@ def _local_z_batched(
         else:
             block[...] = x[start:stop]
         if scaling:
+            assert stds is not None
             xp.divide(block, stds[start:stop], out=block)
             if max_value is not None:
                 xp.clip(block, -max_value, max_value, out=block)

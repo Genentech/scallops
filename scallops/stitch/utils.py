@@ -405,9 +405,9 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> NDArray | 
                     stage_y = tree.findall(".//prop[@id='stage-position-y']")
                     stage_x = tree.findall(".//prop[@id='stage-position-x']")
                     if len(stage_y) == 1 and len(stage_x) == 1:
-                        stage_y = stage_y[0].attrib["value"]
-                        stage_x = stage_x[0].attrib["value"]
-                        return np.array([stage_y, stage_x])
+                        stage_y_value = stage_y[0].attrib["value"]
+                        stage_x_value = stage_x[0].attrib["value"]
+                        return np.array([stage_y_value, stage_x_value])
                 except:  # noqa: E722
                     pass
     if values is None:
@@ -489,14 +489,14 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
                     y = tree.findall(".//prop[@id='spatial-calibration-y']")
                     x = tree.findall(".//prop[@id='spatial-calibration-x']")
                     if len(y) == 1 and len(x) == 1:
-                        y = y[0].attrib["value"]
-                        x = x[0].attrib["value"]
-                        values = np.array([y, x]).astype(float)
+                        y_value = y[0].attrib["value"]
+                        x_value = x[0].attrib["value"]
+                        values = np.array([y_value, x_value]).astype(float)
                         units = tree.findall(".//prop[@id='spatial-calibration-units']")
                         if len(units) == 1:
-                            units = units[0].attrib["value"]
-                            physical_size_y_unit = units
-                            physical_size_x_unit = units
+                            unit = units[0].attrib["value"]
+                            physical_size_y_unit = unit
+                            physical_size_x_unit = unit
 
                 except:  # noqa: E722
                     pass
@@ -764,11 +764,16 @@ def _init_tiles(
     download_suffixes: set[str] | None = None,
     t_index: int | None = None,
 ):
+    # z selection: "max", "focus", an int, a per-tile data frame/array, or computed per-tile indices
+    z_selection: int | str | pd.DataFrame | NDArray | tuple = z_index
     if not isinstance(z_index, int) and z_index not in ("max", "focus"):
-        z_index = pd.read_parquet(z_index.format(**image_metadata["file_metadata"][0]))
-        z_index["key"] = z_index["key"].apply(lambda x: tuple(x))
-        z_index = z_index.set_index("key")
-        assert "z_index" in z_index.columns
+        z_index_df = pd.read_parquet(
+            z_index.format(**image_metadata["file_metadata"][0])
+        )
+        z_index_df["key"] = z_index_df["key"].apply(lambda x: tuple(x))
+        z_index_df = z_index_df.set_index("key")
+        assert "z_index" in z_index_df.columns
+        z_selection = z_index_df
     n_scenes = None
     if len(image_filepaths) == 1:
         img = _create_image(image_filepaths[0])
@@ -791,8 +796,8 @@ def _init_tiles(
         for i in range(len(image_filepaths)):
             filepaths.append((image_filepaths[i],))
         keys = filepaths
-    if isinstance(z_index, pd.DataFrame):
-        z_index = z_index.loc[keys]["z_index"].values
+    if isinstance(z_selection, pd.DataFrame):
+        z_selection = z_selection.loc[keys]["z_index"].values
 
     if expected_images is not None:
         assert len(filepaths) == expected_images, (
@@ -802,7 +807,7 @@ def _init_tiles(
     logger.info(f"{n:,} tiles.")
     path_to_local_path = None
     tmp_dir = None
-    if isinstance(z_index, str) and z_index == "focus":
+    if isinstance(z_selection, str) and z_selection == "focus":
         results = []
         separate_channel_files = "c" in metadata_fields
         filepaths_ = filepaths
@@ -827,14 +832,16 @@ def _init_tiles(
                     file_list, attrs, scene_id, channel, tmp_dir, t_index=t_index
                 )
             )
-        z_index = dask.compute(*results)
+        z_selection = dask.compute(*results)
         logger.info("Determined best focus z-index for all tiles.")
     if (
         "z" in metadata_fields
-        and isinstance(z_index, (Sequence, np.ndarray, int))
-        and not isinstance(z_index, str)
+        and isinstance(z_selection, (Sequence, np.ndarray, int))
+        and not isinstance(z_selection, str)
     ):  # only keep needed files with computed z
-        filepaths, fileattrs = _filter_filepaths(filepaths, fileattrs, ["z"], [z_index])
+        filepaths, fileattrs = _filter_filepaths(
+            filepaths, fileattrs, ["z"], [z_selection]
+        )
     path_to_local_path, tmp_dir = _download_paths(
         filelist=filepaths,
         suffixes=download_suffixes,
@@ -844,7 +851,7 @@ def _init_tiles(
 
     return dict(
         keys=keys,
-        z_index=z_index,
+        z_index=z_selection,
         n_scenes=n_scenes,
         fileattrs=fileattrs,
         filepaths=_replace_remote_paths(filepaths, path_to_local_path),

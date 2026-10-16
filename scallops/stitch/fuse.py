@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import shapely
+import xarray as xr
 import zarr
 from dask import delayed
 from dask.diagnostics import ProgressBar
@@ -97,6 +98,7 @@ def _fuse(
         for i in range(len(image0_paths))
     ]
     img = _images2fov(image0_paths, image0_attrs, scene_id=0 if has_scenes else None)
+    assert isinstance(img, xr.DataArray)
 
     for path in local_image0_paths:
         if path is not None:
@@ -247,9 +249,7 @@ def _fuse(
     source_attrs = (
         df["source_metadata"].values if "source_metadata" in df.columns else None
     )
-    different_z_per_tile = "z_index" in df.columns
-    if different_z_per_tile:
-        z_index = df["z_index"].values
+    tile_z_indices = df["z_index"].values if "z_index" in df.columns else None
 
     tile_priorities = df["priority"].values if blend == "none" else None
 
@@ -301,9 +301,11 @@ def _fuse(
                 min(fused_y_size - 1, y[i] + ysize - 1),
             )
             if blend != "none":
+                assert partition_tree is not None and locks is not None
                 lock_indices = partition_tree.query(tile_box, predicate="intersects")
             intersecting_boxes = []
             if blend == "none":
+                assert tile_tree is not None and tile_priorities is not None
                 intersect_indices = tile_tree.query(tile_box, predicate="intersects")
                 # higher tile priority values have priority
                 for intersect_index in intersect_indices:
@@ -330,18 +332,18 @@ def _fuse(
                 ffp=_ffp,
                 dfp=_dfp,
                 blend=blend,
-                z_index=z_index[i] if different_z_per_tile else z_index,
+                z_index=tile_z_indices[i] if tile_z_indices is not None else z_index,
                 output_channels=channels,
                 target_shape=target_shape,
                 target_dtype=target_dtype,
                 weights=weights,
-                locks=locks[lock_indices] if blend != "none" else None,
+                locks=locks[lock_indices] if locks is not None else None,
                 weights_sum=weights_sum,
                 target=target,
                 intersecting_boxes=intersecting_boxes
                 if len(intersecting_boxes) > 0
                 else None,
-                scene_id=scene_ids[i] if has_scenes else None,
+                scene_id=scene_ids[i] if scene_ids is not None else None,
                 channel_reference=channel_reference,
                 channel_cross_correlation_upsample=channel_cross_correlation_upsample,
                 channel_window=channel_window,
@@ -557,6 +559,8 @@ def _fuse_image(
             ] = img
 
     else:
+        # locks and weights_sum are always provided when blending
+        assert locks is not None and weights_sum is not None
         try:
             for lock in locks:
                 lock.acquire()

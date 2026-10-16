@@ -8,7 +8,7 @@ Authors:
 
 from collections.abc import Sequence
 from copy import copy
-from typing import Any
+from typing import Any, cast
 
 import dask.array as da
 import numpy as np
@@ -189,7 +189,7 @@ def _imcomposite_image(
 
 
 def _imcomposite_labels(
-    labels: xr.DataArray | NDArray | None = None,
+    labels: xr.DataArray | NDArray,
     labels_cmap: str | ListedColormap | None = None,
     labels_alpha: float = 1,
 ):
@@ -404,10 +404,10 @@ def imcomposite(
         if figsize is None:
             figsize = 6 * ncol, 6 * nrow
         if ax is None:
-            fig, ax = plt.subplots(
+            fig, axs = plt.subplots(
                 ncols=ncol, nrows=nrow, figsize=figsize, layout="compressed"
             )
-            ax = ax.ravel()
+            ax = axs.ravel()
         for i in range(len(ax)):
             ax[i].axis("off")
         index = 0
@@ -448,8 +448,9 @@ def imcomposite(
         return ax
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=figsize if figsize is not None else (6, 6))
-
-    ax.axis("off")
+    # without facets, ax is a single Axes
+    single_ax = cast(plt.Axes, ax)
+    single_ax.axis("off")
     im_combined = _imcomposite_image_labels(
         image=image,
         labels=labels,
@@ -475,8 +476,8 @@ def imcomposite(
             mask_alpha * mask_img[mask_sel] + (1 - mask_alpha) * im_combined[mask_sel]
         )
     if im_combined is not None:
-        ax.imshow(im_combined, cmap=None)
-    return ax
+        single_ax.imshow(im_combined, cmap=None)
+    return single_ax
 
 
 def experiment_composite(

@@ -17,7 +17,7 @@ import os
 from collections import defaultdict
 from collections.abc import Sequence
 from functools import partial
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional, cast
 
 import dask
 import dask.array as da
@@ -177,7 +177,7 @@ def segment_nuclei(
         logger.info(f"Skipping nuclei segmentation for {image_key}")
         return root
     logger.info(f"Running nuclei segmentation for {image_key}")
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = cast(xr.DataArray, _images2fov(file_list, metadata, dask=True)).squeeze()
     image = _z_projection(image, z_index)
 
     nuclei_seg_args: dict[str, Any] = {}
@@ -251,7 +251,7 @@ def segment_cells(
     file_list: list[str],
     metadata: dict,
     dapi_channel: int,
-    cyto_channel: int | list[int] | None,
+    cyto_channel: Sequence[int] | NDArray | None,
     method: Callable,
     root: Group,
     z_index: int | Literal["max"],
@@ -308,7 +308,7 @@ def segment_cells(
     if not force and is_ome_zarr_array(root.get(f"labels/{image_key}-cell")):
         logger.info(f"Skipping cell segmentation for {image_key}")
         return root
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = cast(xr.DataArray, _images2fov(file_list, metadata, dask=True)).squeeze()
     image = _z_projection(image, z_index)
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), dapi_channel)
@@ -449,8 +449,8 @@ def _overlap(
 ):
     group_id1, file_list_1, metadata_1 = label_tuple_1
     group_id2, file_list_2, metadata_2 = label_tuple_2
-    label_1 = _images2fov(file_list_1, metadata_1, dask=True)
-    label_2 = _images2fov(file_list_2, metadata_2, dask=True)
+    label_1 = cast(xr.DataArray, _images2fov(file_list_1, metadata_1, dask=True))
+    label_2 = cast(xr.DataArray, _images2fov(file_list_2, metadata_2, dask=True))
     image_key = "-".join(group_id1[:-1]).replace("/", "_")
     prefix = f"{output_parquet_path}{image_key}"
     overlap_path = f"{prefix}-overlap.parquet"
@@ -468,7 +468,7 @@ def _overlap(
     logger.info(f"Finding overlapping objects for {image_key}.")
     write_tuples = [(group_id2, file_list_2, label_2)]
     for group_id, file_list, metadata in additional_tuples:
-        labels = _images2fov(file_list, metadata, dask=True)
+        labels = cast(xr.DataArray, _images2fov(file_list, metadata, dask=True))
         write_tuples.append((group_id, file_list, labels))
     overlap_df = label_overlap(label_1.data, label_2.data).compute()
     assignment_df = assign_labels_by_overlap(overlap_df)

@@ -210,10 +210,10 @@ def map_overlap_ragged(
         )
     shape = np.broadcast_shapes(*(a.shape for a in args))
     ndim = len(shape)
-    depth = da.overlap.coerce_depth(ndim, depth)
-    if any(isinstance(d, tuple) for d in depth.values()):
+    depth_by_axis: dict[int, int] = da.overlap.coerce_depth(ndim, depth)
+    if any(isinstance(d, tuple) for d in depth_by_axis.values()):
         raise NotImplementedError("Asymmetric overlap depth is not supported")
-    boundary = da.overlap.coerce_boundary(ndim, boundary)
+    boundary_by_axis: dict[int, str | int] = da.overlap.coerce_boundary(ndim, boundary)
     # Add missing leading axes, and find the size-1 axes each array is broadcast along
     arrays = [a[(None,) * (ndim - a.ndim)] for a in args]
     broadcast_axes = [
@@ -222,7 +222,7 @@ def map_overlap_ragged(
 
     # Find common chunks so block b_id covers the same region in every array, by splitting
     # each axis at every chunk boundary of the arrays that are not broadcast along it
-    chunks = []
+    chunk_list = []
     for ax in range(ndim):
         boundaries = sorted(
             {
@@ -232,19 +232,20 @@ def map_overlap_ragged(
                 for offset in itertools.accumulate(a.chunks[ax])
             }
         )
-        chunks.append(tuple(np.diff([0, *boundaries]).tolist()) or (shape[ax],))
+        chunk_list.append(tuple(np.diff([0, *boundaries]).tolist()) or (shape[ax],))
     # Rechunk up front the same way da.overlap.overlap would (every chunk must be >= depth),
     # so the block locations below are computed from the chunks actually used
     chunks = tuple(
-        ensure_minimum_chunksize(depth[ax], c) for ax, c in enumerate(chunks)
+        ensure_minimum_chunksize(depth_by_axis[ax], c)
+        for ax, c in enumerate(chunk_list)
     )
 
     delayed_blocks = []
     for a, axes in zip(arrays, broadcast_axes):
         # Broadcast axes stay as one size-1 chunk with no overlap
         a = a.rechunk(tuple(-1 if ax in axes else c for ax, c in enumerate(chunks)))
-        a_depth = {ax: 0 if ax in axes else depth[ax] for ax in range(ndim)}
-        a_boundary = {ax: boundary[ax] for ax in range(ndim) if ax not in axes}
+        a_depth = {ax: 0 if ax in axes else depth_by_axis[ax] for ax in range(ndim)}
+        a_boundary = {ax: boundary_by_axis[ax] for ax in range(ndim) if ax not in axes}
         delayed_blocks.append(
             da.overlap.overlap(a, depth=a_depth, boundary=a_boundary).to_delayed()
         )
@@ -268,8 +269,8 @@ def map_overlap_ragged(
             ],
             broadcast_axes=broadcast_axes,
             chunk_location=chunk_slice,
-            depth=depth,
-            boundary=boundary,
+            depth=depth_by_axis,
+            boundary=boundary_by_axis,
             shape=shape,
             kwargs=kwargs,
         )
@@ -803,7 +804,9 @@ def _write_img_size(file_list: list[str]):
             local_file_list.append(local_path)
         else:
             local_file_list.append(path)
-    sizes = _images2fov(local_file_list, attrs=None, dask=True).sizes
+    img = _images2fov(local_file_list, attrs=None, dask=True)
+    assert isinstance(img, DataArray)
+    sizes = img.sizes
     for path in cleanup_file_list:
         os.remove(path)
     with open("img_size.txt", "wt") as f:
@@ -847,12 +850,16 @@ def _list_images_wdl(
     if batch_size_str != "":
         batch_size = int(batch_size_str)
 
-    if len(subset) == 0 or (len(subset) == 1 and subset[0] == ""):
-        subset = None
+    subset_filter = (
+        None if len(subset) == 0 or (len(subset) == 1 and subset[0] == "") else subset
+    )
     if image_pattern != "":
         groupby = [g for g in groupby if "{" + g + "}" in image_pattern]
     exp_gen = _set_up_experiment(
-        image_path=urls, files_pattern=image_pattern, group_by=groupby, subset=subset
+        image_path=urls,
+        files_pattern=image_pattern,
+        group_by=groupby,
+        subset=subset_filter,
     )
     # "groups.txt" is passed to --subset in cli
     # "groupby.txt" filtered groupby

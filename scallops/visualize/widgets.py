@@ -83,9 +83,9 @@ def _browse_regions_or_labels(
     if image2 is not None:
         assert image1.shape == image2.shape
     image_spacing = get_image_spacing(image1.attrs)
+    padding_px = None
     if padding is not None:
-        padding = np.array([padding, padding]) / image_spacing
-        padding = padding.astype(int)
+        padding_px = (np.array([padding, padding]) / image_spacing).astype(int)
     chunk_out = widgets.Output()
     if y_indices is not None:
         assert x_indices is not None
@@ -128,10 +128,10 @@ def _browse_regions_or_labels(
 
             else:
                 sel = labels_df.iloc[[index]]
-                y1 = sel[labels_df.columns[0]].values[0] - padding[0]
-                x1 = sel[labels_df.columns[1]].values[0] - padding[1]
-                y2 = sel[labels_df.columns[2]].values[0] + padding[0]
-                x2 = sel[labels_df.columns[3]].values[0] + padding[1]
+                y1 = sel[labels_df.columns[0]].values[0] - padding_px[0]
+                x1 = sel[labels_df.columns[1]].values[0] - padding_px[1]
+                y2 = sel[labels_df.columns[2]].values[0] + padding_px[0]
+                x2 = sel[labels_df.columns[3]].values[0] + padding_px[1]
                 y = slice(
                     y1,
                     y2,

@@ -13,7 +13,7 @@ import logging
 import os
 import re
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import anndata
 import dask
@@ -280,14 +280,14 @@ def spot_detection_pipeline(
             method=spot_detection_method,
         )
     else:
-        sigma_log = np.array(sigma_log)
-        if sigma_log.ndim == 0:
-            sigma_log = np.expand_dims(sigma_log, 0)
+        sigma_log_array = np.array(sigma_log)
+        if sigma_log_array.ndim == 0:
+            sigma_log_array = np.expand_dims(sigma_log_array, 0)
         loged_list = []
         maxed_list = []
         std_arr_list = []
         peaks_list = []
-        for sigma in sigma_log:
+        for sigma in sigma_log_array:
             if match_ops_image_scale:
                 # include DAPI channel to match ops rescaling
                 loged = transform_log(image, sigma=sigma)
@@ -497,7 +497,7 @@ def merge_sbs_phenotype_pipeline(
     image_key: str,
     sbs_path: str | None,
     phenotype_paths: list[str],
-    phenotype_suffix: list[str],
+    phenotype_suffix: list[str] | None,
     df_barcode: pd.DataFrame | None,
     output_dir: str,
     sbs_prefix: str | None = None,
@@ -623,6 +623,8 @@ def merge_sbs_phenotype_pipeline(
             f"Duplicate columns: {', '.join(df_phenotype.columns[df_phenotype.columns.duplicated()].to_list())}"
         )
     if df_labels is not None and df_phenotype is not None and df_barcode is not None:
+        # set from metadata or inferred from barcodes whenever df_barcode is given
+        assert sbs_cycles is not None
         merged_df = merge_sbs_phenotype(
             df_labels=df_labels,
             df_phenotype=df_phenotype,
@@ -986,7 +988,9 @@ def reads_pipeline(
         barcode_to_prefix, args=(iss_cycles,)
     )
     output_dir = output_dir + file_separator
-    crosstalk_correction_method = crosstalk_correction_method.lower()
+    crosstalk_method = cast(
+        Literal["median", "li_and_speed", "none"], crosstalk_correction_method.lower()
+    )
     bases_peaks = peaks.compute()  # load all peaks
     bases_array_reads = _peaks_to_bases(
         maxed=maxed,
@@ -1003,14 +1007,13 @@ def reads_pipeline(
     crosstalk_bases_array = bases_array_reads
 
     iss_cycles = maxed.coords["t"].values
-    custom_metadata = dict(scallops=dict(sbs_cycles=iss_cycles.tolist()))
+    custom_metadata: dict[str, Any] = dict(
+        scallops=dict(sbs_cycles=iss_cycles.tolist())
+    )
     w = None
     if not labels_only:
         crosstalk_bases_array = crosstalk_bases_array.query(dict(read="label>0"))
-    if (
-        crosstalk_correction_method != "none"
-        and threshold_peaks_crosstalk_correction is not None
-    ):
+    if crosstalk_method != "none" and threshold_peaks_crosstalk_correction is not None:
         if isinstance(threshold_peaks_crosstalk_correction, float):
             crosstalk_bases_array = crosstalk_bases_array.query(
                 dict(read=f"peak>{threshold_peaks_crosstalk_correction}")
@@ -1049,7 +1052,7 @@ def reads_pipeline(
             )
         w = channel_crosstalk_matrix(
             crosstalk_bases_array,
-            method=crosstalk_correction_method,
+            method=crosstalk_method,
             by_t=crosstalk_correction_by_t,
             **crosstalk_correction_method_args,
         )
@@ -1106,7 +1109,7 @@ def reads_pipeline(
         df_reads.query(" & ".join(reads_to_labels_query))
     )
 
-    delayed_results = []
+    delayed_results: list[Any] = []
 
     points_fs, points_path = fsspec.core.url_to_fs(points_path)
     points_ds = pq.ParquetDataset(points_path, filesystem=points_fs)

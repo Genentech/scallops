@@ -150,6 +150,7 @@ class Experiment:
                 labels=labels,
             )
         if len(self._labels) > 0:
+            assert root is not None
             labels_grp = root["labels"]
             labels_grp.attrs["labels"] = list(self._labels.keys())
 

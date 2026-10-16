@@ -103,6 +103,7 @@ def haralick(
                 pass
         index = index + 1
 
+    assert channel_names is not None
     results = {}
     for channel_index in range(len(c)):
         for direction in range(n_directions):

@@ -395,26 +395,27 @@ def imnapari(
     if viewer is None:
         viewer = napari.Viewer()
     if image is not None:
-        for name, image in images.items():
+        assert images is not None
+        for name, img in images.items():
             axis_labels = []
             channel_axis = 1
-            for i, x in enumerate(image.dims):
+            for i, x in enumerate(img.dims):
                 if x == "c":
                     channel_axis = i
                 else:
                     axis_labels.append(x)
 
-            channel_labels = [f"{name}::Channel {x}" for x in image.coords["c"].values]
+            channel_labels = [f"{name}::Channel {x}" for x in img.coords["c"].values]
 
             viewer.add_image(
-                image,
+                img,
                 channel_axis=channel_axis,
                 name=channel_labels,
-                metadata=image.attrs,
+                metadata=img.attrs,
                 **kwargs,
             )
             viewer.dims.axis_labels = axis_labels
-            viewer.title = image.attrs.get(title_attribute, "")
+            viewer.title = img.attrs.get(title_attribute, "")
 
     if labels is not None:
         if isinstance(labels, (np.ndarray, DataArray)):

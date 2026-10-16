@@ -166,26 +166,26 @@ def channel_crosstalk_matrix(
     :return: The inverse matrix, w (c,c) or an array of (t, c, c) if `by_t`
     """
 
-    method = str(method).lower()
-    assert method in ["median", "li_and_speed"]
+    method_name = str(method).lower()
+    assert method_name in ["median", "li_and_speed"]
 
     nchannels = a.sizes["c"]
-    if isinstance(a.data, da.Array) and method == "median":
+    if isinstance(a.data, da.Array) and method_name == "median":
         dims = a.dims
         a = a.data
-        chunksize = list(a.chunksize)
+        chunksize_list = list(a.chunksize)
         dims_no_chunk = ["c"]
         if not by_t:
             dims_no_chunk.append("t")
         else:
             # timepoints separate
-            chunksize[dims.index("t")] = 1
+            chunksize_list[dims.index("t")] = 1
         # no chunking in t or c dimensions
         for i in range(len(dims)):
             if dims[i] in dims_no_chunk and a.chunksize[i] != a.shape[i]:
-                chunksize[i] = -1
+                chunksize_list[i] = -1
 
-        chunksize = tuple(chunksize)
+        chunksize = tuple(chunksize_list)
         if chunksize != a.chunksize:
             a = a.rechunk(chunksize)
         chunks = list(a.chunks)
@@ -212,9 +212,9 @@ def channel_crosstalk_matrix(
             w_inv = da.stack(w_inv, axis=0)
             return w_inv
 
-    method = (
+    correct_crosstalk = (
         _correct_channel_crosstalk_li_and_speed
-        if method == "li_and_speed"
+        if method_name == "li_and_speed"
         else _correct_channel_crosstalk_median
     )
     if by_t:
@@ -224,11 +224,11 @@ def channel_crosstalk_matrix(
 
         for dim_val in itertools.product(*dim_vals):
             sel = dict(zip(dims, dim_val))
-            w = method(a.sel(sel).data.reshape(-1, a.sizes["c"]), **kwargs)
+            w = correct_crosstalk(a.sel(sel).data.reshape(-1, a.sizes["c"]), **kwargs)
             w_arrays.append(w)
 
         return np.array(w_arrays)
-    return method(a.data.reshape(-1, a.sizes["c"]), **kwargs)
+    return correct_crosstalk(a.data.reshape(-1, a.sizes["c"]), **kwargs)
 
 
 def _crosstalk_median_ratio_per_chunk(x: NDArray) -> NDArray:
@@ -287,15 +287,15 @@ def apply_channel_crosstalk_matrix(
     attrs = a.attrs.copy()
     a = a.data
     if isinstance(a, da.Array):
-        chunksize = list(a.chunksize)
+        chunksize_list = list(a.chunksize)
         # no chunking in t or c dimensions
         no_chunk_dims = ["c"]
         if w.ndim == 3:
             no_chunk_dims.append("t")
         for i in range(len(dims)):
             if dims[i] in no_chunk_dims and a.chunksize[i] != a.shape[i]:
-                chunksize[i] = -1
-        chunksize = tuple(chunksize)
+                chunksize_list[i] = -1
+        chunksize = tuple(chunksize_list)
         if chunksize != a.chunksize:
             a = a.rechunk(chunksize)
 
@@ -563,11 +563,11 @@ def decode_max(
     else:
         # # no chunking in t or c dimension
         dims = spots.dims
-        chunksize = list(spots.data.chunksize)
+        chunksize_list = list(spots.data.chunksize)
         for i in range(len(dims)):
             if dims[i] in ("c", "t") and spots.data.chunksize[i] != spots.data.shape[i]:
-                chunksize[i] = -1
-        chunksize = tuple(chunksize)
+                chunksize_list[i] = -1
+        chunksize = tuple(chunksize_list)
         if chunksize != spots.data.chunksize:
             spots.data = spots.data.rechunk(chunksize)
 

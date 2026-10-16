@@ -561,13 +561,15 @@ def cdf_plot(
                 col_names = natsorted(val.unique())
     if targets is None:
         target_col = df[groupby_column]
+        target_names: list[str]
         if isinstance(target_col.dtype, pd.CategoricalDtype):
-            targets = target_col.cat.categories.tolist()
+            target_names = target_col.cat.categories.tolist()
         else:
-            targets = natsorted(target_col.unique())
+            target_names = natsorted(target_col.unique())
 
         if reference_group is not None:
-            targets.remove(reference_group)
+            target_names.remove(reference_group)
+        targets = target_names
     if col_names is not None:
         df = df[df[col].isin(col_names)]
 
@@ -718,6 +720,7 @@ def cdf_plot(
             handles, labels, loc="center left", bbox_to_anchor=(1, 0.5)
         )
     if col is not None:
+        assert col_names is not None
         for j in range(ncol):
             axes[0, j].set_title(col_names[j])
 

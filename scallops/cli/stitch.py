@@ -16,7 +16,7 @@ Differences from original ashlar code:
 import argparse
 import shutil
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import fsspec
 import matplotlib.patches as mpatches
@@ -186,7 +186,11 @@ def single_stitch_preview(
                 scene_id=i if n_scenes is not None else None,
             )
             img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
-            z_index_ = z_index[i] if z_index_per_tile else z_index
+            z_index_ = (
+                cast(Sequence[int], z_index)[i]
+                if z_index_per_tile
+                else cast(Literal["max", "focus"] | int, z_index)
+            )
             img = (
                 _z_projection(img, z_index_)
                 if not z_tiles_removed
@@ -353,8 +357,11 @@ def run_stitch(args: argparse.Namespace) -> None:
     channel_window = args.channel_window
     channel_filter_min = args.channel_filter_min
     channel_filter_max = args.channel_filter_max
-    channel_filter_percentiles = [channel_filter_min, channel_filter_max]
-    if channel_filter_percentiles[0] <= 0 and channel_filter_percentiles[1] >= 100:
+    channel_filter_percentiles: tuple[float, float] | None = (
+        channel_filter_min,
+        channel_filter_max,
+    )
+    if channel_filter_min <= 0 and channel_filter_max >= 100:
         channel_filter_percentiles = None
 
     assert all(shift >= 0 for shift in max_shifts), "Max shift must be non-negative."

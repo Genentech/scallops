@@ -1,6 +1,6 @@
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import Literal, Tuple
+from typing import Literal, Tuple, cast
 
 import anndata
 import dask
@@ -43,8 +43,9 @@ def recall(
     # validate inputs and check which directions are needed
     for threshold in recall_thresholds:
         if np.isscalar(threshold):
-            assert 0 <= threshold <= 1
-            if threshold >= 0.5:
+            scalar_threshold = cast(float, threshold)
+            assert 0 <= scalar_threshold <= 1
+            if scalar_threshold >= 0.5:
                 left = True
             else:
                 right = True
@@ -81,7 +82,7 @@ def recall(
         result = dict()
         if np.isscalar(threshold):
             result["threshold"] = threshold
-            if threshold >= 0.5:
+            if cast(float, threshold) >= 0.5:
                 result["recall"] = xp.sum(
                     (query_percentage_ranks_left >= threshold)
                 ) / len(query_distribution)

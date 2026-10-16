@@ -443,11 +443,11 @@ def _find_peaks_deep(
 
     if isinstance(iss_image, da.Array):
         # no chunking in t or c
-        chunksize = list(iss_image.chunksize)
+        chunksize_list = list(iss_image.chunksize)
         for i in range(2):
             if iss_image.chunksize[i] != iss_image.shape[i]:
-                chunksize[i] = -1
-        chunksize = tuple(chunksize)
+                chunksize_list[i] = -1
+        chunksize = tuple(chunksize_list)
         if chunksize != iss_image.chunksize:
             iss_image = iss_image.rechunk(chunksize)
         slices = da.core.slices_from_chunks(iss_image.chunks)
@@ -644,12 +644,12 @@ def transform_log(
         dtype = data.data.dtype
         if match_blainey:
             dtype = np.uint16
-        depth = list(
+        depth_list = list(
             _get_border(data.data, _get_sigmas(data.data, np.max(sigma)), truncate)
         )
         for i in range(data.data.ndim - 2):
-            depth[i] = 0
-        depth = tuple(depth)
+            depth_list[i] = 0
+        depth = tuple(depth_list)
         d = [
             da.map_overlap(
                 process_chunk,

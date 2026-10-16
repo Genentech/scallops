@@ -707,10 +707,10 @@ def to_image_montage(
     tile_size_x = image0.sizes["x"]
 
     image0_shape = image0.shape
-    image_shape = list(image0.shape)
-    image_shape[-2] *= image_arrange
-    image_shape[-1] *= image_arrange
-    image_shape = tuple(image_shape)
+    image_shape_list = list(image0.shape)
+    image_shape_list[-2] *= image_arrange
+    image_shape_list[-1] *= image_arrange
+    image_shape = tuple(image_shape_list)
     axes = "".join(image0.dims).upper()
     metadata: dict[str, Any] = {"axes": axes}
     image_args = dict(
@@ -1394,10 +1394,10 @@ def _images2fov(
                     other_dims.append(concat_dims[j])
                 group_2_images = defaultdict(list)
                 for i in range(len(images)):
-                    key = []
+                    key_parts = []
                     for dim in other_dims:
-                        key.append(tuple(images[i].coords[dim].values))
-                    key = tuple(key)
+                        key_parts.append(tuple(images[i].coords[dim].values))
+                    key = tuple(key_parts)
                     group_2_images[key].append(images[i])
                 _images = []
                 for image_group in group_2_images:
@@ -1469,7 +1469,7 @@ def _create_file_regex(
     d = {}
     skip = {"ignore", "skip"}
     default_quantifier = "+"
-    reformatted_pattern = []
+    pattern_parts = []
     unique_field_names = set()
     for v in Formatter().parse(files_pattern):
         # literal_text, field_name, format_spec, conversion
@@ -1478,7 +1478,7 @@ def _create_file_regex(
         format_spec = v[2]
         quantifier = default_quantifier
         if literal_text != "":
-            reformatted_pattern.append(literal_text)
+            pattern_parts.append(literal_text)
 
         if format_spec is not None and format_spec != "":
             quantifier = format_spec
@@ -1496,12 +1496,12 @@ def _create_file_regex(
                     field_name = f"{base_field_name}_{counter}"
                     counter += 1
             unique_field_names.add(field_name)
-            reformatted_pattern.append("{" + field_name + "}")
+            pattern_parts.append("{" + field_name + "}")
             if is_skip:
                 d[field_name] = f"(?:.{quantifier})"
             else:
                 d[field_name] = f"(?P<{field_name}>.{quantifier})"
-    reformatted_pattern = "".join(reformatted_pattern)
+    reformatted_pattern = "".join(pattern_parts)
 
     if len(d) > 0:
         file_regex = re.compile(
@@ -1517,7 +1517,7 @@ def _create_file_regex(
 def _create_subset_function(
     subset: Callable[[str], bool] | Sequence[str | re.Pattern] | None = None,
     flags=re.IGNORECASE,
-):
+) -> Callable[[str], Any]:
     """Creates a subset function based on the provided subset parameter.
 
     :param subset: A callable function to filter the subset, or a sequence of strings
@@ -1594,6 +1594,7 @@ def is_anndata(store: StoreLike) -> bool:
         return False
     finally:
         if close:
+            assert f is not None
             f.close()
 
 
@@ -1800,7 +1801,7 @@ def _set_up_experiment(
 
     subset_ = subset  # for error message
     flags = re.NOFLAG if case_sensitive else re.IGNORECASE
-    subset = _create_subset_function(subset, flags=flags)
+    subset_func = _create_subset_function(subset, flags=flags)
     if group_by is None:
         group_by = ()
     image_paths = image_path
@@ -1864,7 +1865,7 @@ def _set_up_experiment(
                         d = m.groupdict()
                         group = _image_key_func(d, m)
                         image_key = "-".join(group)
-                        if subset(image_key):
+                        if subset_func(image_key):
                             x = images_group[name]
                             group_to_matches[group].append((x, d))
             else:
@@ -1875,7 +1876,7 @@ def _set_up_experiment(
                     d = m.groupdict()
                     group = _image_key_func(d, m)
                     image_key = "-".join(group)
-                    if subset(image_key):
+                    if subset_func(image_key):
                         group_to_matches[group].append((x, d))
         elif image_path.lower().endswith(".csv") or image_path.lower().endswith(
             ".parquet"
@@ -1913,7 +1914,7 @@ def _set_up_experiment(
             for d in df.to_dict(orient="records"):
                 group = tuple([str(d[g]) for g in group_by])
                 image_key = "-".join(group)
-                if subset(image_key):
+                if subset_func(image_key):
                     image = d["image"]
                     del d["image"]
                     group_to_matches[group].append((image, d))
@@ -1973,17 +1974,17 @@ def _set_up_experiment(
                     group = _image_key_func(d, m)
                     image_key = "-".join(group)
 
-                    if subset(image_key):
+                    if subset_func(image_key):
                         group_to_matches[group].append((x, d))
 
     if len(group_to_matches) == 0:
         message = [f"No files found matching pattern: {file_regex.pattern}"]
-        if subset_ is not None:
+        if subset_ is not None and not isinstance(subset_, Callable):
             message.append(f", subset: {', '.join([str(s) for s in subset_])}")
         if len(group_by) > 0:
             message.append(f", group by: {', '.join(group_by)}")
-        image_paths = [str(path) for path in image_paths]
-        message.append(f" in {', '.join(image_paths)}.")
+        image_path_strs = [str(path) for path in image_paths]
+        message.append(f" in {', '.join(image_path_strs)}.")
         raise ValueError("".join(message))
 
     scene_ids: Sequence[str | None] = [
@@ -2001,6 +2002,7 @@ def _set_up_experiment(
 
     keys = files_pattern_keys if unique_csv_columns is None else unique_csv_columns
     sort_dims = list(dict.fromkeys([*(file_sort_order or {}), "t", "c", "z"]))
+    sort_order_index: dict[str, dict[str, int]] | None = None
     if file_sort_order is not None:
         for k in file_sort_order:
             if k not in keys:
@@ -2019,7 +2021,7 @@ def _set_up_experiment(
                 )
             elif unmatched:
                 logger.warning(f"Sort order values for `{k}` not found: {unmatched}.")
-        file_sort_order = {
+        sort_order_index = {
             k: {v: i for i, v in enumerate(order)}
             for k, order in file_sort_order.items()
         }
@@ -2033,8 +2035,8 @@ def _set_up_experiment(
         for c in sort_dims:
             # use a placeholder for missing values so that keys have the same length
             val = metadata.get(c, "")
-            if file_sort_order is not None:
-                order = file_sort_order.get(c)
+            if sort_order_index is not None:
+                order = sort_order_index.get(c)
                 if order is not None:
                     # listed values first, in the given order (e.g. DAPI->(0, 0)),
                     # then unlisted values in natural order
@@ -2052,9 +2054,9 @@ def _set_up_experiment(
         matches.sort(key=sort_key)
         file_list = []
         file_metadata = []
-        for m in matches:
-            file_list.append(m[0])
-            file_metadata.append(m[1])
+        for match in matches:
+            file_list.append(match[0])
+            file_metadata.append(match[1])
 
         if scenes:
             scenes = False
@@ -2082,7 +2084,7 @@ def _set_up_experiment(
                 "/", "_"
             )  # zarr does not support / in group names
 
-            if not subset(image_key):  # need to filter again if filtering scene
+            if not subset_func(image_key):  # need to filter again if filtering scene
                 continue
             group_metadata = dict(
                 group=dict(zip(group_by, group)),
@@ -2449,7 +2451,7 @@ def save_stack_imagej(
     if data.dtype not in (np.uint8, np.uint16, np.float32):
         raise ValueError("Cannot save data of type %s" % data.dtype)
 
-    resolution = (1.0 / resolution,) * 2
+    resolution_xy = (1.0 / resolution,) * 2
 
     if data.ndim == 2:
         # simple description
@@ -2460,7 +2462,7 @@ def save_stack_imagej(
             data,
             photometric="minisblack",
             description=description,
-            resolution=resolution,
+            resolution=resolution_xy,
             compress=compress,
         )
     else:
@@ -2482,7 +2484,7 @@ def save_stack_imagej(
                 data,
                 photometric="minisblack",
                 description=description,
-                resolution=resolution,
+                resolution=resolution_xy,
                 compress=compress,
             )
         else:
@@ -2500,7 +2502,7 @@ def save_stack_imagej(
                 data,
                 photometric="minisblack",
                 description=description,
-                resolution=resolution,
+                resolution=resolution_xy,
                 compress=compress,
                 extratags=[
                     (50838, "I", len(tag_50838), tag_50838, True),

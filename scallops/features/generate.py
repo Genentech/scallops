@@ -9,7 +9,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from functools import partial
 from inspect import Parameter, signature
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, cast
 
 import dask.array as da
 import dask.dataframe as dd
@@ -27,7 +27,9 @@ from scallops.segmentation.util import relabel_sequential
 logger = logging.getLogger("scallops")
 
 
-def _img_from_zarrs(intensity_image: Sequence[zarr.Array], sl: tuple[slice, ...]):
+def _img_from_zarrs(
+    intensity_image: Sequence[zarr.Array | NDArray], sl: tuple[slice, ...]
+) -> NDArray:
     images = []
     for image in intensity_image:
         image = image[..., sl[0], sl[1]]
@@ -85,6 +87,8 @@ def _feature_block(
     if intensity_image is not None:
         if normalize:
             intensity_image = skimage.util.img_as_float(intensity_image)
+        # a sequence of zarrs was combined into a single array above
+        assert not isinstance(intensity_image, Sequence)
         assert label_image.shape == intensity_image.shape[:2]
     offset = (0, 0) if sl is None else tuple([s.start for s in sl])
     results = {}
@@ -147,9 +151,9 @@ def _rewrite_channels(
                             new_val.append((channel_map[v[0]], channel_map[v[1]]))
                         else:
                             raise ValueError()
-                    if isinstance(val, tuple):
-                        new_val = tuple(new_val)
-                    f.keywords[key] = new_val
+                    f.keywords[key] = (
+                        tuple(new_val) if isinstance(val, tuple) else new_val
+                    )
                 else:
                     raise ValueError(f"{val} is not a valid type.")
     return channel_names_subset
@@ -211,14 +215,16 @@ def label_features(
 
     if intensity_image is not None:
         if is_dask_array:
-            nchannels = intensity_image.shape[-1]
+            nchannels = cast(da.Array, intensity_image).shape[-1]
         else:
             nchannels = 0
             for img in intensity_image:
                 nchannels += np.prod(img.shape[:-2])
             nchannels = int(nchannels)
         intensity_image_dtype = (
-            intensity_image.dtype if is_dask_array else intensity_image[0].dtype
+            cast(da.Array, intensity_image).dtype
+            if is_dask_array
+            else intensity_image[0].dtype
         )
         logger.info(f"Number of channels: {nchannels}")
     channel_names_ = [f"Channel{i}" for i in range(nchannels)]
@@ -243,7 +249,7 @@ def label_features(
             all_required_channels=all_required_channels,
             channel_names=channel_names_,
         )
-        intensity_image = intensity_image[..., all_required_channels]
+        intensity_image = cast(da.Array, intensity_image)[..., all_required_channels]
     if len(all_required_channels) == 0:  # Don't pass intensity image if not needed
         intensity_image = None
     intensity_image_delayed = (
@@ -371,7 +377,9 @@ def label_features(
                 if is_dask_array:
                     label_block = label_image[sl]
                     image_block = (
-                        intensity_image[sl] if intensity_image is not None else None
+                        cast(da.Array, intensity_image)[sl]
+                        if intensity_image is not None
+                        else None
                     )
 
                 results.append(

@@ -148,13 +148,9 @@ def channel_thresholds(
 
     channels = image.c.values
     nchannels = len(channels)
-    is_percentile_min_sequence = False
     if isinstance(percentile_min, Sequence):
-        is_percentile_min_sequence = True
         assert len(percentile_min) == nchannels
-    is_percentile_max_sequence = False
     if isinstance(percentile_max, Sequence):
-        is_percentile_max_sequence = True
         assert len(percentile_max) == nchannels
     _thresholds = dict() if thresholds is None else thresholds.copy()
 
@@ -162,12 +158,12 @@ def channel_thresholds(
         if channel not in _thresholds:
             q_min = (
                 percentile_min[channel]
-                if is_percentile_min_sequence
+                if isinstance(percentile_min, Sequence)
                 else percentile_min
             )
             q_max = (
                 percentile_max[channel]
-                if is_percentile_max_sequence
+                if isinstance(percentile_max, Sequence)
                 else percentile_max
             )
             data = image.sel(c=channel).data

@@ -90,14 +90,18 @@ def _single_stitch(
     if not force:
         if not no_save_image:
             try:
-                if is_ome_zarr_array(image_output_root.get(f"images/{image_key}")):
+                if image_output_root is not None and is_ome_zarr_array(
+                    image_output_root.get(f"images/{image_key}")
+                ):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
             except:  # noqa: E722
                 pass
         elif not no_save_labels:
             try:
-                if is_ome_zarr_array(image_output_root.get(f"labels/{image_key}-mask")):
+                if image_output_root is not None and is_ome_zarr_array(
+                    image_output_root.get(f"labels/{image_key}-mask")
+                ):
                     logger.info(f"Skipping stitching for {image_key}.")
                     return
             except:  # noqa: E722
@@ -128,7 +132,7 @@ def _single_stitch(
         expected_images=expected_images,
         t_index=t_index,
     )
-    z_index = init["z_index"]
+    tile_z_index = init["z_index"]
 
     metadata_fields = init["metadata_fields"]
     n_scenes = init["n_scenes"]
@@ -139,8 +143,8 @@ def _single_stitch(
 
     separate_z = (
         "z" in metadata_fields
-        and isinstance(z_index, (Sequence, np.ndarray))
-        and not isinstance(z_index, str)
+        and isinstance(tile_z_index, (Sequence, np.ndarray))
+        and not isinstance(tile_z_index, str)
     )
 
     if radial_correction_k == "none" or (
@@ -190,7 +194,7 @@ def _single_stitch(
         crop_width=crop_width,
         image_spacing=image_spacing,
         channel=channel,
-        z_index=z_index if not separate_z else 0,
+        z_index=tile_z_index if not separate_z else 0,
         stage_positions=stage_positions,
         upsample_factor=upsample_factor,
         ncc_func=_zncc,
@@ -218,10 +222,10 @@ def _single_stitch(
     null_params = stitch_result["null_params"]
     z_threshold = stitch_result["z_threshold"]
     zncc_val = stitch_result["zncc_val"]
-    radial_correction_k = stitch_result["radial_correction_k"]
+    fitted_radial_correction_k = stitch_result["radial_correction_k"]
     output_metadata["area_fraction"] = stitch_result["area_fraction"]
     output_metadata["null_params"] = null_params
-    output_metadata["radial_correction_k"] = radial_correction_k
+    output_metadata["radial_correction_k"] = fitted_radial_correction_k
     output_metadata["min_overlap_fraction"] = stitch_result["min_overlap_fraction"]
     swap = stitch_result["swap"]
     flip_y = stitch_result["flip_y"]
@@ -262,8 +266,10 @@ def _single_stitch(
         stitch_result["stitched_positions"], columns=["y", "x"]
     )
 
-    if isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(z_index, str):
-        stitch_positions_df["z_index"] = z_index
+    if isinstance(tile_z_index, (Sequence, np.ndarray)) and not isinstance(
+        tile_z_index, str
+    ):
+        stitch_positions_df["z_index"] = tile_z_index
     del stitch_result
 
     stitch_position_coords = stitch_positions_df[["y", "x"]].values
@@ -362,7 +368,9 @@ def _single_stitch(
         tile_shape=align_tile_shape,
         valid_edges=valid_edges,
         max_shift=max_shift,
-        radial_correction_k=radial_correction_k if auto_radial_correction else None,
+        radial_correction_k=fitted_radial_correction_k
+        if auto_radial_correction
+        else None,
     )
     if pairs_after_stitching is not None:
         eval_df = pd.DataFrame(
@@ -414,10 +422,10 @@ def _single_stitch(
         no_save_image,
         ffp_path,
         dfp_path,
-        z_index,
+        tile_z_index,
         output_channels,
         fuse_crop_width,
-        radial_correction_k,
+        fitted_radial_correction_k,
         output_metadata,
         channel_names,
         channel_reference=channel_reference,

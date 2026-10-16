@@ -10,7 +10,7 @@ Authors:
     - The SCALLOPS development team
 """
 
-from typing import Callable, Literal, Sequence
+from typing import Callable, Literal, Sequence, cast
 
 import dask.array as da
 import numpy as np
@@ -230,10 +230,16 @@ def segment_cells_watershed(
         of essential human genes <https://pubmed.ncbi.nlm.nih.gov/36347254/>.`
     :return: Cell labels matching `nuclei` labels and thresholds if an auto threshold method is used.
     """
-    watershed_method = watershed_method.lower()
-    assert watershed_method in ["binary", "distance", "intensity"]
+    method = watershed_method.lower()
+    assert method in ["binary", "distance", "intensity"]
+    # threshold passed to image2mask: a method name, a number, or the computed quantile
+    mask_threshold: Literal["Li", "Otsu", "Local"] | float | NDArray
     if threshold == "quantile":
-        image, threshold = threshold_quantile(image=image, quantile=quantile_threshold)
+        image, mask_threshold = threshold_quantile(
+            image=image, quantile=quantile_threshold
+        )
+    else:
+        mask_threshold = cast(Literal["Li", "Otsu", "Local"] | float, threshold)
 
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), nuclei_channel)
@@ -245,14 +251,14 @@ def segment_cells_watershed(
     if rm_small_std is not None:
         nuclei = remove_small_objects_std(nuclei, rm_small_std)
 
-    image, mask, threshold = image2mask(
+    image, mask, computed_threshold = image2mask(
         image=image,
-        threshold=threshold,
+        threshold=mask_threshold,
         threshold_correction_factor=threshold_correction_factor,
         rolling_ball=rolling_ball,
         sigma=sigma,
     )
-    if watershed_method != "intensity":
+    if method != "intensity":
         image = None
 
     if isinstance(image, da.Array):
@@ -269,7 +275,7 @@ def segment_cells_watershed(
                 image,
                 closing_radius=closing_radius,
                 at_least_nuclei=at_least_nuclei,
-                method=watershed_method,
+                method=method,
                 depth=depth,
                 dtype=np.int32,
                 meta=np.array((), dtype=np.int32),
@@ -282,7 +288,7 @@ def segment_cells_watershed(
                 image,
                 closing_radius=closing_radius,
                 at_least_nuclei=at_least_nuclei,
-                method=watershed_method,
+                method=method,
                 dtype=np.int32,
                 meta=np.array((), dtype=np.int32),
             )
@@ -294,7 +300,7 @@ def segment_cells_watershed(
             image,
             closing_radius,
             at_least_nuclei,
-            method=watershed_method,
+            method=method,
         )
 
-    return labels, threshold
+    return labels, computed_threshold

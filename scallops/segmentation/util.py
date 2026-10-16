@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from functools import partial
 from numbers import Number
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Literal, cast
 
 import dask
 import dask.array as da
@@ -61,7 +61,7 @@ def threshold_quantile(
 
 def image2mask(
     image: xr.DataArray,
-    threshold: Literal["Li", "Otsu", "Local"] | float = "Li",
+    threshold: Literal["Li", "Otsu", "Local"] | float | NDArray = "Li",
     threshold_correction_factor: float = 1,
     rolling_ball: bool = False,
     sigma: float | None = None,
@@ -83,10 +83,12 @@ def image2mask(
     :return: Image, mask, and threshold if threshold is `Li` or `Otsu`.
     """
 
+    # lower-cased method name, or the numeric threshold
+    threshold_method: str | float | NDArray = threshold
     if isinstance(threshold, str):
-        threshold = threshold.lower()
-        assert threshold in ("li", "otsu", "local")
-        if threshold == "local":
+        threshold_method = threshold.lower()
+        assert threshold_method in ("li", "otsu", "local")
+        if threshold_method == "local":
             assert sigma is not None, "Please provide sigma when threshold == `local`"
 
     image = cyto_channel_summary(image).data
@@ -116,14 +118,14 @@ def image2mask(
         )
         smoothed = g(image, sigma=sigma)  # usually larger than cells, 25 - 200
     mask = None
-    threshold_val = threshold
-    if isinstance(threshold, str):
-        if threshold == "local":
+    threshold_val = threshold_method
+    if isinstance(threshold_method, str):
+        if threshold_method == "local":
             mask = image > smoothed * threshold_correction_factor  # usually 1.01 - 1.10
-        elif threshold in ("li", "otsu"):
+        elif threshold_method in ("li", "otsu"):
             if isinstance(smoothed, da.Array):
 
-                def process_block(x, method, threshold_correction_factor):
+                def threshold_block(x, method, threshold_correction_factor):
                     threshold_val = (
                         threshold_otsu(x) if method == "otsu" else threshold_li(x)
                     )
@@ -131,9 +133,9 @@ def image2mask(
                     return x > threshold_val
 
                 mask = da.map_overlap(
-                    process_block,
+                    threshold_block,
                     smoothed,
-                    method=threshold,
+                    method=threshold_method,
                     threshold_correction_factor=threshold_correction_factor,
                     depth=depth,
                     boundary="none"
@@ -145,13 +147,17 @@ def image2mask(
             else:
                 threshold_val = (
                     threshold_otsu(smoothed)
-                    if threshold == "otsu"
+                    if threshold_method == "otsu"
                     else threshold_li(smoothed)
                 )
                 threshold_val = threshold_val * threshold_correction_factor
     if mask is None:
         mask = smoothed > threshold_val
-    return smoothed, mask, threshold_val if isinstance(threshold_val, Number) else None
+    return (
+        smoothed,
+        mask,
+        cast(float, threshold_val) if isinstance(threshold_val, Number) else None,
+    )
 
 
 def remove_small_objects_std(labels: NDArray, rm_small_std: float) -> NDArray:

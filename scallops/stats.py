@@ -11,7 +11,7 @@ import warnings
 from collections import namedtuple
 from functools import partial
 from math import comb
-from typing import Literal, Sequence
+from typing import Collection, Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -847,6 +847,7 @@ def compute_area_between_cdfs(
         cdf_target = _compute_cdf(data2, bin_edges)
         cdfs[label] = cdf_target
         if plot:
+            assert ax is not None
             ax.plot(bin_edges[:-1], cdf_target, label=label)
             ax.legend()
         diff_cdf = (
@@ -898,16 +899,18 @@ def random_effects_meta_analysis_mannwhitneyu(
         defaults=[None],
     )
     pvalue = fisher_combined_pvalue(pvalues)
-    if isinstance(U_statistics, list):
+    u_values: Collection[float]
+    if isinstance(U_statistics, Sequence):
         row_names = None
+        u_values = U_statistics
     elif isinstance(U_statistics, dict):
         row_names = list(U_statistics.keys())
-        U_statistics = U_statistics.values()
+        u_values = U_statistics.values()
     else:
         raise NotImplementedError
-    cles = np.zeros(len(U_statistics))
-    variances = np.zeros(len(U_statistics))
-    for i, (U, (n1, n2)) in enumerate(zip(U_statistics, sample_sizes)):
+    cles = np.zeros(len(u_values))
+    variances = np.zeros(len(u_values))
+    for i, (U, (n1, n2)) in enumerate(zip(u_values, sample_sizes)):
         cles[i] = U / (n1 * n2)
         variances[i] = (n1 + n2 + 1) / (12 * n1 * n2)
     if estimation_method == "reml":

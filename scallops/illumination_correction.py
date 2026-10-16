@@ -11,7 +11,7 @@ import logging
 import shutil
 import warnings
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import skimage
@@ -158,7 +158,11 @@ def illumination_correction(
     for i in range(n):
         file_list = filepaths[0] if n_scenes is not None else filepaths[i]
         attrs = fileattrs[i] if fileattrs is not None else None
-        z_index_ = z_index[i] if z_index_per_tile else z_index
+        # z_index is a per-tile sequence when z_index_per_tile is set
+        z_index_ = cast(
+            Literal["max", "focus"] | int,
+            cast(Sequence, z_index)[i] if z_index_per_tile else z_index,
+        )
 
         image = _images2fov(
             file_list,
@@ -166,6 +170,7 @@ def illumination_correction(
             dask=True,
             scene_id=i if n_scenes is not None else None,
         )
+        assert isinstance(image, xr.DataArray)
         if t_index is not None and "t" in image.dims:
             image = image.isel(t=t_index)
         image = (

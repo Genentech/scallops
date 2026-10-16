@@ -5,7 +5,7 @@ import argparse
 import os
 from collections.abc import Sequence
 from itertools import zip_longest
-from typing import Literal
+from typing import Literal, cast
 
 import fsspec
 import itk
@@ -83,7 +83,7 @@ def _flip(image: xr.DataArray, flip_y: bool, flip_x: bool) -> xr.DataArray:
 def single_registration(
     fixed_tuple: ImageTuple | None,
     moving_tuple: ImageTuple,
-    moving_channel: list[int],
+    moving_channel: int,
     fixed_channel: int | None,
     label_output_root: zarr.Group | None,
     image_output_root: zarr.Group | None,
@@ -243,6 +243,8 @@ def single_registration(
     if not register_self:
         if isinstance(moving_image, Sequence):
             moving_image = moving_image[0]
+        moving_image = cast(xr.DataArray, moving_image)
+        fixed_image = cast(xr.DataArray, fixed_image)
         if (
             moving_image_spacing is None
             and get_image_spacing(moving_image.attrs) is None
@@ -418,6 +420,7 @@ def single_registration(
                 raise ValueError(
                     f"Reference timepoint not found: {reference_timepoint}."
                 )
+        assert isinstance(reference_timepoint, int)
 
         set_automatic_transform_initialization(parameter_object, False)
         if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
@@ -602,7 +605,7 @@ def _transform_labels(
     attrs: None | dict,
     flip_y: bool = False,
     flip_x: bool = False,
-    chunksize: tuple[int, int] = (1024, 1024),
+    chunksize: tuple[int, int] | None = (1024, 1024),
 ):
     """Transform and save labels.
 

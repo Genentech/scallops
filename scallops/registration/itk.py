@@ -722,6 +722,7 @@ def _itk_align_reference_time(
             moving_image_ti_moving_c = moving_image_ti_moving_c.squeeze()
             dest = None
             if output_dir is not None:
+                assert output_fs is not None
                 dest = f"{output_dir}{output_fs.sep}t={times[i]}{output_fs.sep}"
                 if output_fs.isdir(dest):
                     output_fs.rm(dest, recursive=True)
@@ -1056,13 +1057,15 @@ def itk_align(
             output_directory = output_directory.rstrip(fs.sep)
             local_directory = tempfile.mkdtemp()
         else:
-            os.makedirs(local_directory, exist_ok=True)
+            os.makedirs(output_directory, exist_ok=True)
         elastix_object.SetLogToFile(True)
         elastix_object.SetOutputDirectory(local_directory)
     elastix_object.UpdateLargestPossibleRegion()
     for tmp_path in tmp_paths:
         os.remove(tmp_path)
     if output_directory != local_directory:
+        # only reached when output_directory is remote and local_directory is a temp dir
+        assert output_directory is not None and local_directory is not None
         for name in os.listdir(local_directory):
             fs.put(
                 os.path.join(local_directory, name), output_directory + fs.sep + name
