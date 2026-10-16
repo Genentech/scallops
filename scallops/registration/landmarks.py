@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from dask import delayed
+from numpy.typing import NDArray
 from scipy.ndimage import center_of_mass
 from skimage.feature import match_template as sk_match_template
 from skimage.transform import resize
@@ -52,7 +53,7 @@ def _match_template_physical_space_inputs(
     template_padding: float,
     template_labels: xr.DataArray | None = None,
     image_labels: xr.DataArray | None = None,
-    translation: tuple[float, float] | None | Literal["com", "none"] = "com",
+    translation: tuple[float, float] | NDArray | None = None,
     image_spacing: tuple[float, float] | None = None,
     template_spacing: tuple[float, float] | None = None,
 ) -> dict:
@@ -90,25 +91,26 @@ def _match_template_physical_space_inputs(
     if translation is None:
         translation = np.array([0, 0])
     translation = np.asarray(translation) / template_spacing
-    template_padding = (
+    # template padding in pixels (y, x)
+    template_padding_px = (
         template_padding / template_spacing[0],
         template_padding / template_spacing[1],
     )
     template_y = (
-        int(max(0, template_start[0] - template_padding[0] + translation[0])),
+        int(max(0, template_start[0] - template_padding_px[0] + translation[0])),
         int(
             min(
                 template.data.shape[0],
-                template_end[0] + template_padding[0] + translation[0],
+                template_end[0] + template_padding_px[0] + translation[0],
             )
         ),
     )
     template_x = (
-        int(max(0, template_start[1] - template_padding[1] + translation[1])),
+        int(max(0, template_start[1] - template_padding_px[1] + translation[1])),
         int(
             min(
                 template.data.shape[1],
-                template_end[1] + template_padding[1] + +translation[1],
+                template_end[1] + template_padding_px[1] + +translation[1],
             )
         ),
     )
@@ -149,15 +151,15 @@ def _match_template_physical_space_inputs(
 
 @delayed
 def _match_template_slice_delayed(
-    template: np.ndarray,
+    template: NDArray,
     template_start: tuple[float, float],
     template_y: tuple[int, int],
     template_x: tuple[int, int],
-    image: np.ndarray,
+    image: NDArray,
     image_spacing: tuple[float, float],
-    shape_ratio: np.ndarray,
-    template_labels: np.ndarray | None,
-    image_labels: np.ndarray | None,
+    shape_ratio: NDArray,
+    template_labels: NDArray | None,
+    image_labels: NDArray | None,
     y_start: float,
     x_start: float,
 ) -> pd.DataFrame:
@@ -199,15 +201,15 @@ def _match_template_slice_delayed(
 
 
 def _match_template_slice(
-    template: np.ndarray,
+    template: NDArray,
     template_start: tuple[float, float],
     template_y: tuple[int, int],
     template_x: tuple[int, int],
-    image: np.ndarray,
+    image: NDArray,
     image_spacing: tuple[float, float],
-    shape_ratio: np.ndarray,
-    template_labels: np.ndarray | None,
-    image_labels: np.ndarray | None,
+    shape_ratio: NDArray,
+    template_labels: NDArray | None,
+    image_labels: NDArray | None,
 ) -> dict | None:
     new_shape = (np.array(template.shape) * shape_ratio).astype(int)
     if new_shape[0] < image.shape[0] or new_shape[1] < image.shape[1]:
@@ -293,7 +295,7 @@ def match_template(
     template_padding: float = 500,
     template_labels: xr.DataArray | None = None,
     image_labels: xr.DataArray | None = None,
-    translation: tuple[float, float] | None | Literal["com", "none"] = "com",
+    translation: tuple[float, float] | None = None,
     image_spacing: tuple[float, float] | None = None,
     template_spacing: tuple[float, float] | None = None,
 ) -> dict | None:
@@ -307,8 +309,7 @@ def match_template(
     :param template_padding: Template padding in physical coordinates.
     :param template_labels: Optional template labels.
     :param image_labels: Optional image labels.
-    :param translation: Global translation between template and image in physical coordinates. Use
-        "com" for center of mass.
+    :param translation: Global translation between template and image in physical coordinates.
     :param image_spacing: Optional image spacing. If not provided, determined from metadata.
     :param template_spacing: Optional template spacing. If not provided, determined from metadata.
     :return: Result dictionary or None.
@@ -361,7 +362,7 @@ def _center_of_mass(
     image_spacing: tuple[float, float],
     min_quantile: float | None = 0.25,
     max_quantile: float | None = 0.75,
-) -> np.ndarray:
+) -> NDArray:
     values = image.values
     if min_quantile is not None or max_quantile is not None:
         q = []

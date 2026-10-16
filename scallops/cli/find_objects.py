@@ -7,13 +7,14 @@ Authors:
 
 import argparse
 import json
+from typing import cast
 
 import dask.array as da
 import fsspec
 import zarr
-from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -29,7 +30,7 @@ logger = _get_cli_logger()
 
 
 def _execute(
-    label_tuple: tuple[tuple[str, ...], list[str | Group], dict],
+    label_tuple: ImageTuple,
     output_dir: str,
     output_sep: str,
     force: bool = False,
@@ -57,7 +58,8 @@ def _execute(
             logger.info(f"Skipping finding objects for {metadata['id']}.")
             return
     logger.info(f"Finding objects for {metadata['id']}.")
-    array = da.from_zarr(file_list[0][list(file_list[0].keys())[0]])
+    labels_group = cast(zarr.Group, file_list[0])
+    array = da.from_zarr(labels_group[list(labels_group.keys())[0]])
     df = find_objects(array)
     df.index.name = "label"
     prefix = _label_name_to_prefix.get(label_name)

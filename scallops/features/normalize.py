@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import anndata
 import dask
@@ -13,6 +13,7 @@ from anndata._core.index import _normalize_index
 from array_api_compat import get_namespace
 from dask.utils import parse_bytes
 from flox.lib import _issorted
+from numpy.typing import NDArray
 from scipy.stats import median_abs_deviation
 from sklearn.neighbors import NearestNeighbors
 
@@ -118,7 +119,7 @@ def normalize_features(
     centering: bool = True,
     scaling: bool = True,
     feature_chunk_size: int | None = None,
-    centroid_column_names: tuple[str, str] = (
+    centroid_column_names: Sequence[str] = (
         "Nuclei_AreaShape_Center_Y",
         "Nuclei_AreaShape_Center_X",
     ),
@@ -200,7 +201,7 @@ def normalize_features(
                 dims=["obs", "var"],
                 coords=coords,
             )
-        kwargs = dict()
+        kwargs: dict[str, Any] = dict()
         if by is not None:
             grouped_ref = x_ref_data.groupby("obs")
             grouped_values = (
@@ -257,8 +258,10 @@ def normalize_features(
             for key, group in grouped_values:
                 values = group.data
                 if centering:
+                    assert means is not None
                     values = values - means.sel(obs=key).data
                 if scaling:
+                    assert stds is not None
                     values = values / stds.sel(obs=key).data
 
                     if max_value is not None:  # only clip when scaling
@@ -295,7 +298,7 @@ def normalize_features(
             )
     # one row per observation, filled in place per group so the full index array is
     # never duplicated by a concatenate
-    indices = (
+    neighbor_indices = (
         np.empty(
             (data.n_obs, n_neighbors),
             dtype=np.int32 if data.n_obs <= np.iinfo(np.int32).max else np.int64,
@@ -303,9 +306,9 @@ def normalize_features(
         if use_map_blocks
         else None
     )
-    results = [] if not use_map_blocks else None
-    obs_list = [] if not use_map_blocks else None
-    obs_indices = [] if not use_map_blocks else None
+    local_results: list | None = [] if not use_map_blocks else None
+    obs_list: list | None = [] if not use_map_blocks else None
+    obs_indices: list | None = [] if not use_map_blocks else None
     resolved_feature_chunk = (
         _feature_chunk_size(
             data.X,
@@ -351,7 +354,8 @@ def normalize_features(
                 reference_indices = local_reference_indices[reference_indices]
             if use_map_blocks:
                 # use_map_blocks is only ever set when grouping
-                indices[group_indices_] = reference_indices
+                assert neighbor_indices is not None
+                neighbor_indices[group_indices_] = reference_indices
             else:
                 kwargs = dict(
                     robust=robust,
@@ -401,7 +405,10 @@ def normalize_features(
         #         )
 
         if not use_map_blocks:
-            results.append(result)
+            assert local_results is not None
+            assert obs_list is not None
+            assert obs_indices is not None
+            local_results.append(result)
             obs_list.append(df)
             if by is not None:
                 obs_indices.append(group_indices_)
@@ -412,8 +419,8 @@ def normalize_features(
         rechunked_data = data.X.rechunk({0: chunks, 1: resolved_feature_chunk})
 
         # one chunk per group along the labels dim, neighbors are never split
-        indices = da.from_array(indices, chunks=(chunks, -1))
-        assert indices.shape[0] == rechunked_data.shape[0]
+        neighbor_indices_da = da.from_array(neighbor_indices, chunks=(chunks, -1))
+        assert neighbor_indices_da.shape[0] == rechunked_data.shape[0]
         kwargs = dict(
             robust=robust,
             mad_scale=mad_scale,
@@ -427,7 +434,7 @@ def normalize_features(
         result = da.map_blocks(
             _local_z_batched,
             rechunked_data,
-            indices,
+            neighbor_indices_da,
             **kwargs,
             dtype=_local_dtype(data.X.dtype),
         )
@@ -445,7 +452,7 @@ def normalize_features(
         row_indices = np.concatenate(obs_indices)
         obsm = {key: value[row_indices] for key, value in data.obsm.items()}
     return anndata.AnnData(
-        X=get_namespace(data.X).vstack(results),
+        X=get_namespace(data.X).vstack(local_results),
         obs=pd.concat(obs_list),
         var=data.var.copy(),
         uns=data.uns.copy(),
@@ -496,6 +503,7 @@ def _local_moments_gather(
                 means[start:stop] = center
         if stds is not None:
             if robust:
+                assert center is not None
                 deviation = xp.abs(block - center[:, None, :])
                 scale = xp.median(deviation, axis=1) / mad_scale
             else:
@@ -506,10 +514,10 @@ def _local_moments_gather(
 
 
 def _local_moments_sparse(
-    x: np.ndarray,
-    indices: np.ndarray,
-    means: np.ndarray | None,
-    stds: np.ndarray | None,
+    x: NDArray,
+    indices: NDArray,
+    means: NDArray | None,
+    stds: NDArray | None,
     tile: int,
     progress: bool | str = False,
 ) -> None:
@@ -578,7 +586,7 @@ def _local_z_batched(
     """
     xp = get_namespace(x)
     is_numpy = isinstance(x, np.ndarray)
-    mad_scale = _convert_scale(mad_scale) if robust else None
+    mad_scale_value = _convert_scale(mad_scale) if robust else None
     n_rows, n_features = x.shape
     n_neighbors = reference_indices.shape[1]
     dtype = _local_dtype(x.dtype)
@@ -604,7 +612,7 @@ def _local_z_batched(
             means,
             stds,
             robust,
-            mad_scale,
+            mad_scale_value,
             tile,
             progress,
         )
@@ -618,6 +626,7 @@ def _local_z_batched(
         else:
             block[...] = x[start:stop]
         if scaling:
+            assert stds is not None
             xp.divide(block, stds[start:stop], out=block)
             if max_value is not None:
                 xp.clip(block, -max_value, max_value, out=block)
@@ -630,11 +639,11 @@ def _local_z_batched(
 
 
 def _nearest_neighbors_indices(
-    reference: np.ndarray,
-    query: np.ndarray,
+    reference: NDArray,
+    query: NDArray,
     n_neighbors: int = 100,
     metric: str = "minkowski",
-) -> np.ndarray:
+) -> NDArray:
     if n_neighbors > len(reference):
         raise ValueError(f"n_neighbors: {n_neighbors}, n points: {len(reference)}")
     # shape is reference.shape[0], n_neighbors
@@ -649,7 +658,7 @@ def _nearest_neighbors_indices(
     return indices
 
 
-def _symmetric_matrix_power(a: np.ndarray, power: float) -> np.ndarray:
+def _symmetric_matrix_power(a: NDArray, power: float) -> NDArray:
     """Fractional power of a symmetric positive-definite matrix.
 
     :func:`scipy.linalg.fractional_matrix_power` accepts any matrix and pays for it
@@ -664,8 +673,8 @@ def _symmetric_matrix_power(a: np.ndarray, power: float) -> np.ndarray:
 
 
 def _apply_affine(
-    x: np.ndarray, codes: np.ndarray, maps: np.ndarray, offsets: np.ndarray
-) -> np.ndarray:
+    x: NDArray, codes: NDArray, maps: NDArray, offsets: NDArray
+) -> NDArray:
     """``x @ maps[g] + offsets[g]``, with `g` the group each row of `x` belongs to."""
     codes = codes.ravel()
     out = np.empty((x.shape[0], maps.shape[2]), dtype=maps.dtype)

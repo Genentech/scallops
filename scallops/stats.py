@@ -11,7 +11,7 @@ import warnings
 from collections import namedtuple
 from functools import partial
 from math import comb
-from typing import Literal, Sequence
+from typing import Collection, Literal, Sequence
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,7 @@ from dask.array.numpy_compat import NUMPY_GE_200
 from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
+from numpy.typing import NDArray
 from scipy import stats
 from scipy.optimize import minimize
 from scipy.stats import chi2, mannwhitneyu, median_abs_deviation, norm, ttest_ind
@@ -29,8 +30,8 @@ from statsmodels.stats.multitest import multipletests
 
 
 def _compute_pairwise_stats(
-    treatment: np.ndarray,
-    reference: np.ndarray,
+    treatment: NDArray,
+    reference: NDArray,
     method: Literal["welch_t", "student_t", "mannwhitney"],
     **kwargs,
 ) -> dict:
@@ -636,7 +637,7 @@ def iqr_threshold(image, multiplier=3.4) -> float:
     return q3 + (multiplier * iqr)
 
 
-def iqr_outlier(image: np.ndarray, multiplier: float) -> np.ndarray:
+def iqr_outlier(image: NDArray, multiplier: float) -> NDArray:
     """Identifies the outliers using the interquartile method.
 
     :param image: numpy array with single channel image data
@@ -649,7 +650,7 @@ def iqr_outlier(image: np.ndarray, multiplier: float) -> np.ndarray:
     return img
 
 
-def vectorized_iqr_outlier(image: np.ndarray, multiplier: float) -> np.ndarray:
+def vectorized_iqr_outlier(image: NDArray, multiplier: float) -> NDArray:
     """Detect outliers in each channel of the intensity image using a vectorized approach.
 
     :param image: numpy array with single channel image data
@@ -670,7 +671,7 @@ def generate_cdfs_with_area_difference(
     n_data: int = 1000,
     iterations: int = 100,
     seed: int = 42,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray, NDArray, float, NDArray, NDArray]:
     """Generates two realistic CDFs from normal distributions with a specified area difference
     between them, along with the raw data corresponding to each CDF.
 
@@ -698,6 +699,8 @@ def generate_cdfs_with_area_difference(
     # First distribution (reference)
     mean1, std1 = 0, 1
     # Search bounds for the second mean
+    mean2_lower: float
+    mean2_upper: float
     mean2_lower, mean2_upper = (
         mean1 - 5 * std1,
         mean1 + 5 * std1,
@@ -737,7 +740,7 @@ def generate_cdfs_with_area_difference(
     return x, cdf1, cdf2, final_area, data1, data2
 
 
-def scale_array(data, min_scale=-1, max_scale=1) -> np.ndarray:
+def scale_array(data, min_scale=-1, max_scale=1) -> NDArray:
     """Scales an array to a specified range.
 
     :param data: The input array to be scaled.
@@ -765,16 +768,16 @@ def scale_array(data, min_scale=-1, max_scale=1) -> np.ndarray:
 
 
 def compute_area_between_cdfs(
-    reference: np.ndarray,
-    target: dict[str, np.ndarray] | np.ndarray,
+    reference: NDArray,
+    target: dict[str, NDArray] | NDArray,
     reference_label: str = "reference",
     npoints: int = 500,
     area_as_delta: bool = False,
     plot: bool = False,
 ) -> tuple[
     dict[str, float],
-    dict[str, np.ndarray],
-    np.ndarray,
+    dict[str, NDArray],
+    NDArray,
     tuple[plt.Axes | None, Figure | None],
 ]:
     """Computes the area between the CDFs of a reference data set and other target data sets.
@@ -844,6 +847,7 @@ def compute_area_between_cdfs(
         cdf_target = _compute_cdf(data2, bin_edges)
         cdfs[label] = cdf_target
         if plot:
+            assert ax is not None
             ax.plot(bin_edges[:-1], cdf_target, label=label)
             ax.legend()
         diff_cdf = (
@@ -860,7 +864,7 @@ def random_effects_meta_analysis_mannwhitneyu(
     pvalues: Sequence[float],
     estimation_method: Literal["pm", "dl"] = "pm",
     alpha: float = 0.05,
-) -> namedtuple:
+) -> tuple:
     """Perform meta-analysis on Mann-Whitney U statistics by converting them to CLES, and then using
     statsmodels to combine the effect sizes under a random-effects model.
 
@@ -895,16 +899,18 @@ def random_effects_meta_analysis_mannwhitneyu(
         defaults=[None],
     )
     pvalue = fisher_combined_pvalue(pvalues)
-    if isinstance(U_statistics, list):
+    u_values: Collection[float]
+    if isinstance(U_statistics, Sequence):
         row_names = None
+        u_values = U_statistics
     elif isinstance(U_statistics, dict):
         row_names = list(U_statistics.keys())
-        U_statistics = U_statistics.values()
+        u_values = U_statistics.values()
     else:
         raise NotImplementedError
-    cles = np.zeros(len(U_statistics))
-    variances = np.zeros(len(U_statistics))
-    for i, (U, (n1, n2)) in enumerate(zip(U_statistics, sample_sizes)):
+    cles = np.zeros(len(u_values))
+    variances = np.zeros(len(u_values))
+    for i, (U, (n1, n2)) in enumerate(zip(u_values, sample_sizes)):
         cles[i] = U / (n1 * n2)
         variances[i] = (n1 + n2 + 1) / (12 * n1 * n2)
     if estimation_method == "reml":
@@ -936,9 +942,7 @@ def random_effects_meta_analysis_mannwhitneyu(
     return res
 
 
-def reml_likelihood(
-    tau_squared: float, effects: np.ndarray, variances: np.ndarray
-) -> float:
+def reml_likelihood(tau_squared: float, effects: NDArray, variances: NDArray) -> float:
     """Calculates the negative log-likelihood for a random-effects meta-analysis model.
 
     :param tau_squared: The between-study variance.
@@ -977,7 +981,7 @@ def reml_likelihood(
     return -likelihood
 
 
-def estimate_reml(effects: np.ndarray, variances: np.ndarray) -> float:
+def estimate_reml(effects: NDArray, variances: NDArray) -> float:
     """Estimates the between-study variance (tau_squared) using REML.
 
     :param effects: Array-like, the observed effect sizes from the studies.
@@ -1012,7 +1016,7 @@ def estimate_reml(effects: np.ndarray, variances: np.ndarray) -> float:
 
 
 def combine_effects_reml(
-    effects: np.ndarray, variances: np.ndarray
+    effects: NDArray, variances: NDArray
 ) -> tuple[float, float, float]:
     """Combines effect sizes using REML in a random-effects meta-analysis.
 
@@ -1045,8 +1049,8 @@ def combine_effects_reml(
 
 
 def guide_pvalue_ABC(
-    non_targeting: np.ndarray, targeting: np.ndarray, reps: int = 10000, cpus: int = -1
-) -> tuple[float, float, np.ndarray]:
+    non_targeting: NDArray, targeting: NDArray, reps: int = 10000, cpus: int = -1
+) -> tuple[float, float, NDArray]:
     """Computes the p-value for the difference in areas between the CDFs of two datasets.
 
     This function compares the cumulative distribution functions (CDFs) of two datasets,
@@ -1086,10 +1090,10 @@ def guide_pvalue_ABC(
 
 
 def _local_zscore_transform(
-    values: np.ndarray,
-    indices: np.ndarray,
+    values: NDArray,
+    indices: NDArray,
     norm_method: Literal["classic", "robust"] = "classic",
-) -> np.ndarray:
+) -> NDArray:
     """Computes the local z-score for a single feature.
     :param values: Feature values
     :param indices: Nearest neighbor indices
@@ -1124,7 +1128,7 @@ def _local_z_score_indices(
         "Nuclei_AreaShape_Center_X",
         "Nuclei_AreaShape_Center_Y",
     ),
-) -> np.ndarray:
+) -> NDArray:
     assert len(centroid_column_names) == 2, "Only a sequence of length 2 is valid"
     assert (centroid_column_names[0] in df.columns) and (
         centroid_column_names[1] in df.columns

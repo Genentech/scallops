@@ -3,7 +3,7 @@ import pathlib
 from typing import List, Union
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from . import utils
 
@@ -14,7 +14,7 @@ def remove_overlapped_objects(
     threshold: float = 0.05,
     spatial_dims: int = 2,
     block_info: Union[dict, None] = None,
-) -> np.ndarray:
+) -> NDArray:
     """Removes ambiguous objects detected in overlapping regions between adjacent chunks."""
     chunk_location = block_info[None]["chunk-location"]
     num_chunks = block_info[None]["num-chunks"]
@@ -117,7 +117,7 @@ def remove_overlapped_objects(
     return removed_labeled_image
 
 
-def sort_indices(labeled_image: ArrayLike, unique_labels: list) -> np.ndarray:
+def sort_indices(labeled_image: ArrayLike, unique_labels: list) -> NDArray:
     """Sort label indices to have them as a continuous sequence."""
     relabeled_image = np.copy(labeled_image)
     for label_id in np.unique(labeled_image):
@@ -133,7 +133,7 @@ def merge_tiles(
     overlaps: List[int],
     spatial_dims: int = 2,
     block_info: Union[dict, None] = None,
-) -> np.ndarray:
+) -> NDArray:
     """Merge objects detected in overlapping regions from adjacent chunks of this chunk."""
     num_chunks = block_info[None]["num-chunks"]
     chunk_location = block_info[None]["chunk-location"]
@@ -222,7 +222,7 @@ def annotate_object_fetures(
     object_classes: dict,
     spatial_dims: int = 2,
     block_info: Union[dict, None] = None,
-) -> np.ndarray:
+) -> NDArray:
     """Convert detections into GeoJson Feature objects containing the contour and class of each
     detected object in this chunk."""
     classes = None
@@ -265,7 +265,7 @@ def dump_annotaions(
     labeled_image_annotations: ArrayLike,
     out_dir: pathlib.Path,
     block_info: Union[dict, None] = None,
-) -> np.ndarray:
+) -> NDArray:
     geojson_annotation = labeled_image_annotations.item()
 
     if geojson_annotation:

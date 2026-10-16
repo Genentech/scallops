@@ -2,8 +2,8 @@ from typing import Literal
 
 import dask.array as da
 import fsspec
-import numpy as np
 from array_api_compat import get_namespace
+from numpy.typing import NDArray
 from skimage.util import img_as_ubyte
 from zarr import Group
 
@@ -16,7 +16,7 @@ from scallops.features.constants import (
     _label_name_to_prefix,
 )
 from scallops.io import (
-    _images2fov,
+    _images2fov_array,
     _pd_to_parquet,
     is_parquet_file,
     to_label_crops,
@@ -25,7 +25,7 @@ from scallops.io import (
 logger = _get_cli_logger()
 
 
-def _norm_block(image: np.ndarray, percentiles) -> np.ndarray:
+def _norm_block(image: NDArray, percentiles) -> NDArray:
     xp = get_namespace(image)
     percentiles = xp.percentile(image, percentiles, axis=(1, 2), keepdims=True)
     image = (image - percentiles[0]) / (percentiles[1] - percentiles[0])
@@ -65,7 +65,7 @@ def single_crop(
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_fs.makedirs(output_dir, exist_ok=True)
-    image = _images2fov(file_list, metadata, dask=True).squeeze().data
+    image = _images2fov_array(file_list, metadata, dask=True).squeeze().data
     logger.info(f"{image_key} image shape {image.shape}")
     label_image = None
     if labels_group is not None:

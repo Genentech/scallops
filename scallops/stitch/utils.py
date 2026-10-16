@@ -17,6 +17,7 @@ import shapely
 import xarray as xr
 import zarr
 from dask import delayed
+from numpy.typing import NDArray
 from ome_types import from_xml
 from pint import UndefinedUnitError, UnitRegistry
 from skimage.util import img_as_float, img_as_ubyte, img_as_uint
@@ -63,7 +64,7 @@ def _read_tile(
     z_index: int | Literal["max"] = "max",
     scene_id: None | str | int = None,
     t_index: int | None = None,
-) -> np.ndarray:
+) -> NDArray:
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
     img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     if img.ndim > 2:
@@ -182,7 +183,7 @@ def overlapping_pairs(df: pd.DataFrame, tile_shape: tuple[int, int]) -> pd.DataF
 
 def tile_source_labels(
     df: pd.DataFrame, tile_shape: tuple[int, int]
-) -> np.ndarray[np.int32]:
+) -> NDArray[np.int32]:
     """Create label array indicating tile source. A value of -1 indicate no tile.
 
     :param df: DataFrame containing stitched tile locations
@@ -207,7 +208,7 @@ def tile_source_labels(
 
 def tile_overlap_mask(
     df: pd.DataFrame, tile_shape: tuple[int, int], fill: bool = True
-) -> np.ndarray[np.uint8]:
+) -> NDArray[np.uint8]:
     """Create a binary mask where zeros indicate locations where tiles overlap.
 
     :param df: DataFrame containing stitched tile locations
@@ -315,7 +316,7 @@ def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str)
     return stage_positions
 
 
-def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> np.ndarray | None:
+def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | None:
     # get from image metadata
     if len(filepaths) == 1:
         img = _create_image(filepaths[0])
@@ -360,7 +361,7 @@ def _get_ome(image: bioio.BioImage):
     return None
 
 
-def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> np.ndarray | None:
+def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> NDArray | None:
     ome_metadata = _get_ome(image)
     physical_size_y_unit = None
     physical_size_x_unit = None
@@ -404,9 +405,9 @@ def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> np.ndarray
                     stage_y = tree.findall(".//prop[@id='stage-position-y']")
                     stage_x = tree.findall(".//prop[@id='stage-position-x']")
                     if len(stage_y) == 1 and len(stage_x) == 1:
-                        stage_y = stage_y[0].attrib["value"]
-                        stage_x = stage_x[0].attrib["value"]
-                        return np.array([stage_y, stage_x])
+                        stage_y_value = stage_y[0].attrib["value"]
+                        stage_x_value = stage_x[0].attrib["value"]
+                        return np.array([stage_y_value, stage_x_value])
                 except:  # noqa: E722
                     pass
     if values is None:
@@ -441,7 +442,7 @@ def _pixel_size_from_araceli_json(json_path: str):
 
 def get_pixel_size(
     filepaths: Sequence[str], stage_positions_path: str | None
-) -> np.ndarray:
+) -> NDArray:
     if stage_positions_path is not None and stage_positions_path.lower().endswith(
         ".json"
     ):
@@ -488,14 +489,14 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
                     y = tree.findall(".//prop[@id='spatial-calibration-y']")
                     x = tree.findall(".//prop[@id='spatial-calibration-x']")
                     if len(y) == 1 and len(x) == 1:
-                        y = y[0].attrib["value"]
-                        x = x[0].attrib["value"]
-                        values = np.array([y, x]).astype(float)
+                        y_value = y[0].attrib["value"]
+                        x_value = x[0].attrib["value"]
+                        values = np.array([y_value, x_value]).astype(float)
                         units = tree.findall(".//prop[@id='spatial-calibration-units']")
                         if len(units) == 1:
-                            units = units[0].attrib["value"]
-                            physical_size_y_unit = units
-                            physical_size_x_unit = units
+                            unit = units[0].attrib["value"]
+                            physical_size_y_unit = unit
+                            physical_size_x_unit = unit
 
                 except:  # noqa: E722
                     pass
@@ -527,7 +528,7 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
     return np.array(values)
 
 
-def min_zncc(a: np.ndarray, b: np.ndarray | None = None) -> float:
+def min_zncc(a: NDArray, b: NDArray | None = None) -> float:
     """Compute z-normalized cross-correlation.
 
     :param a: First image of dimensions (y,x) or (t,y,x) if second image is None
@@ -543,7 +544,7 @@ def min_zncc(a: np.ndarray, b: np.ndarray | None = None) -> float:
     return value
 
 
-def n_labels(a: np.ndarray) -> np.ndarray:
+def n_labels(a: NDArray) -> NDArray:
     """Count number of unique labels in an image.
 
     :param a: Label image
@@ -559,8 +560,8 @@ def create_composite(
     channel: int | None = None,
     radial_correction_k: float | None = None,
     crop_width: tuple[int, int] | None = None,
-    ffp: np.ndarray | None = None,
-    dfp: np.ndarray | None = None,
+    ffp: NDArray | None = None,
+    dfp: NDArray | None = None,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Use stitching coordinates to create a composite image.
 
@@ -692,8 +693,8 @@ def _download_path(path, directory=None):
 def _download_paths(
     filelist: Sequence[Sequence[str]],
     suffixes: set[str] | None,
-    tmp_dir: str = None,
-    path_to_local_path: dict[str, str] = None,
+    tmp_dir: str | None = None,
+    path_to_local_path: dict[str, str | None] | None = None,
 ):
     if path_to_local_path is None:
         path_to_local_path = dict()
@@ -763,11 +764,16 @@ def _init_tiles(
     download_suffixes: set[str] | None = None,
     t_index: int | None = None,
 ):
+    # z selection: "max", "focus", an int, a per-tile data frame/array, or computed per-tile indices
+    z_selection: int | str | pd.DataFrame | NDArray | tuple = z_index
     if not isinstance(z_index, int) and z_index not in ("max", "focus"):
-        z_index = pd.read_parquet(z_index.format(**image_metadata["file_metadata"][0]))
-        z_index["key"] = z_index["key"].apply(lambda x: tuple(x))
-        z_index = z_index.set_index("key")
-        assert "z_index" in z_index.columns
+        z_index_df = pd.read_parquet(
+            z_index.format(**image_metadata["file_metadata"][0])
+        )
+        z_index_df["key"] = z_index_df["key"].apply(lambda x: tuple(x))
+        z_index_df = z_index_df.set_index("key")
+        assert "z_index" in z_index_df.columns
+        z_selection = z_index_df
     n_scenes = None
     if len(image_filepaths) == 1:
         img = _create_image(image_filepaths[0])
@@ -790,8 +796,8 @@ def _init_tiles(
         for i in range(len(image_filepaths)):
             filepaths.append((image_filepaths[i],))
         keys = filepaths
-    if isinstance(z_index, pd.DataFrame):
-        z_index = z_index.loc[keys]["z_index"].values
+    if isinstance(z_selection, pd.DataFrame):
+        z_selection = z_selection.loc[keys]["z_index"].values
 
     if expected_images is not None:
         assert len(filepaths) == expected_images, (
@@ -801,7 +807,7 @@ def _init_tiles(
     logger.info(f"{n:,} tiles.")
     path_to_local_path = None
     tmp_dir = None
-    if isinstance(z_index, str) and z_index == "focus":
+    if isinstance(z_selection, str) and z_selection == "focus":
         results = []
         separate_channel_files = "c" in metadata_fields
         filepaths_ = filepaths
@@ -826,14 +832,16 @@ def _init_tiles(
                     file_list, attrs, scene_id, channel, tmp_dir, t_index=t_index
                 )
             )
-        z_index = dask.compute(*results)
+        z_selection = dask.compute(*results)
         logger.info("Determined best focus z-index for all tiles.")
     if (
         "z" in metadata_fields
-        and isinstance(z_index, (Sequence, np.ndarray, int))
-        and not isinstance(z_index, str)
+        and isinstance(z_selection, (Sequence, np.ndarray, int))
+        and not isinstance(z_selection, str)
     ):  # only keep needed files with computed z
-        filepaths, fileattrs = _filter_filepaths(filepaths, fileattrs, ["z"], [z_index])
+        filepaths, fileattrs = _filter_filepaths(
+            filepaths, fileattrs, ["z"], [z_selection]
+        )
     path_to_local_path, tmp_dir = _download_paths(
         filelist=filepaths,
         suffixes=download_suffixes,
@@ -843,7 +851,7 @@ def _init_tiles(
 
     return dict(
         keys=keys,
-        z_index=z_index,
+        z_index=z_selection,
         n_scenes=n_scenes,
         fileattrs=fileattrs,
         filepaths=_replace_remote_paths(filepaths, path_to_local_path),
@@ -888,7 +896,7 @@ def _filter_filepaths(filepaths, fileattrs, metadata_fields, metadata_values):
     return new_filepaths, new_fileattrs
 
 
-def _crop_image(img: np.ndarray, crop_width: tuple[int, int] | None) -> np.ndarray:
+def _crop_image(img: NDArray, crop_width: tuple[int, int] | None) -> NDArray:
     if crop_width is None:
         return img
 

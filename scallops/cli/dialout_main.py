@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import argparse
 
 from scallops.cli.arg_parser import _sort_groups
+from scallops.cli.util import SubParsers
 
 
 def _run_report(arguments: argparse.Namespace):
@@ -29,7 +32,7 @@ def _run_dialout_pipeline(arguments: argparse.Namespace):
     run_dialout_pipeline(arguments)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Sets up the argument parsers for the 'dialout' command and its subcommands.
 
     This internal function configures the command-line interface for the 'dialout' tool, adding

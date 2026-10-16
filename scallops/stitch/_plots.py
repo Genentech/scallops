@@ -7,17 +7,18 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle
+from numpy.typing import NDArray
 
 from scallops.cli.util import cli_metadata
 from scallops.stitch.shift_utils import _get_overlap_bounding_box
 
 
 def _max_shift_vs_zncc_plot(
-    nccs_before_stitching: np.ndarray,
-    shifts_before_stitching: np.ndarray,
-    spanning_tree_edges: Sequence[tuple[int, int]],
+    nccs_before_stitching: NDArray,
+    shifts_before_stitching: NDArray,
+    spanning_tree_edges: Sequence[tuple[int, int]] | None,
     pairs: Sequence[tuple[int, int]],
-    valid_edges: np.ndarray[bool],
+    valid_edges: NDArray[bool],
     max_shift: float | None = None,
 ):
     fig, ax = plt.subplots()
@@ -77,7 +78,7 @@ def _shifts_quiver_plot(stage_positions, shifts):
 
 
 def _title_plot(
-    zncc_val: float,
+    zncc_val: float | None,
     radial_correction_k: float | None,
     no_version: bool,
 ):
@@ -118,7 +119,7 @@ def _title_plot(
 
 
 def _overlapping_regions_plot(
-    zncc_values: np.ndarray,
+    zncc_values: NDArray,
     pairs_after_stitching,
     shifts_after_stitching,
     fractions_after_stitching,
@@ -229,22 +230,22 @@ def _overlapping_regions_plot(
 
 def _qc_report(
     path: str,
-    stage_positions: np.ndarray,
-    nccs_before_stitching: np.ndarray | None,
-    shifts_before_stitching: np.ndarray | None,
-    final_shifts: np.ndarray,
-    final_positions: np.ndarray,
+    stage_positions: NDArray,
+    nccs_before_stitching: NDArray | None,
+    shifts_before_stitching: NDArray | None,
+    final_shifts: NDArray,
+    final_positions: NDArray,
     zncc_val: float | None,
     no_version: bool,
-    zncc_values: np.ndarray,
-    pairs_after_stitching: np.ndarray | None,
-    shifts_after_stitching: np.ndarray | None,
-    fractions_after_stitching: np.ndarray | None,
+    zncc_values: NDArray,
+    pairs_after_stitching: NDArray | None,
+    shifts_after_stitching: NDArray | None,
+    fractions_after_stitching: NDArray | None,
     min_overlap_fraction: float,
     tile_shape: tuple[int, int],
     spanning_tree_edges: list[tuple[int, int]] | None,
     pairs: Sequence[tuple[int, int]],
-    valid_edges: np.ndarray[bool] | None,
+    valid_edges: NDArray[bool] | None,
     max_shift: float | None,
     radial_correction_k: float | None,
 ):

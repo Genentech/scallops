@@ -10,7 +10,7 @@ Authors:
 
 import logging
 import warnings
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -33,6 +33,7 @@ from anndata.compat import DaskArray
 from dask.array import from_zarr
 from dask.delayed import Delayed
 from dask.graph_manipulation import bind
+from numpy.typing import NDArray
 from ome_zarr import USE_DASK_ARRAY_KWARGS
 from ome_zarr.axes import KNOWN_AXES
 from ome_zarr.format import Format, FormatV04
@@ -105,7 +106,7 @@ def _create_array_kwargs(fmt: Format | None = None) -> dict[str, Any]:
 def _da_to_zarr_kwargs(fmt: Format | None = None) -> dict[str, Any]:
     if fmt is None:
         fmt = _current_format()
-    zarr_array_kwargs = dict()
+    zarr_array_kwargs: dict[str, Any] = dict()
 
     if USE_DASK_ARRAY_KWARGS:
         if fmt.zarr_format == 2:
@@ -195,7 +196,7 @@ def _omero_channels(channel_names, image_dtype: np.dtype) -> dict:
 
 
 def _create_omero_metadata(
-    coords: DataArrayCoordinates, dims: tuple[Hashable, ...], image_dtype: np.dtype
+    coords: DataArrayCoordinates, dims: Sequence[Hashable] | None, image_dtype: np.dtype
 ) -> dict | None:
     """Create OMERO metadata for a DataArray.
 
@@ -291,9 +292,9 @@ def _fix_attrs(d: dict) -> None:
 def _attrs_axes_scales(
     image_attrs: dict | None,
     coords: DataArrayCoordinates,
-    dims: tuple[Hashable, ...],
+    dims: Sequence[Hashable] | None,
     image_dtype: np.dtype,
-) -> tuple[dict, list[dict] | None, dict[str, float] | None]:
+) -> tuple[dict, list[dict] | None, dict[Hashable, float] | None]:
     """Prepare attributes, axes, and coordinate transformations for Zarr storage.
 
     Processes the attributes, coordinates, and dimensions of a DataArray to generate
@@ -331,7 +332,7 @@ def _attrs_axes_scales(
     physical_pixel_units = image_attrs.pop("physical_pixel_units", None)
 
     axes = None
-    scale_dict = None
+    scale_dict: dict[Hashable, float] | None = None
     if dims is not None:
         axes = []
         scale_dict = dict()
@@ -363,7 +364,7 @@ def _attrs_axes_scales(
 def _write_zarr_image(
     name: str | None,
     root: zarr.Group | str | Path,
-    image: da.Array | np.ndarray | xr.DataArray,
+    image: da.Array | NDArray | xr.DataArray,
     metadata: dict[str, Any] | None = None,
     group: str | None = "images",
     zarr_format: Literal["ome_zarr", "zarr"] = "ome_zarr",
@@ -428,7 +429,7 @@ def _write_zarr_image(
 def _write_zarr_labels(
     name: str,
     root: zarr.Group | str | Path,
-    labels: np.ndarray | xr.DataArray | da.Array,
+    labels: NDArray | xr.DataArray | da.Array,
     metadata: dict[str, Any] | None = None,
     group_metadata: dict[str, Any] | None = None,
     compute: bool = True,
@@ -501,7 +502,7 @@ def _create_zarr_attrs(fmt, grp, dims, image_attrs, axes, scale_dict):
 
 def write_zarr(
     grp: zarr.Group,
-    data: np.ndarray | da.Array | xr.DataArray,
+    data: NDArray | da.Array | xr.DataArray,
     image_attrs: dict | None,
     coords: dict | None,
     dims: list[str] | tuple[Hashable, ...] | None,
@@ -666,7 +667,7 @@ def rechunk(image: xr.DataArray | da.Array) -> xr.DataArray | da.Array:
     return image
 
 
-def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:
+def _read_zarr_attrs(attrs) -> tuple[dict | None, dict, list[str] | None]:
     """Read attributes from Zarr.
 
     This function reads and processes the attributes, coordinates, and dimensions from
@@ -729,7 +730,7 @@ def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:
 
 def _read_ome_zarr_array(
     node: str | Path | zarr.Group,
-) -> tuple[zarr.Array, dict, list[str], dict, dict] | None:
+) -> tuple[zarr.Array, list[str] | None, dict | None, dict] | None:
     """Read an image or label at the given zarr node.
 
     :param node: The zarr group or path to a zarr group
@@ -772,6 +773,7 @@ def _read_ome_zarr_array(
 
     else:  # is non-ome zarr
         logger.warning(f"multiscales not found in attrs for {node} ")
+    return None
 
 
 def read_ome_zarr_array(
@@ -836,7 +838,7 @@ def open_ome_zarr(url: Path | str, mode: str = "a") -> zarr.Group | None:
 
 
 def _read_zarr_experiment(
-    store: StoreLike, dask: bool = False, subset: Callable = None
+    store: StoreLike, dask: bool = False, subset: Callable | None = None
 ):
     """Read an experiment saved using Experiment.save.
 
