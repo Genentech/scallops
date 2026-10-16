@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
+from numpy.typing import NDArray
 
 from scallops.io import get_image_spacing
 from scallops.stitch.utils import min_zncc
@@ -44,8 +45,8 @@ def browse_labels(
 def browse_image_regions(
     image1: xr.DataArray,
     image2: xr.DataArray | None,
-    y_indices: np.ndarray[int],
-    x_indices: np.ndarray[int],
+    y_indices: NDArray[int],
+    x_indices: NDArray[int],
     labels: xr.DataArray | None = None,
     figsize: tuple[int, int] = (10, 10),
 ) -> widgets.Widget:
@@ -73,8 +74,8 @@ def _browse_regions_or_labels(
     image1: xr.DataArray,
     image2: xr.DataArray | None = None,
     labels: xr.DataArray | None = None,
-    y_indices: np.ndarray[int] | None = None,
-    x_indices: np.ndarray[int] | None = None,
+    y_indices: NDArray[int] | None = None,
+    x_indices: NDArray[int] | None = None,
     labels_df: pd.DataFrame | None = None,
     padding: float | None = None,
     figsize: tuple[int, int] = (10, 10),

@@ -16,6 +16,7 @@ from typing import Literal
 import numpy as np
 import skimage
 import xarray as xr
+from numpy.typing import NDArray
 
 from scallops.io import _images2fov
 from scallops.stitch.utils import _init_tiles
@@ -25,10 +26,10 @@ logger = logging.getLogger("scallops")
 
 
 def apply_illumination_correction(
-    img: np.ndarray,
-    ffp: np.ndarray | None = None,
-    dfp: np.ndarray | None = None,
-) -> np.ndarray:
+    img: NDArray,
+    ffp: NDArray | None = None,
+    dfp: NDArray | None = None,
+) -> NDArray:
     """Apply illumination correction.
 
     :param img: Input image

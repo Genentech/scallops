@@ -23,6 +23,7 @@ import xarray as xr
 from centrosome.outline import outline
 from dask import delayed
 from dask_image import ndfilters as dask_ndi
+from numpy.typing import NDArray
 from skimage.filters.thresholding import threshold_li, threshold_otsu
 from skimage.measure._regionprops import RegionProperties
 from skimage.morphology import closing, disk, remove_small_objects
@@ -31,7 +32,7 @@ from skimage.util import map_array
 from xarray import DataArray
 
 
-def close_labels(labels: np.ndarray, disk_radius: int = 3) -> np.ndarray:
+def close_labels(labels: NDArray, disk_radius: int = 3) -> NDArray:
     """Close labels using skimage.morphology.closing.
 
     :param labels: Labels 2d array
@@ -43,7 +44,7 @@ def close_labels(labels: np.ndarray, disk_radius: int = 3) -> np.ndarray:
 
 def threshold_quantile(
     image: xr.DataArray, quantile: float
-) -> tuple[DataArray, np.ndarray]:
+) -> tuple[DataArray, NDArray]:
     """Compute threshold using specified quantile after subtraction of the minimum per channel.
 
     :param image: Image with the dimensions (t,c,z,y,x)
@@ -65,7 +66,7 @@ def image2mask(
     rolling_ball: bool = False,
     sigma: float | None = None,
     depth: int = 30,
-) -> tuple[np.ndarray | da.Array, np.ndarray | da.Array, float | None]:
+) -> tuple[NDArray | da.Array, NDArray | da.Array, float | None]:
     """Convert an image to a mask.
 
     :param image: Image with the dimensions (t, c, y, x)
@@ -153,7 +154,7 @@ def image2mask(
     return smoothed, mask, threshold_val if isinstance(threshold_val, Number) else None
 
 
-def remove_small_objects_std(labels: np.ndarray, rm_small_std: float) -> np.ndarray:
+def remove_small_objects_std(labels: NDArray, rm_small_std: float) -> NDArray:
     """Removes small objects from labels.
 
     :param labels: Array of labels
@@ -192,7 +193,7 @@ def cyto_channel_summary(image: xr.DataArray) -> xr.DataArray:
     return image.squeeze()
 
 
-def remove_boundary_labels(labels: np.ndarray, relabel: bool = False) -> np.ndarray:
+def remove_boundary_labels(labels: NDArray, relabel: bool = False) -> NDArray:
     """Remove labels at image boundaries.
 
     :param labels: An array of labels, which must be non-negative integers.
@@ -208,11 +209,11 @@ def remove_boundary_labels(labels: np.ndarray, relabel: bool = False) -> np.ndar
 
 
 def remove_labels_regionprops(
-    labels: np.ndarray,
+    labels: NDArray,
     regions: list[RegionProperties],
     func: Callable[[RegionProperties], bool],
     relabel: bool = False,
-) -> np.ndarray:
+) -> NDArray:
     """Filter labels using region properties.
 
     :param labels: An array of labels, which must be non-negative integers.
@@ -226,10 +227,10 @@ def remove_labels_regionprops(
 
 
 def remove_masked_regions(
-    labels: np.ndarray,
-    mask: np.ndarray,
+    labels: NDArray,
+    mask: NDArray,
     relabel: bool = False,
-) -> np.ndarray:
+) -> NDArray:
     """Remove labels in masked regions
 
     :param labels: An array of labels, which must be non-negative integers.
@@ -242,7 +243,7 @@ def remove_masked_regions(
     return remove_labels(labels, cut, relabel)
 
 
-def remove_labels(labels: np.ndarray, cut: Sequence[int], relabel: bool = False):
+def remove_labels(labels: NDArray, cut: Sequence[int], relabel: bool = False):
     """Remove labels in `cut`.
 
     :param labels: An array of labels, which must be non-negative integers.
@@ -259,10 +260,10 @@ def remove_labels(labels: np.ndarray, cut: Sequence[int], relabel: bool = False)
 
 
 def identify_tertiary_objects(
-    primary_labels: np.ndarray | da.Array,
-    secondary_labels: np.ndarray | da.Array,
+    primary_labels: NDArray | da.Array,
+    secondary_labels: NDArray | da.Array,
     shrink_primary: bool,
-) -> np.ndarray | da.Array:
+) -> NDArray | da.Array:
     """Identify tertiary objects by subtracting smaller objects from larger objects
 
     :param primary_labels: Primary labels (typically nuclei)
@@ -329,9 +330,7 @@ def _download_model(local_model_dir: Path, remote_model_file_name: str | list[st
                 fs.get(remote_path, str(local_model_file))
 
 
-def _label_pair_counts_chunk(
-    x: np.ndarray, y: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+def _label_pair_counts_chunk(x: NDArray, y: NDArray) -> tuple[NDArray, NDArray]:
     for a in (x, y):
         if a.size == 0 or (
             np.issubdtype(a.dtype, np.unsignedinteger) and a.dtype.itemsize <= 4
@@ -354,7 +353,7 @@ def _label_pair_counts_chunk(
 
 
 def _label_overlap_from_counts(
-    chunk_counts: list[tuple[np.ndarray, np.ndarray]],
+    chunk_counts: list[tuple[NDArray, NDArray]],
     dtype_1: np.dtype,
     dtype_2: np.dtype,
 ) -> pd.DataFrame:
@@ -504,19 +503,19 @@ _MAX_LUT_SIZE = 2**24
 
 
 def _map_labels_block(
-    block: np.ndarray, in_vals: np.ndarray, out_vals: np.ndarray, dtype: np.dtype
-) -> np.ndarray:
+    block: NDArray, in_vals: NDArray, out_vals: NDArray, dtype: np.dtype
+) -> NDArray:
     return map_array(block, in_vals, out_vals, out=np.empty(block.shape, dtype=dtype))
 
 
-def _lut_block(block: np.ndarray, lut: np.ndarray) -> np.ndarray:
+def _lut_block(block: NDArray, lut: NDArray) -> NDArray:
     return lut[block]
 
 
 def relabel_by_assignment(
-    labels: np.ndarray | da.Array,
+    labels: NDArray | da.Array,
     assignment_df: pd.DataFrame,
-) -> np.ndarray | da.Array:
+) -> NDArray | da.Array:
     """Relabel `label_2` (e.g. cells) to match the assigned label in `label_1` (e.g. nuclei).
 
     Each label in `labels` that is assigned to a label in `label_1` is renamed to that
@@ -578,7 +577,7 @@ def relabel_by_assignment(
         ]
     )
     max_label = int(in_vals.max())
-    func: Callable[..., np.ndarray]
+    func: Callable[..., NDArray]
     args: tuple
     if (
         np.issubdtype(labels.dtype, np.integer)
@@ -619,9 +618,7 @@ def _relabel_block(label_field, in_vals, output_type=np.uint32, offset=1):
     return map_array(label_field, in_vals, out_vals, out=out_array)
 
 
-def relabel_sequential(
-    a: np.ndarray, unique_labels: np.ndarray | None = None
-) -> np.ndarray:
+def relabel_sequential(a: NDArray, unique_labels: NDArray | None = None) -> NDArray:
     unique_labels = np.unique(a) if unique_labels is None else unique_labels
     return _relabel_block(a, unique_labels)
 

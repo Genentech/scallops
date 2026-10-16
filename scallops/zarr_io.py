@@ -33,6 +33,7 @@ from anndata.compat import DaskArray
 from dask.array import from_zarr
 from dask.delayed import Delayed
 from dask.graph_manipulation import bind
+from numpy.typing import NDArray
 from ome_zarr import USE_DASK_ARRAY_KWARGS
 from ome_zarr.axes import KNOWN_AXES
 from ome_zarr.format import Format, FormatV04
@@ -363,7 +364,7 @@ def _attrs_axes_scales(
 def _write_zarr_image(
     name: str | None,
     root: zarr.Group | str | Path,
-    image: da.Array | np.ndarray | xr.DataArray,
+    image: da.Array | NDArray | xr.DataArray,
     metadata: dict[str, Any] | None = None,
     group: str | None = "images",
     zarr_format: Literal["ome_zarr", "zarr"] = "ome_zarr",
@@ -428,7 +429,7 @@ def _write_zarr_image(
 def _write_zarr_labels(
     name: str,
     root: zarr.Group | str | Path,
-    labels: np.ndarray | xr.DataArray | da.Array,
+    labels: NDArray | xr.DataArray | da.Array,
     metadata: dict[str, Any] | None = None,
     group_metadata: dict[str, Any] | None = None,
     compute: bool = True,
@@ -501,7 +502,7 @@ def _create_zarr_attrs(fmt, grp, dims, image_attrs, axes, scale_dict):
 
 def write_zarr(
     grp: zarr.Group,
-    data: np.ndarray | da.Array | xr.DataArray,
+    data: NDArray | da.Array | xr.DataArray,
     image_attrs: dict | None,
     coords: dict | None,
     dims: list[str] | tuple[Hashable, ...] | None,

@@ -17,6 +17,7 @@ import shapely
 import xarray as xr
 import zarr
 from dask import delayed
+from numpy.typing import NDArray
 from ome_types import from_xml
 from pint import UndefinedUnitError, UnitRegistry
 from skimage.util import img_as_float, img_as_ubyte, img_as_uint
@@ -63,7 +64,7 @@ def _read_tile(
     z_index: int | Literal["max"] = "max",
     scene_id: None | str | int = None,
     t_index: int | None = None,
-) -> np.ndarray:
+) -> NDArray:
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
     img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     if img.ndim > 2:
@@ -182,7 +183,7 @@ def overlapping_pairs(df: pd.DataFrame, tile_shape: tuple[int, int]) -> pd.DataF
 
 def tile_source_labels(
     df: pd.DataFrame, tile_shape: tuple[int, int]
-) -> np.ndarray[np.int32]:
+) -> NDArray[np.int32]:
     """Create label array indicating tile source. A value of -1 indicate no tile.
 
     :param df: DataFrame containing stitched tile locations
@@ -207,7 +208,7 @@ def tile_source_labels(
 
 def tile_overlap_mask(
     df: pd.DataFrame, tile_shape: tuple[int, int], fill: bool = True
-) -> np.ndarray[np.uint8]:
+) -> NDArray[np.uint8]:
     """Create a binary mask where zeros indicate locations where tiles overlap.
 
     :param df: DataFrame containing stitched tile locations
@@ -315,7 +316,7 @@ def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str)
     return stage_positions
 
 
-def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> np.ndarray | None:
+def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | None:
     # get from image metadata
     if len(filepaths) == 1:
         img = _create_image(filepaths[0])
@@ -360,7 +361,7 @@ def _get_ome(image: bioio.BioImage):
     return None
 
 
-def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> np.ndarray | None:
+def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> NDArray | None:
     ome_metadata = _get_ome(image)
     physical_size_y_unit = None
     physical_size_x_unit = None
@@ -441,7 +442,7 @@ def _pixel_size_from_araceli_json(json_path: str):
 
 def get_pixel_size(
     filepaths: Sequence[str], stage_positions_path: str | None
-) -> np.ndarray:
+) -> NDArray:
     if stage_positions_path is not None and stage_positions_path.lower().endswith(
         ".json"
     ):
@@ -527,7 +528,7 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
     return np.array(values)
 
 
-def min_zncc(a: np.ndarray, b: np.ndarray | None = None) -> float:
+def min_zncc(a: NDArray, b: NDArray | None = None) -> float:
     """Compute z-normalized cross-correlation.
 
     :param a: First image of dimensions (y,x) or (t,y,x) if second image is None
@@ -543,7 +544,7 @@ def min_zncc(a: np.ndarray, b: np.ndarray | None = None) -> float:
     return value
 
 
-def n_labels(a: np.ndarray) -> np.ndarray:
+def n_labels(a: NDArray) -> NDArray:
     """Count number of unique labels in an image.
 
     :param a: Label image
@@ -559,8 +560,8 @@ def create_composite(
     channel: int | None = None,
     radial_correction_k: float | None = None,
     crop_width: tuple[int, int] | None = None,
-    ffp: np.ndarray | None = None,
-    dfp: np.ndarray | None = None,
+    ffp: NDArray | None = None,
+    dfp: NDArray | None = None,
 ) -> tuple[xr.DataArray, xr.DataArray]:
     """Use stitching coordinates to create a composite image.
 
@@ -888,7 +889,7 @@ def _filter_filepaths(filepaths, fileattrs, metadata_fields, metadata_values):
     return new_filepaths, new_fileattrs
 
 
-def _crop_image(img: np.ndarray, crop_width: tuple[int, int] | None) -> np.ndarray:
+def _crop_image(img: NDArray, crop_width: tuple[int, int] | None) -> NDArray:
     if crop_width is None:
         return img
 

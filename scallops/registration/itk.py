@@ -28,6 +28,7 @@ import numpy as np
 import xarray as xr
 import zarr
 from natsort import natsorted
+from numpy.typing import NDArray
 
 from scallops.io import _download_file, _get_fs_protocol, get_image_spacing
 from scallops.registration.landmarks import _get_translation, find_landmarks
@@ -224,7 +225,7 @@ def _load_itk_parameters_from_dir(directory: str) -> itk.ParameterObject:
 
 
 def _array_to_itk(
-    image: xr.DataArray | np.ndarray, image_spacing: None | tuple[float, float] = None
+    image: xr.DataArray | NDArray, image_spacing: None | tuple[float, float] = None
 ) -> itk.Image:
     """Convert a NumPy or xarray image to an ITK image with specified spacing.
 
@@ -510,7 +511,7 @@ def _write_itk_point_set(
             f.write(f"{x[i]} {y[i]}\n")
 
 
-def _read_itk_transformix_point_set_output(path: str) -> tuple[np.ndarray, np.ndarray]:
+def _read_itk_transformix_point_set_output(path: str) -> tuple[NDArray, NDArray]:
     # Point	0	; InputIndex = [ 1 1 ]	; InputPoint = [ 1.000000 1.000000 ]	; OutputIndexFixed = [ 26 51 ]	; OutputPoint = [ 25.712395 51.221179 ]	; Deformation = [ 24.712395 50.221180 ]	; OutputIndexMoving = [ 26 51 ]
     y = []
     x = []
@@ -551,7 +552,7 @@ def _itk_align_reference_time(
     attrs_keep: Sequence[str] | None = ("stitch_coords",),
     parameter_object_across_channels: itk.ParameterObject | None = None,
     write_callback: Callable[
-        [np.ndarray | zarr.Array, tuple[int, ...] | int, np.ndarray], None
+        [NDArray | zarr.Array, tuple[int, ...] | int, NDArray], None
     ]
     | None = None,
 ):
@@ -861,10 +862,10 @@ def _itk_align_reference_time(
 
 
 def _itk_align_landmarks(
-    fixed_y: np.ndarray,
-    fixed_x: np.ndarray,
-    moving_y: np.ndarray,
-    moving_x: np.ndarray,
+    fixed_y: NDArray,
+    fixed_x: NDArray,
+    moving_y: NDArray,
+    moving_x: NDArray,
     transform: Literal["affine", "rigid"] = "affine",
 ):
     if transform == "affine":
@@ -898,18 +899,18 @@ def _itk_align_landmarks(
 
 
 def itk_align(
-    fixed_image: xr.DataArray | np.ndarray,
-    moving_image: xr.DataArray | np.ndarray,
+    fixed_image: xr.DataArray | NDArray,
+    moving_image: xr.DataArray | NDArray,
     parameter_object: itk.ParameterObject,
     fixed_image_spacing: None | tuple[float, float] = None,
     moving_image_spacing: None | tuple[float, float] = None,
     output_directory: None | str = None,
-    fixed_mask: xr.DataArray | np.ndarray[np.uint8] | da.Array | None = None,
-    moving_mask: xr.DataArray | np.ndarray[np.uint8] | da.Array | None = None,
+    fixed_mask: xr.DataArray | NDArray[np.uint8] | da.Array | None = None,
+    moving_mask: xr.DataArray | NDArray[np.uint8] | da.Array | None = None,
     initial_transform: str | None = None,
-    landmarks: dict[str, np.ndarray[float]] | None = None,
-    additional_fixed_image: xr.DataArray | np.ndarray | None = None,
-    additional_moving_image: xr.DataArray | np.ndarray | None = None,
+    landmarks: dict[str, NDArray[float]] | None = None,
+    additional_fixed_image: xr.DataArray | NDArray | None = None,
+    additional_moving_image: xr.DataArray | NDArray | None = None,
 ) -> itk.ElastixRegistrationMethod:
     """Align a moving image to a fixed image using ITK registration.
 
@@ -1106,7 +1107,7 @@ def itk_transform_labels(
     image: xr.DataArray,
     transform_parameter_object: itk.ParameterObject | str | Sequence[dict],
     image_spacing: None | tuple[float, float] = None,
-) -> np.ndarray:
+) -> NDArray:
     """Apply an ITK transform to image labels.
 
     :param image: The input image represented as an xarray DataArray.
@@ -1227,7 +1228,7 @@ def _itk_transform_image(
     image: xr.DataArray,
     transform_parameter_object: itk.ParameterObject | str | Sequence[dict],
     image_spacing: None | tuple[float, float],
-    result: np.ndarray | zarr.Array,
+    result: NDArray | zarr.Array,
 ):
     """Apply ITK-based transformation to each (t, c, z) slice individually.
 

@@ -27,10 +27,10 @@ def intensity_distribution_radial(
     scaled: bool = True,
     maximum_radius: int = 100,
     channel_names: Sequence[str] | None = None,
-    label_image: np.ndarray = None,
-    intensity_image: np.ndarray = None,
+    label_image: NDArray = None,
+    intensity_image: NDArray = None,
     **kwargs,
-) -> dict[str, np.ndarray]:
+) -> dict[str, NDArray]:
     # reimplemented from cp_measure to compute information about labels once rather than once per channel
     return get_radial_distribution(
         labels=label_image,
@@ -298,10 +298,10 @@ def intensity_distribution_zernike(
     c: Sequence[int],
     zernike_degree: int = 9,
     channel_names: Sequence[str] | None = None,
-    label_image: np.ndarray = None,
-    intensity_image: np.ndarray = None,
+    label_image: NDArray = None,
+    intensity_image: NDArray = None,
     **kwargs,
-) -> dict[str, np.ndarray]:
+) -> dict[str, NDArray]:
     zernike_indexes = centrosome.zernike.get_zernike_indexes(zernike_degree + 1)
 
     # Intensity-weighted moment sums via the shared helper (pixels as the per-pixel weight);

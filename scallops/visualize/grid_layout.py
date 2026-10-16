@@ -42,7 +42,7 @@ _col_to_row[SNAKE_BY_COLS_UP_RIGHT] = SNAKE_BY_ROWS_RIGHT_UP
 _col_to_row[SNAKE_BY_COLS_UP_LEFT] = SNAKE_BY_ROWS_LEFT_UP
 
 
-def _grid_indices(layout: int, shape: tuple[int, int]) -> np.ndarray:
+def _grid_indices(layout: int, shape: tuple[int, int]) -> NDArray:
     """Generates a 2-d array in which the value at i,j contains the index of the row major array
     layout.
 
@@ -136,7 +136,7 @@ def _ij(layout: int, row: int, col: int, nrows: int, ncols: int) -> tuple[int, i
 @cache
 def _well_grid(
     shape: tuple, grid_sequence: tuple[int, ...], layout: int = SNAKE_BY_ROWS_RIGHT_DOWN
-) -> np.ndarray:
+) -> NDArray:
     """Generates a 2D array with the tile number (instead of indices), and -1 in the locations were
     not tiles were captured.
 

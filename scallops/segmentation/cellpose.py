@@ -22,6 +22,7 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 from filelock import FileLock
+from numpy.typing import NDArray
 
 from scallops.dask_relabeling.relabel import image2labels
 from scallops.segmentation.util import (
@@ -39,11 +40,11 @@ except PackageNotFoundError:
 
 
 def _process_block(
-    x: np.ndarray,
+    x: NDArray,
     model: Any,
     diameter: float,
     eval_kwargs: dict[str, Any],
-) -> np.ndarray:
+) -> NDArray:
     """Process a block of the input image using the provided model.
 
     :param x: Input image block as a NumPy array.
@@ -68,7 +69,7 @@ def _cellpose(
     diameter: None | float = None,
     chunks: None | tuple[int, int] = None,
     **kwargs: Any,
-) -> np.ndarray | da.Array:
+) -> NDArray | da.Array:
     """Perform segmentation using the Cellpose model on the input image.
 
     :param image: Input image as an `xarray.DataArray`.
@@ -140,7 +141,7 @@ def segment_nuclei_cellpose(
     diameter: float | None = None,
     chunks: tuple[int, int] | None = None,
     **kwargs: Any,
-) -> np.ndarray | da.Array:
+) -> NDArray | da.Array:
     """Segment nuclei using cellpose.
 
     :param image: Input image with dimensions (t, c, z, y, x).
@@ -188,7 +189,7 @@ def segment_cells_cellpose(
     diameter: float | None = None,
     chunks: tuple[int, int] | None = None,
     **kwargs: Any,
-) -> np.ndarray | da.Array:
+) -> NDArray | da.Array:
     """Segment cells using cellpose.
 
     :param image: Input image with dimensions (t, c, z, y, x).

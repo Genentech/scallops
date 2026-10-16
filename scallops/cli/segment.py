@@ -27,6 +27,7 @@ import xarray as xr
 import zarr
 from dask.bag import from_sequence
 from fsspec.implementations.local import LocalFileSystem
+from numpy.typing import NDArray
 from skimage.measure import regionprops
 from zarr import Group
 
@@ -86,7 +87,7 @@ def _intensity_filter(r, vmin, vmax):
 
 
 def _filter_labels(
-    labels: np.ndarray | da.Array,
+    labels: NDArray | da.Array,
     intensity_image: xr.DataArray,
     intensity_channel: int | None,
     min_area: float | None,

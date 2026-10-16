@@ -18,6 +18,7 @@ import pandas as pd
 import skimage.util
 import zarr
 from dask import delayed
+from numpy.typing import NDArray
 
 from scallops.features.constants import _features, _features_rewrite
 from scallops.features.spots import _download_ufish_model
@@ -43,14 +44,14 @@ def _img_from_zarrs(intensity_image: Sequence[zarr.Array], sl: tuple[slice, ...]
 
 
 def _feature_block(
-    label_image: np.ndarray | zarr.Array,
-    intensity_image: np.ndarray | Sequence[zarr.Array | np.ndarray] | None,
+    label_image: NDArray | zarr.Array,
+    intensity_image: NDArray | Sequence[zarr.Array | NDArray] | None,
     funcs: list[Callable],
-    labels: np.ndarray,
+    labels: NDArray,
     channel_names: Sequence[str],
     sl: tuple[slice, ...],
     normalize: bool = True,
-    label_filter: np.ndarray | None = None,
+    label_filter: NDArray | None = None,
 ):
     """Compute features for a block of labeled regions.
 
@@ -122,8 +123,8 @@ def _create_dd_metadata(
 
 
 def _rewrite_channels(
-    funcs, all_required_channels: np.ndarray, channel_names: list[str]
-) -> np.ndarray:
+    funcs, all_required_channels: NDArray, channel_names: list[str]
+) -> NDArray:
     channel_names_subset = []
     channel_map = dict()
     for i in range(len(all_required_channels)):
@@ -425,7 +426,7 @@ def normalize_features(features: Iterable[str]) -> set[str]:
 def _create_funcs(
     features: Iterable[str],
     n_channels: int,
-) -> tuple[list[partial], np.ndarray[int]]:
+) -> tuple[list[partial], NDArray[int]]:
     """Create feature functionss.
 
     :param features: Iterable of feature names to be processed.
@@ -587,7 +588,7 @@ def _get_params(
             value = annotation(value)
             params[parameter_name] = value
         else:
-            if annotation not in (np.ndarray, Sequence[str]):
+            if annotation not in (np.ndarray, NDArray, Sequence[str]):
                 raise ValueError(
                     f"{parameter_name} not supported for {name} for type {annotation}"
                 )

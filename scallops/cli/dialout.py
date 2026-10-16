@@ -29,6 +29,7 @@ import seaborn as sns
 from dask.bag import from_sequence
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from numpy.typing import NDArray
 from sklearn.metrics import pairwise_distances_argmin_min
 
 from scallops.cli.util import SubParsers, _get_cli_logger
@@ -52,7 +53,7 @@ def bwa_index(fasta: str):
 
 def hamming_distance(
     query_df: pd.DataFrame, design_df: pd.DataFrame
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray]:
     """
     Compute Hamming distance between sequences in the query DataFrame and the design
     DataFrame.

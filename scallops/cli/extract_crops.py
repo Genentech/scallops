@@ -2,8 +2,8 @@ from typing import Literal
 
 import dask.array as da
 import fsspec
-import numpy as np
 from array_api_compat import get_namespace
+from numpy.typing import NDArray
 from skimage.util import img_as_ubyte
 from zarr import Group
 
@@ -25,7 +25,7 @@ from scallops.io import (
 logger = _get_cli_logger()
 
 
-def _norm_block(image: np.ndarray, percentiles) -> np.ndarray:
+def _norm_block(image: NDArray, percentiles) -> NDArray:
     xp = get_namespace(image)
     percentiles = xp.percentile(image, percentiles, axis=(1, 2), keepdims=True)
     image = (image - percentiles[0]) / (percentiles[1] - percentiles[0])

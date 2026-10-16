@@ -23,11 +23,11 @@ from typing import Any, Literal, TypeAlias
 import dask
 import dask.array as da
 import fsspec
-import numpy as np
 import xarray as xr
 import zarr
 from dask.delayed import Delayed
 from distributed import Client
+from numpy.typing import NDArray
 
 from scallops.io import save_ome_tiff
 from scallops.utils import _cpu_count
@@ -202,7 +202,7 @@ def _group_src_attrs(
 def _write_image(
     name: str,
     root: zarr.Group | str,
-    image: np.ndarray | xr.DataArray | da.Array,
+    image: NDArray | xr.DataArray | da.Array,
     output_format: str,
     file_separator: str = "/",
     metadata: dict | None = None,

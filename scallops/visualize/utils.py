@@ -14,12 +14,13 @@ import numpy as np
 from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
 from matplotlib.colors import Colormap, ListedColormap
+from numpy.typing import NDArray
 from pydantic import ValidationError
 from xarray import DataArray
 
 
 def _get_image_crop_slice(
-    indices: np.ndarray, image_size: int, crop_size: int, discard_small_crops: bool
+    indices: NDArray, image_size: int, crop_size: int, discard_small_crops: bool
 ) -> slice | None:
     """Create slice for label indices.
 
@@ -75,7 +76,7 @@ def _wrap_cols(ncol: int, col_wrap: int) -> tuple[int, int]:
     return ncol, nrow
 
 
-def create_color_map_for_rgb(rgb: np.ndarray | list[float]) -> ListedColormap:
+def create_color_map_for_rgb(rgb: NDArray | list[float]) -> ListedColormap:
     """Create a colormap from an RGB array of length 3.
 
     :param rgb: An RGB array or list with three float values (one per channel).
@@ -181,7 +182,7 @@ def channel_thresholds(
     return _thresholds
 
 
-def _coords(exp, key: str) -> tuple[None | str, np.ndarray]:
+def _coords(exp, key: str) -> tuple[None | str, NDArray]:
     """Extract well and tile coordinates from an experiment image metadata.
 
     Attempts to parse a key to extract the well and tile, and then retrieves the
@@ -227,7 +228,7 @@ def _infer_positions(exp, max_workers: int = -1) -> dict[str, list[int]]:
         )
     )
 
-    def _get_structure(coords_: list[tuple[str, np.ndarray]]) -> tuple[str, list[int]]:
+    def _get_structure(coords_: list[tuple[str, NDArray]]) -> tuple[str, list[int]]:
         """Compute the tile structure for a given well.
 
         :param coords_: List of tuples containing well identifiers and their

@@ -1,5 +1,6 @@
 import numpy
 from cp_measure.multimask.measureobjectneighbors import D_EXPAND
+from numpy.typing import NDArray
 
 from scallops.features.cp_measure_wrapper import cp_neighbors
 from scallops.segmentation.util import relabel_sequential
@@ -8,12 +9,12 @@ from scallops.segmentation.util import relabel_sequential
 # Identical to cp_measure but removes labels that are not part of dask block so neighbors for labels that span
 # multiple blocks are not output more than once"
 def neighbors(
-    unique_labels_original: numpy.ndarray,
-    label_image_original: numpy.ndarray,
+    unique_labels_original: NDArray,
+    label_image_original: NDArray,
     distance: int = 5,
     distance_method: str = D_EXPAND,
     **kwargs,
-) -> dict[str, numpy.ndarray]:
+) -> dict[str, NDArray]:
     unique_labels = numpy.unique(label_image_original)
     unique_labels = unique_labels[unique_labels > 0]
     label_filter = numpy.isin(unique_labels, unique_labels_original, assume_unique=True)

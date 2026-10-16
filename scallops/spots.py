@@ -28,6 +28,7 @@ from dask import delayed
 from dask.array.core import slices_from_chunks
 from dask_image import ndfilters as dask_ndi
 from dask_image.ndfilters._gaussian import _get_border, _get_sigmas
+from numpy.typing import NDArray
 from scipy import ndimage as ndi
 from scipy.spatial import KDTree
 
@@ -205,7 +206,7 @@ def _peak_thresholds_from_reads(
 
 
 def _peaks_to_df(
-    peaks: np.ndarray | da.Array, sigma_list: np.ndarray
+    peaks: NDArray | da.Array, sigma_list: NDArray
 ) -> pd.DataFrame | dd.DataFrame:
     """Converts peak data into a pandas or dask DataFrame.
 
@@ -271,9 +272,9 @@ def _peaks_to_df(
 
 
 def _find_peaks(
-    std_array: xr.DataArray | np.ndarray | da.Array,
+    std_array: xr.DataArray | NDArray | da.Array,
     n: int = 5,
-) -> np.ndarray | da.Array:
+) -> NDArray | da.Array:
     """Identifies peaks in a given standard deviation array using a neighborhood filter.
 
     :param std_array: Array containing standard deviation values.
@@ -334,7 +335,7 @@ def _merge_close_points_kdtree(points, prob, threshold=5):
 
 
 def _spot_detect_chunk(
-    image: np.ndarray,
+    image: NDArray,
     offset: tuple[int, int],
     n: int,
     load_model_func: Callable,
@@ -503,8 +504,8 @@ def find_peaks(std_array: xr.DataArray, n: int = 5) -> pd.DataFrame | dd.DataFra
 
 
 def chastity(
-    x: np.ndarray | da.Array,
-) -> tuple[np.ndarray | da.Array, np.ndarray | da.Array]:
+    x: NDArray | da.Array,
+) -> tuple[NDArray | da.Array, NDArray | da.Array]:
     """Computes the chastity, which is defined as the ratio of the brightest base intensity divided
     by the sum of the brightest and second brightest base intensities after rescaling the intensity
     to between 0 and 1.
@@ -544,7 +545,7 @@ def chastity(
 
 
 def transform_log(
-    data: xr.DataArray, sigma: float | np.ndarray = 1, truncate: float = 4.0, **kwargs
+    data: xr.DataArray, sigma: float | NDArray = 1, truncate: float = 4.0, **kwargs
 ) -> xr.DataArray:
     """Apply Laplacian-of-Gaussian filter.
 
@@ -681,13 +682,13 @@ def transform_log(
 
 
 def _normalize_mi_ma(
-    x: np.ndarray | da.Array,
-    mi: np.ndarray | da.Array,
-    ma: np.ndarray | da.Array,
+    x: NDArray | da.Array,
+    mi: NDArray | da.Array,
+    ma: NDArray | da.Array,
     clip: bool = False,
     eps: float = 1e-20,
     dtype: np.dtype = np.float32,
-) -> np.ndarray | da.Array:
+) -> NDArray | da.Array:
     if dtype is not None:
         x = x.astype(dtype, copy=False)
         mi = mi.astype(dtype, copy=False)
@@ -702,13 +703,13 @@ def _normalize_mi_ma(
 
 
 def normalize_base_intensities(
-    image: np.ndarray | da.Array,
+    image: NDArray | da.Array,
     pmin: float | None = 1,
     pmax: float | None = 99.8,
     eps: float = 1e-20,
     clip: bool = False,
     dtype: np.dtype = np.float32,
-) -> da.Array | np.ndarray:
+) -> da.Array | NDArray:
     """Normalize base intensities for every time and channel separately.
     :param image: Array with dimensions (t,c,y,x)
     :param pmin: Minimum percentile for normalization.

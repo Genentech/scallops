@@ -22,6 +22,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 import zarr
+from numpy.typing import NDArray
 from skimage.util import img_as_float
 from xarray import DataArray
 
@@ -254,7 +255,7 @@ def pooled_iss(
 
 def experiment_napari(
     experiment: Experiment,
-    labels: Experiment | dict[str, np.ndarray | DataArray] | None = None,
+    labels: Experiment | dict[str, NDArray | DataArray] | None = None,
     title_attribute: str = "common_src",
     viewer: "napari.Viewer | None" = None,
     **kwargs,
@@ -329,7 +330,7 @@ def experiment_napari(
 
 def imnapari(
     image: DataArray | dict[str, DataArray] | None,
-    labels: None | np.ndarray | DataArray | dict[str, np.ndarray | DataArray] = None,
+    labels: None | NDArray | DataArray | dict[str, NDArray | DataArray] = None,
     points: pd.DataFrame | None = None,
     title_attribute: str = "common_src",
     viewer: "napari.Viewer | None" = None,

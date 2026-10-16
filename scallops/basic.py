@@ -19,6 +19,7 @@ import numpy as np
 from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from numpy.typing import NDArray
 from skimage.transform import resize as skimage_resize
 from xarray import DataArray
 
@@ -38,7 +39,7 @@ except ModuleNotFoundError:
 
 def _load_image(
     path: str, z: int | str, working_size: int | None
-) -> tuple[np.ndarray, tuple[int, int]]:
+) -> tuple[NDArray, tuple[int, int]]:
     """Load and preprocess an image from the given path.
 
     This function reads an image, selects the appropriate z-plane or computes the
@@ -204,9 +205,7 @@ def basic_illumination_correction(
         )
 
 
-def _basic_single_channel(
-    image: np.ndarray | DataArray, **basic_kwargs: dict
-) -> object:
+def _basic_single_channel(image: NDArray | DataArray, **basic_kwargs: dict) -> object:
     """Apply the BaSiC algorithm to fit illumination correction on a single-channel image.
 
     This function initializes the BaSiC algorithm with the provided keyword arguments,
@@ -238,9 +237,9 @@ def _basic_single_channel(
 
 
 def basic_qc_plot(
-    flatfield: np.ndarray,
-    darkfield: np.ndarray | None = None,
-    baseline: np.ndarray | None = None,
+    flatfield: NDArray,
+    darkfield: NDArray | None = None,
+    baseline: NDArray | None = None,
 ) -> None:
     """Generate a quality control (QC) plot for BaSiC illumination correction.
 

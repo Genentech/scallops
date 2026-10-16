@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import pandas as pd
 from filelock import FileLock
+from numpy.typing import NDArray
 
 from scallops.segmentation.util import _download_model
 
@@ -48,16 +49,16 @@ def spot_count(
     c: Sequence[int],
     intensity_threshold=0.06,
     channel_names: Sequence[str] | None = None,
-    unique_labels: np.ndarray = None,
-    label_image: np.ndarray = None,
-    intensity_image: np.ndarray = None,
+    unique_labels: NDArray = None,
+    label_image: NDArray = None,
+    intensity_image: NDArray = None,
     model: Optional["ufish.api.UFish"] = None,
     connectivity=2,
     laplace_process=True,
     axes="yx",
     return_spots_coords=False,
     **kwargs,
-) -> dict[str, np.ndarray] | tuple[dict[str, np.ndarray], pd.DataFrame]:
+) -> dict[str, NDArray] | tuple[dict[str, NDArray], pd.DataFrame]:
     """Determine the number of FISH spots within labeled regions for specified channels.
 
     This function identifies FISH spots in microscopy images by enhancing the image using
@@ -89,7 +90,7 @@ def spot_count(
     :return: A dictionary where keys are formatted as "Spots_Count_{ChannelName}" and values
         are 1D numpy arrays containing the spot counts for each unique label.
     """
-    results: dict[str, np.ndarray] = {}
+    results: dict[str, NDArray] = {}
     # Initialize and load weights for the UFish model if not provided.
     if model is None:
         model = _load_ufish_model()

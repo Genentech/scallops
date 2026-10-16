@@ -15,6 +15,7 @@ import numpy as np
 import xarray as xr
 from matplotlib import pyplot as plt
 from matplotlib.colors import Colormap, ListedColormap
+from numpy.typing import NDArray
 from scipy import ndimage as ndi
 
 from scallops.experiment.elements import Experiment
@@ -100,9 +101,9 @@ def _get_vmin_max(d, j, sel):
 
 
 def _imcomposite_image(
-    image: xr.DataArray | np.ndarray | da.Array | None = None,
-    vmin: float | xr.DataArray | np.ndarray | da.Array | None = None,
-    vmax: float | xr.DataArray | np.ndarray | da.Array | None = None,
+    image: xr.DataArray | NDArray | da.Array | None = None,
+    vmin: float | xr.DataArray | NDArray | da.Array | None = None,
+    vmax: float | xr.DataArray | NDArray | da.Array | None = None,
     cmap: None | list[str | Colormap] | str | Colormap = None,
     dim: None | str = "c",
     rgb: bool = False,
@@ -188,7 +189,7 @@ def _imcomposite_image(
 
 
 def _imcomposite_labels(
-    labels: xr.DataArray | np.ndarray | None = None,
+    labels: xr.DataArray | NDArray | None = None,
     labels_cmap: str | ListedColormap | None = None,
     labels_alpha: float = 1,
 ):
@@ -205,7 +206,7 @@ def _imcomposite_labels(
 
 
 def _get_contours(
-    labels: np.ndarray | xr.DataArray, thickness: int, background_label: int
+    labels: NDArray | xr.DataArray, thickness: int, background_label: int
 ):
     """From napari.napari/layers/labels/_labels_utils.py"""
     if isinstance(labels, xr.DataArray):
@@ -296,14 +297,14 @@ def _imcomposite_image_labels(
 
 
 def imcomposite(
-    image: xr.DataArray | np.ndarray | da.Array | None = None,
-    labels: xr.DataArray | np.ndarray | da.Array | None = None,
-    vmin: float | xr.DataArray | np.ndarray | da.Array | None = None,
-    vmax: float | xr.DataArray | np.ndarray | da.Array | None = None,
+    image: xr.DataArray | NDArray | da.Array | None = None,
+    labels: xr.DataArray | NDArray | da.Array | None = None,
+    vmin: float | xr.DataArray | NDArray | da.Array | None = None,
+    vmax: float | xr.DataArray | NDArray | da.Array | None = None,
     cmap: Sequence[str | Colormap] | str | Colormap | None = None,
     labels_cmap: str | ListedColormap | None = None,
     labels_alpha: float = 0.5,
-    labels_contour: bool | np.ndarray | xr.DataArray | da.Array = False,
+    labels_contour: bool | NDArray | xr.DataArray | da.Array = False,
     labels_contour_cmap: str | ListedColormap | None = None,
     labels_contour_thickness: int = 1,
     labels_contour_alpha: float = 1,
@@ -314,7 +315,7 @@ def imcomposite(
     figsize: tuple[int, int] | None = None,
     ax: plt.Axes | Sequence[plt.Axes] | None = None,
     rgb: bool = False,
-    mask: np.ndarray | xr.DataArray | da.Array = None,
+    mask: NDArray | xr.DataArray | da.Array = None,
 ) -> plt.Axes | Sequence[plt.Axes]:
     """Plot an image composite using additive blending.
 
@@ -484,7 +485,7 @@ def experiment_composite(
     max_cols: int = 3,
     figsize: tuple[int, int] = (5, 5),
     **kwargs,
-) -> tuple[plt.Figure, plt.Axes | np.ndarray[plt.Axes]]:
+) -> tuple[plt.Figure, plt.Axes | NDArray[plt.Axes]]:
     """Plot an experiment (one image per axis) composite using additive blending.
 
     :param figsize: Figure size
@@ -515,12 +516,12 @@ def experiment_composite(
 
 def label_montage(
     image: xr.DataArray,
-    labels: np.ndarray,
+    labels: NDArray,
     labels_include: list[int],
     col_wrap: int = 14,
     crop_size: tuple[int, int] = (24, 24),
     **kwargs: Any,
-) -> np.ndarray:
+) -> NDArray:
     """Plot a label montage.
 
     :param image: XArray representing image to plot

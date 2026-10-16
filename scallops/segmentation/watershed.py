@@ -16,6 +16,7 @@ import dask.array as da
 import numpy as np
 import scipy.ndimage as ndi
 import xarray as xr
+from numpy.typing import NDArray
 from skimage.feature import peak_local_max
 from skimage.filters import gaussian
 from skimage.filters.rank import mean as skmean
@@ -33,7 +34,7 @@ from scallops.segmentation.util import (
 )
 
 
-def _binarize(image: np.ndarray, radius: int, min_size: float) -> np.ndarray:
+def _binarize(image: NDArray, radius: int, min_size: float) -> NDArray:
     """Apply local mean threshold to find outlines. Filter out background shapes. Otsu threshold on
     list of region mean intensities will remove a few dark cells. Could use shape to improve the
     filtering.
@@ -65,12 +66,12 @@ def _scoring(regions: regionprops, score_func: Callable, threshold: float) -> Se
 
 
 def _filter_by_region(
-    labeled: np.ndarray,
+    labeled: NDArray,
     score: Callable,
     threshold: float,
-    intensity_image: np.ndarray = None,
+    intensity_image: NDArray = None,
     relabel: bool = True,
-) -> np.ndarray:
+) -> NDArray:
     """Apply a filter to label image. The `score` function takes a single region as input and
     returns a score. If scores are boolean, regions where the score is false are removed. Otherwise,
     the function `threshold` is applied to the list of scores to determine the minimum score at
@@ -103,7 +104,7 @@ def segment_nuclei_watershed(
     area_max: float = 400,
     smooth: float = 1.35,
     radius: int = 15,
-) -> np.ndarray:
+) -> NDArray:
     """Segment nuclei using watershed algorithm.
 
     Uses local mean filtering to find cell foreground from aligned but unfiltered data, then filters
@@ -183,7 +184,7 @@ def _process_block(mask, nuclei, image, closing_radius, at_least_nuclei, method)
 
 def segment_cells_watershed(
     image: xr.DataArray,
-    nuclei: np.ndarray,
+    nuclei: NDArray,
     threshold: Literal["Li", "quantile", "Otsu", "Local"] | float = "Li",
     cyto_channel: int | Sequence[int] | None = None,
     threshold_correction_factor: float = 1,
@@ -198,7 +199,7 @@ def segment_cells_watershed(
     depth: int = 30,
     watershed_method: Literal["binary", "distance", "intensity"] = "distance",
     at_least_nuclei: bool = True,
-) -> tuple[np.ndarray, float | None]:
+) -> tuple[NDArray, float | None]:
     """Segment cells using watershed algorithm, matching cell labels to nuclei labels.
 
     :param image: Image with the dimensions (t, c, z, y, x)

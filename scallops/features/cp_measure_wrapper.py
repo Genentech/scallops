@@ -7,7 +7,6 @@ Authors:
 from collections.abc import Sequence
 from typing import Any
 
-import numpy as np
 from cp_measure.core.measurecolocalization import (
     get_correlation_costes,
     get_correlation_manders_fold,
@@ -28,10 +27,11 @@ from cp_measure.core.measureobjectsizeshape import (
 )
 from cp_measure.core.measuretexture import get_texture
 from cp_measure.multimask.measureobjectneighbors import D_EXPAND, measureobjectneighbors
+from numpy.typing import NDArray
 
 
 def cp_neighbors(
-    label_image: np.ndarray,
+    label_image: NDArray,
     distance: int = 5,
     distance_method: str = D_EXPAND,
     **kwargs,
@@ -42,8 +42,8 @@ def cp_neighbors(
 def cp_granularity(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -60,18 +60,18 @@ def cp_colocalization(
     c1: int,
     c2: int,
     channel_names: Sequence[str],
-    unique_labels: np.ndarray,
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
-) -> dict[str, np.ndarray]:
+    unique_labels: NDArray,
+    label_image: NDArray,
+    intensity_image: NDArray,
+) -> dict[str, NDArray]:
     pass
 
 
 def _cp_colocalization_pairs(
     c: list[tuple[int, int]],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     all_results = {}
@@ -102,8 +102,8 @@ def _cp_colocalization_pairs(
 def cp_intensity_distribution_radial(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -120,8 +120,8 @@ def cp_intensity_distribution_radial(
 def cp_intensity_distribution_zernike(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -138,8 +138,8 @@ def cp_intensity_distribution_zernike(
 def cp_intensity(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     offset: tuple[int, int] = (0, 0),
     **kwargs,
 ) -> dict[str, Any]:
@@ -167,8 +167,8 @@ def _texture_rename(key, channel_names, c):
 def cp_texture(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -196,7 +196,7 @@ size_shape_skip = {
 
 
 def cp_size_shape(
-    label_image: np.ndarray,
+    label_image: NDArray,
     remove_objects: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
@@ -213,7 +213,7 @@ def cp_size_shape(
     return results
 
 
-def _zernike(label_image: np.ndarray) -> dict[str, Any]:
+def _zernike(label_image: NDArray) -> dict[str, Any]:
     results_ = get_zernike(label_image, None)
     results = {}
     for key in results_:
@@ -221,7 +221,7 @@ def _zernike(label_image: np.ndarray) -> dict[str, Any]:
     return results
 
 
-def _feret(label_image: np.ndarray) -> dict[str, Any]:
+def _feret(label_image: NDArray) -> dict[str, Any]:
     results_ = get_feret(label_image, None)
     results = {}
     for key in results_:

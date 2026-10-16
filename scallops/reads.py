@@ -22,6 +22,7 @@ import xarray as xr
 from dask import delayed
 from dask.utils import cached_cumsum
 from numpy import ndarray
+from numpy.typing import NDArray
 from scipy.special import softmax
 from skimage.segmentation import expand_labels
 from skimage.util import img_as_float
@@ -34,7 +35,7 @@ logger = logging.getLogger("scallops")
 
 
 def _hamming_distance(
-    whitelist_barcodes: np.ndarray, read_barcodes: np.ndarray
+    whitelist_barcodes: NDArray, read_barcodes: NDArray
 ) -> pd.DataFrame:
     """Computes the Hamming distance between read barcodes and a whitelist of barcodes.
 
@@ -134,7 +135,7 @@ def summarize_base_call_mismatches(
     return df
 
 
-def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
+def quality_softmax(x: NDArray, min_error: float = 1e-6) -> NDArray:
     """Computes the phred quality score of transformed data using the softmax function.
 
     :param x: Array with transformed data (read, cycle, channel).
@@ -153,7 +154,7 @@ def channel_crosstalk_matrix(
     method: Literal["median", "li_and_speed"] = "median",
     by_t: bool = False,
     **kwargs,
-) -> ndarray | da.Array | dict[str, list[str] | np.ndarray]:
+) -> ndarray | da.Array | dict[str, list[str] | NDArray]:
     """Estimate and correct differences in channel intensity and spectral overlap among sequencing
     channels using either median or Li and Speed method.
 
@@ -230,7 +231,7 @@ def channel_crosstalk_matrix(
     return method(a.data.reshape(-1, a.sizes["c"]), **kwargs)
 
 
-def _crosstalk_median_ratio_per_chunk(x: np.ndarray) -> np.ndarray:
+def _crosstalk_median_ratio_per_chunk(x: NDArray) -> NDArray:
     """Compute the crosstalk median ratio for a given chunk of data.
 
     :param x: Input 2 or 3d array representing the chunk data.
@@ -241,7 +242,7 @@ def _crosstalk_median_ratio_per_chunk(x: np.ndarray) -> np.ndarray:
     return _crosstalk_median_ratio(x).reshape(1, 1, nchannels * nchannels)
 
 
-def _correct_channel_crosstalk_median(a: np.ndarray) -> np.ndarray:
+def _correct_channel_crosstalk_median(a: NDArray) -> NDArray:
     """Estimate and correct differences in channel intensity and spectral overlap among
     sequencing channels. For each channel, find points where the largest signal is from
     that channel. Use the median of these points to define new basis vectors.
@@ -256,7 +257,7 @@ def _correct_channel_crosstalk_median(a: np.ndarray) -> np.ndarray:
 
 
 def apply_channel_crosstalk_matrix(
-    a: xr.DataArray, w: np.ndarray | da.Array, dtype=np.float32
+    a: xr.DataArray, w: NDArray | da.Array, dtype=np.float32
 ) -> xr.DataArray:
     """Applies a linear transformation w * a = y, where y is the corrected data.
 
@@ -311,7 +312,7 @@ def apply_channel_crosstalk_matrix(
     return xr.DataArray(data=vals, coords=coords, dims=dims, attrs=attrs)
 
 
-def _crosstalk_median_ratio(a: np.ndarray) -> np.ndarray:
+def _crosstalk_median_ratio(a: NDArray) -> NDArray:
     """Compute the median ratio of the input array to quantify crosstalk between channels.
 
     :param a: Input 2D array where each row represents data for a specific observation, and each
@@ -501,7 +502,7 @@ def correct_mismatches(
 
 
 def _decode_max_chunk(
-    spots: np.ndarray,
+    spots: NDArray,
     bases: list[str],
     meta_df: pd.DataFrame,
     offset: slice | None,
@@ -611,7 +612,7 @@ def decode_max(
 def peaks_to_bases(
     maxed: xr.DataArray,
     peaks: pd.DataFrame | dd.DataFrame,
-    labels: np.ndarray | xr.DataArray | None = None,
+    labels: NDArray | xr.DataArray | None = None,
     labels_only: bool = True,
     bases: Sequence[str] | None = ("G", "T", "A", "C"),
 ) -> xr.DataArray:
@@ -822,7 +823,7 @@ def base_counts(reads_df: pd.DataFrame, normalize: bool = False) -> pd.DataFrame
 
 def peaks_to_spot_labels(
     peaks: dd.DataFrame | pd.DataFrame, shape: tuple[int, int]
-) -> np.ndarray:
+) -> NDArray:
     """Convert peaks to spot labels.
 
     :param peaks: Peaks data frame which has been filtered to retain only peaks of interest
@@ -921,11 +922,11 @@ def annotated_spots(reads_df, shape, bases_order, expand_width=3):
 
 
 def query_spots(
-    spots_labels: np.ndarray,
-    calls: np.ndarray | pd.DataFrame,
+    spots_labels: NDArray,
+    calls: NDArray | pd.DataFrame,
     query: Sequence[str],
     expand_width: int = 1,
-) -> np.ndarray:
+) -> NDArray:
     """Returns expanded (optional) labels that match a set of query barcodes.
 
     :param spots_labels: An array of spot labels to be queried.
@@ -956,7 +957,7 @@ def query_spots(
 
 
 def li_speed_slope(
-    x: np.ndarray, y: np.ndarray, quantile_range: tuple[float, float] = (0.6, 0.999)
+    x: NDArray, y: NDArray, quantile_range: tuple[float, float] = (0.6, 0.999)
 ) -> Tuple[pd.DataFrame, float]:
     """Computes the slope using the Li and Speed method for crosstalk correction.
 
@@ -1006,7 +1007,7 @@ def _correct_channel_crosstalk_li_and_speed(
     slope_threshold: float = 0.05,
     quantile_range: tuple[float, float] = (0.6, 0.999),
     normalize_w: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray]:
     """Estimate and correct differences in channel intensity and spectral overlap among sequencing
     channels using the method in Li and Speed.
 

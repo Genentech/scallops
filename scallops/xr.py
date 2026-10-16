@@ -12,8 +12,8 @@ import itertools
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Union
 
-import numpy as np
 import xarray as xr
+from numpy.typing import NDArray
 
 
 def _z_projection(
@@ -92,7 +92,7 @@ def _get_dims(
 def apply_data_array(
     array: xr.DataArray,
     dims: list[str],
-    func: Callable[..., np.ndarray | xr.DataArray],
+    func: Callable[..., NDArray | xr.DataArray],
     missing_dims: Literal["ignore", "error"] = "ignore",
     **kwargs: Any,
 ) -> xr.DataArray:

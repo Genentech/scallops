@@ -11,11 +11,12 @@ import numpy as np
 import pandas as pd
 import zarr
 from dask import delayed
+from numpy.typing import NDArray
 
 
 def _find_bounding_boxes(
-    label_image: np.ndarray | zarr.Array,
-    intensity_image: np.ndarray | zarr.Array | None,
+    label_image: NDArray | zarr.Array,
+    intensity_image: NDArray | zarr.Array | None,
     sl: tuple[slice, ...],
     store_label_image: bool = False,
 ) -> pd.DataFrame:
@@ -254,7 +255,7 @@ def _agg_objects(grouped) -> dd.DataFrame:
     return objects_df
 
 
-def find_objects(label_image: da.Array | np.ndarray) -> dd.DataFrame | pd.DataFrame:
+def find_objects(label_image: da.Array | NDArray) -> dd.DataFrame | pd.DataFrame:
     """Find objects in a labeled array.
 
     :param label_image: Image labels noted by integers.

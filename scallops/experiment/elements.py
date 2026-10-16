@@ -6,8 +6,8 @@ data. The experiments are saved in the Zarr format, leveraging Dask for handling
 
 from collections.abc import Mapping
 
-import numpy as np
 import xarray as xr
+from numpy.typing import NDArray
 from zarr.storage import StoreLike
 
 from scallops.experiment.abc import _LazyLoadData
@@ -96,7 +96,7 @@ class Experiment:
     def __init__(
         self,
         images: Mapping[str, xr.DataArray] | None = None,
-        labels: Mapping[str, np.ndarray | xr.DataArray] | None = None,
+        labels: Mapping[str, NDArray | xr.DataArray] | None = None,
     ):
         """Create an experiment.
 
@@ -118,7 +118,7 @@ class Experiment:
         return self._images
 
     @property
-    def labels(self) -> Mapping[str, np.ndarray | xr.DataArray]:
+    def labels(self) -> Mapping[str, NDArray | xr.DataArray]:
         """The labels dictionary."""
         return self._labels
 

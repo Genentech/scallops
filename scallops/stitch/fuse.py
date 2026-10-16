@@ -14,6 +14,7 @@ import shapely
 import zarr
 from dask import delayed
 from dask.diagnostics import ProgressBar
+from numpy.typing import NDArray
 from skimage.transform import SimilarityTransform, warp
 from skimage.util import img_as_float
 from sklearn.cluster import AgglomerativeClustering
@@ -42,8 +43,8 @@ def _fuse(
     output_channels: Sequence[int] | None = None,
     channel_names: Sequence[str] | None = None,
     output_metadata: dict[str, Any] | None = None,
-    ffp: np.ndarray | None = None,
-    dfp: np.ndarray | None = None,
+    ffp: NDArray | None = None,
+    dfp: NDArray | None = None,
     crop_width: tuple[int, int] | None = None,
     radial_correction_k: float | None = None,
     chunk_size: tuple[int, int] | None = None,
@@ -385,7 +386,7 @@ def _fuse(
 
 
 def _register_across_channels(
-    img: np.ndarray,
+    img: NDArray,
     channel_reference: int | None = None,
     channel_cross_correlation_upsample: int = 1,
     channel_window: int = 1,
@@ -434,19 +435,19 @@ def _fuse_image(
     y: int,
     x: int,
     target_shape: tuple[int, int],
-    target: np.ndarray,
+    target: NDArray,
     target_dtype: np.dtype,
     radial_correction_k: float | None = None,
     output_channels: Sequence[int] | int | None = None,
     crop_width: tuple[int, int] | None = None,
-    dfp: np.ndarray | None = None,
-    ffp: np.ndarray | None = None,
+    dfp: NDArray | None = None,
+    ffp: NDArray | None = None,
     z_index: int | Literal["max"] = "max",
     locks: Sequence[threading.Lock] | None = None,
     blend: Literal["none", "linear"] = "none",
     intersecting_boxes: Sequence[tuple[int, int, int, int]] | None = None,
-    weights: np.ndarray | None = None,
-    weights_sum: np.ndarray | None = None,
+    weights: NDArray | None = None,
+    weights_sum: NDArray | None = None,
     scene_id: int | None = None,
     channel_reference: int | None = None,
     channel_cross_correlation_upsample: int = 1,
@@ -593,7 +594,7 @@ def _dist_from_tile_edge(i: int, j: int, tile_width: int, tile_height: int) -> i
     return hor * vert
 
 
-def _tile_blending_weights(tile_shape: tuple[int, int]) -> np.ndarray:
+def _tile_blending_weights(tile_shape: tuple[int, int]) -> NDArray:
     weights = np.zeros(tile_shape)
     for i in range(tile_shape[0]):
         for j in range(tile_shape[1]):

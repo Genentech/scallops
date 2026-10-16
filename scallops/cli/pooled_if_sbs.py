@@ -28,6 +28,7 @@ import xarray as xr
 import zarr
 from dask.delayed import Delayed, delayed
 from matplotlib import pyplot as plt
+from numpy.typing import NDArray
 from skimage.segmentation import expand_labels
 
 from scallops.cli.util import (
@@ -149,7 +150,7 @@ def _read_qc_stats(df_reads: pd.DataFrame, df_labels: pd.DataFrame) -> dict:
 def _peaks_to_bases(
     maxed: xr.DataArray,
     peaks: pd.DataFrame,
-    labels: np.ndarray,
+    labels: NDArray,
     labels_only: bool,
     bases: list[str],
 ) -> xr.DataArray:

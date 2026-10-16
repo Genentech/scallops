@@ -31,6 +31,7 @@ from dask.array.overlap import ensure_minimum_chunksize
 from dask.system import CPU_COUNT
 from decorator import decorator
 from kneed import KneeLocator
+from numpy.typing import NDArray
 from skimage import restoration
 from skimage.feature import hog
 from skimage.measure import label
@@ -47,7 +48,7 @@ BlockFunc = Callable[..., pd.DataFrame]
 
 
 def _broadcast_block(
-    block: np.ndarray,
+    block: NDArray,
     broadcast_axes: Sequence[int],
     starts: Sequence[int],
     stops: Sequence[int],
@@ -55,7 +56,7 @@ def _broadcast_block(
     left_pads: Sequence[int],
     right_pads: Sequence[int],
     boundary: Mapping[int, str | int],
-) -> np.ndarray:
+) -> NDArray:
     """Stretch a block's size-1 broadcast axes to the size of the overlapped block.
 
     :param block: Block with size 1 and no overlap along ``broadcast_axes``.
@@ -93,7 +94,7 @@ def _broadcast_block(
 
 def _block_wrapper(
     func: BlockFunc,
-    blocks: Sequence[np.ndarray],
+    blocks: Sequence[NDArray],
     broadcast_axes: Sequence[Sequence[int]],
     chunk_location,
     boundary: Mapping[int, str | int],
@@ -352,7 +353,7 @@ def is_dask_distributed():
     return "distributed" in dask.config.config
 
 
-def high_pass_filter(image: np.ndarray, sigma: float) -> np.ndarray:
+def high_pass_filter(image: NDArray, sigma: float) -> NDArray:
     """High pass filter typically used to remove background.
 
     :param image: Input image to filter.
@@ -365,7 +366,7 @@ def high_pass_filter(image: np.ndarray, sigma: float) -> np.ndarray:
     return highpass
 
 
-def gaussian_kernel(size: tuple[int, ...] = (3, 3), sigma: float = 0.5) -> np.ndarray:
+def gaussian_kernel(size: tuple[int, ...] = (3, 3), sigma: float = 0.5) -> NDArray:
     """Returns a gaussian kernel of specified size and standard deviation.
 
     The kernel is normalized to one.
@@ -385,8 +386,8 @@ def gaussian_kernel(size: tuple[int, ...] = (3, 3), sigma: float = 0.5) -> np.nd
 
 @decorator
 def applyIJ(
-    f: Callable, arr: Union[np.ndarray, DataArray], *args: Any, **kwargs: Any
-) -> np.ndarray:
+    f: Callable, arr: Union[NDArray, DataArray], *args: Any, **kwargs: Any
+) -> NDArray:
     """Apply a function that expects 2D input to the trailing two dimensions of an array. The
     function must output an array whose shape depends only on the input shape.
 
@@ -406,9 +407,7 @@ def applyIJ(
     return np.array(arr_).reshape(output_shape)
 
 
-def match_size(
-    image: np.ndarray, target: np.ndarray, order: Optional[str] = None
-) -> np.ndarray:
+def match_size(image: NDArray, target: NDArray, order: Optional[str] = None) -> NDArray:
     """Resize image to target without changing data range or type.
 
     :param image: Array with image data.
@@ -476,7 +475,7 @@ def mlcs(strings: Sequence[str]):
         result.append(letter)
 
 
-def id_well_edge(data_: np.ndarray) -> np.ndarray:
+def id_well_edge(data_: NDArray) -> NDArray:
     """ID the bright edge of a well and return the mask of it.
 
     :param data_: Image array with potentially an edge of a well to be identified.
@@ -507,7 +506,7 @@ def id_well_edge(data_: np.ndarray) -> np.ndarray:
     return new_mask
 
 
-def rm_edge(dt, rm_bkgr=True) -> tuple[np.ndarray, np.ndarray]:
+def rm_edge(dt, rm_bkgr=True) -> tuple[NDArray, NDArray]:
     """Remove the well edge from an image.
 
     :param dt: Image array with potentially an edge of a well to be removed.
@@ -522,7 +521,7 @@ def rm_edge(dt, rm_bkgr=True) -> tuple[np.ndarray, np.ndarray]:
     return d, new_mask
 
 
-def id_edge_hog(stack: np.ndarray) -> np.ndarray:
+def id_edge_hog(stack: NDArray) -> NDArray:
     """Identify the edge of a well and return its mask using Histogram of Oriented Gradients (HOG).
     This is faster, but coarser than the :func:`id_well_edge`. It is is also *less* prone to
     overcorrecting.
@@ -557,7 +556,7 @@ def id_edge_hog(stack: np.ndarray) -> np.ndarray:
     return mask
 
 
-def curate_segmentation(seg_data: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def curate_segmentation(seg_data: NDArray, mask: NDArray) -> NDArray:
     """Given segmentation data with potential edge of a well, curate the segmentation given the well
     mask.
 
@@ -760,17 +759,17 @@ def forceTCZYX(array: DataArray, requires_dims: str = "tczyx") -> DataArray:
 
 
 def _block_full(
-    a: np.ndarray,
-    b: np.ndarray | None = None,
+    a: NDArray,
+    b: NDArray | None = None,
     *,
-    f: Callable[[np.ndarray, np.ndarray | None], float],
+    f: Callable[[NDArray, NDArray | None], float],
     ndim: int,
-) -> np.ndarray:
+) -> NDArray:
     return np.full((1,) * ndim, f(a, b))
 
 
 def dask_chunk_stats(
-    f: Callable[[np.ndarray, np.ndarray | None], float],
+    f: Callable[[NDArray, NDArray | None], float],
     a: da.Array,
     b: da.Array | None = None,
 ) -> da.Array:

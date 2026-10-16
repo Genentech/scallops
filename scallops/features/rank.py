@@ -8,6 +8,7 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 from dask.delayed import delayed
+from numpy.typing import NDArray
 from statsmodels.stats.multitest import multipletests
 
 from scallops.features.util import _slice_anndata
@@ -131,8 +132,8 @@ def rank_features(
 
 
 def _diff_exp(
-    values: np.ndarray,
-    indices: Mapping[str, np.ndarray],
+    values: NDArray,
+    indices: Mapping[str, NDArray],
     method: Literal["welch_t", "student_t", "mannwhitney"],
     reference_value: str | None,
     feature: str,

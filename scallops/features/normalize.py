@@ -13,6 +13,7 @@ from anndata._core.index import _normalize_index
 from array_api_compat import get_namespace
 from dask.utils import parse_bytes
 from flox.lib import _issorted
+from numpy.typing import NDArray
 from scipy.stats import median_abs_deviation
 from sklearn.neighbors import NearestNeighbors
 
@@ -506,10 +507,10 @@ def _local_moments_gather(
 
 
 def _local_moments_sparse(
-    x: np.ndarray,
-    indices: np.ndarray,
-    means: np.ndarray | None,
-    stds: np.ndarray | None,
+    x: NDArray,
+    indices: NDArray,
+    means: NDArray | None,
+    stds: NDArray | None,
     tile: int,
     progress: bool | str = False,
 ) -> None:
@@ -630,11 +631,11 @@ def _local_z_batched(
 
 
 def _nearest_neighbors_indices(
-    reference: np.ndarray,
-    query: np.ndarray,
+    reference: NDArray,
+    query: NDArray,
     n_neighbors: int = 100,
     metric: str = "minkowski",
-) -> np.ndarray:
+) -> NDArray:
     if n_neighbors > len(reference):
         raise ValueError(f"n_neighbors: {n_neighbors}, n points: {len(reference)}")
     # shape is reference.shape[0], n_neighbors
@@ -649,7 +650,7 @@ def _nearest_neighbors_indices(
     return indices
 
 
-def _symmetric_matrix_power(a: np.ndarray, power: float) -> np.ndarray:
+def _symmetric_matrix_power(a: NDArray, power: float) -> NDArray:
     """Fractional power of a symmetric positive-definite matrix.
 
     :func:`scipy.linalg.fractional_matrix_power` accepts any matrix and pays for it
@@ -664,8 +665,8 @@ def _symmetric_matrix_power(a: np.ndarray, power: float) -> np.ndarray:
 
 
 def _apply_affine(
-    x: np.ndarray, codes: np.ndarray, maps: np.ndarray, offsets: np.ndarray
-) -> np.ndarray:
+    x: NDArray, codes: NDArray, maps: NDArray, offsets: NDArray
+) -> NDArray:
     """``x @ maps[g] + offsets[g]``, with `g` the group each row of `x` belongs to."""
     codes = codes.ravel()
     out = np.empty((x.shape[0], maps.shape[2]), dtype=maps.dtype)

@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from dask import delayed
+from numpy.typing import NDArray
 from scipy.ndimage import center_of_mass
 from skimage.feature import match_template as sk_match_template
 from skimage.transform import resize
@@ -149,15 +150,15 @@ def _match_template_physical_space_inputs(
 
 @delayed
 def _match_template_slice_delayed(
-    template: np.ndarray,
+    template: NDArray,
     template_start: tuple[float, float],
     template_y: tuple[int, int],
     template_x: tuple[int, int],
-    image: np.ndarray,
+    image: NDArray,
     image_spacing: tuple[float, float],
-    shape_ratio: np.ndarray,
-    template_labels: np.ndarray | None,
-    image_labels: np.ndarray | None,
+    shape_ratio: NDArray,
+    template_labels: NDArray | None,
+    image_labels: NDArray | None,
     y_start: float,
     x_start: float,
 ) -> pd.DataFrame:
@@ -199,15 +200,15 @@ def _match_template_slice_delayed(
 
 
 def _match_template_slice(
-    template: np.ndarray,
+    template: NDArray,
     template_start: tuple[float, float],
     template_y: tuple[int, int],
     template_x: tuple[int, int],
-    image: np.ndarray,
+    image: NDArray,
     image_spacing: tuple[float, float],
-    shape_ratio: np.ndarray,
-    template_labels: np.ndarray | None,
-    image_labels: np.ndarray | None,
+    shape_ratio: NDArray,
+    template_labels: NDArray | None,
+    image_labels: NDArray | None,
 ) -> dict | None:
     new_shape = (np.array(template.shape) * shape_ratio).astype(int)
     if new_shape[0] < image.shape[0] or new_shape[1] < image.shape[1]:
@@ -361,7 +362,7 @@ def _center_of_mass(
     image_spacing: tuple[float, float],
     min_quantile: float | None = 0.25,
     max_quantile: float | None = 0.75,
-) -> np.ndarray:
+) -> NDArray:
     values = image.values
     if min_quantile is not None or max_quantile is not None:
         q = []

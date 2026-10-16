@@ -4,6 +4,7 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 from centrosome.cpmorphology import fill_labeled_holes
+from numpy.typing import NDArray
 
 from scallops.segmentation import _propagate
 from scallops.segmentation.util import (
@@ -14,13 +15,13 @@ from scallops.segmentation.util import (
 
 
 def _process_block(
-    image: np.ndarray,
-    nuclei: np.ndarray,
-    mask: np.ndarray,
+    image: NDArray,
+    nuclei: NDArray,
+    mask: NDArray,
     weight: float,
     fill_holes: bool,
     closing_radius: int | None,
-) -> np.ndarray:
+) -> NDArray:
     """Process a block of the input image for label propagation.
 
     This function applies label propagation using the provided nuclei, mask, and weight, followed by
@@ -53,7 +54,7 @@ def _process_block(
 
 def segment_cells_propagation(
     image: xr.DataArray,
-    nuclei: np.ndarray,
+    nuclei: NDArray,
     threshold: Literal["Li", "Otsu", "Local"] | float = "Li",
     cyto_channel: int | Sequence[int] | None = None,
     threshold_correction_factor: float = 1,
@@ -67,7 +68,7 @@ def segment_cells_propagation(
     fill_holes: bool = True,
     chunks: tuple[int, int] | None = None,
     depth: int = 30,
-) -> tuple[np.ndarray, float | np.ndarray | None]:
+) -> tuple[NDArray, float | NDArray | None]:
     """Segment cells using propagation algorithm, matching cell labels to nuclei labels.
 
     :param image: Image with the dimensions (t, c, z, y, x)
