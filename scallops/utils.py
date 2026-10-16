@@ -762,8 +762,9 @@ def forceTCZYX(array: DataArray, requires_dims: str = "tczyx") -> DataArray:
 def _block_full(
     a: np.ndarray,
     b: np.ndarray | None = None,
-    f: Callable[[np.ndarray, np.ndarray | None], float] | None = None,
-    ndim: int | None = None,
+    *,
+    f: Callable[[np.ndarray, np.ndarray | None], float],
+    ndim: int,
 ) -> np.ndarray:
     return np.full((1,) * ndim, f(a, b))
 
@@ -865,7 +866,7 @@ def _list_images_wdl(
 
     first = True
     subset_ids = []
-    for g, file_list, metadata in exp_gen:
+    for _, file_list, metadata in exp_gen:
         subset_ids.append(metadata["id"])
 
         if first:

@@ -32,8 +32,7 @@ from scallops.segmentation.util import (
 
 logger = logging.getLogger("scallops")
 try:
-    cellpose_version = version("cellpose")
-    cellpose_version = int(cellpose_version[0])
+    cellpose_version = int(version("cellpose").split(".")[0])
 
 except PackageNotFoundError:
     logger.info("Please install cellpose")
@@ -41,7 +40,7 @@ except PackageNotFoundError:
 
 def _process_block(
     x: np.ndarray,
-    model: object,
+    model: Any,
     diameter: float,
     eval_kwargs: dict[str, Any],
 ) -> np.ndarray:
@@ -63,12 +62,12 @@ def _process_block(
 def _cellpose(
     image: xr.DataArray,
     channels: tuple[int, int],
-    model: object,
+    model: Any,
     nuclei_channel: int = 0,
     cyto_channel: None | int | Sequence[int] = None,
     diameter: None | float = None,
     chunks: None | tuple[int, int] = None,
-    **kwargs: dict[str, Any],
+    **kwargs: Any,
 ) -> np.ndarray | da.Array:
     """Perform segmentation using the Cellpose model on the input image.
 

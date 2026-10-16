@@ -22,7 +22,7 @@ from scallops.visualize.utils import _figsize
 def pairwise_channel_scatter_plot(
     bases: DataArray | pd.DataFrame,
     plot_func: Callable[..., None] | None = None,
-    q: tuple[float, ...] | None = None,
+    q: tuple[float, float] | None = None,
     col_wrap: int = 3,
     intensity_column: str = "intensity",
     **plot_args,
@@ -122,7 +122,7 @@ def pairwise_channel_scatter_plot(
     _axes = axes
     axes = axes.ravel()
     max_slopes = []
-    max_slope = 0
+    max_slope: float = 0
     k = 0
 
     def default_plot_func(x, y, i, j, ax, **plot_kwargs):

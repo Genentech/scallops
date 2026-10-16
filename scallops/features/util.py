@@ -166,7 +166,7 @@ def _slice_anndata(
 
 def _update_coords(
     df: pd.DataFrame,
-    df_coords: bool | str | Sequence[str],
+    df_coords: bool | str | Sequence[str] | None,
     coord_name: str,
     coords_keys: set,
     xarray_coords: dict,
@@ -174,7 +174,7 @@ def _update_coords(
     if df_coords:
         xarray_coords[coord_name] = df.index.to_numpy(copy=False)
         if isinstance(df_coords, str):
-            columns = [df_coords]
+            columns: Sequence[str] = [df_coords]
         elif isinstance(df_coords, Sequence):
             columns = df_coords
         else:
@@ -191,8 +191,8 @@ def _update_coords(
 
 def _anndata_to_xr(
     data: anndata.AnnData,
-    obs_coords: bool | str | Sequence[str] = True,
-    var_coords: bool | str | Sequence[str] = False,
+    obs_coords: bool | str | Sequence[str] | None = True,
+    var_coords: bool | str | Sequence[str] | None = False,
 ) -> xr.DataArray:
     coords: dict[str, Any] = dict()
     coords_keys = {"obs", "var"}

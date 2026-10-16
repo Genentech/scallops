@@ -31,6 +31,7 @@ from matplotlib import pyplot as plt
 from skimage.segmentation import expand_labels
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -180,12 +181,12 @@ def _peaks_to_bases(
 
 
 def spot_detection_pipeline(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: ImageTuple,
     iss_channels: list[int],
     output: str,
     max_filter_width: int,
     sigma_log: float | list[float],
-    z_index: int | str,
+    z_index: int | Literal["max"],
     save_keys: Sequence[str] = ("max", "log", "std", "peaks"),
     output_image_format: str = "zarr",
     cycles: None | list[int] = None,

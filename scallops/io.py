@@ -315,7 +315,7 @@ def _download_file(fs, path, suffix=None, tmp_dir: str | None = None):
 def _read_image(
     path: str | zarr.Group | Path,
     dask: bool = False,
-    scene_id: str | None = None,
+    scene_id: str | int | None = None,
     tmp_dir: str | None = None,
     **kwargs,
 ) -> xr.DataArray:
@@ -711,7 +711,7 @@ def to_image_montage(
     image_shape[-1] *= image_arrange
     image_shape = tuple(image_shape)
     axes = "".join(image0.dims).upper()
-    metadata = {"axes": axes}
+    metadata: dict[str, Any] = {"axes": axes}
     image_args = dict(
         shape=image_shape, dtype=dtype, photometric="minisblack", tile=(1024, 1024)
     )
@@ -937,7 +937,7 @@ def _extract_crops(
     label_image: np.ndarray | zarr.Array | None,
     df: pd.DataFrame,
     query: str,
-    sl: tuple[slice],
+    sl: tuple[slice, ...],
     output_dir: str,
     label_col: str,
     output_format: Literal["tiff", "npy"],
@@ -1273,11 +1273,11 @@ def _combine_attrs(variable_attrs: Sequence[Dict], context: str | None = None) -
 
 
 def _images2fov(
-    file_list: list[str] | zarr.Group,
-    attrs: dict[str, str | list[str]] | None,
+    file_list: Sequence[str | zarr.Group] | zarr.Group,
+    attrs: dict[str, Any] | None,
     dask: bool = False,
-    scene_id: str | None = None,
-    concat_dims: tuple[str, ...] | None = ("z", "c", "t"),
+    scene_id: str | int | None = None,
+    concat_dims: Sequence[str] | None = ("z", "c", "t"),
     tmp_dir: str | None = None,
     **kwargs,
 ) -> xr.DataArray | list[xr.DataArray]:
@@ -1530,7 +1530,7 @@ def _create_subset_function(
         # Example usage of _create_subset_function
         subset_func = _create_subset_function(["channel1", "channel2"])
     """
-    if isinstance(subset, Callable):
+    if callable(subset):
         return subset
     funcs = None
 
@@ -1985,7 +1985,7 @@ def _set_up_experiment(
         message.append(f" in {', '.join(image_paths)}.")
         raise ValueError("".join(message))
 
-    scene_ids = [
+    scene_ids: Sequence[str | None] = [
         None
     ]  # get scene ids from 1st file in 1st group (assume they are all the same)
 
@@ -2105,7 +2105,7 @@ def _set_up_experiment(
             yield group, file_list, metadata
 
 
-def _join(*paths: Sequence[str], sep: str):
+def _join(*paths: str, sep: str):
     """Join paths using the specified separator.
 
     :param paths: List of paths
@@ -2133,8 +2133,8 @@ class _LazyLoadImage(_LazyLoadData):
         Attributes containing metadata for the images.
     :param dask: bool
         Whether to use Dask for lazy loading of the images.
-    :param scene_id: str
-        The ID of the specific scene to read from a multi-scene file.
+    :param scene_id: str | int | None
+        The ID or index of the specific scene to read from a multi-scene file.
     :param kwargs: dict
         Additional arguments passed to the image processing functions.
 
@@ -2155,7 +2155,7 @@ class _LazyLoadImage(_LazyLoadData):
         file_list: list[str] | zarr.Group,
         attrs: Mapping[Any, Any],
         dask: bool,
-        scene_id: str,
+        scene_id: str | int | None,
         **kwargs,
     ):
         super().__init__()
@@ -2188,7 +2188,7 @@ class _LazyLoadImage(_LazyLoadData):
         )
 
 
-def _load_experiment(experiment: Experiment) -> None:
+def _load_experiment(experiment: Experiment) -> Experiment:
     """Loads all images from an experiment into memory in parallel.
 
     :param experiment: Experiment
@@ -2247,17 +2247,17 @@ DEFAULT_LUTS = GRAY, GREEN, RED, MAGENTA, CYAN, GRAY, GRAY
 
 
 def _infer_luts_display_ranges(
-    data: np.ndarray, luts: list | None, display_ranges: list | None
-) -> tuple[list, list]:
+    data: np.ndarray, luts: Sequence | None, display_ranges: list | None
+) -> tuple[Sequence, list]:
     """Infers the lookup tables (LUTs) and display ranges for a given image data.
 
     :param data: np.ndarray
         The image data for which to infer LUTs and display ranges.
-    :param luts: list | None
+    :param luts: Sequence | None
         The list of LUTs to use, or None to infer default LUTs.
     :param display_ranges: list | None
         The display ranges to use, or None to infer ranges from the data.
-    :return: tuple[list, list]
+    :return: tuple[Sequence, list]
         A tuple containing the inferred LUTs and display ranges.
 
     :example:
@@ -2292,7 +2292,7 @@ def _infer_luts_display_ranges(
 def _imagej_description(
     leading_shape: tuple[int, ...],
     leading_axes: str,
-    contrast: list | None = None,
+    contrast: Sequence | None = None,
     display_mode: str = "composite",
 ) -> str:
     """Generates an ImageJ description string based on the provided image properties.
@@ -2301,7 +2301,7 @@ def _imagej_description(
         The shape of the leading dimensions of the image.
     :param leading_axes: str
         The labels of the leading axes (e.g., "XYZCT").
-    :param contrast: list | None, optional
+    :param contrast: Sequence | None, optional
         The contrast settings for each channel (default is None).
     :param display_mode: str, optional
         The display mode for ImageJ (default is "composite").
@@ -2376,7 +2376,7 @@ def _ij_tag_50839(luts, display_ranges):
 def save_stack_imagej(
     uri: str,
     data: np.ndarray,
-    luts: tuple[Sequence[int], ...] | None = None,
+    luts: Sequence[Sequence[int]] | None = None,
     display_ranges: tuple[tuple[int, int], ...] | None = None,
     resolution: float = 1.0,
     compress: Literal[0, 1] = 0,
@@ -2556,9 +2556,7 @@ def create_multiscene_hyperstack(
         # Create the multi-scene hyperstack image
         scallops.io.create_multiscene_hyperstack(output_uri, images)
     """
-    assert all([isinstance(x, xr.DataArray) for x in images.values]), (
-        "All arrays must be xarrays"
-    )
+
     assert set(output_order) <= set("sctzyx"), (
         "output_order can only contain s, c, tm z, y, and x"
     )

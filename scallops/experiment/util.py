@@ -7,7 +7,7 @@ Authors:
     - The SCALLOPS development team.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import Literal
 
 import dask.bag as db
@@ -19,7 +19,7 @@ from scallops.experiment.elements import Experiment
 def map_images(
     experiment: Experiment | Sequence[Experiment],
     func: Callable,
-    keys: Sequence[str] | None = None,
+    keys: Collection[str] | None = None,
     output_type: Literal["images", "labels"] = "images",
     **kwargs,
 ):
@@ -57,7 +57,7 @@ def map_images(
 
 
 def _concat_images(
-    experiment: Experiment, image_keys: Sequence[str] | None = None
+    experiment: Experiment, image_keys: Collection[str] | None = None
 ) -> xr.DataArray:
     """Concatenate images.
 

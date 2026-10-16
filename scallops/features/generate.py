@@ -9,7 +9,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from functools import partial
 from inspect import Parameter, signature
-from typing import Iterable, Literal
+from typing import Any, Iterable, Literal
 
 import dask.array as da
 import dask.dataframe as dd
@@ -26,7 +26,7 @@ from scallops.segmentation.util import relabel_sequential
 logger = logging.getLogger("scallops")
 
 
-def _img_from_zarrs(intensity_image: Sequence[zarr.Array], sl: tuple[slice]):
+def _img_from_zarrs(intensity_image: Sequence[zarr.Array], sl: tuple[slice, ...]):
     images = []
     for image in intensity_image:
         image = image[..., sl[0], sl[1]]
@@ -48,7 +48,7 @@ def _feature_block(
     funcs: list[Callable],
     labels: np.ndarray,
     channel_names: Sequence[str],
-    sl: tuple[slice],
+    sl: tuple[slice, ...],
     normalize: bool = True,
     label_filter: np.ndarray | None = None,
 ):
@@ -137,7 +137,7 @@ def _rewrite_channels(
                 if isinstance(val, int):
                     f.keywords[key] = channel_map[val]
                 elif isinstance(val, (list, tuple)):
-                    new_val = []
+                    new_val: list[int | tuple[int, int]] = []
 
                     for v in val:
                         if isinstance(v, int):
@@ -424,8 +424,8 @@ def normalize_features(features: Iterable[str]) -> set[str]:
 
 def _create_funcs(
     features: Iterable[str],
-    n_channels: Sequence[str],
-) -> tuple[list[Callable], np.ndarray[int]]:
+    n_channels: int,
+) -> tuple[list[partial], np.ndarray[int]]:
     """Create feature functionss.
 
     :param features: Iterable of feature names to be processed.
@@ -460,11 +460,11 @@ def _create_funcs(
                 for val in params["c"]:
                     channels.add(val)
             all_required_channels.update(channels)
-            new_params = dict(c=tuple(sorted(channels)))
+            new_params: dict[str, Any] = dict(c=tuple(sorted(channels)))
             for p in params_list[0]:
                 if p != "c":
                     new_params[p] = params_list[0][p]
-            f: Callable = partial(features_dict[func_name], **new_params)
+            f = partial(features_dict[func_name], **new_params)
             funcs.append(f)
         elif "c1" in params_list[0]:
             seen_symmetric = set()  # c1 always < c2
@@ -562,7 +562,7 @@ def _get_params(
                         range_spec = entry.split(":")
                         if len(range_spec) != 3:
                             raise ValueError("Incorrect format for range.")
-                        val = range(
+                        val: range | list[int] = range(
                             int(range_spec[0]), int(range_spec[1]), int(range_spec[2])
                         )
                     else:

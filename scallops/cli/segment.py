@@ -15,8 +15,9 @@ import importlib
 import math
 import os
 from collections import defaultdict
+from collections.abc import Sequence
 from functools import partial
-from typing import Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import dask
 import dask.array as da
@@ -30,6 +31,7 @@ from skimage.measure import regionprops
 from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -131,7 +133,7 @@ def segment_nuclei(
     dapi_channel: int,
     method: Callable,
     root: Group,
-    z_index: int | str,
+    z_index: int | Literal["max"],
     min_area: float | None = None,
     max_area: float | None = None,
     chunks: None | tuple[int, int] = None,
@@ -177,7 +179,7 @@ def segment_nuclei(
     image = _images2fov(file_list, metadata, dask=True).squeeze()
     image = _z_projection(image, z_index)
 
-    nuclei_seg_args = {}
+    nuclei_seg_args: dict[str, Any] = {}
     if method.__name__ in ["segment_nuclei_stardist"]:
         nuclei_seg_args["clip"] = clip
         if pmin is not None:
@@ -251,7 +253,7 @@ def segment_cells(
     cyto_channel: int | list[int] | None,
     method: Callable,
     root: Group,
-    z_index: int | str,
+    z_index: int | Literal["max"],
     chunks: None | tuple[int, int] = None,
     chunk_overlap: None | int = None,
     nuclei_image_root: Group = None,
@@ -313,7 +315,7 @@ def segment_cells(
         cyto_channel = [dapi_channel]
     logger.info(f"Running cell segmentation for {image_key}")
 
-    cell_seg_args = {"nuclei_channel": dapi_channel}
+    cell_seg_args: dict[str, Any] = {"nuclei_channel": dapi_channel}
     nuclei = None
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
         nuclei = read_ome_zarr_array(
@@ -415,7 +417,7 @@ def segment_cells(
     return root
 
 
-def _label_source_metadata(file_list: list[str | Group]) -> dict:
+def _label_source_metadata(file_list: Sequence[str | Group]) -> dict:
     """Get the stored metadata (e.g. physical pixel sizes).
 
     :param file_list: List containing the label zarr group
@@ -436,9 +438,9 @@ def _label_source_metadata(file_list: list[str | Group]) -> dict:
 
 
 def _overlap(
-    label_tuple_1: tuple[tuple[str, ...], list[str | Group], dict],
-    label_tuple_2: tuple[tuple[str, ...], list[str | Group], dict],
-    additional_tuples: list[tuple[tuple[str, ...], list[str | Group], dict]],
+    label_tuple_1: ImageTuple,
+    label_tuple_2: ImageTuple,
+    additional_tuples: list[ImageTuple],
     output_parquet_path: str,
     output_root: zarr.Group,
     force: bool = False,

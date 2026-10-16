@@ -16,9 +16,9 @@ from dask import delayed
 def _find_bounding_boxes(
     label_image: np.ndarray | zarr.Array,
     intensity_image: np.ndarray | zarr.Array | None,
-    sl: tuple[slice],
+    sl: tuple[slice, ...],
     store_label_image: bool = False,
-):
+) -> pd.DataFrame:
     """Find bounding boxes, centroids, and optionally extract label and intensity images.
 
     :param label_image: Dask array representing labeled regions.
@@ -52,12 +52,12 @@ def _find_bounding_boxes(
             total = (pos + array_location[i]).sum()
             values.append(total)
             values.append(len(pos))
-        slices = tuple(slices)
+        bbox = tuple(slices)
         if store_label_image:
-            image_ = label_image[slices] == val
+            image_ = label_image[bbox] == val
             values.append(image_.reshape(-1))
         if intensity_image is not None:
-            intensity_image_ = intensity_image[slices].reshape(-1)
+            intensity_image_ = intensity_image[bbox].reshape(-1)
             values.append(intensity_image_)
 
         result[val] = values
@@ -113,7 +113,7 @@ def _agg_slices(
         result_y_slice = slice(bbox0[i] - bbox0_min, bbox2[i] - bbox0_min)
         result_x_slice = slice(bbox1[i] - bbox1_min, bbox3[i] - bbox1_min)
         label_result[result_y_slice, result_x_slice] = label_images[i].reshape(shape)
-        if intensity_images is not None:
+        if image_result is not None:
             image_result[result_y_slice, result_x_slice] = intensity_images[i].reshape(
                 shape + (-1,)
             )
@@ -122,7 +122,7 @@ def _agg_slices(
         "shape-0": [label_result.shape[0]],
         "shape-1": [label_result.shape[1]],
     }
-    if intensity_images is not None:
+    if image_result is not None:
         data["intensity_image"] = [
             image_result.reshape(-1) if flatten else image_result
         ]
@@ -206,7 +206,7 @@ def _find_objects(
     return grouped
 
 
-def _agg_objects(grouped):
+def _agg_objects(grouped) -> dd.DataFrame:
     """Aggregate object properties into a summary DataFrame.
 
     :param grouped: Grouped DataFrame of object properties.
@@ -254,12 +254,13 @@ def _agg_objects(grouped):
     return objects_df
 
 
-def find_objects(label_image: da.Array) -> dd.DataFrame:
+def find_objects(label_image: da.Array | np.ndarray) -> dd.DataFrame | pd.DataFrame:
     """Find objects in a labeled array.
 
     :param label_image: Image labels noted by integers.
     :return: Objects data frame containing bounding box, centroid, and area for
-        each label
+        each label. A pandas data frame if `label_image` is a NumPy array, otherwise a
+        Dask data frame.
     """
     is_numpy = False
     if isinstance(label_image, np.ndarray):

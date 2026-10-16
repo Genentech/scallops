@@ -110,7 +110,7 @@ def _get_chunk_size(image: xr.DataArray) -> tuple[int, int]:
         ):
             chunk_size[1] = image.data.chunksize[-1]
 
-    return tuple(chunk_size)
+    return chunk_size[0], chunk_size[1]
 
 
 def _load_itk_parameters(itk_parameters: list[str] | None) -> itk.ParameterObject:
@@ -551,7 +551,7 @@ def _itk_align_reference_time(
     attrs_keep: Sequence[str] | None = ("stitch_coords",),
     parameter_object_across_channels: itk.ParameterObject | None = None,
     write_callback: Callable[
-        [np.ndarray | zarr.Array, tuple[int, ...], np.ndarray], None
+        [np.ndarray | zarr.Array, tuple[int, ...] | int, np.ndarray], None
     ]
     | None = None,
 ):
@@ -662,7 +662,7 @@ def _itk_align_reference_time(
                 unique_channels.add(channel_name)
                 all_channels.append(channel_name)
         coords = dict(c=all_channels)
-        leading_dims_shape = (len(all_channels),)
+        leading_dims_shape: tuple[int, ...] = (len(all_channels),)
         result_image_attrs["src_channels"] = channels
         result_image_attrs["src_times"] = times
 
@@ -1226,7 +1226,7 @@ def _itk_transform_image_zarr(
 def _itk_transform_image(
     image: xr.DataArray,
     transform_parameter_object: itk.ParameterObject | str | Sequence[dict],
-    image_spacing: None | tuple[float],
+    image_spacing: None | tuple[float, float],
     result: np.ndarray | zarr.Array,
 ):
     """Apply ITK-based transformation to each (t, c, z) slice individually.

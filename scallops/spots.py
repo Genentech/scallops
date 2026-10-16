@@ -14,7 +14,7 @@ import random
 import warnings
 from collections.abc import Callable
 from numbers import Number
-from typing import Literal
+from typing import Any, Literal
 
 import dask
 import dask.array as da
@@ -417,7 +417,7 @@ def _find_peaks_deep(
         points = model.predict(img, **predict_args)
         return points.astype(int), np.ones(len(points))
 
-    default_prediction_args = dict()
+    default_prediction_args: dict[str, Any] = dict()
 
     if method == "u-fish":
         _download_ufish_model()

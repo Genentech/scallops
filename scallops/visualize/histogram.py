@@ -9,6 +9,7 @@ Authors:
 """
 
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -79,7 +80,7 @@ def channel_hist_plot(
     if binrange is None:
         binrange = image.min().values, image.max().values
     bins = np.histogram_bin_edges(image, bins=bins, range=binrange)
-    hist_kwargs = dict(alpha=0.5)
+    hist_kwargs: dict[str, Any] = dict(alpha=0.5)
     hist_kwargs.update(kwargs)
     for i in range(nimages):
         ax = axes[0, i]

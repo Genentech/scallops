@@ -34,7 +34,7 @@ def _create_rank_metadata(
 def _rank_single(
     data: anndata.AnnData,
     perturbation_column: str,
-    min_labels: int,
+    min_labels: int | None,
     group_name: str | None,
     method: Literal["welch_t", "student_t", "mannwhitney"],
     reference_value: str | None,

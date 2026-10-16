@@ -1076,7 +1076,7 @@ def li_and_speed_cc_number(bases: xr.DataArray) -> float:
     """
     a = bases.where(bases.label > 0, drop=True)
     channels = a.c.values
-    max_slope = 0
+    max_slope: float = 0
     for i, j in product(range(len(channels)), repeat=2):
         x = a.sel(c=channels[i]).to_numpy().flatten()
         if i != j:

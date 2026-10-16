@@ -10,6 +10,7 @@ from functools import cache
 from itertools import islice
 
 import numpy as np
+from numpy.typing import NDArray
 
 from scallops.visualize.grid_layout_constants import (
     COL_BY_COL_DOWN_LEFT,
@@ -166,7 +167,8 @@ def _well_grid(
     if layout not in range(1, 17):
         raise ValueError("Invalid layout {}".format(layout))
     nrows, ncols = shape
-    grid_sequence = np.array(grid_sequence)
+
+    grid_sequence: NDArray = np.array(grid_sequence)
     missing_row = False
     if grid_sequence.shape[0] < nrows:
         grid_sequence = np.insert(grid_sequence, [0, grid_sequence.shape[0]], 0)

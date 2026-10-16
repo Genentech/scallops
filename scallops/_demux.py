@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 import numpy as np
 import scipy.stats
@@ -56,7 +57,7 @@ def fit_kmedoids(
 
 def find_min_mean_indices(
     data: np.ndarray,
-    k_medoids: object,
+    k_medoids: Any,
     n_clusters: int = 5,
     n_smallest_clusters: int = 1,
 ) -> list[np.ndarray]:
@@ -104,7 +105,7 @@ def negbinomial_fit(x: np.ndarray) -> tuple[float, float, bool]:
 
 def compute_quantiles(
     pixel_array: np.ndarray,
-    k_medoids: object,
+    k_medoids: Any,
     index_lst: list[np.ndarray],
     percentile_threshold: float = 99.5,
     quantile_val: float = 0.99,

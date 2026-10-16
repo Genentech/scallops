@@ -11,9 +11,9 @@ import json
 import dask.array as da
 import fsspec
 import zarr
-from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -29,7 +29,7 @@ logger = _get_cli_logger()
 
 
 def _execute(
-    label_tuple: tuple[tuple[str, ...], list[str | Group], dict],
+    label_tuple: ImageTuple,
     output_dir: str,
     output_sep: str,
     force: bool = False,

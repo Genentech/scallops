@@ -4,7 +4,7 @@ import math
 import os
 import shutil
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import fsspec
 import numpy as np
@@ -112,7 +112,7 @@ def _single_stitch(
     if dfp_path:
         dfp_path = dfp_path.format(**image_metadata["file_metadata"][0])
         assert fsspec.url_to_fs(dfp_path)[0].exists(dfp_path), f"{dfp_path} not found."
-    output_metadata = {
+    output_metadata: dict[str, Any] = {
         "blend": blend,
         "z_index": z_index,
         "channel": channel,

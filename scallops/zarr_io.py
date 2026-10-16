@@ -10,7 +10,7 @@ Authors:
 
 import logging
 import warnings
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -105,7 +105,7 @@ def _create_array_kwargs(fmt: Format | None = None) -> dict[str, Any]:
 def _da_to_zarr_kwargs(fmt: Format | None = None) -> dict[str, Any]:
     if fmt is None:
         fmt = _current_format()
-    zarr_array_kwargs = dict()
+    zarr_array_kwargs: dict[str, Any] = dict()
 
     if USE_DASK_ARRAY_KWARGS:
         if fmt.zarr_format == 2:
@@ -195,7 +195,7 @@ def _omero_channels(channel_names, image_dtype: np.dtype) -> dict:
 
 
 def _create_omero_metadata(
-    coords: DataArrayCoordinates, dims: tuple[Hashable, ...], image_dtype: np.dtype
+    coords: DataArrayCoordinates, dims: Sequence[Hashable] | None, image_dtype: np.dtype
 ) -> dict | None:
     """Create OMERO metadata for a DataArray.
 
@@ -291,9 +291,9 @@ def _fix_attrs(d: dict) -> None:
 def _attrs_axes_scales(
     image_attrs: dict | None,
     coords: DataArrayCoordinates,
-    dims: tuple[Hashable, ...],
+    dims: Sequence[Hashable] | None,
     image_dtype: np.dtype,
-) -> tuple[dict, list[dict] | None, dict[str, float] | None]:
+) -> tuple[dict, list[dict] | None, dict[Hashable, float] | None]:
     """Prepare attributes, axes, and coordinate transformations for Zarr storage.
 
     Processes the attributes, coordinates, and dimensions of a DataArray to generate
@@ -331,7 +331,7 @@ def _attrs_axes_scales(
     physical_pixel_units = image_attrs.pop("physical_pixel_units", None)
 
     axes = None
-    scale_dict = None
+    scale_dict: dict[Hashable, float] | None = None
     if dims is not None:
         axes = []
         scale_dict = dict()
@@ -666,7 +666,7 @@ def rechunk(image: xr.DataArray | da.Array) -> xr.DataArray | da.Array:
     return image
 
 
-def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:
+def _read_zarr_attrs(attrs) -> tuple[dict | None, dict, list[str] | None]:
     """Read attributes from Zarr.
 
     This function reads and processes the attributes, coordinates, and dimensions from
@@ -729,7 +729,7 @@ def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:
 
 def _read_ome_zarr_array(
     node: str | Path | zarr.Group,
-) -> tuple[zarr.Array, list[str], dict, dict] | None:
+) -> tuple[zarr.Array, list[str] | None, dict | None, dict] | None:
     """Read an image or label at the given zarr node.
 
     :param node: The zarr group or path to a zarr group

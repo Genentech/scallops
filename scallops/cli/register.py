@@ -17,6 +17,7 @@ from dask.bag import from_sequence
 from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _get_cli_logger,
@@ -80,8 +81,8 @@ def _flip(image: xr.DataArray, flip_y: bool, flip_x: bool) -> xr.DataArray:
 
 
 def single_registration(
-    fixed_tuple: tuple[tuple[str, ...], list[str | Group], dict] | None,
-    moving_tuple: tuple[tuple[str, ...], list[str | Group], dict],
+    fixed_tuple: ImageTuple | None,
+    moving_tuple: ImageTuple,
     moving_channel: list[int],
     fixed_channel: int | None,
     label_output_root: zarr.Group | None,
@@ -95,7 +96,7 @@ def single_registration(
     reference_timepoint: int | str,
     unroll_channels: bool = False,
     force: bool = False,
-    z_index: int | str = "max",
+    z_index: int | Literal["max"] = "max",
     initial_transform: str | None = None,
     landmarks_initialize: bool = False,
     landmark_slice_size: float = 200,
@@ -202,6 +203,7 @@ def single_registration(
         logger.info(f"Running registration for {image_key}")
 
     if not register_self:  # register fixed t=0 to moving
+        assert fixed_tuple is not None
         _, fixed_file_list, fixed_metadata = fixed_tuple
 
         assert fixed_metadata["id"] == moving_metadata["id"], (

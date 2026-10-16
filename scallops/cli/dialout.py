@@ -175,12 +175,12 @@ def single_pool(
     if len(unaligned_seq_2_counts) > 0 and save_unaligned_fasta:
         with open(
             os.path.join(output_dir, f"{basename}-reference-unaligned.fa"), "wt"
-        ) as fasta:
+        ) as fasta_file:
             for counter, (seq, count) in enumerate(
                 sorted(unaligned_seq_2_counts.items(), key=itemgetter(1), reverse=True)
             ):
                 line = f">seq{counter};count={count}\n{seq}\n"
-                fasta.write(line)
+                fasta_file.write(line)
 
     # convert to dataframe
     sequences = []
@@ -232,8 +232,8 @@ def single_pool(
             ]
             with open(
                 os.path.join(output_dir, f"{basename}-dialout-unaligned.fa"), "wt"
-            ) as fasta:
-                fasta.write("\n".join(lines))
+            ) as fasta_file:
+                fasta_file.write("\n".join(lines))
     mapped_counts_df.to_csv(
         os.path.join(output_dir, f"{basename}.counts.csv"), index=False
     )

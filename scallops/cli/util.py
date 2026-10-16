@@ -15,10 +15,10 @@ import os
 import sys
 import time
 import types
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from importlib.metadata import version
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import dask
 import dask.array as da
@@ -35,6 +35,9 @@ from scallops.zarr_io import _write_zarr_image
 
 SubParsers: TypeAlias = argparse._SubParsersAction
 """Type of the object returned by :meth:`argparse.ArgumentParser.add_subparsers`."""
+
+ImageTuple: TypeAlias = tuple[tuple[str, ...], Sequence[str | zarr.Group], dict]
+"""Group key, image sources, and metadata yielded by :func:`scallops.io._set_up_experiment`."""
 
 
 class ContextFilter(logging.Filter):
@@ -67,7 +70,7 @@ def _dask_workers_threads(
     n_workers: int | None = None,
     threads_per_worker: int | None = None,
     processes: bool = True,
-) -> dict[str, int]:
+) -> dict[str, int | None]:
     # adopted from LocalCluster
     if n_workers is None and threads_per_worker is None:
         if processes:
@@ -109,7 +112,7 @@ def _create_default_dask_config(config: dict | None = None) -> dask.config.set:
     return dask.config.set(conf_)
 
 
-def _log_function_call(func: types.FunctionType) -> types.FunctionType:
+def _log_function_call(func: Callable) -> Callable:
     """Decorator to log function calls and execution time.
 
     :param func: Function to wrap.
@@ -187,13 +190,13 @@ def _group_src_attrs(
         sources.append(src[i])
         attrs["file_metadata"].append(meta)
     filelist = []
-    attrs = []
+    attrs_list = []
     keys = []
     for key in group_to_src:
         filelist.append(group_to_src[key])
-        attrs.append(group_to_attrs[key])
+        attrs_list.append(group_to_attrs[key])
         keys.append(key)
-    return keys, filelist, attrs
+    return keys, filelist, attrs_list
 
 
 def _write_image(
@@ -327,7 +330,7 @@ def force_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _z_index_type(s: str) -> int | str:
+def _z_index_type(s: str) -> int | Literal["max"]:
     """Parse and validate the z-index argument.
 
     This function ensures that the input is a non-negative integer 'max'
@@ -350,7 +353,7 @@ def _z_index_type(s: str) -> int | str:
 
     s = s.strip()
     if s == "max":
-        return s
+        return "max"
     try:
         value = int(s)
     except ValueError:

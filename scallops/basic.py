@@ -12,7 +12,7 @@ Authors:
 
 import logging
 from collections.abc import Mapping
-from typing import Literal
+from typing import Any, Literal
 
 import fsspec
 import numpy as np
@@ -152,7 +152,7 @@ def basic_illumination_correction(
     full_image_shape = image_tuples[0][1]
     image = np.array(images)
     nchannels = image.shape[1]
-    _basic_kwargs = dict(get_darkfield=True)
+    _basic_kwargs: dict[str, Any] = dict(get_darkfield=True)
     _basic_kwargs.update(basic_kwargs)
     models = Parallel(n_jobs=n_jobs)(
         delayed(_basic_single_channel)(image[:, i], **_basic_kwargs)

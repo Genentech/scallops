@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import anndata
 import dask
@@ -118,7 +118,7 @@ def normalize_features(
     centering: bool = True,
     scaling: bool = True,
     feature_chunk_size: int | None = None,
-    centroid_column_names: tuple[str, str] = (
+    centroid_column_names: Sequence[str] = (
         "Nuclei_AreaShape_Center_Y",
         "Nuclei_AreaShape_Center_X",
     ),
@@ -200,7 +200,7 @@ def normalize_features(
                 dims=["obs", "var"],
                 coords=coords,
             )
-        kwargs = dict()
+        kwargs: dict[str, Any] = dict()
         if by is not None:
             grouped_ref = x_ref_data.groupby("obs")
             grouped_values = (

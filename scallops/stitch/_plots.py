@@ -15,7 +15,7 @@ from scallops.stitch.shift_utils import _get_overlap_bounding_box
 def _max_shift_vs_zncc_plot(
     nccs_before_stitching: np.ndarray,
     shifts_before_stitching: np.ndarray,
-    spanning_tree_edges: Sequence[tuple[int, int]],
+    spanning_tree_edges: Sequence[tuple[int, int]] | None,
     pairs: Sequence[tuple[int, int]],
     valid_edges: np.ndarray[bool],
     max_shift: float | None = None,
@@ -77,7 +77,7 @@ def _shifts_quiver_plot(stage_positions, shifts):
 
 
 def _title_plot(
-    zncc_val: float,
+    zncc_val: float | None,
     radial_correction_k: float | None,
     no_version: bool,
 ):

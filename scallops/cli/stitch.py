@@ -30,6 +30,7 @@ from distributed import Client
 from skimage.util import img_as_uint
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _get_cli_logger,
@@ -58,7 +59,7 @@ logger = _get_cli_logger()
 
 
 def single_stitch_preview(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: ImageTuple,
     output_path: str,
     channel: int,
     bounds: bool,

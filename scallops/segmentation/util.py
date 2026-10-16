@@ -578,6 +578,8 @@ def relabel_by_assignment(
         ]
     )
     max_label = int(in_vals.max())
+    func: Callable[..., np.ndarray]
+    args: tuple
     if (
         np.issubdtype(labels.dtype, np.integer)
         and in_vals.min() >= 0

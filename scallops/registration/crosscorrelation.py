@@ -313,7 +313,7 @@ def align_image(
             filter_percentiles=(0, 90),
         )
     """
-    registration_attrs = dict()
+    registration_attrs: dict[str, Any] = dict()
     if align_within_time_channels is not None and len(align_within_time_channels) > 1:
         # if filter percentiles is not None, values outside of filter_percentiles are modified
         image = _align_within_t(

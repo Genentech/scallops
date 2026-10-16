@@ -698,6 +698,8 @@ def generate_cdfs_with_area_difference(
     # First distribution (reference)
     mean1, std1 = 0, 1
     # Search bounds for the second mean
+    mean2_lower: float
+    mean2_upper: float
     mean2_lower, mean2_upper = (
         mean1 - 5 * std1,
         mean1 + 5 * std1,

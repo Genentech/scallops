@@ -1026,7 +1026,10 @@ def _get_overlap_bounding_box(y0, x0, dy, dx, sy, sx):
 
 
 def _estimate_crop_width(
-    fracs, min_frac, tile_shape: tuple[int, int], crop_width: tuple[int, int]
+    fracs,
+    min_frac,
+    tile_shape: tuple[int, int],
+    crop_width: tuple[int, int] | None,
 ) -> tuple[int, int]:
     pct = max(
         np.median(fracs[fracs > min_frac]) / 2.0 - 0.015, 0.0
