@@ -6,6 +6,7 @@ Authors:
 - The SCALLOPS development team
 """
 
+import math
 from collections.abc import Sequence
 from copy import copy
 from typing import Any, cast
@@ -498,7 +499,7 @@ def experiment_composite(
     """
     image_keys = exp.images.keys() if subset is None else subset
     ncols = min(max_cols, len(image_keys))
-    nrows = -(-len(image_keys) // ncols)
+    nrows = math.ceil(len(image_keys) / ncols)
     f, axs = plt.subplots(
         nrows=nrows,
         ncols=ncols,
