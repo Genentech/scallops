@@ -304,8 +304,8 @@ def normalize_features(
         else None
     )
     results = [] if not use_map_blocks else None
-    obs_list = [] if not use_map_blocks else None
-    obs_indices = [] if not use_map_blocks else None
+    obs_list: list | None = [] if not use_map_blocks else None
+    obs_indices: list | None = [] if not use_map_blocks else None
     resolved_feature_chunk = (
         _feature_chunk_size(
             data.X,

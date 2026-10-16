@@ -99,7 +99,7 @@ def single_registration(
     initial_transform: str | None = None,
     landmarks_initialize: bool = False,
     landmark_slice_size: float = 200,
-    landmark_template_padding: Sequence[float] = 500,
+    landmark_template_padding: Sequence[float] = (500,),
     landmark_step_size: float = 1000,
     landmark_min_score: float = 0.6,
     landmark_initializations: Sequence[Literal["com", "none"]] = ("com", "none"),

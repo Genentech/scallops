@@ -58,7 +58,7 @@ def pftas(
 def haralick(
     c: Sequence[int],
     scale: int = 3,
-    channel_names: Sequence[str] = None,
+    channel_names: Sequence[str] | None = None,
     unique_labels: np.ndarray = None,
     label_image: np.ndarray = None,
     intensity_image: np.ndarray = None,

@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Sequence
 from tokenize import NAME
+from typing import Any
 
 import anndata
 import dask.array as da
@@ -193,7 +194,7 @@ def _anndata_to_xr(
     obs_coords: bool | str | Sequence[str] = True,
     var_coords: bool | str | Sequence[str] = False,
 ) -> xr.DataArray:
-    coords = dict()
+    coords: dict[str, Any] = dict()
     coords_keys = {"obs", "var"}
     _update_coords(
         df=data.obs,

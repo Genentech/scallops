@@ -29,7 +29,7 @@ def _run_dialout_pipeline(arguments: argparse.Namespace):
     run_dialout_pipeline(arguments)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     """Sets up the argument parsers for the 'dialout' command and its subcommands.
 
     This internal function configures the command-line interface for the 'dialout' tool, adding

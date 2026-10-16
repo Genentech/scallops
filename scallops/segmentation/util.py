@@ -159,6 +159,7 @@ def remove_small_objects_std(labels: np.ndarray, rm_small_std: float) -> np.ndar
     :param labels: Array of labels
     :param rm_small_std: Remove objects smaller than specified number of standard deviations of
         labels
+    :return: Labels with small objects removed
     """
 
     counts = np.array(list(Counter(labels[labels > 0]).values()))

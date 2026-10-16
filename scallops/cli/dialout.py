@@ -157,8 +157,8 @@ def single_pool(
     )
     basename = os.path.splitext(os.path.basename(fastq))[0].split("_")[0]
     with AlignmentFile(bwa_output, "rb") as aligned:
-        seq_2_counts = defaultdict(lambda: 0)
-        unaligned_seq_2_counts = defaultdict(lambda: 0)
+        seq_2_counts: defaultdict[str, int] = defaultdict(lambda: 0)
+        unaligned_seq_2_counts: defaultdict[str, int] = defaultdict(lambda: 0)
         for read in aligned.fetch(until_eof=True):
             seq = read.seq
             if read.is_mapped:
@@ -653,7 +653,7 @@ def run_dialout_pipeline(arguments: argparse.Namespace) -> None:
         os.remove(local_path)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     """Sets up the argument parsers for the 'dialout' command and its subcommands.
 
     This internal function configures the command-line interface for the 'dialout' tool,

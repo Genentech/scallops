@@ -2,13 +2,16 @@ import logging
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import pandas as pd
 from filelock import FileLock
 
 from scallops.segmentation.util import _download_model
+
+if TYPE_CHECKING:
+    import ufish.api
 
 logger = logging.getLogger("scallops")
 
@@ -44,11 +47,11 @@ def _load_ufish_model():
 def spot_count(
     c: Sequence[int],
     intensity_threshold=0.06,
-    channel_names: Sequence[str] = None,
+    channel_names: Sequence[str] | None = None,
     unique_labels: np.ndarray = None,
     label_image: np.ndarray = None,
     intensity_image: np.ndarray = None,
-    model: Optional["ufish.api.UFish"] = None,  # noqa
+    model: Optional["ufish.api.UFish"] = None,
     connectivity=2,
     laplace_process=True,
     axes="yx",

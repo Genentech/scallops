@@ -181,7 +181,7 @@ def single_feature(
     label_name_to_min_max_area: dict[str, tuple[float | None, float | None]],
     features_plot: set[str],
     label_filter: str | None = None,
-    channel_names: dict[str, str] = None,
+    channel_names: dict[str, str] | None = None,
     force: bool = False,
     no_version: bool = False,
     normalize: bool = True,

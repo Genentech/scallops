@@ -28,7 +28,7 @@ def _run_pipeline_compute_features(arguments: argparse.Namespace):
     run_pipeline_compute_features(arguments)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     """Sets up the argument parser for the 'features' command and its arguments.
 
     This internal function configures the command-line interface for computing features, adding

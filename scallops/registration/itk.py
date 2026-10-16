@@ -552,7 +552,8 @@ def _itk_align_reference_time(
     parameter_object_across_channels: itk.ParameterObject | None = None,
     write_callback: Callable[
         [np.ndarray | zarr.Array, tuple[int, ...], np.ndarray], None
-    ] = None,
+    ]
+    | None = None,
 ):
     """Align a time-series of moving images to the reference time point using ITK registration.
 
@@ -1027,7 +1028,7 @@ def itk_align(
     if initial_transform is not None:
         fs = fsspec.core.url_to_fs(initial_transform)[0]
         if _get_fs_protocol(fs) != "file":
-            tmp_path = _download_file(initial_transform)
+            tmp_path = _download_file(fs, initial_transform)
             initial_transform = tmp_path
             tmp_paths.append(tmp_path)
         elastix_object.SetInitialTransformParameterFileName(initial_transform)

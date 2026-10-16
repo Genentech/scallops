@@ -95,8 +95,8 @@ class Experiment:
 
     def __init__(
         self,
-        images: Mapping[str, xr.DataArray] = None,
-        labels: Mapping[str, np.ndarray | xr.DataArray] = None,
+        images: Mapping[str, xr.DataArray] | None = None,
+        labels: Mapping[str, np.ndarray | xr.DataArray] | None = None,
     ):
         """Create an experiment.
 

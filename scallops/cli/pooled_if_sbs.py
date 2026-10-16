@@ -12,7 +12,8 @@ import json
 import logging
 import os
 import re
-from typing import Literal
+from collections.abc import Sequence
+from typing import Any, Literal
 
 import anndata
 import dask
@@ -185,7 +186,7 @@ def spot_detection_pipeline(
     max_filter_width: int,
     sigma_log: float | list[float],
     z_index: int | str,
-    save_keys: tuple[str] | list[str] = ("max", "log", "std", "peaks"),
+    save_keys: Sequence[str] = ("max", "log", "std", "peaks"),
     output_image_format: str = "zarr",
     cycles: None | list[int] = None,
     percentile_min: float | None = None,
@@ -1254,7 +1255,7 @@ def reads_main(arguments: argparse.Namespace):
     bases = list(arguments.bases)
     crosstalk_correction_method = arguments.crosstalk_correction_method
     force = arguments.force
-    crosstalk_correction_method_args = dict()
+    crosstalk_correction_method_args: dict[str, Any] = dict()
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)

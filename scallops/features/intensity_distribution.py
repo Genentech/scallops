@@ -26,7 +26,7 @@ def intensity_distribution_radial(
     bin_count: int = 4,
     scaled: bool = True,
     maximum_radius: int = 100,
-    channel_names: Sequence[str] = None,
+    channel_names: Sequence[str] | None = None,
     label_image: np.ndarray = None,
     intensity_image: np.ndarray = None,
     **kwargs,
@@ -297,7 +297,7 @@ def _zernike_scores(
 def intensity_distribution_zernike(
     c: Sequence[int],
     zernike_degree: int = 9,
-    channel_names: Sequence[str] = None,
+    channel_names: Sequence[str] | None = None,
     label_image: np.ndarray = None,
     intensity_image: np.ndarray = None,
     **kwargs,

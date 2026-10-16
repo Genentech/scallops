@@ -729,7 +729,7 @@ def _read_zarr_attrs(attrs) -> tuple[dict, dict, list[str]]:
 
 def _read_ome_zarr_array(
     node: str | Path | zarr.Group,
-) -> tuple[zarr.Array, dict, list[str], dict, dict] | None:
+) -> tuple[zarr.Array, list[str], dict, dict] | None:
     """Read an image or label at the given zarr node.
 
     :param node: The zarr group or path to a zarr group
@@ -772,6 +772,7 @@ def _read_ome_zarr_array(
 
     else:  # is non-ome zarr
         logger.warning(f"multiscales not found in attrs for {node} ")
+    return None
 
 
 def read_ome_zarr_array(
@@ -836,7 +837,7 @@ def open_ome_zarr(url: Path | str, mode: str = "a") -> zarr.Group | None:
 
 
 def _read_zarr_experiment(
-    store: StoreLike, dask: bool = False, subset: Callable = None
+    store: StoreLike, dask: bool = False, subset: Callable | None = None
 ):
     """Read an experiment saved using Experiment.save.
 

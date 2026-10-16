@@ -13,8 +13,8 @@ Make sure to have Napari installed before using these functions.
 """
 
 import os
-import re
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 import dask.array as da
 import dask.dataframe as dd
@@ -27,12 +27,15 @@ from xarray import DataArray
 
 from scallops.experiment.elements import Experiment
 from scallops.io import read_image
+
+if TYPE_CHECKING:
+    import napari
 from scallops.stitch._radial import radial_correct
 from scallops.utils import forceTCZYX
 
 
 def add_bases(
-    viewer: "napari.Viewer",  # noqa: F821
+    viewer: "napari.Viewer",
     df_reads: pd.DataFrame | dd.DataFrame,
     y_slice: slice | None = None,
     x_slice: slice | None = None,
@@ -43,7 +46,7 @@ def add_bases(
         "C": "green",
     },
     **params,
-) -> "napari.layers.Points":  # noqa: F821
+) -> "napari.layers.Points":
     """Add bases to napari viewer.
 
     :param viewer: The napari viewer
@@ -94,8 +97,8 @@ def add_bases(
 
 def pooled_iss(
     url: str,
-    viewer: "napari.Viewer" = None,  # noqa: F821
-) -> "napari.Viewer":  # noqa: F821
+    viewer: "napari.Viewer | None" = None,
+) -> "napari.Viewer":
     """View pooled in-situ sequencing results in Napari.
 
     Napari is a powerful multi-dimensional image viewer that allows interactive exploration
@@ -253,9 +256,9 @@ def experiment_napari(
     experiment: Experiment,
     labels: Experiment | dict[str, np.ndarray | DataArray] | None = None,
     title_attribute: str = "common_src",
-    viewer: "napari.Viewer" = None,  # noqa: F821
+    viewer: "napari.Viewer | None" = None,
     **kwargs,
-) -> "napari.Viewer":  # noqa: F821
+) -> "napari.Viewer":
     """View an exp in Napari.
 
     Napari is a versatile multi-dimensional image viewer, and this function facilitates
@@ -329,10 +332,10 @@ def imnapari(
     labels: None | np.ndarray | DataArray | dict[str, np.ndarray | DataArray] = None,
     points: pd.DataFrame | None = None,
     title_attribute: str = "common_src",
-    viewer: "napari.Viewer" = None,  # noqa: F821
+    viewer: "napari.Viewer | None" = None,
     point_size: int = 5,
     **kwargs,
-) -> "napari.Viewer":  # noqa: F821
+) -> "napari.Viewer":
     """View image in Napari.
 
     Napari is a versatile multi-dimensional image viewer, and this function facilitates
@@ -438,15 +441,13 @@ def imnapari(
 
         for feat, values in feats.items():
             mini, maxi = min(values), max(values)
-            dtype = re.sub("[0-9]", "", points[feat].dtype.name)
-            dtype = str if dtype == "object" else exec(dtype)
 
             @magicgui(
                 call_button=f"{feat} filter",
                 slider={"widget_type": "FloatSlider", "min": mini, "max": maxi},
                 auto_call=True,
             )
-            def slider(slider: dtype) -> None:
+            def slider(slider) -> None:
                 filtered_indices = [
                     i for i, val in enumerate(feats[feat]) if val > slider
                 ]

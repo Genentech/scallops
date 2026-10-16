@@ -38,7 +38,7 @@ def _run_stitch_preview(arguments: Namespace) -> None:
 
 
 def _create_stitch_preview_parser(
-    subparsers: ArgumentParser, default_help: bool
+    subparsers: argparse._SubParsersAction, default_help: bool
 ) -> ArgumentParser:
     """Create the parser for the stitch preview command.
 
@@ -109,7 +109,7 @@ def _create_stitch_preview_parser(
 
 
 def _create_stitch_parser(
-    subparsers: ArgumentParser, default_help: bool
+    subparsers: argparse._SubParsersAction, default_help: bool
 ) -> ArgumentParser:
     parser = subparsers.add_parser(
         "stitch",

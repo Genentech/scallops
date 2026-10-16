@@ -97,11 +97,11 @@ def _smooth_and_rescale(
 
 def illumination_correction(
     image_tuple: tuple[tuple[str, ...], list[str], dict],
-    smooth: int = None,
+    smooth: int | None = None,
     rescale: bool = True,
     z_index: Literal["max", "focus"] | str | int = "max",
     channel: int = 0,
-    agg_method: str = Literal["mean", "median", "min"],
+    agg_method: Literal["mean", "median", "min"] = "mean",
     expected_images: int | None = None,
     t_index: int | None = None,
 ) -> tuple[xr.DataArray, list[str], str | int | Sequence[int]]:

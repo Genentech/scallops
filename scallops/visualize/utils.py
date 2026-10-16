@@ -103,7 +103,7 @@ def channel_thresholds(
     percentile_max: Sequence[float] | float = 99.0,
     pad_min: Sequence[float] | float = 0,
     pad_max: Sequence[float] | float = 0,
-    thresholds: dict[int, tuple[float, float]] = None,
+    thresholds: dict[int, tuple[float, float]] | None = None,
 ) -> dict[int, tuple[float, float]]:
     """Compute thresholds per channel for contrast adjustment in visualization.
 

@@ -97,7 +97,9 @@ def _fuse(
     ]
     img = _images2fov(image0_paths, image0_attrs, scene_id=0 if has_scenes else None)
 
-    [os.remove(path) for path in local_image0_paths if path is not None]
+    for path in local_image0_paths:
+        if path is not None:
+            os.remove(path)
 
     n_channels = img.sizes["c"]
     size_z = img.sizes["z"] if "z" in img.dims else 1
@@ -460,7 +462,9 @@ def _fuse_image(
 
     img = _images2fov(image_paths, image_attrs, scene_id=scene_id)
     img = _select_t_index(img, t_index)
-    [os.remove(path) for path in local_image_paths if path is not None]
+    for path in local_image_paths:
+        if path is not None:
+            os.remove(path)
     if "z" in img.dims:
         img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
     img = img.values

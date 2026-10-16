@@ -121,7 +121,7 @@ def stitch_align(
     radial_correction_k: float | None | Literal["auto"] = "auto",
     crop_width: tuple[int, int] | None = None,
     upsample_factor=1.0,
-    min_overlap_fraction: float = None,
+    min_overlap_fraction: float | None = None,
     ncc_func: Callable[[np.ndarray, np.ndarray], float] = _zncc,
     stitch_alpha: float = 0.001,
     evaluate_stitching: bool = True,

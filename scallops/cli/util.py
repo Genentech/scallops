@@ -167,8 +167,8 @@ def _group_src_attrs(
 ) -> tuple[list[Any], list[Any], list[Any]]:
     file_metadata = metadata["file_metadata"]
     src = metadata["group_metadata"]["src"]
-    group_to_src = dict()
-    group_to_attrs = dict()
+    group_to_src: dict[tuple, list] = dict()
+    group_to_attrs: dict[tuple, dict[str, list]] = dict()
     for i in range(len(file_metadata)):
         meta = file_metadata[i]
         group = tuple([meta[key] for key in meta.keys() if key not in metadata_fields])
@@ -176,7 +176,7 @@ def _group_src_attrs(
         sources = group_to_src.get(group)
         if sources is None:
             sources = []
-            attrs = dict(file_metadata=[])
+            attrs: dict[str, list] = dict(file_metadata=[])
             group_to_src[group] = sources
             group_to_attrs[group] = attrs
         else:
@@ -202,7 +202,7 @@ def _write_image(
     metadata: dict | None = None,
     compute: bool = True,
     **kwargs,
-) -> list[Delayed]:
+) -> list[Delayed] | None:
     """Write image data to Zarr or TIFF format.
 
     :param name: Name of the image.
@@ -228,11 +228,11 @@ def _write_image(
             save_ome_tiff(
                 data=image.data,
                 uri=image_path,
-                channel_names=image.coords.get("c"),
                 dim_order="".join(image.dims).upper(),
             )
         else:
             save_ome_tiff(data=image, uri=image_path)
+        return None
     else:
         raise ValueError(f"Unknown output format: {output_format}")
 

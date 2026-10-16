@@ -860,7 +860,7 @@ def random_effects_meta_analysis_mannwhitneyu(
     pvalues: Sequence[float],
     estimation_method: Literal["pm", "dl"] = "pm",
     alpha: float = 0.05,
-) -> namedtuple:
+) -> tuple:
     """Perform meta-analysis on Mann-Whitney U statistics by converting them to CLES, and then using
     statsmodels to combine the effect sizes under a random-effects model.
 

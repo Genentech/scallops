@@ -124,7 +124,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         ).compute()
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "extract-crops",
         help="Extract crops from labeled images.",

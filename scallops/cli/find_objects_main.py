@@ -16,7 +16,7 @@ def _run_pipeline_find_objects(arguments: argparse.Namespace):
     run_pipeline_find_objects(arguments)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "find-objects",
         help="Find objects in a labeled array.",

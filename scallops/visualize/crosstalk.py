@@ -8,13 +8,11 @@ Authors:
 
 from collections.abc import Callable
 from math import comb
-from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
-from matplotlib.axes import Axes
 from xarray import DataArray
 
 from scallops.reads import li_speed_slope
@@ -23,8 +21,8 @@ from scallops.visualize.utils import _figsize
 
 def pairwise_channel_scatter_plot(
     bases: DataArray | pd.DataFrame,
-    plot_func: Callable[[np.ndarray, np.ndarray, int, int, Axes, Any], None] = None,
-    q: tuple[float, ...] = None,
+    plot_func: Callable[..., None] | None = None,
+    q: tuple[float, ...] | None = None,
     col_wrap: int = 3,
     intensity_column: str = "intensity",
     **plot_args,

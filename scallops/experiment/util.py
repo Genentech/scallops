@@ -19,7 +19,7 @@ from scallops.experiment.elements import Experiment
 def map_images(
     experiment: Experiment | Sequence[Experiment],
     func: Callable,
-    keys: Sequence[str] = None,
+    keys: Sequence[str] | None = None,
     output_type: Literal["images", "labels"] = "images",
     **kwargs,
 ):

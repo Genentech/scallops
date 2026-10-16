@@ -26,7 +26,7 @@ def _run_illumination_correction_agg(arguments: argparse.Namespace):
     run_illumination_correction_agg(arguments)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     """Create a parser for the illumination correction module.
 
     :param subparsers: Subparsers object for adding subcommands.
@@ -48,7 +48,7 @@ def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> N
     _add_agg_parser(subparsers, default_help)
 
 
-def _add_agg_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _add_agg_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     """Add a parser for calculating illumination correction by aggregating images by mean or median.
 
     :param subparsers: Subparsers object for adding subcommands.

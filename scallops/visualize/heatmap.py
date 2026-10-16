@@ -41,10 +41,10 @@ logger = logging.getLogger("scallops")
 def plate_heatmap(
     df: pd.DataFrame,
     column: str,
-    tile_shape: tuple[int, int] = None,
+    tile_shape: tuple[int, int] | None = None,
     tile_layout: int = SNAKE_BY_ROWS_RIGHT_DOWN,
     cmap: str | Colormap = "viridis",
-    figsize: tuple[float, float] = None,
+    figsize: tuple[float, float] | None = None,
     colorbar_location: Literal["top", "bottom", "right", "left"] | None = "top",
     vmin_quantile: float = 0,
     vmax_quantile: float = 1,
@@ -440,7 +440,7 @@ def in_situ_identity_matrix_plot(
 
 def plot_well_aggregated_heatmaps(
     df: pd.DataFrame,
-    agg_function: callable,
+    agg_function: Callable,
     feature: str,
     grid_size: int = 40,
     plate_shape: tuple[int, int] = (2, 3),

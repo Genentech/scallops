@@ -92,7 +92,7 @@ def _get_dims(
 def apply_data_array(
     array: xr.DataArray,
     dims: list[str],
-    func: Callable[[xr.DataArray, Any], np.ndarray | xr.DataArray],
+    func: Callable[..., np.ndarray | xr.DataArray],
     missing_dims: Literal["ignore", "error"] = "ignore",
     **kwargs: Any,
 ) -> xr.DataArray:

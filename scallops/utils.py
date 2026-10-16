@@ -291,10 +291,12 @@ def _tqdm_shim(iterator, *args, **kwargs):
 
 def tqdm_func(progress: bool | str = True):
     progress_args = dict()
-    tqdm_ = _tqdm_shim
+    tqdm_: Any = _tqdm_shim
     if progress != False:  # noqa: E712
         try:
-            from tqdm import tqdm as tqdm_
+            from tqdm import tqdm
+
+            tqdm_ = tqdm
 
             if isinstance(progress, str):
                 progress_args["desc"] = progress
@@ -435,7 +437,9 @@ def mlcs(strings: Sequence[str]):
     strings = list(set(strings))  # deduplicate
     alphabet = set.intersection(*(set(s) for s in strings))
 
-    indexes = {letter: [[] for _ in strings] for letter in alphabet}
+    indexes: dict[str, list[list[int]]] = {
+        letter: [[] for _ in strings] for letter in alphabet
+    }
     for i, s in enumerate(strings):
         for j, letter in enumerate(s):
             if letter in alphabet:
@@ -458,7 +462,7 @@ def mlcs(strings: Sequence[str]):
             else:
                 yield distance, letter, candidate
 
-    result = []
+    result: list[str] = []
     while True:
         try:
             # Choose the closest candidate position, if any.
@@ -758,8 +762,8 @@ def forceTCZYX(array: DataArray, requires_dims: str = "tczyx") -> DataArray:
 def _block_full(
     a: np.ndarray,
     b: np.ndarray | None = None,
-    f: Callable[[np.ndarray, np.ndarray | None], float] = None,
-    ndim: int = None,
+    f: Callable[[np.ndarray, np.ndarray | None], float] | None = None,
+    ndim: int | None = None,
 ) -> np.ndarray:
     return np.full((1,) * ndim, f(a, b))
 
@@ -799,7 +803,7 @@ def _write_img_size(file_list: list[str]):
             local_file_list.append(local_path)
         else:
             local_file_list.append(path)
-    sizes = _images2fov(local_file_list, dask=True).sizes
+    sizes = _images2fov(local_file_list, attrs=None, dask=True).sizes
     for path in cleanup_file_list:
         os.remove(path)
     with open("img_size.txt", "wt") as f:

@@ -311,7 +311,7 @@ def imcomposite(
     col_facet: str | None = None,
     row_facet: str | None = None,
     col_wrap: int | None = 3,
-    figsize: tuple[int, int] = None,
+    figsize: tuple[int, int] | None = None,
     ax: plt.Axes | Sequence[plt.Axes] | None = None,
     rgb: bool = False,
     mask: np.ndarray | xr.DataArray | da.Array = None,
@@ -341,12 +341,15 @@ def imcomposite(
     :param labels_cmap: ListedColormap instance or registered colormap name used to
         map label data to colors.
     :param dim: Image dimension to blend.
-    :param facet: Image dimension to plot on different facet.
+    :param col_facet: Image dimension whose values are plotted on different facet columns.
+    :param row_facet: Image dimension whose values are plotted on different facet rows.
     :param col_wrap: Wrap the facet variable at this width, so that the facet values span multiple rows.
-    :param ax: Matplotlib axes to plot to. If facet is provided, a one dimensional array of axes corresponding to
-    length of facet values
+    :param ax: Matplotlib axes to plot to. If `col_facet` or `row_facet` is provided, a one
+        dimensional array of axes with one entry per facet.
     :param rgb: Whether the image is RGB or RGBA.
     :param mask: Mask pixels where mask == 0
+    :return: The axes plotted to, or an array of axes (one per facet) if `col_facet` or
+        `row_facet` is provided.
 
     :example:
 
@@ -488,7 +491,8 @@ def experiment_composite(
     :param exp: Scallop experiment to plot
     :param subset: List of image keys to plot, by default all present in `experiment`
     :param max_cols: Maximum number of plotting columns
-    :param kwargs: Key-word arguments passed to `single` plotting function
+    :param kwargs: Key-word arguments passed to :func:`imcomposite`
+    :return: Tuple of the figure and the array of axes (one per image)
     """
     image_keys = exp.images.keys() if subset is None else subset
     ncols = min(max_cols, len(image_keys))

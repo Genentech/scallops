@@ -464,7 +464,7 @@ def _create_funcs(
             for p in params_list[0]:
                 if p != "c":
                     new_params[p] = params_list[0][p]
-            f = partial(features_dict[func_name], **new_params)
+            f: Callable = partial(features_dict[func_name], **new_params)
             funcs.append(f)
         elif "c1" in params_list[0]:
             seen_symmetric = set()  # c1 always < c2

@@ -692,8 +692,8 @@ def _download_path(path, directory=None):
 def _download_paths(
     filelist: Sequence[Sequence[str]],
     suffixes: set[str] | None,
-    tmp_dir: str = None,
-    path_to_local_path: dict[str, str] = None,
+    tmp_dir: str | None = None,
+    path_to_local_path: dict[str, str] | None = None,
 ):
     if path_to_local_path is None:
         path_to_local_path = dict()

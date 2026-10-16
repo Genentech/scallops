@@ -24,7 +24,7 @@ from scallops.visualize.utils import _figsize
 
 def channel_hist_plot(
     image: Experiment | DataArray,
-    binrange: tuple[float, float] = None,
+    binrange: tuple[float, float] | None = None,
     bins: str | int | Sequence[float] = "auto",
     height: float = 5,
     aspect: float = 1,
@@ -97,7 +97,7 @@ def channel_hist_plot(
 def in_situ_barcode_hist_plot(
     reads_df: pd.DataFrame,
     counts: Sequence[int] | None = (0, 1, 2, 3, 4, 5),
-    hue: str = None,
+    hue: str | None = None,
     normalize: bool = True,
     **fig_kw,
 ) -> plt.Axes:

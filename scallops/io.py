@@ -151,6 +151,7 @@ def _dd_to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
             if not isinstance(parquet_delayed, Delayed)
             else bind(rm_delayed, parquet_delayed)
         )
+    return None
 
 
 def is_scallops_zarr(url: str) -> bool:
@@ -314,7 +315,7 @@ def _download_file(fs, path, suffix=None, tmp_dir: str | None = None):
 def _read_image(
     path: str | zarr.Group | Path,
     dask: bool = False,
-    scene_id: str = None,
+    scene_id: str | None = None,
     tmp_dir: str | None = None,
     **kwargs,
 ) -> xr.DataArray:
@@ -490,7 +491,7 @@ def save_ome_tiff(
     compute: bool = True,
     attrs: Mapping[str, Any] | None = None,
     ome_xml: str | OME = None,
-) -> list[Delayed]:
+) -> Delayed | None:
     """Save array to OME-TIFF format.
 
     This function saves the input data to an OME-TIFF file. If the specified URI is
@@ -500,11 +501,13 @@ def save_ome_tiff(
     :param data: The data to save.
     :param uri: URI to save the OME-TIFF file to.
     :param dim_order: Order of the dimensions.
-    :param compute: If true compute immediately otherwise a list
-        of :class:`dask.delayed.Delayed` is returned.
-    :return: Empty list if the compute flag is True, otherwise it returns a list of
-        :class:`dask.delayed.Delayed` representing the value to be computed by dask.
+    :param compute: If true compute immediately, otherwise a
+        :class:`dask.delayed.Delayed` is returned when `data` is a dask array.
     :param attrs: Key-values to save as map attributes
+    :param ome_xml: Optional OME metadata (OME-XML string or :class:`ome_types.OME`
+        instance) to write instead of the metadata generated from the data.
+    :return: None if the data was saved immediately, otherwise a
+        :class:`dask.delayed.Delayed` representing the value to be computed by dask.
 
     Example:
 
@@ -529,7 +532,7 @@ def save_ome_tiff(
     _save_ome_tiff(
         data=data, uri=uri, dim_order=dim_order, attrs=attrs, ome_xml=ome_xml
     )
-    return []
+    return None
 
 
 def _save_ome_tiff(
@@ -546,7 +549,7 @@ def _save_ome_tiff(
     :param dim_order: The dimension order of the data (e.g., "XYZCT").
         If None, it's inferred from the DataArray (default is None).
     :param attrs: Key-values to save as map attributes
-    :params ome_xml: Optional OME metadata
+    :param ome_xml: Optional OME metadata (OME-XML string or OME instance)
 
     :example:
     .. code-block:: python
@@ -567,7 +570,9 @@ def _save_ome_tiff(
     if attrs is not None:
         import bioio_base as biob
 
-        if ome_xml is None:
+        if isinstance(ome_xml, str):
+            ome_xml = ome_types.from_xml(ome_xml)
+        elif ome_xml is None:
             ome_xml = OmeTiffWriter.build_ome(
                 [data.shape],
                 [data.dtype],
@@ -660,7 +665,7 @@ def to_image_montage(
     experiment: Experiment,
     keys: list[str],
     path: str,
-    crop: int | tuple[int, int, int, int] = None,
+    crop: int | tuple[int, int, int, int] | None = None,
     **kwargs,
 ):
     """Create an image montage using the image keys from the specified experiment.
@@ -850,7 +855,7 @@ def read_experiment(
     return Experiment(images)
 
 
-def _match_size(images: list[xr.DataArray], fill_value: float = None):
+def _match_size(images: list[xr.DataArray], fill_value: float | None = None):
     """Ensure all the images are the same size.
 
     Images in an image stack might be slightly different sizes due to stitching differences
@@ -1272,7 +1277,7 @@ def _images2fov(
     attrs: dict[str, str | list[str]] | None,
     dask: bool = False,
     scene_id: str | None = None,
-    concat_dims: tuple[str] | None = ("z", "c", "t"),
+    concat_dims: tuple[str, ...] | None = ("z", "c", "t"),
     tmp_dir: str | None = None,
     **kwargs,
 ) -> xr.DataArray | list[xr.DataArray]:
@@ -1303,7 +1308,7 @@ def _images2fov(
     images = []
 
     file_metadata = attrs.get("file_metadata") if attrs is not None else None
-    group_metadata = attrs.get("group_metadata", {}) if attrs is not None else {}
+    group_metadata: dict = attrs.get("group_metadata", {}) if attrs is not None else {}
 
     if concat_dims is None:
         concat_dims = ()
@@ -1421,7 +1426,7 @@ def _images2fov(
     if len(file_list) == 1:
         image.attrs.update(image_attrs[0])
     else:
-        src_metadata = []
+        src_metadata: list[dict] = []
         image.attrs["src_metadata"] = src_metadata
 
         for i in range(len(file_list)):
@@ -2375,7 +2380,7 @@ def save_stack_imagej(
     display_ranges: tuple[tuple[int, int], ...] | None = None,
     resolution: float = 1.0,
     compress: Literal[0, 1] = 0,
-    dimensions: str = None,
+    dimensions: str | None = None,
     display_mode: Literal["composite", "color", "grayscale"] = "composite",
 ):
     """

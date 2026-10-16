@@ -1,3 +1,4 @@
+import argparse
 from argparse import (
     ArgumentDefaultsHelpFormatter,
     ArgumentParser,
@@ -45,7 +46,7 @@ def _run_pipeline_segment_cell(arguments: Namespace) -> None:
     _run_pipeline_segment_cell(arguments)
 
 
-def _create_parser(subparsers: ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     """Create the main segmentation parser.
 
     :param subparsers: Subparsers object to which segmentation parsers will be added.
@@ -122,7 +123,9 @@ def _add_common_args(parser: ArgumentParser) -> None:
     no_version_arg(parser)
 
 
-def _add_nuclei_parser(subparsers: ArgumentParser, default_help: bool = True) -> None:
+def _add_nuclei_parser(
+    subparsers: argparse._SubParsersAction, default_help: bool = True
+) -> None:
     """Add the parser for nuclei segmentation.
 
     :param subparsers: Subparsers object to which the nuclei parser will be added.
@@ -177,7 +180,9 @@ def _add_nuclei_parser(subparsers: ArgumentParser, default_help: bool = True) ->
     parser.set_defaults(func=_run_pipeline_segment_nuclei)
 
 
-def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> None:
+def _add_cell_parser(
+    subparsers: argparse._SubParsersAction, default_help: bool = True
+) -> None:
     """Add the parser for cell segmentation.
 
     :param subparsers: Subparsers object to which the cell parser will be added.
@@ -313,7 +318,7 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
     parser.set_defaults(func=_run_pipeline_segment_cell)
 
 
-def _overlap_parser(subparsers: ArgumentParser, default_help: bool) -> None:
+def _overlap_parser(subparsers: argparse._SubParsersAction, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "overlap",
         help="Find the fraction of `label-1` contained within `label-2",
