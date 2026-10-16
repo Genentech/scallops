@@ -38,6 +38,11 @@ RESAMPLING = (
 )
 
 
+def channel_key(name) -> str:
+    """Normalised channel name for matching: text (numbers are converted), surrounding spaces removed, lower case."""
+    return str(name).strip().lower()
+
+
 def parse_correction_channels(
     values: Sequence[str | int] | bool | str | None,
 ) -> list[int] | Literal["all"] | None:
@@ -82,7 +87,7 @@ def load_params(path: str) -> dict:
 
     :param path: Local path or fsspec URL of the JSON file.
     :return: Dict with ``path``, ``sha256``, ``tile_shape``, ``reference_channel`` (or ``None``) and ``channels``,
-        mapping each lower-cased channel name to ``dict(name, m, ty, tx, same_as)``, with ``same_as`` resolved.
+        mapping each channel's :func:`channel_key` to ``dict(name, m, ty, tx, same_as)``, with ``same_as`` resolved.
     """
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "rb") as f:
@@ -111,15 +116,17 @@ def load_params(path: str) -> dict:
     ):
         fail('"tile_shape" must be [height, width] in pixels.')
     reference = doc.get("reference_channel")
-    if reference is not None and not isinstance(reference, str):
-        fail('"reference_channel" must be a channel name.')
+    if reference is not None:
+        if isinstance(reference, (dict, list, bool)):
+            fail('"reference_channel" must be a channel name.')
+        reference = str(reference).strip()
     entries = doc.get("channels")
     if not isinstance(entries, dict) or len(entries) == 0:
         fail('"channels" must map channel names to parameters.')
 
     by_key = {}
     for name, entry in entries.items():
-        key = name.lower()
+        key = channel_key(name)
         if key in by_key:
             fail(f'channel names must be unique (case-insensitive): "{name}".')
         if not isinstance(entry, dict):
@@ -135,9 +142,13 @@ def load_params(path: str) -> dict:
                 fail(
                     f'entry for "{name}" has "same_as", so it cannot also have values.'
                 )
-            if not isinstance(source_name, str) or source_name.lower() not in by_key:
+            if (
+                isinstance(source_name, (dict, list, bool))
+                or channel_key(source_name) not in by_key
+            ):
                 fail(f'"{name}": "same_as" must name another channel in the file.')
-            target = by_key[source_name.lower()][1]
+            source_name = str(source_name).strip()
+            target = by_key[channel_key(source_name)][1]
             if "same_as" in target:
                 fail(
                     f'"{name}": "same_as" must point to an entry with values, not another "same_as".'
@@ -171,18 +182,20 @@ def resolve_channel_alignment(
     reference_channel: int,
     output_channels: Sequence[int] | None,
     tile_shape: tuple[int, int],
-) -> dict[int, dict]:
+) -> tuple[dict[int, dict], list[int]]:
     """Work out the parameters to apply to each channel of a stitched image.
 
     :param correction_channels: Parsed ``--alignment-correction-channels``.
-    :param params: Loaded parameter file (:func:`load_params`).
+    :param params: Loaded parameter file (:func:`load_params`), or ``None`` (every channel is estimated).
     :param channel_order: ``--alignment-correction-channel-order``: one parameter-file name per input channel
         (``-`` for a channel with no entry).
     :param n_channels: Number of input channels.
     :param reference_channel: Reference channel index (the stitch alignment channel).
     :param output_channels: Output channels, or ``None`` for all.
     :param tile_shape: Tile (height, width) in pixels.
-    :return: For each corrected input channel index: ``dict(name, m, ty, tx, source)``.
+    :return: ``(resolved, to_estimate)``: for each channel with parameter-file values, its input index ->
+        ``dict(name, m, ty, tx, same_as, source)``; and the input indices of the requested channels to estimate from
+        the images (no parameter file, or no entry in it).
     """
     if channel_order is None or len(channel_order) == 0:
         raise ValueError(
@@ -194,6 +207,7 @@ def resolve_channel_alignment(
             f"--alignment-correction-channel-order has {len(channel_order)} names, but the images have "
             f"{n_channels} channels: give one name per input channel, in input order."
         )
+    channel_order = [str(n).strip() for n in channel_order]
     if not 0 <= reference_channel < n_channels:
         raise ValueError(
             f"Reference channel {reference_channel} (--align-channel) is out of range for {n_channels} channels."
@@ -224,20 +238,21 @@ def resolve_channel_alignment(
                 requested.append(c)
 
     if params is None:
-        raise ValueError(
-            "--alignment-correction-params is required: estimating the parameters from the images is not "
-            "available yet. Give a parameter file with values for every channel to correct."
-        )
+        if requested:
+            logger.info(
+                "No --alignment-correction-params: estimating the alignment of channel(s) "
+                f"{', '.join(f'{c} ({channel_order[c]})' for c in requested)} from the images of each well."
+            )
+        return {}, requested
     if tuple(params["tile_shape"]) != tuple(tile_shape):
         raise ValueError(
             f"Parameter file {params['path']} is for tiles of {params['tile_shape'][0]} x "
             f"{params['tile_shape'][1]} px, but these tiles are {tile_shape[0]} x {tile_shape[1]} px."
         )
     reference_name = channel_order[reference_channel]
-    if (
-        params["reference_channel"] is not None
-        and reference_name.lower() != params["reference_channel"].lower()
-    ):
+    if params["reference_channel"] is not None and channel_key(
+        reference_name
+    ) != channel_key(params["reference_channel"]):
         raise ValueError(
             f"Parameter file {params['path']} is relative to reference channel "
             f'"{params["reference_channel"]}", but the reference channel (--align-channel {reference_channel}) '
@@ -248,9 +263,9 @@ def resolve_channel_alignment(
     missing = []
     for c in requested:
         name = channel_order[c]
-        entry = params["channels"].get(name.lower()) if name != "-" else None
+        entry = params["channels"].get(channel_key(name)) if name != "-" else None
         if entry is None:
-            missing.append(f"{c} ({name})")
+            missing.append(c)
             continue
         resolved[c] = dict(
             name=name,
@@ -261,12 +276,12 @@ def resolve_channel_alignment(
             source="params_file",
         )
     if missing:
-        raise ValueError(
-            f"No entry in parameter file {params['path']} for channel {', '.join(missing)}. Estimating the "
-            "parameters from the images is not available yet: add the channel to the parameter file, or leave "
-            "it out of --alignment-correction-channels."
+        logger.warning(
+            f"No entry in parameter file {params['path']} for channel(s) "
+            f"{', '.join(f'{c} ({channel_order[c]})' for c in missing)}: estimating their alignment from the images "
+            "of each well."
         )
-    return resolved
+    return resolved, missing
 
 
 def alignment_coords(
@@ -341,15 +356,97 @@ def warp_image(
     return np.clip(out, lo, hi, out=out)
 
 
+def _file_channel_name(path: str, index: int = 0) -> str | None:
+    """Channel name recorded in an image file's metadata, if any (IXM/MetaXpress ``_IllumSetting_``, else OME)."""
+    import re
+
+    from scallops.io import _create_image
+
+    img = _create_image(path)
+    try:
+        attrs = img.xarray_dask_data.attrs
+        xml = attrs.get("unprocessed", {}).get(270) if isinstance(attrs, dict) else None
+        if isinstance(xml, str):
+            m = re.search(r'<prop id="_IllumSetting_"[^>]*value="([^"]*)"', xml)
+            if m:
+                return m.group(1)
+    except Exception:  # noqa: BLE001 - metadata is optional
+        pass
+    try:
+        names = img.channel_names
+        if (
+            names
+            and index < len(names)
+            and not str(names[index]).startswith("Channel:")
+        ):  # bioio placeholder
+            return str(names[index])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def metadata_channel_names(
+    file_list: Sequence[str], attrs: dict | None, n_channels: int
+) -> list[str | None]:
+    """The image metadata's name of each input channel of one tile (``None`` where the metadata has none).
+
+    Only used to cross-check ``--alignment-correction-channel-order``; it never decides which parameters apply.
+    """
+    names: list[str | None] = [None] * n_channels
+    try:
+        meta = attrs.get("file_metadata") if attrs else None
+        if meta and len(file_list) > 1 and "c" in meta[0]:  # one file per channel
+            seen = []
+            for path, md in zip(file_list, meta):
+                if md["c"] not in seen:
+                    seen.append(md["c"])
+                    if len(seen) <= n_channels:
+                        names[len(seen) - 1] = _file_channel_name(path)
+        else:
+            for c in range(n_channels):
+                names[c] = _file_channel_name(file_list[0], c)
+    except Exception as e:  # noqa: BLE001 - metadata is optional
+        logger.debug(f"Could not read channel names from the image metadata: {e}")
+    return names
+
+
+def check_channel_order(
+    channel_order: Sequence[str], metadata_names: Sequence[str | None]
+) -> None:
+    """Warn where --alignment-correction-channel-order and the image metadata name a channel differently."""
+    for c, (given, meta) in enumerate(zip(channel_order, metadata_names)):
+        if (
+            meta is not None
+            and str(given).strip() != "-"
+            and channel_key(given) != channel_key(meta)
+        ):
+            logger.warning(
+                f"Channel {c}: --alignment-correction-channel-order says '{given}' but the image metadata says "
+                f"'{meta}'. Check the order (the names may just be written differently)."
+            )
+
+
 def record(
     resolved: dict[int, dict],
-    params: dict,
+    params: dict | None,
     channel_order: Sequence[str],
     channel_names: Sequence[str] | None,
     reference_channel: int,
     radial_correction_k: float | None,
+    metadata_names: Sequence[str | None] | None = None,
+    estimation: dict | None = None,
 ) -> dict:
-    """JSON-serializable record of the alignment applied to a stitched image."""
+    """JSON-serializable record of the alignment applied to a stitched image.
+
+    :param resolved: Input channel index -> ``dict(name, m, ty, tx, same_as, source[, estimate])``.
+    :param estimation: Well-level information of :func:`scallops.stitch._channel_align_estimate.estimate_well`
+        (settings, tile pool), if any channel was estimated.
+    """
+    meta = (
+        list(metadata_names)
+        if metadata_names is not None
+        else [None] * len(channel_order)
+    )
     return dict(
         model="corrected(y, x) = raw(c + (1 + m) * ((y, x) - c) + (ty, tx)); c = (H/2, W/2); px; "
         "relative to the reference channel; composed with the radial correction",
@@ -359,21 +456,36 @@ def record(
             index=reference_channel,
             name=channel_order[reference_channel],
             channel_name=channel_names[reference_channel] if channel_names else None,
+            metadata_name=meta[reference_channel],
         ),
-        params_file=dict(path=params["path"], sha256=params["sha256"]),
+        params_file=dict(path=params["path"], sha256=params["sha256"])
+        if params
+        else None,
+        channel_identification=[
+            dict(
+                index=c,
+                name=channel_order[c],
+                channel_name=channel_names[c] if channel_names else None,
+                metadata_name=meta[c],
+            )
+            for c in range(len(channel_order))
+        ],
         channels=[
             dict(
                 index=c,
                 name=a["name"],
                 channel_name=channel_names[c] if channel_names else None,
+                metadata_name=meta[c],
                 m=a["m"],
                 ty=a["ty"],
                 tx=a["tx"],
-                same_as=a["same_as"],
+                same_as=a.get("same_as"),
                 source=a["source"],
+                estimate=a.get("estimate"),
             )
             for c, a in sorted(resolved.items())
         ],
+        estimation=estimation,
     )
 
 

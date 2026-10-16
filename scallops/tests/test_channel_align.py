@@ -10,6 +10,7 @@ from skimage.registration import phase_cross_correlation
 from scallops.io import read_image
 from scallops.stitch._channel_align import (
     alignment_coords,
+    check_channel_order,
     load_params,
     parse_correction_channels,
     resolve_channel_alignment,
@@ -94,19 +95,26 @@ def test_resolve_channel_alignment(tmp_path):
         output_channels=None,
         tile_shape=(TILE, TILE),
     )
-    order = ["CY7", "tl", "dapi", "FITC"]
-    r = resolve_channel_alignment("all", channel_order=order, **kw)
-    assert sorted(r) == [0, 1, 3]
+    order = ["CY7", " tl", "dapi", "FITC"]  # case and surrounding spaces don't matter
+    r, est = resolve_channel_alignment("all", channel_order=order, **kw)
+    assert sorted(r) == [0, 1, 3] and est == []
     assert r[1]["m"] == 0.00075 and r[1]["same_as"] == "FITC"
     assert r[0]["ty"] == 0.95
     # the reference is skipped, channels outside the output are skipped
-    r = resolve_channel_alignment(
+    r, est = resolve_channel_alignment(
         [0, 2], channel_order=order, **dict(kw, output_channels=[1, 2, 3])
     )
-    assert r == {}
-    # missing entry, wrong length, wrong reference, wrong tile shape, out of range
-    with pytest.raises(ValueError, match="No entry"):
-        resolve_channel_alignment([1], channel_order=["CY7", "-", "DAPI", "FITC"], **kw)
+    assert r == {} and est == []
+    # no entry ('-' or not in the file): estimated; no parameter file: every requested channel is estimated
+    r, est = resolve_channel_alignment(
+        [0, 1, 3], channel_order=["CY7", "-", "DAPI", "CY5"], **kw
+    )
+    assert sorted(r) == [0] and est == [1, 3]
+    r, est = resolve_channel_alignment(
+        "all", channel_order=order, **dict(kw, params=None)
+    )
+    assert r == {} and est == [0, 1, 3]
+    # wrong length, wrong reference, wrong tile shape, out of range
     with pytest.raises(ValueError, match="has 3 names"):
         resolve_channel_alignment("all", channel_order=order[:3], **kw)
     with pytest.raises(ValueError, match="reference channel"):
@@ -121,6 +129,34 @@ def test_resolve_channel_alignment(tmp_path):
         resolve_channel_alignment([5], channel_order=order, **kw)
     with pytest.raises(ValueError, match="required"):
         resolve_channel_alignment("all", channel_order=None, **kw)
+
+
+def test_channel_names_are_text_and_case_insensitive(tmp_path):
+    doc = _params_doc(
+        **{"405": {"m": 0.0, "ty": 0.0, "tx": 0.0}, "Cy7": {"same_as": 405}}
+    )
+    doc["reference_channel"] = 405
+    params = load_params(_write_params(tmp_path / "p.json", doc))
+    assert (
+        params["reference_channel"] == "405"
+        and params["channels"]["cy7"]["same_as"] == "405"
+    )
+    r, est = resolve_channel_alignment(
+        "all",
+        params=params,
+        channel_order=[405, "CY7"],
+        n_channels=2,
+        reference_channel=0,
+        output_channels=None,
+        tile_shape=(TILE, TILE),
+    )
+    assert sorted(r) == [1] and est == [] and r[1]["name"] == "CY7"
+
+
+def test_check_channel_order_warns_on_mismatch(caplog):
+    check_channel_order(["DAPI", "cy7", "-", "FITC"], ["dapi", "CY5", "TRITC", None])
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1 and "Channel 1" in warnings[0] and "CY5" in warnings[0]
 
 
 def test_alignment_coords_match_radial_mapping():
@@ -251,13 +287,17 @@ def test_stitch_alignment_correction(tmp_path):
             index=1,
             name="CY7",
             channel_name=None,
+            metadata_name=None,
             m=M,
             ty=TY,
             tx=TX,
             same_as=None,
             source="params_file",
+            estimate=None,
         )
     ]
+    assert [c["name"] for c in record["channel_identification"]] == ["DAPI", "CY7"]
+    assert record["estimation"] is None
     meta = json.loads(
         pq.read_schema(tmp_path / "stitch" / "A1-positions.parquet").metadata[
             b"scallops"

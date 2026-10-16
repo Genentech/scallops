@@ -371,14 +371,11 @@ def run_stitch(args: argparse.Namespace) -> None:
                 "the parameter-file name of every input channel, in input order (use - for a channel with no "
                 "entry)."
             )
-        if args.alignment_correction_params is None:
-            raise ValueError(
-                "--alignment-correction-params is required with --alignment-correction-channels: estimating "
-                "the parameters from the images is not available yet."
-            )
         alignment_correction = dict(
             channels=correction_channels,
-            params=load_params(args.alignment_correction_params),
+            params=load_params(args.alignment_correction_params)
+            if args.alignment_correction_params is not None
+            else None,
             channel_order=args.alignment_correction_channel_order,
         )
         if no_save_image:
