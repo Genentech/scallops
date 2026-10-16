@@ -42,7 +42,7 @@ from scallops.features.generate import label_features, normalize_features
 from scallops.features.util import _get_names_from_pd_query
 from scallops.io import (
     _dd_to_parquet,
-    _images2fov,
+    _images2fov_array,
     _pd_to_parquet,
     _set_up_experiment,
     is_parquet_file,
@@ -126,8 +126,7 @@ def _read_image(file_list: Sequence[str | Group], metadata: dict) -> xr.DataArra
     :param metadata: Dictionary containing metadata associated with the images.
     :return: DataArray containing the processed image data.
     """
-    image = _images2fov(file_list, metadata, dask=True)
-    assert isinstance(image, xr.DataArray)
+    image = _images2fov_array(file_list, metadata, dask=True)
     dims = tuple([d for d in ["t", "c", "z"] if d in image.dims])
 
     if len(dims) > 0:

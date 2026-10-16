@@ -1,8 +1,7 @@
-from typing import Literal, cast
+from typing import Literal
 
 import dask.array as da
 import fsspec
-import xarray as xr
 from array_api_compat import get_namespace
 from numpy.typing import NDArray
 from skimage.util import img_as_ubyte
@@ -17,7 +16,7 @@ from scallops.features.constants import (
     _label_name_to_prefix,
 )
 from scallops.io import (
-    _images2fov,
+    _images2fov_array,
     _pd_to_parquet,
     is_parquet_file,
     to_label_crops,
@@ -66,9 +65,7 @@ def single_crop(
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_fs.makedirs(output_dir, exist_ok=True)
-    image = (
-        cast(xr.DataArray, _images2fov(file_list, metadata, dask=True)).squeeze().data
-    )
+    image = _images2fov_array(file_list, metadata, dask=True).squeeze().data
     logger.info(f"{image_key} image shape {image.shape}")
     label_image = None
     if labels_group is not None:

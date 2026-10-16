@@ -18,7 +18,7 @@ import skimage
 import xarray as xr
 from numpy.typing import NDArray
 
-from scallops.io import _images2fov
+from scallops.io import _images2fov_array
 from scallops.stitch.utils import _init_tiles
 from scallops.xr import _z_projection, apply_data_array
 
@@ -164,13 +164,12 @@ def illumination_correction(
             cast(Sequence, z_index)[i] if z_index_per_tile else z_index,
         )
 
-        image = _images2fov(
+        image = _images2fov_array(
             file_list,
             attrs,
             dask=True,
             scene_id=i if n_scenes is not None else None,
         )
-        assert isinstance(image, xr.DataArray)
         if t_index is not None and "t" in image.dims:
             image = image.isel(t=t_index)
         image = (

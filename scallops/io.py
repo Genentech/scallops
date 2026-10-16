@@ -1473,6 +1473,27 @@ def _images2fov(
     return image
 
 
+def _images2fov_array(
+    file_list: Sequence[str | zarr.Group] | zarr.Group,
+    attrs: dict[str, Any] | None,
+    **kwargs,
+) -> xr.DataArray:
+    """Like :func:`_images2fov`, but raises if the images cannot be concatenated into
+    a single DataArray.
+
+    :param file_list: List of file paths or a Zarr group containing the images.
+    :param attrs: Attributes containing metadata for the images.
+    :param kwargs: Additional arguments passed to :func:`_images2fov`.
+    :return: The images as a field of view represented as a DataArray.
+    """
+    image = _images2fov(file_list, attrs, **kwargs)
+    if not isinstance(image, xr.DataArray):
+        raise ValueError(
+            f"Unable to concatenate {len(image)} images into a single field of view"
+        )
+    return image
+
+
 def _create_file_regex(
     files_pattern: str, flags: int = re.IGNORECASE
 ) -> tuple[re.Pattern[str], str, KeysView[str]]:

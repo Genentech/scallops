@@ -408,7 +408,8 @@ def imcomposite(
             fig, axs = plt.subplots(
                 ncols=ncol, nrows=nrow, figsize=figsize, layout="compressed"
             )
-            ax = axs.ravel()
+            # a single Axes is returned when nrow == ncol == 1
+            ax = np.atleast_1d(axs).ravel()
         for i in range(len(ax)):
             ax[i].axis("off")
         index = 0
@@ -487,7 +488,7 @@ def experiment_composite(
     max_cols: int = 3,
     figsize: tuple[int, int] = (5, 5),
     **kwargs,
-) -> tuple[plt.Figure, NDArray[plt.Axes]]:
+) -> tuple[plt.Figure, plt.Axes | NDArray[plt.Axes]]:
     """Plot an experiment (one image per axis) composite using additive blending.
 
     :param figsize: Figure size
@@ -495,21 +496,19 @@ def experiment_composite(
     :param subset: List of image keys to plot, by default all present in `experiment`
     :param max_cols: Maximum number of plotting columns
     :param kwargs: Key-word arguments passed to :func:`imcomposite`
-    :return: Tuple of the figure and the 2D array of axes (one per image)
+    :return: Tuple of the figure and the array of axes (one per image)
     """
     image_keys = exp.images.keys() if subset is None else subset
     ncols = min(max_cols, len(image_keys))
     nrows = math.ceil(len(image_keys) / ncols)
     f, axs = plt.subplots(
-        nrows=nrows,
-        ncols=ncols,
-        layout="constrained",
-        figsize=figsize,
-        squeeze=False,
+        nrows=nrows, ncols=ncols, layout="constrained", figsize=figsize
     )
-    for ax in axs.flat:
+    # a single Axes is returned when nrows == ncols == 1
+    axs_array = np.atleast_1d(axs)
+    for ax in axs_array.flat:
         ax.set_axis_off()
-    for im, ax in zip(image_keys, axs.flat):
+    for im, ax in zip(image_keys, axs_array.flat):
         ind_kwargs = copy(kwargs)
         if "labels" in ind_kwargs:
             ind_kwargs["labels"] = ind_kwargs["labels"].labels[im]

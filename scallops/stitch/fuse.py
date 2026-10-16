@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import psutil
 import shapely
-import xarray as xr
 import zarr
 from dask import delayed
 from dask.diagnostics import ProgressBar
@@ -20,7 +19,7 @@ from skimage.transform import SimilarityTransform, warp
 from skimage.util import img_as_float
 from sklearn.cluster import AgglomerativeClustering
 
-from scallops.io import _images2fov, _localize_path, pluralize
+from scallops.io import _images2fov, _images2fov_array, _localize_path, pluralize
 from scallops.registration.crosscorrelation import _apply_window, _filter_percentiles
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import calc_best_shift
@@ -97,8 +96,9 @@ def _fuse(
         local_image0_paths[i] if local_image0_paths[i] is not None else image0_paths[i]
         for i in range(len(image0_paths))
     ]
-    img = _images2fov(image0_paths, image0_attrs, scene_id=0 if has_scenes else None)
-    assert isinstance(img, xr.DataArray)
+    img = _images2fov_array(
+        image0_paths, image0_attrs, scene_id=0 if has_scenes else None
+    )
 
     for path in local_image0_paths:
         if path is not None:

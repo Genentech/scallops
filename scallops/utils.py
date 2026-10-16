@@ -793,7 +793,7 @@ def dask_chunk_stats(
 
 
 def _write_img_size(file_list: list[str]):
-    from scallops.io import _images2fov, _localize_path
+    from scallops.io import _images2fov_array, _localize_path
 
     local_file_list = []
     cleanup_file_list = []
@@ -804,8 +804,7 @@ def _write_img_size(file_list: list[str]):
             local_file_list.append(local_path)
         else:
             local_file_list.append(path)
-    img = _images2fov(local_file_list, attrs=None, dask=True)
-    assert isinstance(img, DataArray)
+    img = _images2fov_array(local_file_list, attrs=None, dask=True)
     sizes = img.sizes
     for path in cleanup_file_list:
         os.remove(path)
