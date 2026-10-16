@@ -211,7 +211,6 @@ def spot_detection_pipeline(
     :param z_index: Either 'max' or z-index
     :param sigma_log: Sigma parameter for log transformation in spot detection.
     :param save_keys: List of keys specifying which results to save.
-    :param output_image_format: Output format for saved images.
     :param cycles: Optional list of cycle indices to process.
     :param percentile_min: Minimum percentile for normalization
     :param percentile_max: Maximum percentile for normalization
@@ -342,7 +341,6 @@ def spot_detection_pipeline(
                 root=root,
                 image=std_arr,
                 compute=compute,
-                zarr_format="zarr",
             )
         )
     else:

@@ -11,7 +11,6 @@ import json
 import warnings
 from collections.abc import Collection, Iterable, Sequence
 from itertools import zip_longest
-from typing import get_type_hints
 
 import dask.array
 import dask.array as da
@@ -34,7 +33,6 @@ from scallops.cli.util import (
 )
 from scallops.features._plot import _plot_features
 from scallops.features.constants import (
-    _features,
     _features_multichannel,
     _features_single_channel,
     _label_name_to_prefix,
@@ -145,30 +143,6 @@ def _read_image(file_list: Sequence[str | Group], metadata: dict) -> xr.DataArra
         # add trailing c dimension
         image = image.expand_dims("c", -1)
     return image
-
-
-def _get_feature_channel_indices(tokens):
-    """Get indices of channel parameters in a feature name.
-
-    This function identifies the positions of channel indices in the list of tokens representing a
-    feature name. It uses the feature method name to look up parameter types and returns the indices
-    of parameters that are channel indices.
-
-    :param tokens: List of tokens obtained by splitting the feature name.
-    :return: List of indices corresponding to channel parameters in the feature name.
-    """
-    method_name = tokens[0]
-    f = _features.get(method_name)
-    if f is None:
-        return []
-    parameters = get_type_hints(f)
-    parameter_names = list(parameters)
-    return [
-        i
-        for i in range(1, len(tokens))
-        if (parameter_name := parameter_names[i - 1]) in ["c", "c1", "c2"]
-        and parameters[parameter_name] in [int, Sequence[int]]
-    ]
 
 
 def single_feature(
