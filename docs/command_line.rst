@@ -211,6 +211,8 @@ Key Features:
   in overlapping regions.
 * **Crop**: Crop image tiles to remove edge effects.
 * **Radial Correction**: Automatically determine K for radial distortion and apply radial correction.
+* **Channel Alignment Correction**: Align channels to the reference channel (magnification and translation per channel)
+  using values from a parameter file or estimated from the tiles of each well.
 * **Stitching Evaluation**: Compute error in overlapping regions after stitching.
 
 .. argparse::

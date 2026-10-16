@@ -55,5 +55,39 @@ FAQ
         user	0m4.659s
         sys	0m6.972s
 
+#. My channels are not aligned with each other in the stitched image.
+    Chromatic aberration can make each channel slightly magnified and shifted relative to the others. Use
+    ``--alignment-correction-channels`` to align channels to the reference channel (``--align-channel``) when writing
+    the stitched image, and ``--alignment-correction-channel-order`` to name every input channel, in input order (use
+    ``-`` for a channel without values). Names are matched to the parameter file as text, ignoring case.
+
+    Values are read from a JSON parameter file (``--alignment-correction-params``), usually one per microscope.
+    ``m`` is the magnification about the tile centre and ``ty``, ``tx`` the translation in pixels, such that
+    ``corrected(y, x) = raw(c + (1 + m) * ((y, x) - c) + (ty, tx))`` with ``c`` the tile centre. ``same_as`` reuses the
+    values of another channel.
+
+    Example::
+
+        {
+          "format": "scallops-channel-alignment",
+          "version": 1,
+          "tile_shape": [2304, 2304],
+          "reference_channel": "DAPI",
+          "channels": {
+            "FITC": {"m": 0.000751, "ty": 0.341, "tx": -0.162},
+            "CY7": {"m": -0.001493, "ty": 0.950, "tx": 0.300}
+          }
+        }
+
+    Channels without values (or all channels, if no parameter file is given) are estimated from up to 100 interior
+    tiles of each well, using the nuclei of the reference channel, which must be a nuclear stain such as DAPI. If an
+    estimate fails its quality checks, stitching stops with an error; give values for that channel in the parameter
+    file or leave it out of ``--alignment-correction-channels``. The values applied to each image are saved to
+    ``<image>-channel-alignment.json`` in the report output and to the stitched image metadata.
+
+    When channel alignment is requested, every output channel is resampled once with a quintic B-spline (alignment and
+    radial correction combined) instead of the bilinear radial correction, to keep fine detail.
+    ``--alignment-correction-channels`` cannot be combined with ``--channel-reference``.
+
 .. _fsspec: https://filesystem-spec.readthedocs.io/
 .. _`fsspec configuration documentation`: https://filesystem-spec.readthedocs.io/en/latest/features.html#configuration
