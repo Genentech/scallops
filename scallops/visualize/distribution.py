@@ -575,7 +575,7 @@ def cdf_plot(
 
     df = df[
         df[groupby_column].isin(
-            targets + ([reference_group] if reference_group is not None else [])
+            list(targets) + ([reference_group] if reference_group is not None else [])
         )
     ]
     feature_values = df[feature].dropna().values

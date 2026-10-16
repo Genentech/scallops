@@ -128,7 +128,7 @@ def _create_dd_metadata(
 
 def _rewrite_channels(
     funcs, all_required_channels: NDArray, channel_names: list[str]
-) -> NDArray:
+) -> list[str]:
     channel_names_subset = []
     channel_map = dict()
     for i in range(len(all_required_channels)):
@@ -598,20 +598,25 @@ def _get_params(
         elif get_origin(annotation) is Literal and all(
             isinstance(arg, str) for arg in get_args(annotation)
         ):
-            if value not in get_args(annotation):
+            # feature names may be lower-cased, so match case-insensitively
+            choices = {arg.lower(): arg for arg in get_args(annotation)}
+            if value.lower() not in choices:
                 raise ValueError(
                     f"Invalid value {value} for {parameter_name} in {name}. "
                     f"Must be one of {get_args(annotation)}"
                 )
-            params[parameter_name] = value
+            params[parameter_name] = choices[value.lower()]
         else:
             if annotation not in (
                 np.ndarray,
                 NDArray,
+                Union[np.ndarray, None],
+                Union[NDArray, None],
                 Sequence[str],
                 Union[Sequence[str], None],
             ):
                 raise ValueError(
                     f"{parameter_name} not supported for {name} for type {annotation}"
                 )
+
     return method_name, params

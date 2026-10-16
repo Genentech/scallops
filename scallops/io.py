@@ -502,7 +502,8 @@ def save_ome_tiff(
 
     :param data: The data to save.
     :param uri: URI to save the OME-TIFF file to.
-    :param dim_order: Order of the dimensions.
+    :param dim_order: Order of the dimensions. If None and `data` is a DataArray, it's
+        inferred from `data.dims`.
     :param compute: If true compute immediately, otherwise a
         :class:`dask.delayed.Delayed` is returned when `data` is a dask array.
     :param attrs: Key-values to save as map attributes
@@ -527,7 +528,10 @@ def save_ome_tiff(
         uri = "path/to/save/file.ome.tiff"
         scallops.io.save_ome_tiff(data, uri)
     """
-    data = data.data if isinstance(data, xr.DataArray) else data
+    if isinstance(data, xr.DataArray):
+        if dim_order is None:
+            dim_order = "".join([str(d).upper() for d in data.dims])
+        data = data.data
     if isinstance(data, da.Array) and not compute:
         _save_ome_tiff_delayed = dask.delayed(_save_ome_tiff)
         return _save_ome_tiff_delayed(
@@ -562,7 +566,6 @@ def _save_ome_tiff(
     :param data: The image data to be saved.
     :param uri: The file path or URI where the OME-TIFF file will be saved.
     :param dim_order: The dimension order of the data (e.g., "XYZCT").
-        If None, it's inferred from the DataArray (default is None).
     :param attrs: Key-values to save as map attributes
     :param ome_xml: Optional OME metadata (OME-XML string or OME instance)
     :param channel_names: Optional channel names, ignored when `ome_xml` is provided
@@ -573,8 +576,6 @@ def _save_ome_tiff(
         # Example usage of _save_ome_tiff
         _save_ome_tiff(image_data, "output.ome.tiff", dim_order="XYZCT")
     """
-    if dim_order is None and isinstance(data, xr.DataArray):
-        dim_order = "".join([str(d).upper() for d in data.dims])
     fs, _ = fsspec.core.url_to_fs(uri)
     local_path = uri
 
