@@ -83,9 +83,13 @@ def _browse_regions_or_labels(
     if image2 is not None:
         assert image1.shape == image2.shape
     image_spacing = get_image_spacing(image1.attrs)
-    padding_px = None
-    if padding is not None:
-        padding_px = (np.array([padding, padding]) / image_spacing).astype(int)
+
+    padding_px = (
+        np.zeros(2, dtype=int)
+        if padding is None
+        else (np.array([padding, padding]) / image_spacing).astype(int)
+    )
+
     chunk_out = widgets.Output()
     if y_indices is not None:
         assert x_indices is not None
