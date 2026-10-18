@@ -45,8 +45,8 @@ def browse_labels(
 def browse_image_regions(
     image1: xr.DataArray,
     image2: xr.DataArray | None,
-    y_indices: NDArray[int],
-    x_indices: NDArray[int],
+    y_indices: NDArray[np.integer],
+    x_indices: NDArray[np.integer],
     labels: xr.DataArray | None = None,
     figsize: tuple[int, int] = (10, 10),
 ) -> widgets.Widget:

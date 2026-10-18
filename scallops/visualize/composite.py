@@ -488,7 +488,7 @@ def experiment_composite(
     max_cols: int = 3,
     figsize: tuple[int, int] = (5, 5),
     **kwargs,
-) -> tuple[plt.Figure, plt.Axes | NDArray[plt.Axes]]:
+) -> tuple[plt.Figure, plt.Axes | np.ndarray[tuple[int], plt.Axes]]:
     """Plot an experiment (one image per axis) composite using additive blending.
 
     :param figsize: Figure size

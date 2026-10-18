@@ -18,7 +18,7 @@ def _max_shift_vs_zncc_plot(
     shifts_before_stitching: NDArray,
     spanning_tree_edges: Sequence[tuple[int, int]] | None,
     pairs: Sequence[tuple[int, int]],
-    valid_edges: NDArray[bool],
+    valid_edges: NDArray[np.bool_],
     max_shift: float | None = None,
 ):
     fig, ax = plt.subplots()

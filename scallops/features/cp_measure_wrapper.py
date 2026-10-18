@@ -64,7 +64,7 @@ def cp_colocalization(
     label_image: NDArray,
     intensity_image: NDArray,
 ) -> dict[str, Any]:
-    pass
+    raise NotImplementedError()
 
 
 def _cp_colocalization_pairs(

@@ -110,7 +110,7 @@ def _match_template_physical_space_inputs(
         int(
             min(
                 template.data.shape[1],
-                template_end[1] + template_padding_px[1] + +translation[1],
+                template_end[1] + template_padding_px[1] + translation[1],
             )
         ),
     )

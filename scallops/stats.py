@@ -11,7 +11,7 @@ import warnings
 from collections import namedtuple
 from functools import partial
 from math import comb
-from typing import Collection, Literal, Sequence
+from typing import Collection, Literal, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -900,14 +900,13 @@ def random_effects_meta_analysis_mannwhitneyu(
     )
     pvalue = fisher_combined_pvalue(pvalues)
     u_values: Collection[float]
-    if isinstance(U_statistics, Sequence):
+    if not isinstance(U_statistics, Mapping):
         row_names = None
         u_values = U_statistics
-    elif isinstance(U_statistics, dict):
+    else:
         row_names = list(U_statistics.keys())
         u_values = U_statistics.values()
-    else:
-        raise NotImplementedError
+
     cles = np.zeros(len(u_values))
     variances = np.zeros(len(u_values))
     for i, (U, (n1, n2)) in enumerate(zip(u_values, sample_sizes)):

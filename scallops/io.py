@@ -2606,7 +2606,7 @@ def create_multiscene_hyperstack(
     """
 
     assert set(output_order) <= set("sctzyx"), (
-        "output_order can only contain s, c, tm z, y, and x"
+        "output_order can only contain s, c, t, z, y, and x"
     )
 
     names, data = zip(
