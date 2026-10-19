@@ -77,7 +77,12 @@ def _cp_colocalization_pairs(
     **kwargs,
 ) -> dict[str, Any]:
     all_results = {}
-    scale_max = np.iinfo(intensity_image_original_dtype).max
+    scale_max = (
+        np.iinfo(intensity_image_original_dtype).max
+        if intensity_image_original_dtype is not None
+        and np.issubdtype(intensity_image_original_dtype, np.integer)
+        else 65535
+    )
     for c_pair in c:
         results = {}
         img1 = intensity_image[..., c_pair[0]]
