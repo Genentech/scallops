@@ -84,7 +84,9 @@ def _feature_block(
     label_image = relabel_sequential(label_image)
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
+    intensity_image_original_dtype = None
     if intensity_image is not None:
+        intensity_image_original_dtype = intensity_image.dtype
         if normalize:
             intensity_image = skimage.util.img_as_float(intensity_image)
         # a sequence of zarrs was combined into a single array above
@@ -101,6 +103,7 @@ def _feature_block(
                 label_image=label_image,
                 label_image_original=label_image_original,
                 intensity_image=intensity_image,
+                intensity_image_original_dtype=intensity_image_original_dtype,
                 offset=offset,
             )
         )

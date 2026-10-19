@@ -7,6 +7,7 @@ Authors:
 from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
 from cp_measure.core.measurecolocalization import (
     get_correlation_costes,
     get_correlation_manders_fold,
@@ -72,16 +73,20 @@ def _cp_colocalization_pairs(
     channel_names: Sequence[str],
     label_image: NDArray,
     intensity_image: NDArray,
+    intensity_image_original_dtype: np.dtype,
     **kwargs,
 ) -> dict[str, Any]:
     all_results = {}
+    scale_max = np.iinfo(intensity_image_original_dtype).max
     for c_pair in c:
         results = {}
         img1 = intensity_image[..., c_pair[0]]
         img2 = intensity_image[..., c_pair[1]]
         channel_name1 = channel_names[c_pair[0]]
         channel_name2 = channel_names[c_pair[1]]
-        results.update(get_correlation_costes(img1, img2, label_image))
+        results.update(
+            get_correlation_costes(img1, img2, label_image, scale_max=scale_max)
+        )
         results.update(get_correlation_manders_fold(img1, img2, label_image))
         results.update(get_correlation_overlap(img1, img2, label_image))
         results.update(get_correlation_pearson(img1, img2, label_image))
