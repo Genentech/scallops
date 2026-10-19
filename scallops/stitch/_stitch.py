@@ -15,7 +15,7 @@ import zarr
 from sklearn.cluster import AgglomerativeClustering
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
-from scallops.io import _images2fov, is_parquet_file, read_image
+from scallops.io import _images2fov, _localize_path, is_parquet_file, read_image
 from scallops.stitch._align import stitch_align
 from scallops.stitch._channel_align import (
     check_channel_order,
@@ -537,23 +537,44 @@ def _estimate_channel_alignment(
     )
 
     def read_tile(i, channels):
-        img = _images2fov(
-            filepaths[0] if n_scenes is not None else filepaths[i],
-            fileattrs[i] if fileattrs is not None else None,
-            dask=True,
-            scene_id=i if n_scenes is not None else None,
+        paths = filepaths[0] if n_scenes is not None else filepaths[i]
+        # non-local nd2 files are downloaded and removed after reading, as in fusion
+        local_paths = (
+            [_localize_path(path) for path in paths]
+            if isinstance(paths, (list, tuple))
+            else []
         )
-        img = _select_t_index(img, t_index)
-        if "z" in img.dims:
-            z = z_index[i] if z_per_tile else z_index
-            if img.sizes["z"] == 1:
-                img = img.isel(z=0)
-            elif isinstance(z, (int, np.integer)):
-                img = img.isel(z=int(z))
-            else:
-                img = img.max(dim="z")
-        ref = img.isel(c=reference_channel).values
-        return ref, {c: img.isel(c=c).values for c in channels}
+        if any(path is not None for path in local_paths):
+            paths = [
+                local if local is not None else path
+                for path, local in zip(paths, local_paths)
+            ]
+        try:
+            img = _images2fov(
+                paths,
+                fileattrs[i] if fileattrs is not None else None,
+                dask=True,  # opened lazily so that only the needed channels are read
+                scene_id=i if n_scenes is not None else None,
+            )
+            img = _select_t_index(img, t_index)
+            if "z" in img.dims:
+                z = z_index[i] if z_per_tile else z_index
+                if img.sizes["z"] == 1:
+                    img = img.isel(z=0)
+                elif isinstance(z, (int, np.integer)):
+                    img = img.isel(z=int(z))
+                else:
+                    img = img.max(dim="z")
+            # read in this task's thread: no nested scheduler or thread pool
+            img = img.isel(c=[reference_channel, *channels]).compute(
+                scheduler="synchronous"
+            )
+        finally:
+            for path in local_paths:
+                if path is not None:
+                    os.remove(path)
+        ref = img.isel(c=0).values
+        return ref, {c: img.isel(c=k + 1).values for k, c in enumerate(channels)}
 
     spacing = (
         np.asarray(image_spacing, float).ravel() if image_spacing is not None else None

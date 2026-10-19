@@ -499,18 +499,16 @@ def _fuse_image(
 
     # order: radial (with channel alignment if given), illumination, channel registration, crop
     if channel_coords is not None:
-        # one quintic B-spline resampling per channel; channel_coords follows the output channel order
+        # one quintic B-spline resampling per channel; channel_coords follows the output channel order. The result
+        # stays float (a new array) until the final conversion to target_dtype
         img = np.stack(
-            [
-                dtype_convert(warp_image(img[i], channel_coords[i]), target_dtype)
-                for i in range(img.shape[0])
-            ]
+            [warp_image(img[i], channel_coords[i]) for i in range(img.shape[0])]
         )
     elif radial_correction_k is not None:
         img = radial_correct(img, radial_correction_k)
         img = dtype_convert(img, target_dtype)
 
-    img = img_as_float(img, force_copy=True)
+    img = img_as_float(img, force_copy=channel_coords is None)
     if dfp is not None:
         img -= dfp
     if ffp is not None:

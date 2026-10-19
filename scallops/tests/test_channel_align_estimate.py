@@ -96,6 +96,29 @@ def test_estimate_tile_recovers_known_alignment():
     assert abs(r["ty"] - TY) < 0.06 and abs(r["tx"] - TX) < 0.06
 
 
+def test_region_mean_patches_drops_patches_outside_the_tile():
+    rng = np.random.default_rng(3)
+    img = rng.random((200, 200)).astype(np.float32)
+    R = 10
+    inside_y, inside_x = np.array([60.3, 120.7]), np.array([80.2, 140.9])
+    # patches beyond the top, left (negative indices would wrap around), bottom and right edges
+    out_y, out_x = (
+        np.array([5.0, 100.0, 195.0, 100.0]),
+        np.array([100.0, 4.0, 100.0, 196.5]),
+    )
+    M_all, counts = E._region_mean_patches(
+        img,
+        np.concatenate([inside_y, out_y]),
+        np.concatenate([inside_x, out_x]),
+        np.zeros(6, int),
+        R,
+        5.0,
+    )
+    M_in, _ = E._region_mean_patches(img, inside_y, inside_x, np.zeros(2, int), R, 5.0)
+    assert counts[0] == 2
+    np.testing.assert_array_equal(M_all, M_in)
+
+
 def test_tile_pool_rules():
     pos = _circle_grid()
     pool, rule = E.tile_pool(pos)

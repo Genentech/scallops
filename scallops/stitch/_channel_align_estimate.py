@@ -195,9 +195,12 @@ def _region_mean_patches(
 
     n_regions = N_REGIONS * N_REGIONS
     S = 2 * R + 2
-    iy, ix = np.floor(ys).astype(int), np.floor(xs).astype(int)
-    fy, fx = (ys - iy).astype(np.float32), (xs - ix).astype(np.float32)
     view = sliding_window_view(img, (S, S))
+    iy, ix = np.floor(ys).astype(int), np.floor(xs).astype(int)
+    keep = (iy >= R) & (ix >= R) & (iy - R < view.shape[0]) & (ix - R < view.shape[1])
+    if not keep.all():  # patch (partly) outside the tile: drop the nucleus
+        ys, xs, region, iy, ix = ys[keep], xs[keep], region[keep], iy[keep], ix[keep]
+    fy, fx = (ys - iy).astype(np.float32), (xs - ix).astype(np.float32)
     P = view[iy - R, ix - R].reshape(len(ys), S * S)
     wn = np.ones(len(ys), np.float32)
     if norm:
