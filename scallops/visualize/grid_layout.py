@@ -140,8 +140,8 @@ def _well_grid(
     """Generates a 2D array with the tile number (instead of indices), and -1 in the locations were
     not tiles were captured.
 
-    It takes the `grid_sequence` input, which is a sequence with the number of tiles in that specific row, e.g:
-    grid_sequence = [9, 13,17, 19, 19, 21, 21, *[23]*9, 21, 21, 19, 19, 17,13, 9], which means that in the first row,
+    It takes the `grid_sequence_` input, which is a sequence with the number of tiles in that specific row, e.g:
+    grid_sequence_ = [9, 13,17, 19, 19, 21, 21, *[23]*9, 21, 21, 19, 19, 17,13, 9], which means that in the first row,
     only 9 tiles where capture, second 13, etc. This is in line with the Nikon elements structure on a 25x25 grid with
     no overlap
 
@@ -168,15 +168,15 @@ def _well_grid(
         raise ValueError("Invalid layout {}".format(layout))
     nrows, ncols = shape
 
-    grid_sequence: NDArray = np.array(grid_sequence)
+    grid_sequence_ = np.array(grid_sequence)
     missing_row = False
-    if grid_sequence.shape[0] < nrows:
-        grid_sequence = np.insert(grid_sequence, [0, grid_sequence.shape[0]], 0)
+    if grid_sequence_.shape[0] < nrows:
+        grid_sequence_ = np.insert(grid_sequence_, [0, grid_sequence_.shape[0]], 0)
         missing_row = True
     indices = []
-    starts = (ncols - grid_sequence) // 2
-    tile_names = iter(range(grid_sequence.sum()))
-    for row, col in enumerate(grid_sequence):
+    starts = (ncols - grid_sequence_) // 2
+    tile_names = iter(range(grid_sequence_.sum()))
+    for row, col in enumerate(grid_sequence_):
         if col == 0:
             cols = [-1] * ncols
         else:

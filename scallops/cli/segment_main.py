@@ -121,6 +121,11 @@ def _add_common_args(parser: ArgumentParser) -> None:
         help="Chunk size overlap to use to perform segmentation using overlapping chunks",
         type=int,
     )
+    parser.add_argument(
+        "--seg-args",
+        type=str,
+        help="JSON URL or inline JSON containing additional segmentation parameters.",
+    )
     z_index_arg(parser)
     no_version_arg(parser)
 

@@ -10,7 +10,9 @@ Authors:
     - The SCALLOPS development team
 """
 
+import inspect
 import logging
+import math
 from collections.abc import Sequence
 from contextlib import redirect_stdout
 from importlib.metadata import PackageNotFoundError, version
@@ -24,16 +26,15 @@ import xarray as xr
 from filelock import FileLock
 from numpy.typing import NDArray
 
-from scallops.dask_relabeling.relabel import image2labels
+from scallops.segmentation.dask import segment_blocks
 from scallops.segmentation.util import (
     _download_model,
     cyto_channel_summary,
-    dask_relabel_sequential,
 )
 
 logger = logging.getLogger("scallops")
 try:
-    cellpose_version = int(version("cellpose").split(".")[0])
+    cellpose_version = int(version("cellpose")[0])
 
 except PackageNotFoundError:
     logger.info("Please install cellpose")
@@ -41,34 +42,32 @@ except PackageNotFoundError:
 
 def _process_block(
     x: NDArray,
-    model: Any,
-    diameter: float,
+    model: object,
     eval_kwargs: dict[str, Any],
 ) -> NDArray:
     """Process a block of the input image using the provided model.
 
     :param x: Input image block as a NumPy array.
     :param model: Model object with an `eval` method for segmentation.
-    :param diameter: Diameter of objects to detect.
-    :param eval_kwargs: Additional keyword arguments for the model evaluation.
+    :param eval_kwargs: Keyword arguments for the model evaluation.
     :return: Labeled image block as a NumPy array of type int32.
     """
 
     if (x.max() - x.min()) == 0:
         return np.zeros(x.shape[-2:], dtype=np.int32)
-    result = model.eval(x, diameter=diameter, **eval_kwargs)
+    result = model.eval(x, **eval_kwargs)
     return result[0].astype(np.int32)
 
 
 def _cellpose(
     image: xr.DataArray,
     channels: tuple[int, int],
-    model: Any,
+    model: object,
     nuclei_channel: int = 0,
     cyto_channel: None | int | Sequence[int] = None,
-    diameter: None | float = None,
+    diameter: float | None = None,
     chunks: None | tuple[int, int] = None,
-    **kwargs: Any,
+    **kwargs: dict[str, Any],
 ) -> NDArray | da.Array:
     """Perform segmentation using the Cellpose model on the input image.
 
@@ -105,81 +104,62 @@ def _cellpose(
 
     else:
         array = np.stack([cyto, nuclei]) if cyto is not None else nuclei
+    depth = kwargs.pop("depth", None)
+    eval_kwargs = dict(diameter=diameter)
+    if cellpose_version < 4:
+        eval_kwargs["channels"] = channels
+    eval_kwargs.update(kwargs)
 
     if isinstance(array, da.Array):
-        depth = kwargs.pop("depth", 30)
-        if diameter is not None and depth is None:
-            depth = np.ceil(diameter).astype(np.int64)
-        segmentation_fn_kwargs = {
-            "diameter": diameter,
-            "eval_kwargs": kwargs,
-            "model": model,
-        }
-        if cellpose_version < 4:
-            kwargs["channels"] = channels
-        labels = image2labels(
+        if depth is None:
+            depth = math.ceil(diameter) + 1 if diameter is not None else 50
+
+        return segment_blocks(
             array,
             seg_fn=_process_block,
-            overlaps=[depth, depth],
+            depth=depth,
             spatial_dims=2,
-            segmentation_fn_kwargs=segmentation_fn_kwargs,
+            model=model,
+            eval_kwargs=eval_kwargs,
         )
-        return dask_relabel_sequential(labels)
+
     else:
-        model_args = dict()
-        if cellpose_version < 4:
-            model_args["channels"] = channels
-        model_args.update(kwargs)
-        labels = model.eval(array, diameter=diameter, **model_args)[0]
+        labels = model.eval(array, **eval_kwargs)[0]
 
     return labels
 
 
-def segment_nuclei_cellpose(
-    image: xr.DataArray,
-    nuclei_channel: int = 0,
-    diameter: float | None = None,
-    chunks: tuple[int, int] | None = None,
-    **kwargs: Any,
-) -> NDArray | da.Array:
-    """Segment nuclei using cellpose.
-
-    :param image: Input image with dimensions (t, c, z, y, x).
-    :param nuclei_channel: Index of nuclei channel (typically DAPI).
-    :param diameter: The diameter parameter for cellpose.
-    :param chunks: Chunk size to perform segmentation using overlapping chunks.
-    :param kwargs: Additional arguments to pass to model.eval.
-    :return: Nuclei labels.
-    """
-    if cellpose_version < 4:
-        from cellpose.models import Cellpose
-    else:
-        from cellpose.models import CellposeModel
+def _create_cellpose_model(**kwargs):
     import torch
 
     with FileLock(".scallops-cellpose.lock"):
         if cellpose_version < 4:
-            _download_model(
-                Path.home() / ".cellpose" / "models",
-                ["nucleitorch_0", "size_nucleitorch_0.npy"],
-            )
-        with redirect_stdout(StringIO()):
-            model = (
-                Cellpose(model_type="nuclei", gpu=torch.cuda.is_available())
-                if cellpose_version < 4
-                else CellposeModel(gpu=torch.cuda.is_available())
-            )
+            from cellpose.models import Cellpose
 
-    return _cellpose(
-        image=image,
-        channels=(0, 0),
-        model=model,
-        nuclei_channel=nuclei_channel,
-        cyto_channel=None,
-        diameter=diameter,
-        chunks=chunks,
-        **kwargs,
-    )
+            if kwargs["model_type"] == "cyto3":
+                _download_model(
+                    Path.home() / ".cellpose" / "models", ["cyto3", "size_cyto3.npy"]
+                )
+            elif kwargs["model_type"] == "nuclei":
+                _download_model(
+                    Path.home() / ".cellpose" / "models",
+                    ["nucleitorch_0", "size_nucleitorch_0.npy"],
+                )
+            model_cls = Cellpose
+        else:
+            from cellpose.models import CellposeModel
+
+            model_cls = CellposeModel
+        # Split constructor arguments from eval arguments; unspecified constructor
+        # arguments use the library defaults
+        constructor_params = inspect.signature(model_cls).parameters
+        cellpose_kwargs = dict(gpu=torch.cuda.is_available())
+        for key in list(kwargs):
+            if key in constructor_params:
+                cellpose_kwargs[key] = kwargs.pop(key)
+        with redirect_stdout(StringIO()):
+            model = model_cls(**cellpose_kwargs)
+        return model, kwargs
 
 
 def segment_cells_cellpose(
@@ -196,37 +176,61 @@ def segment_cells_cellpose(
     :param nuclei_channel: Index of nuclei channel (typically DAPI).
     :param cyto_channel: Index or list of indices for cyto channel(s). If not provided,
      all channels except for the nuclei channel are used.
-    :param diameter: The diameter parameter for cellpose.
+    :param diameter: The diameter parameter for cellpose. Also used as the default
+     chunk overlap (`depth`) when segmenting with chunks.
     :param chunks: Chunk size to perform segmentation using overlapping chunks.
-    :param kwargs: Additional arguments to pass to model.eval.
+    :param kwargs: Additional arguments to pass to model.eval or model constructor.
+     Pass `depth` to set the chunk overlap.
     :return: Cell labels.
     """
 
-    if cellpose_version < 4:
-        from cellpose.models import Cellpose
-    else:
-        from cellpose.models import CellposeModel
-    import torch
-
-    with FileLock(".scallops-cellpose.lock"):
-        if cellpose_version < 4:
-            _download_model(
-                Path.home() / ".cellpose" / "models", ["cyto3", "size_cyto3.npy"]
-            )
-        with redirect_stdout(StringIO()):
-            model = (
-                Cellpose(model_type="cyto3", gpu=torch.cuda.is_available())
-                if cellpose_version < 4
-                else CellposeModel(gpu=torch.cuda.is_available())
-            )
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), nuclei_channel)
+    if cellpose_version < 4 and "model_type" not in kwargs:
+        kwargs["model_type"] = "cyto3"
+
+    model, kwargs = _create_cellpose_model(**kwargs)
+
     return _cellpose(
         image=image,
         channels=(1, 2),
         model=model,
         nuclei_channel=nuclei_channel,
         cyto_channel=cyto_channel,
+        diameter=diameter,
+        chunks=chunks,
+        **kwargs,
+    )
+
+
+def segment_nuclei_cellpose(
+    image: xr.DataArray,
+    nuclei_channel: int = 0,
+    diameter: float | None = None,
+    chunks: tuple[int, int] | None = None,
+    **kwargs: Any,
+) -> NDArray | da.Array:
+    """Segment nuclei using cellpose.
+
+    :param image: Input image with dimensions (t, c, z, y, x).
+    :param nuclei_channel: Index of nuclei channel (typically DAPI).
+    :param diameter: The diameter parameter for cellpose. Also used as the default
+     chunk overlap (`depth`) when segmenting with chunks.
+    :param chunks: Chunk size to perform segmentation using overlapping chunks.
+    :param kwargs: Additional arguments to pass to model.eval or model constructor.
+     Pass `depth` to set the chunk overlap.
+    :return: Nuclei labels.
+    """
+
+    if cellpose_version < 4 and "model_type" not in kwargs:
+        kwargs["model_type"] = "nuclei"
+    model, kwargs = _create_cellpose_model(**kwargs)
+    return _cellpose(
+        image=image,
+        channels=(0, 0),
+        model=model,
+        nuclei_channel=nuclei_channel,
+        cyto_channel=None,
         diameter=diameter,
         chunks=chunks,
         **kwargs,
