@@ -15,8 +15,9 @@ import importlib
 import math
 import os
 from collections import defaultdict
+from collections.abc import Sequence
 from functools import partial
-from typing import Callable, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 import dask
 import dask.array as da
@@ -26,10 +27,12 @@ import xarray as xr
 import zarr
 from dask.bag import from_sequence
 from fsspec.implementations.local import LocalFileSystem
+from numpy.typing import NDArray
 from skimage.measure import regionprops
 from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -40,7 +43,7 @@ from scallops.cli.util import (
 from scallops.io import (
     _add_suffix,
     _create_file_regex,
-    _images2fov,
+    _images2fov_array,
     _pd_to_parquet,
     _set_up_experiment,
     get_image_spacing,
@@ -84,7 +87,7 @@ def _intensity_filter(r, vmin, vmax):
 
 
 def _filter_labels(
-    labels: np.ndarray | da.Array,
+    labels: NDArray | da.Array,
     intensity_image: xr.DataArray,
     intensity_channel: int | None,
     min_area: float | None,
@@ -131,7 +134,7 @@ def segment_nuclei(
     dapi_channel: int,
     method: Callable,
     root: Group,
-    z_index: int | str,
+    z_index: int | Literal["max"],
     min_area: float | None = None,
     max_area: float | None = None,
     chunks: None | tuple[int, int] = None,
@@ -174,10 +177,10 @@ def segment_nuclei(
         logger.info(f"Skipping nuclei segmentation for {image_key}")
         return root
     logger.info(f"Running nuclei segmentation for {image_key}")
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = _images2fov_array(file_list, metadata, dask=True).squeeze()
     image = _z_projection(image, z_index)
 
-    nuclei_seg_args = {}
+    nuclei_seg_args: dict[str, Any] = {}
     if method.__name__ in ["segment_nuclei_stardist"]:
         nuclei_seg_args["clip"] = clip
         if pmin is not None:
@@ -248,10 +251,10 @@ def segment_cells(
     file_list: list[str],
     metadata: dict,
     dapi_channel: int,
-    cyto_channel: int | list[int] | None,
+    cyto_channel: Sequence[int] | NDArray | None,
     method: Callable,
     root: Group,
-    z_index: int | str,
+    z_index: int | Literal["max"],
     chunks: None | tuple[int, int] = None,
     chunk_overlap: None | int = None,
     nuclei_image_root: Group = None,
@@ -305,7 +308,7 @@ def segment_cells(
     if not force and is_ome_zarr_array(root.get(f"labels/{image_key}-cell")):
         logger.info(f"Skipping cell segmentation for {image_key}")
         return root
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = _images2fov_array(file_list, metadata, dask=True).squeeze()
     image = _z_projection(image, z_index)
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), dapi_channel)
@@ -313,7 +316,7 @@ def segment_cells(
         cyto_channel = [dapi_channel]
     logger.info(f"Running cell segmentation for {image_key}")
 
-    cell_seg_args = {"nuclei_channel": dapi_channel}
+    cell_seg_args: dict[str, Any] = {"nuclei_channel": dapi_channel}
     nuclei = None
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
         nuclei = read_ome_zarr_array(
@@ -415,7 +418,7 @@ def segment_cells(
     return root
 
 
-def _label_source_metadata(file_list: list[str | Group]) -> dict:
+def _label_source_metadata(file_list: Sequence[str | Group]) -> dict:
     """Get the stored metadata (e.g. physical pixel sizes).
 
     :param file_list: List containing the label zarr group
@@ -436,9 +439,9 @@ def _label_source_metadata(file_list: list[str | Group]) -> dict:
 
 
 def _overlap(
-    label_tuple_1: tuple[tuple[str, ...], list[str | Group], dict],
-    label_tuple_2: tuple[tuple[str, ...], list[str | Group], dict],
-    additional_tuples: list[tuple[tuple[str, ...], list[str | Group], dict]],
+    label_tuple_1: ImageTuple,
+    label_tuple_2: ImageTuple,
+    additional_tuples: list[ImageTuple],
     output_parquet_path: str,
     output_root: zarr.Group,
     force: bool = False,
@@ -446,8 +449,8 @@ def _overlap(
 ):
     group_id1, file_list_1, metadata_1 = label_tuple_1
     group_id2, file_list_2, metadata_2 = label_tuple_2
-    label_1 = _images2fov(file_list_1, metadata_1, dask=True)
-    label_2 = _images2fov(file_list_2, metadata_2, dask=True)
+    label_1 = _images2fov_array(file_list_1, metadata_1, dask=True)
+    label_2 = _images2fov_array(file_list_2, metadata_2, dask=True)
     image_key = "-".join(group_id1[:-1]).replace("/", "_")
     prefix = f"{output_parquet_path}{image_key}"
     overlap_path = f"{prefix}-overlap.parquet"
@@ -465,7 +468,7 @@ def _overlap(
     logger.info(f"Finding overlapping objects for {image_key}.")
     write_tuples = [(group_id2, file_list_2, label_2)]
     for group_id, file_list, metadata in additional_tuples:
-        labels = _images2fov(file_list, metadata, dask=True)
+        labels = _images2fov_array(file_list, metadata, dask=True)
         write_tuples.append((group_id, file_list, labels))
     overlap_df = label_overlap(label_1.data, label_2.data).compute()
     assignment_df = assign_labels_by_overlap(overlap_df)

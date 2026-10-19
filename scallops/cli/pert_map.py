@@ -121,8 +121,8 @@ def _read_metadata(join_path: str) -> dd.DataFrame:
 
 def rechunk(
     data: anndata.AnnData,
-    rechunk_label_size: str | None,
-    rechunk_feature_size: str | None,
+    rechunk_label_size: str | int | None,
+    rechunk_feature_size: str | int | None,
 ) -> anndata.AnnData:
     if rechunk_label_size == "":
         rechunk_label_size = None

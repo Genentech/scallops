@@ -16,7 +16,7 @@ Differences from original ashlar code:
 import argparse
 import shutil
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import fsspec
 import matplotlib.patches as mpatches
@@ -30,6 +30,7 @@ from distributed import Client
 from skimage.util import img_as_uint
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _get_cli_logger,
@@ -58,7 +59,7 @@ logger = _get_cli_logger()
 
 
 def single_stitch_preview(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: ImageTuple,
     output_path: str,
     channel: int,
     bounds: bool,
@@ -163,9 +164,6 @@ def single_stitch_preview(
     fig, ax = plt.subplots()
     ax.axis("off")
     tile_shape = np.round(np.array(tile_shape_no_crop) * resolution_scale).astype(int)
-    z_index_per_tile = isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(
-        z_index, str
-    )
     z_tiles_removed = (
         "z" in metadata_fields
         and isinstance(z_index, (Sequence, np.ndarray, int))
@@ -173,6 +171,9 @@ def single_stitch_preview(
     )
     if z_tiles_removed:
         z_index = 0
+    z_index_per_tile = isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(
+        z_index, str
+    )
     mosaic_image_shape = stage_positions.max(axis=0) + tile_shape
     if show_image:
         mosaic_image = np.zeros(mosaic_image_shape, dtype=np.uint16)
@@ -185,7 +186,11 @@ def single_stitch_preview(
                 scene_id=i if n_scenes is not None else None,
             )
             img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
-            z_index_ = z_index[i] if z_index_per_tile else z_index
+            z_index_ = (
+                cast(Sequence[int], z_index)[i]
+                if z_index_per_tile
+                else cast(Literal["max", "focus"] | int, z_index)
+            )
             img = (
                 _z_projection(img, z_index_)
                 if not z_tiles_removed
@@ -352,8 +357,11 @@ def run_stitch(args: argparse.Namespace) -> None:
     channel_window = args.channel_window
     channel_filter_min = args.channel_filter_min
     channel_filter_max = args.channel_filter_max
-    channel_filter_percentiles = [channel_filter_min, channel_filter_max]
-    if channel_filter_percentiles[0] <= 0 and channel_filter_percentiles[1] >= 100:
+    channel_filter_percentiles: tuple[float, float] | None = (
+        channel_filter_min,
+        channel_filter_max,
+    )
+    if channel_filter_min <= 0 and channel_filter_max >= 100:
         channel_filter_percentiles = None
 
     assert all(shift >= 0 for shift in max_shifts), "Max shift must be non-negative."

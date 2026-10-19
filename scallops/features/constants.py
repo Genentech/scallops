@@ -4,6 +4,8 @@ Authors:
     - The SCALLOPS development team
 """
 
+from collections.abc import Callable
+
 from scallops.features.cp_measure_wrapper import (
     _cp_colocalization_pairs,
     cp_colocalization,
@@ -20,12 +22,12 @@ from scallops.features.other import corr_region, intersects_boundary
 from scallops.features.spots import spot_count
 from scallops.features.texture import haralick, pftas
 
-_cp_features_mask = {
+_cp_features_mask: dict[str, Callable] = {
     "sizeshape": cp_size_shape,
     "neighbors": neighbors,
 }
 
-_cp_features_single_channel = {
+_cp_features_single_channel: dict[str, Callable] = {
     "intensity": cp_intensity,
     "granularity": cp_granularity,
     "intensitydistribution": intensity_distribution_radial,
@@ -33,27 +35,27 @@ _cp_features_single_channel = {
     "haralick": haralick,
     "pftas": pftas,
 }
-_other_features_single_channel = {
+_other_features_single_channel: dict[str, Callable] = {
     "intersectsboundary": intersects_boundary,
     "spots": spot_count,
 }
 
-_cp_features_multichannel = {
+_cp_features_multichannel: dict[str, Callable] = {
     "colocalization": cp_colocalization,
 }
 
-_other_features_multichannel = {
+_other_features_multichannel: dict[str, Callable] = {
     "correlationpearsonbox": corr_region,
 }
 
-_features_single_channel = {}
+_features_single_channel: dict[str, Callable] = {}
 _features_single_channel.update(_cp_features_single_channel)
 _features_single_channel.update(_other_features_single_channel)
-_features_multichannel = {}
+_features_multichannel: dict[str, Callable] = {}
 _features_multichannel.update(_cp_features_multichannel)
 _features_multichannel.update(_other_features_multichannel)
 
-_features = {}
+_features: dict[str, Callable] = {}
 _features.update(_features_single_channel)
 _features.update(_features_multichannel)
 

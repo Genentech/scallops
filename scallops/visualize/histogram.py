@@ -9,6 +9,7 @@ Authors:
 """
 
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -24,7 +25,7 @@ from scallops.visualize.utils import _figsize
 
 def channel_hist_plot(
     image: Experiment | DataArray,
-    binrange: tuple[float, float] = None,
+    binrange: tuple[float, float] | None = None,
     bins: str | int | Sequence[float] = "auto",
     height: float = 5,
     aspect: float = 1,
@@ -79,7 +80,7 @@ def channel_hist_plot(
     if binrange is None:
         binrange = image.min().values, image.max().values
     bins = np.histogram_bin_edges(image, bins=bins, range=binrange)
-    hist_kwargs = dict(alpha=0.5)
+    hist_kwargs: dict[str, Any] = dict(alpha=0.5)
     hist_kwargs.update(kwargs)
     for i in range(nimages):
         ax = axes[0, i]
@@ -97,7 +98,7 @@ def channel_hist_plot(
 def in_situ_barcode_hist_plot(
     reads_df: pd.DataFrame,
     counts: Sequence[int] | None = (0, 1, 2, 3, 4, 5),
-    hue: str = None,
+    hue: str | None = None,
     normalize: bool = True,
     **fig_kw,
 ) -> plt.Axes:

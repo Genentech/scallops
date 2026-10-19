@@ -9,7 +9,7 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from functools import partial
 from inspect import Parameter, signature
-from typing import Iterable, Literal
+from typing import Any, Iterable, Literal, Union, cast, get_args, get_origin
 
 import dask.array as da
 import dask.dataframe as dd
@@ -18,6 +18,7 @@ import pandas as pd
 import skimage.util
 import zarr
 from dask import delayed
+from numpy.typing import NDArray
 
 from scallops.features.constants import _features, _features_rewrite
 from scallops.features.spots import _download_ufish_model
@@ -26,7 +27,9 @@ from scallops.segmentation.util import relabel_sequential
 logger = logging.getLogger("scallops")
 
 
-def _img_from_zarrs(intensity_image: Sequence[zarr.Array], sl: tuple[slice]):
+def _img_from_zarrs(
+    intensity_image: Sequence[zarr.Array | NDArray], sl: tuple[slice, ...]
+) -> NDArray:
     images = []
     for image in intensity_image:
         image = image[..., sl[0], sl[1]]
@@ -43,14 +46,14 @@ def _img_from_zarrs(intensity_image: Sequence[zarr.Array], sl: tuple[slice]):
 
 
 def _feature_block(
-    label_image: np.ndarray | zarr.Array,
-    intensity_image: np.ndarray | Sequence[zarr.Array | np.ndarray] | None,
+    label_image: NDArray | zarr.Array,
+    intensity_image: NDArray | Sequence[zarr.Array | NDArray] | None,
     funcs: list[Callable],
-    labels: np.ndarray,
+    labels: NDArray,
     channel_names: Sequence[str],
-    sl: tuple[slice],
+    sl: tuple[slice, ...],
     normalize: bool = True,
-    label_filter: np.ndarray | None = None,
+    label_filter: NDArray | None = None,
 ):
     """Compute features for a block of labeled regions.
 
@@ -84,6 +87,8 @@ def _feature_block(
     if intensity_image is not None:
         if normalize:
             intensity_image = skimage.util.img_as_float(intensity_image)
+        # a sequence of zarrs was combined into a single array above
+        assert not isinstance(intensity_image, Sequence)
         assert label_image.shape == intensity_image.shape[:2]
     offset = (0, 0) if sl is None else tuple([s.start for s in sl])
     results = {}
@@ -122,8 +127,8 @@ def _create_dd_metadata(
 
 
 def _rewrite_channels(
-    funcs, all_required_channels: np.ndarray, channel_names: list[str]
-) -> np.ndarray:
+    funcs, all_required_channels: NDArray, channel_names: list[str]
+) -> list[str]:
     channel_names_subset = []
     channel_map = dict()
     for i in range(len(all_required_channels)):
@@ -137,7 +142,7 @@ def _rewrite_channels(
                 if isinstance(val, int):
                     f.keywords[key] = channel_map[val]
                 elif isinstance(val, (list, tuple)):
-                    new_val = []
+                    new_val: list[int | tuple[int, int]] = []
 
                     for v in val:
                         if isinstance(v, int):
@@ -146,9 +151,9 @@ def _rewrite_channels(
                             new_val.append((channel_map[v[0]], channel_map[v[1]]))
                         else:
                             raise ValueError()
-                    if isinstance(val, tuple):
-                        new_val = tuple(new_val)
-                    f.keywords[key] = new_val
+                    f.keywords[key] = (
+                        tuple(new_val) if isinstance(val, tuple) else new_val
+                    )
                 else:
                     raise ValueError(f"{val} is not a valid type.")
     return channel_names_subset
@@ -210,14 +215,16 @@ def label_features(
 
     if intensity_image is not None:
         if is_dask_array:
-            nchannels = intensity_image.shape[-1]
+            nchannels = cast(da.Array, intensity_image).shape[-1]
         else:
             nchannels = 0
             for img in intensity_image:
                 nchannels += np.prod(img.shape[:-2])
             nchannels = int(nchannels)
         intensity_image_dtype = (
-            intensity_image.dtype if is_dask_array else intensity_image[0].dtype
+            cast(da.Array, intensity_image).dtype
+            if is_dask_array
+            else intensity_image[0].dtype
         )
         logger.info(f"Number of channels: {nchannels}")
     channel_names_ = [f"Channel{i}" for i in range(nchannels)]
@@ -242,7 +249,7 @@ def label_features(
             all_required_channels=all_required_channels,
             channel_names=channel_names_,
         )
-        intensity_image = intensity_image[..., all_required_channels]
+        intensity_image = cast(da.Array, intensity_image)[..., all_required_channels]
     if len(all_required_channels) == 0:  # Don't pass intensity image if not needed
         intensity_image = None
     intensity_image_delayed = (
@@ -370,7 +377,9 @@ def label_features(
                 if is_dask_array:
                     label_block = label_image[sl]
                     image_block = (
-                        intensity_image[sl] if intensity_image is not None else None
+                        cast(da.Array, intensity_image)[sl]
+                        if intensity_image is not None
+                        else None
                     )
 
                 results.append(
@@ -424,8 +433,8 @@ def normalize_features(features: Iterable[str]) -> set[str]:
 
 def _create_funcs(
     features: Iterable[str],
-    n_channels: Sequence[str],
-) -> tuple[list[Callable], np.ndarray[int]]:
+    n_channels: int,
+) -> tuple[list[partial], NDArray[int]]:
     """Create feature functionss.
 
     :param features: Iterable of feature names to be processed.
@@ -460,7 +469,7 @@ def _create_funcs(
                 for val in params["c"]:
                     channels.add(val)
             all_required_channels.update(channels)
-            new_params = dict(c=tuple(sorted(channels)))
+            new_params: dict[str, Any] = dict(c=tuple(sorted(channels)))
             for p in params_list[0]:
                 if p != "c":
                     new_params[p] = params_list[0][p]
@@ -562,7 +571,7 @@ def _get_params(
                         range_spec = entry.split(":")
                         if len(range_spec) != 3:
                             raise ValueError("Incorrect format for range.")
-                        val = range(
+                        val: range | list[int] = range(
                             int(range_spec[0]), int(range_spec[1]), int(range_spec[2])
                         )
                     else:
@@ -583,12 +592,31 @@ def _get_params(
                 params[parameter_name] = False
             else:
                 raise ValueError(f"Invalid boolean value {value} for {name}")
-        elif annotation in (int, float, str, Literal):
+        elif annotation in (int, float, str):
             value = annotation(value)
             params[parameter_name] = value
+        elif get_origin(annotation) is Literal and all(
+            isinstance(arg, str) for arg in get_args(annotation)
+        ):
+            # feature names may be lower-cased, so match case-insensitively
+            choices = {arg.lower(): arg for arg in get_args(annotation)}
+            if value.lower() not in choices:
+                raise ValueError(
+                    f"Invalid value {value} for {parameter_name} in {name}. "
+                    f"Must be one of {get_args(annotation)}"
+                )
+            params[parameter_name] = choices[value.lower()]
         else:
-            if annotation not in (np.ndarray, Sequence[str]):
+            if annotation not in (
+                np.ndarray,
+                NDArray,
+                Union[np.ndarray, None],
+                Union[NDArray, None],
+                Sequence[str],
+                Union[Sequence[str], None],
+            ):
                 raise ValueError(
                     f"{parameter_name} not supported for {name} for type {annotation}"
                 )
+
     return method_name, params

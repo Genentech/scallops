@@ -17,6 +17,7 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 from filelock import FileLock
+from numpy.typing import NDArray
 
 from scallops.segmentation.util import _download_model
 
@@ -24,14 +25,14 @@ logger = logging.getLogger("scallops")
 
 
 def _normalize(
-    x: np.ndarray | da.Array,
+    x: NDArray | da.Array,
     pmin: float = 3,
     pmax: float = 99.8,
     axis: int | tuple[int, ...] | None = None,
     clip: bool = False,
     eps: float = 1e-20,
     dtype: np.dtype | None = np.float32,
-) -> np.ndarray:
+) -> NDArray:
     """Perform percentile-based image normalization.
 
     :param x: Input image as a NumPy array or Dask array.
@@ -55,14 +56,14 @@ def _normalize(
 
 
 def _normalize_mi_ma(
-    x: np.ndarray,
-    mi: np.ndarray,
-    ma: np.ndarray,
+    x: NDArray,
+    mi: NDArray,
+    ma: NDArray,
     clip: bool = False,
     eps: float = 1e-20,
     dtype: np.dtype | None = np.float32,
     inplace: bool = False,
-) -> np.ndarray:
+) -> NDArray:
     """Normalize image based on minimum and maximum values.
 
     :param x: Input image as a NumPy array.
@@ -106,7 +107,7 @@ def segment_nuclei_stardist(
     chunks: tuple[int, int] | None = (4096, 4096),
     depth: int | None = None,
     **kwargs: Any,
-) -> np.ndarray:
+) -> NDArray:
     """Segment nuclei using StarDist.
 
     :param image: Input image with the dimensions (t, c, z, y, x).
