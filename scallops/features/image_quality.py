@@ -1,5 +1,6 @@
 import numpy as np
 import scipy
+from numpy.typing import NDArray
 from scipy.fftpack import fft2
 from scipy.ndimage import sum as nd_sum
 
@@ -28,7 +29,7 @@ def rps(img):
     return [2], [0], [0]
 
 
-def power_spectrum(image: np.ndarray) -> float:
+def power_spectrum(image: NDArray) -> float:
     """The slope of the image log-log power spectrum.
     The power spectrum contains the frequency information of the image, and the slope
     gives a measure of image blur. A higher slope indicates more lower frequency

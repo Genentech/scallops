@@ -10,6 +10,7 @@ from functools import cache
 from itertools import islice
 
 import numpy as np
+from numpy.typing import NDArray
 
 from scallops.visualize.grid_layout_constants import (
     COL_BY_COL_DOWN_LEFT,
@@ -41,7 +42,7 @@ _col_to_row[SNAKE_BY_COLS_UP_RIGHT] = SNAKE_BY_ROWS_RIGHT_UP
 _col_to_row[SNAKE_BY_COLS_UP_LEFT] = SNAKE_BY_ROWS_LEFT_UP
 
 
-def _grid_indices(layout: int, shape: tuple[int, int]) -> np.ndarray:
+def _grid_indices(layout: int, shape: tuple[int, int]) -> NDArray:
     """Generates a 2-d array in which the value at i,j contains the index of the row major array
     layout.
 
@@ -135,7 +136,7 @@ def _ij(layout: int, row: int, col: int, nrows: int, ncols: int) -> tuple[int, i
 @cache
 def _well_grid(
     shape: tuple, grid_sequence: tuple[int, ...], layout: int = SNAKE_BY_ROWS_RIGHT_DOWN
-) -> np.ndarray:
+) -> NDArray:
     """Generates a 2D array with the tile number (instead of indices), and -1 in the locations were
     not tiles were captured.
 
@@ -166,7 +167,8 @@ def _well_grid(
     if layout not in range(1, 17):
         raise ValueError("Invalid layout {}".format(layout))
     nrows, ncols = shape
-    grid_sequence = np.array(grid_sequence)
+
+    grid_sequence: NDArray = np.array(grid_sequence)
     missing_row = False
     if grid_sequence.shape[0] < nrows:
         grid_sequence = np.insert(grid_sequence, [0, grid_sequence.shape[0]], 0)

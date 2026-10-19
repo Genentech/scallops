@@ -1,11 +1,12 @@
 import logging
 from collections.abc import Callable, Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import dask
 import numpy as np
 from dask import delayed
 from dask.diagnostics import ProgressBar
+from numpy.typing import NDArray
 
 from scallops.stitch._radial import radial_correct
 from scallops.stitch._radial_optim import (
@@ -31,9 +32,9 @@ logger = logging.getLogger("scallops")
 
 
 def _zncc_shift_pair(
-    ref: np.ndarray,
-    mov: np.ndarray,
-    shift: np.ndarray,
+    ref: NDArray,
+    mov: NDArray,
+    shift: NDArray,
     upsample_factor=1.0,
     ncc_func=_zncc,
     overlap_min=0.01,
@@ -50,13 +51,13 @@ def _zncc_shift_pair(
 
 
 def _all_zncc_shifts(
-    pairs: np.ndarray,
-    shifts: np.ndarray,
+    pairs: NDArray,
+    shifts: NDArray,
     read_images: Sequence,
     upsample_factor=1.0,
     ncc_func=_zncc,
     overlap_min=0.01,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray]:
     _zncc_shift_pair_delayed = delayed(_zncc_shift_pair, nout=2)
 
     results = []
@@ -104,7 +105,7 @@ def _get_read_images(
             crop_width=crop_width,
             scene_id=i if n_scenes is not None else None,
             radial_correction_k=radial_correction_k,
-            z_index=z_index[i] if z_index_is_sequence else z_index,
+            z_index=cast(Sequence[int], z_index)[i] if z_index_is_sequence else z_index,
             t_index=t_index,
         )
         for i in range(n)
@@ -115,14 +116,14 @@ def stitch_align(
     filepaths: Sequence[Sequence[str]],
     fileattrs: Sequence[dict[str, str | list[str]]] | None,
     image_spacing: tuple[float, float],
-    stage_positions: np.ndarray,
+    stage_positions: NDArray,
     channel: int = 0,
     z_index: int | Sequence[int] | Literal["max"] = "max",
     radial_correction_k: float | None | Literal["auto"] = "auto",
     crop_width: tuple[int, int] | None = None,
     upsample_factor=1.0,
-    min_overlap_fraction: float = None,
-    ncc_func: Callable[[np.ndarray, np.ndarray], float] = _zncc,
+    min_overlap_fraction: float | None = None,
+    ncc_func: Callable[[NDArray, NDArray], float] = _zncc,
     stitch_alpha: float = 0.001,
     evaluate_stitching: bool = True,
     n_scenes: int | None = None,
@@ -291,7 +292,8 @@ def stitch_align(
             fileattrs=fileattrs,
             channel=channel,
             z_index=z_index,
-            radial_correction_k=radial_correction_k,
+            # "auto" has been replaced by the computed K above
+            radial_correction_k=cast(float, radial_correction_k),
             crop_width=crop_width,
             n_scenes=n_scenes,
             t_index=t_index,

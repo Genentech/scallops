@@ -26,12 +26,13 @@ def intensity_distribution_radial(
     bin_count: int = 4,
     scaled: bool = True,
     maximum_radius: int = 100,
-    channel_names: Sequence[str] = None,
-    label_image: np.ndarray = None,
-    intensity_image: np.ndarray = None,
+    channel_names: Sequence[str] | None = None,
+    label_image: NDArray = None,
+    intensity_image: NDArray = None,
     **kwargs,
-) -> dict[str, np.ndarray]:
+) -> dict[str, NDArray]:
     # reimplemented from cp_measure to compute information about labels once rather than once per channel
+    assert channel_names is not None
     return get_radial_distribution(
         labels=label_image,
         intensity_image=intensity_image,
@@ -278,6 +279,7 @@ def _zernike_scores(
             s_ += c
         s_[r_square > 1] = 0
         for channel_index, channel in enumerate(channels):
+            assert intensity_image is not None
             w = intensity_image[keep, channel].astype(float)
             real_sums = real_sums_list[channel_index]
             imag_sums = imag_sums_list[channel_index]
@@ -297,11 +299,11 @@ def _zernike_scores(
 def intensity_distribution_zernike(
     c: Sequence[int],
     zernike_degree: int = 9,
-    channel_names: Sequence[str] = None,
-    label_image: np.ndarray = None,
-    intensity_image: np.ndarray = None,
+    channel_names: Sequence[str] | None = None,
+    label_image: NDArray = None,
+    intensity_image: NDArray = None,
     **kwargs,
-) -> dict[str, np.ndarray]:
+) -> dict[str, NDArray]:
     zernike_indexes = centrosome.zernike.get_zernike_indexes(zernike_degree + 1)
 
     # Intensity-weighted moment sums via the shared helper (pixels as the per-pixel weight);
@@ -315,6 +317,7 @@ def intensity_distribution_zernike(
     # n - the radial moment of the Zernike
     # m - the azimuthal moment of the Zernike
     #
+    assert channel_names is not None
     results: dict[str, NDArray[np.floating]] = {}
     for channel_index in range(len(c)):
         channel_name = channel_names[c[channel_index]]

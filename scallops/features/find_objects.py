@@ -11,14 +11,15 @@ import numpy as np
 import pandas as pd
 import zarr
 from dask import delayed
+from numpy.typing import NDArray
 
 
 def _find_bounding_boxes(
-    label_image: np.ndarray | zarr.Array,
-    intensity_image: np.ndarray | zarr.Array | None,
-    sl: tuple[slice],
+    label_image: NDArray | zarr.Array,
+    intensity_image: NDArray | zarr.Array | None,
+    sl: tuple[slice, ...],
     store_label_image: bool = False,
-):
+) -> pd.DataFrame:
     """Find bounding boxes, centroids, and optionally extract label and intensity images.
 
     :param label_image: Dask array representing labeled regions.
@@ -52,12 +53,12 @@ def _find_bounding_boxes(
             total = (pos + array_location[i]).sum()
             values.append(total)
             values.append(len(pos))
-        slices = tuple(slices)
+        bbox = tuple(slices)
         if store_label_image:
-            image_ = label_image[slices] == val
+            image_ = label_image[bbox] == val
             values.append(image_.reshape(-1))
         if intensity_image is not None:
-            intensity_image_ = intensity_image[slices].reshape(-1)
+            intensity_image_ = intensity_image[bbox].reshape(-1)
             values.append(intensity_image_)
 
         result[val] = values
@@ -75,59 +76,6 @@ def _find_bounding_boxes(
     if intensity_image is not None:
         columns.append("intensity_image")
     return pd.DataFrame.from_dict(result, orient="index", columns=columns)
-
-
-def _agg_slices(
-    partition: pd.DataFrame, n_channels: int, flatten: bool = True
-) -> pd.DataFrame:
-    """Aggregate label and intensity slices into a single image.
-
-    :param partition: DataFrame containing label and intensity image slices.
-    :param n_channels: Number of channels in the intensity image.
-    :param flatten: Whether to flatten the images.
-    :return: DataFrame with aggregated label and intensity images.
-    """
-    label_images = partition["label_image"].values
-    intensity_images = partition.get("intensity_image", None)
-    bbox0 = partition["AreaShape_BoundingBoxMinimum_Y"].values
-    bbox1 = partition["AreaShape_BoundingBoxMinimum_X"].values
-    bbox2 = partition["AreaShape_BoundingBoxMaximum_Y"].values
-    bbox3 = partition["AreaShape_BoundingBoxMaximum_X"].values
-    bbox0_min = bbox0.min()
-    bbox1_min = bbox1.min()
-    bbox2_max = bbox2.max()
-    bbox3_max = bbox3.max()
-
-    label_result = np.zeros(
-        (bbox2_max - bbox0_min, bbox3_max - bbox1_min), dtype=label_images[0].dtype
-    )
-    image_result = None
-    if intensity_images is not None:
-        image_result = np.zeros(
-            (bbox2_max - bbox0_min, bbox3_max - bbox1_min, n_channels),
-            dtype=intensity_images[0].dtype,
-        )
-
-    for i in range(len(label_images)):
-        shape = (bbox2[i] - bbox0[i], bbox3[i] - bbox1[i])
-        result_y_slice = slice(bbox0[i] - bbox0_min, bbox2[i] - bbox0_min)
-        result_x_slice = slice(bbox1[i] - bbox1_min, bbox3[i] - bbox1_min)
-        label_result[result_y_slice, result_x_slice] = label_images[i].reshape(shape)
-        if intensity_images is not None:
-            image_result[result_y_slice, result_x_slice] = intensity_images[i].reshape(
-                shape + (-1,)
-            )
-    data = {
-        "label_image": [label_result.reshape(-1) if flatten else label_result],
-        "shape-0": [label_result.shape[0]],
-        "shape-1": [label_result.shape[1]],
-    }
-    if intensity_images is not None:
-        data["intensity_image"] = [
-            image_result.reshape(-1) if flatten else image_result
-        ]
-
-    return pd.DataFrame(data, index=[partition.index.values[0]])
 
 
 def _find_objects(
@@ -206,7 +154,7 @@ def _find_objects(
     return grouped
 
 
-def _agg_objects(grouped):
+def _agg_objects(grouped) -> dd.DataFrame:
     """Aggregate object properties into a summary DataFrame.
 
     :param grouped: Grouped DataFrame of object properties.
@@ -254,12 +202,13 @@ def _agg_objects(grouped):
     return objects_df
 
 
-def find_objects(label_image: da.Array) -> dd.DataFrame:
+def find_objects(label_image: da.Array | NDArray) -> dd.DataFrame | pd.DataFrame:
     """Find objects in a labeled array.
 
     :param label_image: Image labels noted by integers.
     :return: Objects data frame containing bounding box, centroid, and area for
-        each label
+        each label. A pandas data frame if `label_image` is a NumPy array, otherwise a
+        Dask data frame.
     """
     is_numpy = False
     if isinstance(label_image, np.ndarray):

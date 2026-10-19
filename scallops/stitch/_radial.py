@@ -1,6 +1,7 @@
 """Radial correction from ashlar"""
 
 import numpy as np
+from numpy.typing import NDArray
 from skimage.transform import warp
 from skimage.util import img_as_float
 
@@ -21,10 +22,10 @@ def _radial_mapping(xy, center, k):
 
 
 def radial_correct(
-    image: np.ndarray,
+    image: NDArray,
     k: float,
     cval: float = 0,
-) -> np.ndarray:
+) -> NDArray:
     """Perform a transformation to correct for barrel or pincushion distortion.
 
      Radial distortion is modeled using a one-parameter model described in

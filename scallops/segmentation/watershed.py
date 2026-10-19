@@ -10,12 +10,13 @@ Authors:
     - The SCALLOPS development team
 """
 
-from typing import Callable, Literal, Sequence
+from typing import Callable, Literal, Sequence, cast
 
 import dask.array as da
 import numpy as np
 import scipy.ndimage as ndi
 import xarray as xr
+from numpy.typing import NDArray
 from skimage.feature import peak_local_max
 from skimage.filters import gaussian
 from skimage.filters.rank import mean as skmean
@@ -33,7 +34,7 @@ from scallops.segmentation.util import (
 )
 
 
-def _binarize(image: np.ndarray, radius: int, min_size: float) -> np.ndarray:
+def _binarize(image: NDArray, radius: int, min_size: float) -> NDArray:
     """Apply local mean threshold to find outlines. Filter out background shapes. Otsu threshold on
     list of region mean intensities will remove a few dark cells. Could use shape to improve the
     filtering.
@@ -65,12 +66,12 @@ def _scoring(regions: regionprops, score_func: Callable, threshold: float) -> Se
 
 
 def _filter_by_region(
-    labeled: np.ndarray,
+    labeled: NDArray,
     score: Callable,
     threshold: float,
-    intensity_image: np.ndarray = None,
+    intensity_image: NDArray = None,
     relabel: bool = True,
-) -> np.ndarray:
+) -> NDArray:
     """Apply a filter to label image. The `score` function takes a single region as input and
     returns a score. If scores are boolean, regions where the score is false are removed. Otherwise,
     the function `threshold` is applied to the list of scores to determine the minimum score at
@@ -103,7 +104,7 @@ def segment_nuclei_watershed(
     area_max: float = 400,
     smooth: float = 1.35,
     radius: int = 15,
-) -> np.ndarray:
+) -> NDArray:
     """Segment nuclei using watershed algorithm.
 
     Uses local mean filtering to find cell foreground from aligned but unfiltered data, then filters
@@ -183,7 +184,7 @@ def _process_block(mask, nuclei, image, closing_radius, at_least_nuclei, method)
 
 def segment_cells_watershed(
     image: xr.DataArray,
-    nuclei: np.ndarray,
+    nuclei: NDArray,
     threshold: Literal["Li", "quantile", "Otsu", "Local"] | float = "Li",
     cyto_channel: int | Sequence[int] | None = None,
     threshold_correction_factor: float = 1,
@@ -198,7 +199,7 @@ def segment_cells_watershed(
     depth: int = 30,
     watershed_method: Literal["binary", "distance", "intensity"] = "distance",
     at_least_nuclei: bool = True,
-) -> tuple[np.ndarray, float | None]:
+) -> tuple[NDArray, float | None]:
     """Segment cells using watershed algorithm, matching cell labels to nuclei labels.
 
     :param image: Image with the dimensions (t, c, z, y, x)
@@ -229,10 +230,16 @@ def segment_cells_watershed(
         of essential human genes <https://pubmed.ncbi.nlm.nih.gov/36347254/>.`
     :return: Cell labels matching `nuclei` labels and thresholds if an auto threshold method is used.
     """
-    watershed_method = watershed_method.lower()
-    assert watershed_method in ["binary", "distance", "intensity"]
+    method = watershed_method.lower()
+    assert method in ["binary", "distance", "intensity"]
+    # threshold passed to image2mask: a method name, a number, or the computed quantile
+    mask_threshold: Literal["Li", "Otsu", "Local"] | float | NDArray
     if threshold == "quantile":
-        image, threshold = threshold_quantile(image=image, quantile=quantile_threshold)
+        image, mask_threshold = threshold_quantile(
+            image=image, quantile=quantile_threshold
+        )
+    else:
+        mask_threshold = cast(Literal["Li", "Otsu", "Local"] | float, threshold)
 
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), nuclei_channel)
@@ -244,14 +251,14 @@ def segment_cells_watershed(
     if rm_small_std is not None:
         nuclei = remove_small_objects_std(nuclei, rm_small_std)
 
-    image, mask, threshold = image2mask(
+    image, mask, computed_threshold = image2mask(
         image=image,
-        threshold=threshold,
+        threshold=mask_threshold,
         threshold_correction_factor=threshold_correction_factor,
         rolling_ball=rolling_ball,
         sigma=sigma,
     )
-    if watershed_method != "intensity":
+    if method != "intensity":
         image = None
 
     if isinstance(image, da.Array):
@@ -268,7 +275,7 @@ def segment_cells_watershed(
                 image,
                 closing_radius=closing_radius,
                 at_least_nuclei=at_least_nuclei,
-                method=watershed_method,
+                method=method,
                 depth=depth,
                 dtype=np.int32,
                 meta=np.array((), dtype=np.int32),
@@ -281,7 +288,7 @@ def segment_cells_watershed(
                 image,
                 closing_radius=closing_radius,
                 at_least_nuclei=at_least_nuclei,
-                method=watershed_method,
+                method=method,
                 dtype=np.int32,
                 meta=np.array((), dtype=np.int32),
             )
@@ -293,7 +300,7 @@ def segment_cells_watershed(
             image,
             closing_radius,
             at_least_nuclei,
-            method=watershed_method,
+            method=method,
         )
 
-    return labels, threshold
+    return labels, computed_threshold

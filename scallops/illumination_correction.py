@@ -11,13 +11,14 @@ import logging
 import shutil
 import warnings
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import skimage
 import xarray as xr
+from numpy.typing import NDArray
 
-from scallops.io import _images2fov
+from scallops.io import _images2fov_array
 from scallops.stitch.utils import _init_tiles
 from scallops.xr import _z_projection, apply_data_array
 
@@ -25,10 +26,10 @@ logger = logging.getLogger("scallops")
 
 
 def apply_illumination_correction(
-    img: np.ndarray,
-    ffp: np.ndarray | None = None,
-    dfp: np.ndarray | None = None,
-) -> np.ndarray:
+    img: NDArray,
+    ffp: NDArray | None = None,
+    dfp: NDArray | None = None,
+) -> NDArray:
     """Apply illumination correction.
 
     :param img: Input image
@@ -97,11 +98,11 @@ def _smooth_and_rescale(
 
 def illumination_correction(
     image_tuple: tuple[tuple[str, ...], list[str], dict],
-    smooth: int = None,
+    smooth: int | None = None,
     rescale: bool = True,
     z_index: Literal["max", "focus"] | str | int = "max",
     channel: int = 0,
-    agg_method: str = Literal["mean", "median", "min"],
+    agg_method: Literal["mean", "median", "min"] = "mean",
     expected_images: int | None = None,
     t_index: int | None = None,
 ) -> tuple[xr.DataArray, list[str], str | int | Sequence[int]]:
@@ -157,9 +158,13 @@ def illumination_correction(
     for i in range(n):
         file_list = filepaths[0] if n_scenes is not None else filepaths[i]
         attrs = fileattrs[i] if fileattrs is not None else None
-        z_index_ = z_index[i] if z_index_per_tile else z_index
+        # z_index is a per-tile sequence when z_index_per_tile is set
+        z_index_ = cast(
+            Literal["max", "focus"] | int,
+            cast(Sequence, z_index)[i] if z_index_per_tile else z_index,
+        )
 
-        image = _images2fov(
+        image = _images2fov_array(
             file_list,
             attrs,
             dask=True,

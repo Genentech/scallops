@@ -4,6 +4,7 @@ import numpy as np
 import skimage
 from mahotas.features import haralick as ma_haralick
 from mahotas.features import pftas as ma_pftas
+from numpy.typing import NDArray
 from scipy.ndimage import find_objects
 
 F_HARALICK = """AngularSecondMoment Contrast Correlation Variance
@@ -14,11 +15,11 @@ DifferenceVariance DifferenceEntropy InfoMeas1 InfoMeas2""".split()
 def pftas(
     c: Sequence[int],
     channel_names: Sequence[str],
-    unique_labels: np.ndarray,
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    unique_labels: NDArray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
-) -> dict[str, np.ndarray]:
+) -> dict[str, NDArray]:
     """Parameter-free threshold adjacency statistics. Outputs 54 features.
 
     Thresholding is applied using Otsu's method. Reference:
@@ -58,10 +59,10 @@ def pftas(
 def haralick(
     c: Sequence[int],
     scale: int = 3,
-    channel_names: Sequence[str] = None,
-    unique_labels: np.ndarray = None,
-    label_image: np.ndarray = None,
-    intensity_image: np.ndarray = None,
+    channel_names: Sequence[str] | None = None,
+    unique_labels: NDArray = None,
+    label_image: NDArray = None,
+    intensity_image: NDArray = None,
     gray_levels: int = 256,
     ignore_zeros: bool = True,
     **kwargs,
@@ -102,6 +103,7 @@ def haralick(
                 pass
         index = index + 1
 
+    assert channel_names is not None
     results = {}
     for channel_index in range(len(c)):
         for direction in range(n_directions):

@@ -9,9 +9,10 @@ import numpy as np
 import scipy.sparse
 import scipy.sparse.csgraph
 import skimage.measure
+from numpy.typing import NDArray
 
 
-def block_ndi_label_delayed(block: da.Array) -> tuple[np.ndarray, np.ndarray]:
+def block_ndi_label_delayed(block: da.Array) -> tuple[NDArray, NDArray]:
     """Label a Dask block using scikit-image's label function.
 
     :param block: Dask array block.

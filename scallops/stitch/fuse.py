@@ -14,11 +14,12 @@ import shapely
 import zarr
 from dask import delayed
 from dask.diagnostics import ProgressBar
+from numpy.typing import NDArray
 from skimage.transform import SimilarityTransform, warp
 from skimage.util import img_as_float
 from sklearn.cluster import AgglomerativeClustering
 
-from scallops.io import _images2fov, _localize_path, pluralize
+from scallops.io import _images2fov, _images2fov_array, _localize_path, pluralize
 from scallops.registration.crosscorrelation import _apply_window, _filter_percentiles
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import calc_best_shift
@@ -42,8 +43,8 @@ def _fuse(
     output_channels: Sequence[int] | None = None,
     channel_names: Sequence[str] | None = None,
     output_metadata: dict[str, Any] | None = None,
-    ffp: np.ndarray | None = None,
-    dfp: np.ndarray | None = None,
+    ffp: NDArray | None = None,
+    dfp: NDArray | None = None,
     crop_width: tuple[int, int] | None = None,
     radial_correction_k: float | None = None,
     chunk_size: tuple[int, int] | None = None,
@@ -95,9 +96,13 @@ def _fuse(
         local_image0_paths[i] if local_image0_paths[i] is not None else image0_paths[i]
         for i in range(len(image0_paths))
     ]
-    img = _images2fov(image0_paths, image0_attrs, scene_id=0 if has_scenes else None)
+    img = _images2fov_array(
+        image0_paths, image0_attrs, scene_id=0 if has_scenes else None
+    )
 
-    [os.remove(path) for path in local_image0_paths if path is not None]
+    for path in local_image0_paths:
+        if path is not None:
+            os.remove(path)
 
     n_channels = img.sizes["c"]
     size_z = img.sizes["z"] if "z" in img.dims else 1
@@ -244,9 +249,7 @@ def _fuse(
     source_attrs = (
         df["source_metadata"].values if "source_metadata" in df.columns else None
     )
-    different_z_per_tile = "z_index" in df.columns
-    if different_z_per_tile:
-        z_index = df["z_index"].values
+    tile_z_indices = df["z_index"].values if "z_index" in df.columns else None
 
     tile_priorities = df["priority"].values if blend == "none" else None
 
@@ -298,9 +301,11 @@ def _fuse(
                 min(fused_y_size - 1, y[i] + ysize - 1),
             )
             if blend != "none":
+                assert partition_tree is not None and locks is not None
                 lock_indices = partition_tree.query(tile_box, predicate="intersects")
             intersecting_boxes = []
             if blend == "none":
+                assert tile_tree is not None and tile_priorities is not None
                 intersect_indices = tile_tree.query(tile_box, predicate="intersects")
                 # higher tile priority values have priority
                 for intersect_index in intersect_indices:
@@ -327,18 +332,18 @@ def _fuse(
                 ffp=_ffp,
                 dfp=_dfp,
                 blend=blend,
-                z_index=z_index[i] if different_z_per_tile else z_index,
+                z_index=tile_z_indices[i] if tile_z_indices is not None else z_index,
                 output_channels=channels,
                 target_shape=target_shape,
                 target_dtype=target_dtype,
                 weights=weights,
-                locks=locks[lock_indices] if blend != "none" else None,
+                locks=locks[lock_indices] if locks is not None else None,
                 weights_sum=weights_sum,
                 target=target,
                 intersecting_boxes=intersecting_boxes
                 if len(intersecting_boxes) > 0
                 else None,
-                scene_id=scene_ids[i] if has_scenes else None,
+                scene_id=scene_ids[i] if scene_ids is not None else None,
                 channel_reference=channel_reference,
                 channel_cross_correlation_upsample=channel_cross_correlation_upsample,
                 channel_window=channel_window,
@@ -383,7 +388,7 @@ def _fuse(
 
 
 def _register_across_channels(
-    img: np.ndarray,
+    img: NDArray,
     channel_reference: int | None = None,
     channel_cross_correlation_upsample: int = 1,
     channel_window: int = 1,
@@ -432,19 +437,19 @@ def _fuse_image(
     y: int,
     x: int,
     target_shape: tuple[int, int],
-    target: np.ndarray,
+    target: NDArray,
     target_dtype: np.dtype,
     radial_correction_k: float | None = None,
     output_channels: Sequence[int] | int | None = None,
     crop_width: tuple[int, int] | None = None,
-    dfp: np.ndarray | None = None,
-    ffp: np.ndarray | None = None,
+    dfp: NDArray | None = None,
+    ffp: NDArray | None = None,
     z_index: int | Literal["max"] = "max",
     locks: Sequence[threading.Lock] | None = None,
     blend: Literal["none", "linear"] = "none",
     intersecting_boxes: Sequence[tuple[int, int, int, int]] | None = None,
-    weights: np.ndarray | None = None,
-    weights_sum: np.ndarray | None = None,
+    weights: NDArray | None = None,
+    weights_sum: NDArray | None = None,
     scene_id: int | None = None,
     channel_reference: int | None = None,
     channel_cross_correlation_upsample: int = 1,
@@ -460,7 +465,9 @@ def _fuse_image(
 
     img = _images2fov(image_paths, image_attrs, scene_id=scene_id)
     img = _select_t_index(img, t_index)
-    [os.remove(path) for path in local_image_paths if path is not None]
+    for path in local_image_paths:
+        if path is not None:
+            os.remove(path)
     if "z" in img.dims:
         img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
     img = img.values
@@ -552,6 +559,8 @@ def _fuse_image(
             ] = img
 
     else:
+        # locks and weights_sum are always provided when blending
+        assert locks is not None and weights_sum is not None
         try:
             for lock in locks:
                 lock.acquire()
@@ -589,7 +598,7 @@ def _dist_from_tile_edge(i: int, j: int, tile_width: int, tile_height: int) -> i
     return hor * vert
 
 
-def _tile_blending_weights(tile_shape: tuple[int, int]) -> np.ndarray:
+def _tile_blending_weights(tile_shape: tuple[int, int]) -> NDArray:
     weights = np.zeros(tile_shape)
     for i in range(tile_shape[0]):
         for j in range(tile_shape[1]):
