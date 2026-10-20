@@ -837,7 +837,7 @@ def _list_images_wdl(
     subset: list[str],
     batch_size_str: str,
     save_group_size: bool = False,
-    expected_cycles_str: int | None = None,
+    expected_cycles_str: str = "",
 ):
     """Used by WDL workflow to output info about images"""
     from scallops.io import _set_up_experiment

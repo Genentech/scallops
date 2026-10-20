@@ -2024,7 +2024,7 @@ def _set_up_experiment(
 
     if len(group_to_matches) == 0:
         message = [f"No files found matching pattern: {file_regex.pattern}"]
-        if subset_ is not None and not isinstance(subset_, Callable):
+        if subset_ is not None and not callable(subset_):
             message.append(f", subset: {', '.join([str(s) for s in subset_])}")
         if len(group_by) > 0:
             message.append(f", group by: {', '.join(group_by)}")
@@ -2295,7 +2295,7 @@ DEFAULT_LUTS = GRAY, GREEN, RED, MAGENTA, CYAN, GRAY, GRAY
 
 
 def _infer_luts_display_ranges(
-    data: NDArray, luts: Sequence | None, display_ranges: list | None
+    data: NDArray, luts: Sequence | None, display_ranges: Sequence | None
 ) -> tuple[Sequence, list]:
     """Infers the lookup tables (LUTs) and display ranges for a given image data.
 
@@ -2320,8 +2320,9 @@ def _infer_luts_display_ranges(
     if luts is None:
         luts = DEFAULT_LUTS + (GRAY,) * (nchannels - len(DEFAULT_LUTS))
 
-    if display_ranges is None:
-        display_ranges = [None] * nchannels
+    display_ranges = (
+        [None] * nchannels if display_ranges is None else list(display_ranges)
+    )
 
     for i, dr in enumerate(display_ranges):
         if dr is None:
@@ -2425,7 +2426,7 @@ def save_stack_imagej(
     uri: str,
     data: NDArray,
     luts: Sequence[Sequence[int]] | None = None,
-    display_ranges: tuple[tuple[int, int], ...] | None = None,
+    display_ranges: Sequence[tuple[int, int] | None] | None = None,
     resolution: float = 1.0,
     compress: Literal[0, 1] = 0,
     dimensions: str | None = None,

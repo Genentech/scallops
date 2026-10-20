@@ -93,6 +93,8 @@ def _browse_regions_or_labels(
     chunk_out = widgets.Output()
     if y_indices is not None:
         assert x_indices is not None
+        if image_spacing is None:
+            raise ValueError("Unable to determine image spacing from metadata")
         img_slice_size = image1.data.chunksize[-2:]
 
         selector = widgets.Dropdown(

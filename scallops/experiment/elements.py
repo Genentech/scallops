@@ -4,7 +4,7 @@ This module provides classes and methods for managing spatial experiments, inclu
 data. The experiments are saved in the Zarr format, leveraging Dask for handling large datasets.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 
 import xarray as xr
 from numpy.typing import NDArray
@@ -13,7 +13,7 @@ from zarr.storage import StoreLike
 from scallops.experiment.abc import _LazyLoadData
 
 
-class _DataAccessorDict:
+class _DataAccessorDict(MutableMapping):
     """A dictionary-like class for managing and lazy-loading data.
 
     This class is designed to store data, which may be loaded lazily, meaning that the data is only

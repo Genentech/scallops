@@ -756,7 +756,7 @@ def _power_spectrum_delayed(file_list, attrs, scene_id, channel, tmp_dir, t_inde
 
 
 def _init_tiles(
-    image_filepaths: Sequence[Sequence[str]],
+    image_filepaths: Sequence[str],
     image_metadata: dict,
     channel: int = 0,
     z_index: int | Literal["max", "focus"] | str = "max",
