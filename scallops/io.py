@@ -22,6 +22,7 @@ import warnings
 import weakref
 from collections import defaultdict
 from collections.abc import Callable, KeysView
+from functools import cached_property
 from io import BytesIO
 from itertools import product
 from pathlib import Path
@@ -2175,8 +2176,8 @@ def _join(*paths: str, sep: str):
 class _LazyLoadImage(_LazyLoadData):
     """A class for lazy loading of image data, supporting Dask and scene selection.
 
-    :param file_list: list[str] | zarr.Group
-        A list of file paths or a Zarr group containing the images.
+    :param file_list: Sequence[str | zarr.Group]
+        A list of file paths and/or Zarr groups containing the images.
     :param attrs: Mapping[Any, Any]
         Attributes containing metadata for the images.
     :param dask: bool
@@ -2200,39 +2201,40 @@ class _LazyLoadImage(_LazyLoadData):
 
     def __init__(
         self,
-        file_list: list[str] | zarr.Group,
+        file_list: Sequence[str | zarr.Group],
         attrs: Mapping[Any, Any],
         dask: bool,
         scene_id: str | int | None,
         **kwargs,
     ):
-        super().__init__()
         self._file_list = file_list
         self._attrs = attrs
         self._dask = dask
         self._scene_id = scene_id
         self._kwargs = kwargs
-        self._localized = False  # whether non-local nd2 files have been downloaded
+
+    @cached_property
+    def _local_file_list(self) -> list[str | zarr.Group]:
+        """File list with non-local nd2 files downloaded (done once, on first access)."""
+        local_file_list: list[str | zarr.Group] = []
+        for path in self._file_list:
+            local_path = _localize_path(path) if isinstance(path, str) else None
+            if local_path is not None:
+                # delete downloaded file when experiment is finalized
+                weakref.finalize(self, os.remove, local_path)
+                path = local_path
+            local_file_list.append(path)
+        return local_file_list
 
     @property
     def data(self):
         """Load data from images."""
-        if not self._localized:
-            self._localized = True
-            self._file_list = list(self._file_list)
-            for i in range(len(self._file_list)):
-                path = self._file_list[i]
-                if isinstance(path, str):
-                    local_path = _localize_path(path)
-                    if local_path is not None:
-                        path = local_path
-                        # delete downloaded file when experiment is finalized
-                        weakref.finalize(self, lambda: os.remove(local_path))
-
-                        self._file_list[i] = path
-
         return _images2fov(
-            self._file_list, self._attrs, self._dask, self._scene_id, **self._kwargs
+            self._local_file_list,
+            self._attrs,
+            self._dask,
+            self._scene_id,
+            **self._kwargs,
         )
 
 

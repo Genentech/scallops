@@ -11,6 +11,7 @@ Authors:
 import logging
 import warnings
 from collections.abc import Callable, Hashable, Mapping, Sequence
+from functools import cached_property
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
@@ -932,12 +933,10 @@ class _LazyLoadZarrData(_LazyLoadData):
     """
 
     def __init__(self, group: zarr.Group, dask: bool = False):
-        super().__init__()
-        self._data: xr.DataArray | None = None  # Lazy load
         self._group = group
         self._dask = dask
 
-    @property
+    @cached_property
     def data(self) -> xr.DataArray:
         """Property to access the data.
 
@@ -945,9 +944,7 @@ class _LazyLoadZarrData(_LazyLoadData):
 
         :return: xr.DataArray The loaded data as an Xarray DataArray.
         """
-        if self._data is None:
-            self._data = read_ome_zarr_array(self._group, self._dask)
-        return self._data
+        return read_ome_zarr_array(self._group, self._dask)
 
 
 @_REGISTRY.register_write(zarr.Group, DaskArrayView, IOSpec("array", "0.2.0"))
