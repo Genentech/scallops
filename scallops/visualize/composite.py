@@ -514,7 +514,7 @@ def experiment_composite(
     for im, ax in zip(image_keys, axs_array.flat):
         ind_kwargs = copy(kwargs)
         if "labels" in ind_kwargs:
-            ind_kwargs["labels"] = ind_kwargs["labels"].labels[im]
+            ind_kwargs["labels"] = ind_kwargs["labels"].labels.get(im)
         img = exp.images[im].isel(t=0, z=0)
         ax.set_axis_on()
         ax.set_title(im)

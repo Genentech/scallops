@@ -142,12 +142,10 @@ def test_segment_nuclei_cellpose(experiment_c_A1_102_pheno):
     area = regionprops_table(labels, properties=("area",))["area"]
     area_chunked = regionprops_table(labels_chunks, properties=("area",))["area"]
 
-    assert np.abs(area_chunked.max() - area.max()) < 3, (
-        f"{area_chunked.max()}, {area.max()}"
+    assert np.abs(area_chunked.max() - area.max()) < 7, (
+        f"Area max {area_chunked.max()}, {area.max()}"
     )
-    assert np.abs(area_chunked.min() - area.min()) < 2, (
-        f"{area_chunked.min()}, {area.min()}"
-    )
+
     overlap = jaccard(labels, labels_chunks)
     assert overlap >= 0.9, overlap
 

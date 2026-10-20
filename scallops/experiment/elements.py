@@ -31,11 +31,12 @@ class _DataAccessorDict(MutableMapping):
         """Retrieve an item from the data accessor dictionary.
 
         :param key: The key associated with the data.
-        :return: The data associated with the key, or None if not found.
+        :return: The data associated with the key.
+        :raises KeyError: If the key is not found.
         """
-        value = self._d.get(key)
-        if value is None:
+        if key not in self._d:
             raise KeyError(key)
+        value = self._d[key]
         return value.data if isinstance(value, _LazyLoadData) else value
 
     def __contains__(self, key):
@@ -116,12 +117,12 @@ class Experiment:
                 self._labels[key] = labels[key]
 
     @property
-    def images(self) -> Mapping[str, xr.DataArray]:
+    def images(self) -> MutableMapping[str, xr.DataArray]:
         """The image dictionary."""
         return self._images
 
     @property
-    def labels(self) -> Mapping[str, NDArray | xr.DataArray]:
+    def labels(self) -> MutableMapping[str, NDArray | xr.DataArray]:
         """The labels dictionary."""
         return self._labels
 
