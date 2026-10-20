@@ -16,9 +16,12 @@ from scallops.experiment.abc import _LazyLoadData
 class _DataAccessorDict(MutableMapping):
     """A dictionary-like class for managing and lazy-loading data.
 
-    This class is designed to store data, which may be loaded lazily, meaning that the data is only
+    This class is designed to store data which may be loaded lazily, meaning that the data is only
     loaded into memory when it is accessed.
     """
+
+    __eq__ = object.__eq__  # identity, no loading
+    __hash__ = object.__hash__  # hashable again
 
     def __init__(self):
         """Initialize an empty DataAccessorDict."""
@@ -32,7 +35,7 @@ class _DataAccessorDict(MutableMapping):
         """
         value = self._d.get(key)
         if value is None:
-            return None
+            raise KeyError(key)
         return value.data if isinstance(value, _LazyLoadData) else value
 
     def __contains__(self, key):
