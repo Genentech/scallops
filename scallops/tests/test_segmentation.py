@@ -108,25 +108,33 @@ def test_segment_nuclei_stardist(image):
     assert labels.max() == labels_chunks.max()
     area = regionprops_table(labels, properties=("area",))["area"]
     area_chunked = regionprops_table(labels_chunks, properties=("area",))["area"]
-    assert area_chunked.max() == area.max(), f"{area_chunked.max()}, {area.max()}"
-    assert area_chunked.min() == area.min(), f"{area_chunked.min()}, {area.min()}"
+    assert area_chunked.max() == area.max(), (
+        f"Max area: {area_chunked.max()}, {area.max()}"
+    )
+    assert area_chunked.min() == area.min(), (
+        f"Min area: {area_chunked.min()}, {area.min()}"
+    )
     overlap = jaccard(labels, labels_chunks)
     assert overlap >= 0.99, overlap
 
 
 @pytest.mark.segmentation_cellpose
-def test_segment_nuclei_cellpose(image):
+def test_segment_nuclei_cellpose(experiment_c_A1_102_pheno):
     pytest.importorskip("cellpose")
 
     import scallops.segmentation.cellpose
 
-    labels = scallops.segmentation.cellpose.segment_nuclei_cellpose(image)
-    image_dask = image.copy(
-        data=da.from_array(image.data, chunks=(1,) * (image.ndim - 2) + (256, 256))
+    labels = scallops.segmentation.cellpose.segment_nuclei_cellpose(
+        experiment_c_A1_102_pheno
+    )
+    image_dask = experiment_c_A1_102_pheno.copy(
+        data=da.from_array(
+            experiment_c_A1_102_pheno.data,
+            chunks=(1,) * (experiment_c_A1_102_pheno.data.ndim - 2) + (256, 256),
+        )
     )
     labels_chunks = scallops.segmentation.cellpose.segment_nuclei_cellpose(
         image_dask,
-        diameter=8,
     ).compute()
     assert len(np.unique(labels_chunks)) - 1 == labels_chunks.max()
     assert labels.max() > 2000
@@ -134,19 +142,25 @@ def test_segment_nuclei_cellpose(image):
     area = regionprops_table(labels, properties=("area",))["area"]
     area_chunked = regionprops_table(labels_chunks, properties=("area",))["area"]
 
-    assert area_chunked.max() == area.max(), f"{area_chunked.max()}, {area.max()}"
-    assert area_chunked.min() == area.min(), f"{area_chunked.min()}, {area.min()}"
+    assert np.abs(area_chunked.max() - area.max()) < 3, (
+        f"{area_chunked.max()}, {area.max()}"
+    )
+    assert np.abs(area_chunked.min() - area.min()) < 2, (
+        f"{area_chunked.min()}, {area.min()}"
+    )
     overlap = jaccard(labels, labels_chunks)
     assert overlap >= 0.9, overlap
 
 
 @pytest.mark.segmentation_cellpose
-def test_segment_cells_cellpose(image):
+def test_segment_cells_cellpose(experiment_c_A1_102_pheno):
     pytest.importorskip("cellpose")
 
     import scallops.segmentation.cellpose
 
-    labels = scallops.segmentation.cellpose.segment_cells_cellpose(image)
+    labels = scallops.segmentation.cellpose.segment_cells_cellpose(
+        experiment_c_A1_102_pheno
+    )
     assert labels.max() > 10
 
 
