@@ -315,7 +315,7 @@ def spot_detection_pipeline(
             else std_arr_list[0]
         )
         peaks = dd.concat(peaks_list) if len(peaks_list) > 1 else peaks_list[0]
-    dask_delayed = []
+    dask_delayed: list = []
     compute = True
     metadata = cli_metadata() if not no_version else dict()
     metadata["image_metadata"] = image_metadata

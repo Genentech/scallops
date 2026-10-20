@@ -80,6 +80,9 @@ def _match_template_physical_space_inputs(
         if template_spacing is None
         else template_spacing
     )
+
+    if image_spacing is None or template_spacing is None:
+        raise ValueError("Unable to determine image spacing from metadata")
     end = y_start + slice_size, x_start + slice_size
     image_start = max(0, y_start / image_spacing[0]), max(0, x_start / image_spacing[1])
     image_end = (
@@ -401,6 +404,9 @@ def _get_translation(
             if template_spacing is None
             else template_spacing
         )
+
+        if image_spacing is None or template_spacing is None:
+            raise ValueError("Unable to determine image spacing from metadata")
         if translation == "com":
             image_com = _center_of_mass(
                 image=image,
@@ -470,6 +476,9 @@ def find_landmarks(
         if template_spacing is None
         else template_spacing
     )
+
+    if image_spacing is None or template_spacing is None:
+        raise ValueError("Unable to determine image spacing from metadata")
     translation = _get_translation(
         translation=translation,
         image=image,

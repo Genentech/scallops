@@ -40,7 +40,6 @@ from ome_zarr.format import Format, FormatV04
 from ome_zarr.io import parse_url
 from ome_zarr.types import JSONDict
 from ome_zarr.writer import write_multiscale
-from xarray.core.coordinates import DataArrayCoordinates
 from zarr.errors import ContainsGroupError
 from zarr.storage import StoreLike
 
@@ -190,13 +189,15 @@ def _omero_channels(channel_names, image_dtype: np.dtype) -> dict:
             for i in range(len(channel_names))
         ]
         if not np.isscalar(channel_names)
-        else [channel_names.tolist()]
+        else [np.asarray(channel_names).tolist()]
     )
     return dict(channels=channels)
 
 
 def _create_omero_metadata(
-    coords: DataArrayCoordinates, dims: Sequence[Hashable] | None, image_dtype: np.dtype
+    coords: Mapping[Hashable, Any] | None,
+    dims: Sequence[Hashable] | None,
+    image_dtype: np.dtype,
 ) -> dict | None:
     """Create OMERO metadata for a DataArray.
 
@@ -228,7 +229,7 @@ def _create_omero_metadata(
             # Output: {'channels': [{'label': 'DAPI', 'color': '00FFFF'},
                 {'label': 'FITC', 'color': 'FFFF00'}, ...]}
     """
-    if dims is None:
+    if dims is None or coords is None:
         return None
 
     channel_names = coords["c"] if "c" in dims and "c" in coords else None
@@ -291,7 +292,7 @@ def _fix_attrs(d: dict) -> None:
 
 def _attrs_axes_scales(
     image_attrs: dict | None,
-    coords: DataArrayCoordinates,
+    coords: Mapping[Hashable, Any] | None,
     dims: Sequence[Hashable] | None,
     image_dtype: np.dtype,
 ) -> tuple[dict, list[dict] | None, dict[Hashable, float] | None]:
@@ -398,8 +399,8 @@ def _write_zarr_image(
         if group_metadata is not None:
             dest_grp.attrs.update(group_metadata)
     image_attrs = None
-    coords = None
-    dims = None
+    coords: Mapping[Hashable, Any] | None = None
+    dims: Sequence[Hashable] | None = None
     if isinstance(image, xr.DataArray):
         data = image.data
         image_attrs = image.attrs.copy()
@@ -504,8 +505,8 @@ def write_zarr(
     grp: zarr.Group,
     data: NDArray | da.Array | xr.DataArray,
     image_attrs: dict | None,
-    coords: dict | None,
-    dims: list[str] | tuple[Hashable, ...] | None,
+    coords: Mapping[Hashable, Any] | None,
+    dims: Sequence[Hashable] | None,
     metadata: dict[str, Any] | None = None,
     zarr_format: Literal["ome_zarr", "zarr"] = "ome_zarr",
     compute: bool = True,
@@ -788,7 +789,7 @@ def read_ome_zarr_array(
     result = _read_ome_zarr_array(node)
 
     if result is None:
-        return None
+        raise ValueError(f"No OME-Zarr image found at {node}")
     array, dims, coords, attrs = result
     if not dask:
         array = array[...]
@@ -932,7 +933,7 @@ class _LazyLoadZarrData(_LazyLoadData):
 
     def __init__(self, group: zarr.Group, dask: bool = False):
         super().__init__()
-        self._data = None  # Lazy load
+        self._data: xr.DataArray | None = None  # Lazy load
         self._group = group
         self._dask = dask
 

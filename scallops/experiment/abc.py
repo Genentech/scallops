@@ -5,11 +5,13 @@ classes that implement lazy loading of values through a data accessor.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class _LazyLoadData(ABC):
     """Class with data accessor to lazily load values."""
 
+    @property
     @abstractmethod
-    def data(self):
+    def data(self) -> Any:
         pass

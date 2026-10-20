@@ -482,6 +482,8 @@ def combine_stats(
         path = os.path.join(output_dir, pool + ".stats.csv")
         _df = pd.read_csv(path)
         df = pd.concat((df, _df)) if df is not None else _df
+    if df is None:
+        raise ValueError("No pools provided")
     if index_rename is not None:
         df["index"] = df["index"].replace(index_rename)
     return df
@@ -532,6 +534,8 @@ def join_counts(
         _df = _df.set_index("sequence").drop(["mismatches", "closest_match"], axis=1)
         _df.columns = _df.columns + "_" + index_rename.get(pool, pool)
         df = df.join(_df, how="outer") if df is not None else _df
+    if df is None or mismatches_df is None:
+        raise ValueError("No pools provided")
 
     df = (
         df.reset_index()

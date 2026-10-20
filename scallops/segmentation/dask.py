@@ -75,6 +75,7 @@ def _segment_block(
     Labels that only occur in the overlap are removed (they belong to a neighboring
     block) and the remaining labels are renumbered sequentially starting at 1.
     """
+    assert block_info is not None
     labels = np.asarray(seg_fn(*blocks, **kwargs))
     spatial_dims = len(block_depth)
     chunk_location = block_info[None]["chunk-location"][-spatial_dims:]

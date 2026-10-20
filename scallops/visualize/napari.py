@@ -306,7 +306,7 @@ def experiment_napari(
         label = None
         if labels is not None:
             if isinstance(labels, Experiment):
-                label = labels.labels[name]
+                label = labels.labels.get(name)
             else:
                 label = labels.get(name)
         imnapari(
