@@ -22,6 +22,7 @@ import warnings
 import weakref
 from collections import defaultdict
 from collections.abc import Callable, KeysView
+from functools import cached_property
 from io import BytesIO
 from itertools import product
 from pathlib import Path
@@ -2024,7 +2025,7 @@ def _set_up_experiment(
 
     if len(group_to_matches) == 0:
         message = [f"No files found matching pattern: {file_regex.pattern}"]
-        if subset_ is not None and not isinstance(subset_, Callable):
+        if subset_ is not None and not callable(subset_):
             message.append(f", subset: {', '.join([str(s) for s in subset_])}")
         if len(group_by) > 0:
             message.append(f", group by: {', '.join(group_by)}")
@@ -2175,8 +2176,8 @@ def _join(*paths: str, sep: str):
 class _LazyLoadImage(_LazyLoadData):
     """A class for lazy loading of image data, supporting Dask and scene selection.
 
-    :param file_list: list[str] | zarr.Group
-        A list of file paths or a Zarr group containing the images.
+    :param file_list: Sequence[str | zarr.Group]
+        A list of file paths and/or Zarr groups containing the images.
     :param attrs: Mapping[Any, Any]
         Attributes containing metadata for the images.
     :param dask: bool
@@ -2200,39 +2201,40 @@ class _LazyLoadImage(_LazyLoadData):
 
     def __init__(
         self,
-        file_list: list[str] | zarr.Group,
+        file_list: Sequence[str | zarr.Group],
         attrs: Mapping[Any, Any],
         dask: bool,
         scene_id: str | int | None,
         **kwargs,
     ):
-        super().__init__()
         self._file_list = file_list
         self._attrs = attrs
         self._dask = dask
         self._scene_id = scene_id
         self._kwargs = kwargs
-        self._localized = False  # whether non-local nd2 files have been downloaded
+
+    @cached_property
+    def _local_file_list(self) -> list[str | zarr.Group]:
+        """File list with non-local nd2 files downloaded (done once, on first access)."""
+        local_file_list: list[str | zarr.Group] = []
+        for path in self._file_list:
+            local_path = _localize_path(path) if isinstance(path, str) else None
+            if local_path is not None:
+                # delete downloaded file when experiment is finalized
+                weakref.finalize(self, os.remove, local_path)
+                path = local_path
+            local_file_list.append(path)
+        return local_file_list
 
     @property
     def data(self):
         """Load data from images."""
-        if not self._localized:
-            self._localized = True
-            self._file_list = list(self._file_list)
-            for i in range(len(self._file_list)):
-                path = self._file_list[i]
-                if isinstance(path, str):
-                    local_path = _localize_path(path)
-                    if local_path is not None:
-                        path = local_path
-                        # delete downloaded file when experiment is finalized
-                        weakref.finalize(self, lambda: os.remove(local_path))
-
-                        self._file_list[i] = path
-
         return _images2fov(
-            self._file_list, self._attrs, self._dask, self._scene_id, **self._kwargs
+            self._local_file_list,
+            self._attrs,
+            self._dask,
+            self._scene_id,
+            **self._kwargs,
         )
 
 
@@ -2295,7 +2297,7 @@ DEFAULT_LUTS = GRAY, GREEN, RED, MAGENTA, CYAN, GRAY, GRAY
 
 
 def _infer_luts_display_ranges(
-    data: NDArray, luts: Sequence | None, display_ranges: list | None
+    data: NDArray, luts: Sequence | None, display_ranges: Sequence | None
 ) -> tuple[Sequence, list]:
     """Infers the lookup tables (LUTs) and display ranges for a given image data.
 
@@ -2320,8 +2322,9 @@ def _infer_luts_display_ranges(
     if luts is None:
         luts = DEFAULT_LUTS + (GRAY,) * (nchannels - len(DEFAULT_LUTS))
 
-    if display_ranges is None:
-        display_ranges = [None] * nchannels
+    display_ranges = (
+        [None] * nchannels if display_ranges is None else list(display_ranges)
+    )
 
     for i, dr in enumerate(display_ranges):
         if dr is None:
@@ -2425,7 +2428,7 @@ def save_stack_imagej(
     uri: str,
     data: NDArray,
     luts: Sequence[Sequence[int]] | None = None,
-    display_ranges: tuple[tuple[int, int], ...] | None = None,
+    display_ranges: Sequence[tuple[int, int] | None] | None = None,
     resolution: float = 1.0,
     compress: Literal[0, 1] = 0,
     dimensions: str | None = None,

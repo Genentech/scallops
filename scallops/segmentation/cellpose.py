@@ -42,7 +42,7 @@ except PackageNotFoundError:
 
 def _process_block(
     x: NDArray,
-    model: object,
+    model: Any,
     eval_kwargs: dict[str, Any],
 ) -> NDArray:
     """Process a block of the input image using the provided model.
@@ -62,12 +62,12 @@ def _process_block(
 def _cellpose(
     image: xr.DataArray,
     channels: tuple[int, int],
-    model: object,
+    model: Any,
     nuclei_channel: int = 0,
     cyto_channel: None | int | Sequence[int] = None,
     diameter: float | None = None,
     chunks: None | tuple[int, int] = None,
-    **kwargs: dict[str, Any],
+    **kwargs: Any,
 ) -> NDArray | da.Array:
     """Perform segmentation using the Cellpose model on the input image.
 
@@ -105,7 +105,7 @@ def _cellpose(
     else:
         array = np.stack([cyto, nuclei]) if cyto is not None else nuclei
     depth = kwargs.pop("depth", None)
-    eval_kwargs = dict(diameter=diameter)
+    eval_kwargs: dict[str, Any] = dict(diameter=diameter)
     if cellpose_version < 4:
         eval_kwargs["channels"] = channels
     eval_kwargs.update(kwargs)

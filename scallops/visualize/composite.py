@@ -182,6 +182,7 @@ def _imcomposite_image(
 
             channel_cmap = dim_index_to_cmap[j]
             im_combined += channel_cmap(image_values)
+        assert im_combined is not None
         im_combined[im_combined > 1] = 1
         im_combined = im_combined.squeeze()
     elif image is not None and rgb:
@@ -389,6 +390,8 @@ def imcomposite(
     ):
         labels_contour = labels_contour.astype(np.uint32, copy=False)
     if col_facet is not None or row_facet is not None:
+        if image is None:
+            raise ValueError("image is required when col_facet or row_facet is set")
         col_facet_values = (
             image.coords[col_facet].values if col_facet is not None else [None]
         )
@@ -511,7 +514,7 @@ def experiment_composite(
     for im, ax in zip(image_keys, axs_array.flat):
         ind_kwargs = copy(kwargs)
         if "labels" in ind_kwargs:
-            ind_kwargs["labels"] = ind_kwargs["labels"].labels[im]
+            ind_kwargs["labels"] = ind_kwargs["labels"].labels.get(im)
         img = exp.images[im].isel(t=0, z=0)
         ax.set_axis_on()
         ax.set_title(im)
