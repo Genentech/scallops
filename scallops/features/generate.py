@@ -49,7 +49,7 @@ def _feature_block(
     label_image: NDArray | zarr.Array,
     intensity_image: NDArray | Sequence[zarr.Array | NDArray] | None,
     funcs: list[Callable],
-    labels: NDArray,
+    labels: NDArray | None,
     channel_names: Sequence[str],
     sl: tuple[slice, ...],
     normalize: bool = True,
@@ -69,9 +69,12 @@ def _feature_block(
 
     if isinstance(label_image, zarr.Array):
         label_image = label_image[sl[0], sl[1]]
-    if isinstance(intensity_image, Sequence):  # zarrs
-        intensity_image = _img_from_zarrs(intensity_image, sl)
-
+    # combine a sequence of zarrs into a single array
+    image: NDArray | None = (
+        _img_from_zarrs(intensity_image, sl)
+        if isinstance(intensity_image, Sequence)
+        else intensity_image
+    )
     if labels is None:
         labels = np.unique(label_image)
         labels = labels[labels > 0]
@@ -85,13 +88,11 @@ def _feature_block(
     unique_labels = np.unique(label_image)
     unique_labels = unique_labels[unique_labels > 0]
     intensity_image_original_dtype = None
-    if intensity_image is not None:
-        intensity_image_original_dtype = intensity_image.dtype
+    if image is not None:
+        intensity_image_original_dtype = image.dtype
         if normalize:
-            intensity_image = skimage.util.img_as_float(intensity_image)
-        # a sequence of zarrs was combined into a single array above
-        assert not isinstance(intensity_image, Sequence)
-        assert label_image.shape == intensity_image.shape[:2]
+            image = skimage.util.img_as_float(image)
+        assert label_image.shape == image.shape[:2]
     offset = (0, 0) if sl is None else tuple([s.start for s in sl])
     results = {}
     for f in funcs:
@@ -102,7 +103,7 @@ def _feature_block(
                 channel_names=channel_names,
                 label_image=label_image,
                 label_image_original=label_image_original,
-                intensity_image=intensity_image,
+                intensity_image=image,
                 intensity_image_original_dtype=intensity_image_original_dtype,
                 offset=offset,
             )
