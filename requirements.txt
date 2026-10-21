@@ -22,11 +22,11 @@ kneed==0.9.0
 mahotas==1.4.19
 matplotlib==3.11.2
 natsort==8.4.0
-numcodecs==0.17.0
+numcodecs==0.17.1
 numpy==2.5.4
 ome-zarr==0.21.0
 pandas==2.3.3
-pint==0.26.1
+pint==0.26.2
 psutil==7.2.2
 pyarrow==26.0.0
 pydantic==2.12.5
@@ -38,6 +38,6 @@ shapely==2.2.0
 stardist==0.9.2
 statsmodels==0.15.0
 tensorflow==2.21.0
-tifffile==2026.9.20
+tifffile==2026.10.15
 xarray==2026.7.0
 zarr==3.4.1
