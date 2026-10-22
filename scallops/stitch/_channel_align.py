@@ -331,6 +331,104 @@ def channel_coords(
     return result
 
 
+def edge_band_width(
+    shape: tuple[int, int],
+    radial_correction_k: float | None,
+    m: float = 0.0,
+    ty: float = 0.0,
+    tx: float = 0.0,
+) -> tuple[int, int]:
+    """Width (px) of the band at the tile edge that resampling fills with zeros (output pixels sampled from outside
+    the tile), as rows (y) and columns (x), the wider of the two sides of each axis."""
+    coords = alignment_coords(shape, radial_correction_k, m, ty, tx)
+    if coords is None:
+        return 0, 0
+    h, w = shape
+    rows = max(
+        int((coords[0] < 0).any(axis=1).sum()),
+        int((coords[0] > h - 1).any(axis=1).sum()),
+    )
+    cols = max(
+        int((coords[1] < 0).any(axis=0).sum()),
+        int((coords[1] > w - 1).any(axis=0).sum()),
+    )
+    return rows, cols
+
+
+def check_stage_positions_only(
+    channel_alignment: dict[int, dict],
+    shape: tuple[int, int],
+    radial_correction_k: float | None,
+    image_key: str,
+) -> None:
+    """Stop when tiles were placed at their stage positions and a corrected channel would leave a band of missing
+    pixels: without tile alignment, fusion doesn't crop, so the bands would stay in the stitched image.
+
+    :raises ValueError: Naming the channels that would leave bands.
+    """
+    banded = [
+        f"{c} ({a['name']})"
+        for c, a in sorted(channel_alignment.items())
+        if any(edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"]))
+    ]
+    if banded:
+        raise ValueError(
+            f"Tiles of {image_key} could not be aligned (no tile pairs overlap enough) and were placed at their "
+            f"stage positions, so nothing is cropped and correcting channel(s) {', '.join(banded)} would leave bands "
+            "of missing pixels at the tile edges. Remove only these channel(s) from --alignment-correction-channels; "
+            "the other requested channels leave no bands and can still be corrected."
+        )
+
+
+def fusion_crop(
+    channel_alignment: dict[int, dict],
+    shape: tuple[int, int],
+    radial_correction_k: float | None,
+    crop: tuple[int, int],
+    max_crop: tuple[int | None, int | None],
+    image_key: str,
+) -> tuple[tuple[int, int], dict]:
+    """Fusion crop that removes the zero bands the corrected channels leave at the tile edges.
+
+    :param crop: SCALLOPS's fusion crop (y, x).
+    :param max_crop: Per axis, the largest crop that opens no gaps between tiles (half the smallest tile overlap);
+        ``None`` where any crop opens no gaps.
+    :return: The crop to use (each axis at least the widest band), and a record of the values.
+    :raises ValueError: If a channel's band is wider than both ``crop`` and ``max_crop`` on an axis: the tile overlap
+        is too small for the correction.
+    """
+    allowed = [
+        None if max_crop[i] is None else max(crop[i], max_crop[i]) for i in range(2)
+    ]
+    bands = {
+        c: edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"])
+        for c, a in channel_alignment.items()
+    }
+    too_wide = []
+    for c, b in sorted(bands.items()):
+        over = [i for i in range(2) if allowed[i] is not None and b[i] > allowed[i]]
+        if over:
+            i = max(over, key=lambda i: b[i] - allowed[i])
+            too_wide.append(
+                f"Tile overlap is too small to correct channel {c} ({channel_alignment[c]['name']}) of {image_key}: "
+                f"its alignment leaves a {b[i]} px band of missing pixels at the tile edge, but the overlap allows "
+                f"cropping only {allowed[i]} px. Leave the channel out of --alignment-correction-channels or give "
+                "smaller parameters for it."
+            )
+    if too_wide:
+        raise ValueError("\n".join(too_wide))
+    band = tuple(max([b[i] for b in bands.values()], default=0) for i in range(2))
+    used = (max(crop[0], band[0]), max(crop[1], band[1]))
+    if used != tuple(crop):
+        logger.info(
+            f"Crop for writing increased to {used} to remove the zero bands of the channel alignment correction "
+            f"(widest band {band} px)."
+        )
+    return used, dict(
+        scallops=list(crop), edge_band=list(band), used=list(used), max=list(max_crop)
+    )
+
+
 def warp_image(
     image: np.ndarray, coords: np.ndarray | None, cval: float = 0.0
 ) -> np.ndarray:
@@ -356,8 +454,9 @@ def warp_image(
     return np.clip(out, lo, hi, out=out)
 
 
-def _file_channel_name(path: str, index: int = 0) -> str | None:
-    """Channel name recorded in an image file's metadata, if any (IXM/MetaXpress ``_IllumSetting_``, else OME)."""
+def _file_channel_names(path: str, n_channels: int = 1) -> list[str | None]:
+    """Channel names recorded in an image file's metadata, if any (IXM/MetaXpress ``_IllumSetting_``, else OME), for
+    the file's first ``n_channels`` channels. The file is opened once."""
     import re
 
     from scallops.io import _create_image
@@ -369,20 +468,18 @@ def _file_channel_name(path: str, index: int = 0) -> str | None:
         if isinstance(xml, str):
             m = re.search(r'<prop id="_IllumSetting_"[^>]*value="([^"]*)"', xml)
             if m:
-                return m.group(1)
+                return [m.group(1)] * n_channels
     except Exception:  # noqa: BLE001 - metadata is optional
         pass
+    result: list[str | None] = [None] * n_channels
     try:
-        names = img.channel_names
-        if (
-            names
-            and index < len(names)
-            and not str(names[index]).startswith("Channel:")
-        ):  # bioio placeholder
-            return str(names[index])
+        names = img.channel_names or []
+        for i in range(min(n_channels, len(names))):
+            if not str(names[i]).startswith("Channel:"):  # bioio placeholder
+                result[i] = str(names[i])
     except Exception:  # noqa: BLE001
         pass
-    return None
+    return result
 
 
 def metadata_channel_names(
@@ -401,10 +498,9 @@ def metadata_channel_names(
                 if md["c"] not in seen:
                     seen.append(md["c"])
                     if len(seen) <= n_channels:
-                        names[len(seen) - 1] = _file_channel_name(path)
+                        names[len(seen) - 1] = _file_channel_names(path)[0]
         else:
-            for c in range(n_channels):
-                names[c] = _file_channel_name(file_list[0], c)
+            names = _file_channel_names(file_list[0], n_channels)
     except Exception as e:  # noqa: BLE001 - metadata is optional
         logger.debug(f"Could not read channel names from the image metadata: {e}")
     return names

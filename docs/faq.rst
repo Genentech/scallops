@@ -89,5 +89,13 @@ FAQ
     radial correction combined) instead of the bilinear radial correction, to keep fine detail.
     ``--alignment-correction-channels`` cannot be combined with ``--channel-reference``.
 
+    Correcting a channel's shift leaves a band of missing pixels along some tile edges (pixels that would come from
+    outside the tile). The crop applied when writing the stitched image is widened to remove these bands. If a band is
+    wider than half the typical overlap between neighbouring tiles, cropping it would open gaps between tiles, so
+    stitching stops with an error: leave that channel out of ``--alignment-correction-channels`` or give smaller
+    parameters for it (which may correct it only partly). If the tiles could not be aligned and were placed at their
+    stage positions, nothing is cropped, so stitching stops with an error when a corrected channel would leave a band;
+    run without ``--alignment-correction-channels``. The crop used is saved in the per-image record (``fusion_crop``).
+
 .. _fsspec: https://filesystem-spec.readthedocs.io/
 .. _`fsspec configuration documentation`: https://filesystem-spec.readthedocs.io/en/latest/features.html#configuration

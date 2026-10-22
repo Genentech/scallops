@@ -19,6 +19,8 @@ from scallops.io import _images2fov, is_parquet_file, read_image
 from scallops.stitch._align import stitch_align
 from scallops.stitch._channel_align import (
     check_channel_order,
+    check_stage_positions_only,
+    fusion_crop,
     metadata_channel_names,
     resolve_channel_alignment,
     write_record,
@@ -27,12 +29,16 @@ from scallops.stitch._channel_align import record as alignment_record
 from scallops.stitch._channel_align_estimate import estimate_well, raise_for_failures
 from scallops.stitch._plots import _qc_report
 from scallops.stitch.fuse import _fuse
-from scallops.stitch.shift_utils import _zncc, convert_stage_positions
+from scallops.stitch.shift_utils import (
+    _zncc,
+    convert_stage_positions,
+)
 from scallops.stitch.utils import (
     _autodetect_stage_positions_from_araceli_json,
     _download_path,
     _init_tiles,
     _select_t_index,
+    _select_z_index,
     _stage_positions_from_image_metadata,
     get_pixel_size,
     read_stage_positions,
@@ -297,6 +303,22 @@ def _single_stitch(
             reference_channel=channel,
             radial_correction_k=radial_correction_k,
         )
+        if (
+            stitch_result["pairs_after_stitching"] is None
+            and len(stitch_result["stitched_positions"]) > 1
+        ):  # tiles placed at their stage positions: no crop can remove the bands
+            check_stage_positions_only(
+                channel_alignment, tile_shape_no_crop, radial_correction_k, image_key
+            )
+        fuse_crop_width, crop_record = fusion_crop(
+            channel_alignment,
+            tile_shape_no_crop,
+            radial_correction_k,
+            fuse_crop_width,
+            _max_fusion_crop(stitch_result),
+            image_key,
+        )
+        output_metadata["channel_alignment"]["fusion_crop"] = crop_record
     output_metadata["min_overlap_fraction"] = stitch_result["min_overlap_fraction"]
     swap = stitch_result["swap"]
     flip_y = stitch_result["flip_y"]
@@ -513,6 +535,23 @@ def _single_stitch(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _max_fusion_crop(stitch_result: dict) -> tuple[int | None, int | None]:
+    """The largest fusion crop per axis (y, x) for the channel alignment: half the typical (median) overlap between
+    side-by-side tiles along that axis (pairs that overlap by at least half a tile across it, so diagonal neighbours
+    don't count). ``None`` for an axis without such neighbours (e.g. a single tile), where any crop opens no gaps."""
+    positions = np.asarray(stitch_result["stitched_positions"], float)
+    pairs = stitch_result["pairs_after_stitching"]
+    shape = stitch_result["tile_shape"]
+    overlaps: list[list[float]] = [[], []]
+    for i, j in np.asarray(pairs if pairs is not None else [], int).reshape(-1, 2):
+        d = np.abs(positions[j] - positions[i])
+        for axis in (0, 1):
+            other = 1 - axis
+            if d[axis] >= d[other] and d[other] <= shape[other] / 2:
+                overlaps[axis].append(shape[axis] - d[axis])
+    return tuple(int(np.median(o) // 2) if o else None for o in overlaps)
+
+
 def _estimate_channel_alignment(
     to_estimate,
     channel_order,
@@ -545,14 +584,8 @@ def _estimate_channel_alignment(
             scene_id=i if n_scenes is not None else None,
         )
         img = _select_t_index(img, t_index)
-        if "z" in img.dims:
-            z = z_index[i] if z_per_tile else z_index
-            if img.sizes["z"] == 1:
-                img = img.isel(z=0)
-            elif isinstance(z, (int, np.integer)):
-                img = img.isel(z=int(z))
-            else:
-                img = img.max(dim="z")
+        # the z plane fusion uses; per-tile values as fusion gets them from the positions table (numpy integers)
+        img = _select_z_index(img, np.asarray(z_index)[i] if z_per_tile else z_index)
         ref = img.isel(c=reference_channel).values
         return ref, {c: img.isel(c=c).values for c in channels}
 

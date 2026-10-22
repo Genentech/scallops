@@ -11,7 +11,11 @@ from scallops.io import read_image
 from scallops.stitch._channel_align import (
     alignment_coords,
     check_channel_order,
+    check_stage_positions_only,
+    edge_band_width,
+    fusion_crop,
     load_params,
+    metadata_channel_names,
     parse_correction_channels,
     resolve_channel_alignment,
     warp_image,
@@ -199,16 +203,16 @@ def test_warp_image_accuracy():
     assert out16.max() <= 1.0
 
 
-def _write_tiles(path, rng, displaced):
+def _write_tiles(path, rng, displaced, m=M, ty=TY, tx=TX, positions=POSITIONS):
     """Channel 0: blobs on a global grid; channel 1: the same blobs, displaced in each tile by the inverse of
-    s(p) = c + (1 + M)(p - c) + (TY, TX), so that the alignment correction maps channel 1 back onto channel 0."""
+    s(p) = c + (1 + m)(p - c) + (ty, tx), so that the alignment correction maps channel 1 back onto channel 0."""
     centres = rng.uniform(0, 2 * TILE - 64, (1200, 2))
     c = TILE / 2
     yy, xx = np.mgrid[0:TILE, 0:TILE].astype(float)
-    for i, (py, px) in enumerate(POSITIONS):
+    for i, (py, px) in enumerate(positions):
         ch0 = _blobs(yy + py, xx + px, centres)
         if displaced:
-            qy, qx = c + (yy - TY - c) / (1 + M), c + (xx - TX - c) / (1 + M)
+            qy, qx = c + (yy - ty - c) / (1 + m), c + (xx - tx - c) / (1 + m)
         else:
             qy, qx = yy, xx
         ch1 = _blobs(qy + py, qx + px, centres)
@@ -349,3 +353,256 @@ def test_stitch_alignment_correction_refuses_channel_reference(tmp_path):
     )
     assert result.returncode != 0
     assert "--channel-reference" in result.stderr
+
+
+def test_bare_correction_channels_flag_is_an_error(tmp_path):
+    r = subprocess.run(
+        [
+            "scallops",
+            "stitch",
+            "--images",
+            str(tmp_path),
+            "--report-output",
+            str(tmp_path / "stitch"),
+            "--alignment-correction-channels",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 2 and "expected at least one argument" in r.stderr
+
+
+def test_metadata_channel_names_open_a_multichannel_file_once(tmp_path, monkeypatch):
+    import tifffile
+
+    import scallops.io
+
+    names = ["DAPI", "FITC", "TRITC", "CY5", "CY7"]
+    path = tmp_path / "five.ome.tif"
+    tifffile.imwrite(
+        path,
+        np.zeros((5, 16, 16), np.uint16),
+        ome=True,
+        metadata={"axes": "CYX", "Channel": {"Name": names}},
+    )
+    opens = []
+    create_image = scallops.io._create_image
+    monkeypatch.setattr(
+        scallops.io,
+        "_create_image",
+        lambda p, **kw: opens.append(p) or create_image(p, **kw),
+    )
+    assert metadata_channel_names([str(path)], None, 5) == names
+    assert len(opens) == 1
+
+
+def test_estimation_reads_the_z_plane_fusion_uses(tmp_path, monkeypatch):
+    import tifffile
+
+    import scallops.stitch._stitch as S
+    from scallops.stitch.fuse import _fuse_image
+
+    # 3 z planes in one file, each plane a constant: the value read identifies the plane
+    data = np.zeros((3, 2, 32, 32), np.uint16)
+    for z in range(3):
+        data[z] = 1000 * (z + 1)
+    path = tmp_path / "zstack.ome.tif"
+    tifffile.imwrite(path, data, ome=True, metadata={"axes": "ZCYX"})
+
+    class Stop(Exception):
+        pass
+
+    captured = {}
+
+    def capture_reference(read_tile, *args, **kwargs):
+        captured["ref"] = read_tile(0, [])[0]
+        raise Stop
+
+    monkeypatch.setattr(S, "estimate_well", capture_reference)
+    # one z for all tiles, and per-tile z values as --z-index focus gives them (Python ints)
+    for z_index, fusion_z in ((1, 1), ((1,), np.asarray((1,))[0])):
+        with pytest.raises(Stop):
+            S._estimate_channel_alignment(
+                to_estimate=[1],
+                channel_order=["DAPI", "CY7"],
+                reference_channel=0,
+                filepaths=[[str(path)]],
+                fileattrs=None,
+                n_scenes=None,
+                stage_positions=np.zeros((1, 2)),
+                image_spacing=None,
+                z_index=z_index,
+                t_index=None,
+                random_seed=0,
+                image_key="A1",
+            )
+        # fusion gets per-tile z values from the positions table (numpy integers)
+        target = np.zeros((1, 32, 32), np.uint16)
+        _fuse_image(
+            [str(path)],
+            None,
+            0,
+            0,
+            (32, 32),
+            target,
+            np.uint16,
+            output_channels=[0],
+            z_index=fusion_z,
+        )
+        np.testing.assert_array_equal(captured["ref"], target[0])
+
+
+def test_edge_band_width():
+    assert edge_band_width((512, 512), None) == (0, 0)
+    assert edge_band_width((512, 512), None, 0.0, 30.0, 0.0) == (30, 0)
+    assert edge_band_width((512, 512), None, 0.0, -12.5, 7.2) == (13, 8)
+
+
+def test_fusion_crop_covers_zero_bands_or_stops():
+    def shifted(ty):
+        return {1: dict(name="CY7", m=0.0, ty=ty, tx=0.0)}
+
+    used, rec = fusion_crop(shifted(10.0), (512, 512), None, (24, 24), (32, 32), "A1")
+    assert used == (24, 24)
+    used, rec = fusion_crop(shifted(30.0), (512, 512), None, (24, 24), (32, 32), "A1")
+    assert used == (30, 24) and rec == dict(
+        scallops=[24, 24], edge_band=[30, 0], used=[30, 24], max=[32, 32]
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"Tile overlap is too small to correct channel 1 \(CY7\) of A1: .* 40 px band .* only 32 px",
+    ):
+        fusion_crop(shifted(40.0), (512, 512), None, (24, 24), (32, 32), "A1")
+    # a band inside SCALLOPS's own crop is accepted even where the overlap limit is smaller
+    assert fusion_crop(shifted(30.0), (512, 512), None, (32, 24), (20, 20), "A1")[
+        0
+    ] == (32, 24)
+    # no neighbours along an axis (e.g. a single tile): any crop opens no gaps
+    assert fusion_crop(shifted(40.0), (512, 512), None, (0, 0), (None, None), "A1")[
+        0
+    ] == (40, 0)
+
+
+def _shifted_stitch(tmp_path, ty, positions=POSITIONS):
+    _write_tiles(
+        tmp_path / "input",
+        np.random.default_rng(1),
+        True,
+        m=0.0,
+        ty=ty,
+        tx=0.0,
+        positions=positions,
+    )
+    params = _write_params(
+        tmp_path / "params.json", _params_doc(CY7={"m": 0.0, "ty": ty, "tx": 0.0})
+    )
+    return _stitch_cmd(
+        tmp_path,
+        "--alignment-correction-channels",
+        "all",
+        "--alignment-correction-params",
+        params,
+        "--alignment-correction-channel-order",
+        "DAPI",
+        "CY7",
+    )
+
+
+@pytest.mark.io
+def test_stitch_crop_removes_zero_bands(tmp_path):
+    # 64 px overlap: SCALLOPS's crop is 24 px, half the overlap 32 px; a 30 px shift leaves a 30 px band
+    subprocess.check_call(_shifted_stitch(tmp_path, 30.0))
+    fused = read_image(str(tmp_path / "stitch.zarr")).values
+    assert (fused[1] == 0).sum() == 0
+    record = json.loads((tmp_path / "stitch" / "A1-channel-alignment.json").read_text())
+    crop = record["fusion_crop"]
+    assert crop["scallops"] == [24, 24] and crop["edge_band"] == [30, 0]
+    assert crop["used"] == [30, 24] and min(crop["max"]) >= 30
+
+
+@pytest.mark.io
+def test_stitch_stops_when_overlap_is_too_small(tmp_path):
+    r = subprocess.run(_shifted_stitch(tmp_path, 40.0), capture_output=True, text=True)
+    assert r.returncode != 0
+    assert (
+        "Tile overlap is too small to correct channel 1 (CY7) of A1"
+        in r.stdout + r.stderr
+    )
+
+
+def test_max_fusion_crop_counts_side_by_side_neighbours():
+    from scallops.stitch._stitch import _max_fusion_crop
+
+    # 2 x 2 grid, 64 px overlaps; one pair 12 px further apart in x; the diagonal pairs don't count
+    positions = [(0, 0), (0, 460), (448, 0), (448, 448)]
+    pairs = [(0, 1), (0, 2), (1, 3), (2, 3), (0, 3), (1, 2)]
+    result = dict(
+        stitched_positions=positions, pairs_after_stitching=pairs, tile_shape=(512, 512)
+    )
+    # typical overlap per axis: y pairs overlap 64 and 64 px, x pairs 52 and 64 px (median 58)
+    assert _max_fusion_crop(result) == (32, 29)
+    # a single tile: no neighbours, any crop opens no gaps
+    assert _max_fusion_crop(
+        dict(result, stitched_positions=[(0, 0)], pairs_after_stitching=None)
+    ) == (None, None)
+
+
+def test_estimators_survive_patches_leaving_the_tile(monkeypatch):
+    import scallops.stitch._channel_align_estimate as E
+
+    rng = np.random.default_rng(2)
+    shape = (256, 256)
+    centres = rng.uniform(80, 176, (40, 2))
+    settings = E.scale_settings(9.0)
+    cp = E._prep(rng.normal(300, 30, shape))
+    # a translation that moves every patch out of the tile: not converged, rather than an error
+    *_, step = E.method_et(
+        centres, cp, shape, settings, dict(m=0.0, ty=500.0, tx=0.0), 9.0
+    )
+    assert step == float("inf")
+    # S's own estimate moving every patch out of the tile: fails the rms rule, rather than an error
+    monkeypatch.setattr(E, "_sym_shift", lambda P: np.array([500.0, 0.0]))
+    _, rms, _ = E.method_s(centres, cp, shape, settings)
+    assert rms == float("inf")
+
+
+def test_stage_positions_only_stops_when_bands_would_remain():
+    alignment = {
+        1: dict(name="FITC", m=0.0, ty=1.5, tx=0.0),
+        2: dict(name="CY7", m=0.0, ty=0.0, tx=0.0),
+        3: dict(name="CY5", m=0.0, ty=0.0, tx=-2.0),
+    }
+    check_stage_positions_only(
+        {2: alignment[2]}, (512, 512), None, "A1"
+    )  # no band: corrected
+    with pytest.raises(ValueError) as err:
+        check_stage_positions_only(alignment, (512, 512), None, "A1")
+    message = str(err.value)
+    assert message.startswith("Tiles of A1 could not be aligned")
+    assert (
+        "channel(s) 1 (FITC), 3 (CY5) would leave bands" in message
+        and "CY7" not in message
+    )
+    assert (
+        "Remove only these channel(s) from --alignment-correction-channels" in message
+    )
+
+
+@pytest.mark.io
+def test_single_tile_crop_removes_zero_band(tmp_path):
+    subprocess.check_call(_shifted_stitch(tmp_path, 30.0, positions=[(0, 0)]))
+    fused = read_image(str(tmp_path / "stitch.zarr")).values
+    assert (fused[1] == 0).sum() == 0
+    record = json.loads((tmp_path / "stitch" / "A1-channel-alignment.json").read_text())
+    assert record["fusion_crop"]["used"] == [30, 0]
+
+
+@pytest.mark.io
+def test_stitch_stops_when_tiles_are_placed_at_stage_positions(tmp_path):
+    # tiles 88 px apart: no overlaps, so SCALLOPS places them at their stage positions without cropping
+    spaced = [(0, 0), (0, TILE + 88), (TILE + 88, 0), (TILE + 88, TILE + 88)]
+    r = subprocess.run(
+        _shifted_stitch(tmp_path, 3.0, positions=spaced), capture_output=True, text=True
+    )
+    assert r.returncode != 0
+    assert "were placed at their stage positions" in r.stdout + r.stderr

@@ -23,7 +23,12 @@ from scallops.registration.crosscorrelation import _apply_window, _filter_percen
 from scallops.stitch._channel_align import channel_coords, warp_image
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import calc_best_shift
-from scallops.stitch.utils import _crop_image, _select_t_index, dtype_convert
+from scallops.stitch.utils import (
+    _crop_image,
+    _select_t_index,
+    _select_z_index,
+    dtype_convert,
+)
 from scallops.utils import _cpu_count
 from scallops.zarr_io import (
     _attrs_axes_scales,
@@ -490,8 +495,7 @@ def _fuse_image(
     img = _images2fov(image_paths, image_attrs, scene_id=scene_id)
     img = _select_t_index(img, t_index)
     [os.remove(path) for path in local_image_paths if path is not None]
-    if "z" in img.dims:
-        img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
+    img = _select_z_index(img, z_index)
     img = img.values
 
     if output_channels is not None and channel_reference is None:

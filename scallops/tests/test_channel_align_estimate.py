@@ -232,6 +232,29 @@ def test_estimate_well_small_well_uses_all_tiles_and_fails_blank_channel():
     )
 
 
+def test_exception_on_a_tile_stops_estimation(monkeypatch):
+    pos, read_tile = _well(5)
+
+    def fails(*args, **kwargs):
+        raise RuntimeError("simulated failure")
+
+    monkeypatch.setattr(E, "method_s", fails)
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        E.estimate_well(read_tile, pos, ["CY7"], seed=0)
+
+
+def test_tile_without_nuclei_is_invalid_not_an_error():
+    pos, read_tile = _well(5)
+    blank = {3, 11}
+
+    def read(i, channels):
+        ref, images = read_tile(i, channels)
+        return (np.full_like(ref, 300.0), images) if i in blank else (ref, images)
+
+    cy7 = E.estimate_well(read, pos, ["CY7"], seed=0)["channels"]["CY7"]
+    assert cy7["passed"] and not blank & set(cy7["tiles_used"])
+
+
 def test_implausible_estimate_requires_parameters():
     tiles = {i: dict(channels={"c": dict(m=0.0, ty=12.0, tx=0.0)}) for i in range(30)}
     valid = {0: list(range(30)), 1: [], 2: [], 3: []}

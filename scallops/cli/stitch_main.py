@@ -302,7 +302,7 @@ def _create_stitch_parser(
     )
     parser.add_argument(
         "--alignment-correction-channels",
-        nargs="*",
+        nargs="+",
         help="Channel indices (0-based) to align to the reference channel (--align-channel) when fusing, or `all` "
         "(also `*` or `true`) for every channel except the reference. When given, every output channel is "
         "resampled once with a quintic B-spline (alignment composed with the radial correction) instead of the "

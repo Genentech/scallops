@@ -29,8 +29,9 @@ Per tile (:func:`estimate_tile`):
 - **ET** gives ``(ty, tx)`` with ``m`` fixed at the tile's S value (geometry of the nucleus outline in the mean
   patch, 10 iterations from S's translation).
 
-A tile is valid for a channel when neither raised an error, S's regional fit rms is < 3 px, ET converged (last step
-< 0.01 px), and the tile has at least 25% of the median nucleus count of the well's first-drawn tiles. Pixel sizes
+A tile is valid for a channel when its reference channel has nuclei, S's regional fit rms is < 3 px, ET converged
+(last step < 0.01 px), and the tile has at least 25% of the median nucleus count of the well's first-drawn tiles. An
+exception while estimating a tile is not caught: it stops the estimation. Pixel sizes
 of all settings scale with the nucleus radius measured on the reference channel (anchored to the validated settings
 of a 20x IXM, nucleus radius 12 px); the minimum nucleus area scales with the pixel size when it is known.
 
@@ -200,6 +201,10 @@ def _region_mean_patches(
     keep = (iy >= R) & (ix >= R) & (iy - R < view.shape[0]) & (ix - R < view.shape[1])
     if not keep.all():  # patch (partly) outside the tile: drop the nucleus
         ys, xs, region, iy, ix = ys[keep], xs[keep], region[keep], iy[keep], ix[keep]
+    if len(ys) == 0:  # no patch inside the tile
+        return np.zeros((n_regions, S - 1, S - 1), np.float32), np.zeros(
+            n_regions, np.float32
+        )
     fy, fx = (ys - iy).astype(np.float32), (xs - ix).astype(np.float32)
     P = view[iy - R, ix - R].reshape(len(ys), S * S)
     wn = np.ones(len(ys), np.float32)
@@ -258,12 +263,11 @@ def _inside(cen, shape, border):
     )
 
 
-def method_s(ref_centres, img, shape, settings):
-    """S: (m, ty, tx) and the regional fit rms (px)."""
+def method_s(ref_centres, cp, shape, settings):
+    """S: (m, ty, tx) and the regional fit rms (px). ``cp``: the channel prepared by :func:`_prep`."""
     ok = _inside(ref_centres, shape, settings["border"])
     cy, cx = ref_centres[ok, 0], ref_centres[ok, 1]
     region = _regions(cy, cx, shape)
-    cp = _prep(img)
     R = settings["patch_radius"]
     prm = dict(m=0.0, ty=0.0, tx=0.0)
     for _ in range(S_ITERATIONS):
@@ -272,6 +276,10 @@ def method_s(ref_centres, img, shape, settings):
             cp, cy + py, cx + px, region, R, settings["norm_radius"]
         )
         rs = np.flatnonzero(counts > 0)
+        if (
+            rs.size == 0
+        ):  # every shifted patch left the tile: the tile fails the rms rule
+            return prm, float("inf"), int(ok.sum())
         t = np.array([_sym_shift(M[r].astype(np.float64)) for r in rs])
         ry = np.array([cy[region == r].mean() for r in rs])
         rx = np.array([cx[region == r].mean() for r in rs])
@@ -334,12 +342,14 @@ def _edge_shift_fn(r_lo, r_hi, n_ang=72, dr=0.5):
     return f
 
 
-def method_et(ref_centres, img, shape, settings, start, edge_radius):
-    """ET: translation with m fixed at start['m'], from start's translation; returns (ty, tx, last step)."""
+def method_et(ref_centres, cp, shape, settings, start, edge_radius):
+    """ET: translation with m fixed at start['m'], from start's translation; returns (ty, tx, last step).
+
+    ``cp``: the channel prepared by :func:`_prep`.
+    """
     ok = _inside(ref_centres, shape, settings["border"])
     cy, cx = ref_centres[ok, 0], ref_centres[ok, 1]
     region = _regions(cy, cx, shape)
-    cp = _prep(img)
     shift_fn = _edge_shift_fn(0.6 * edge_radius, 1.25 * edge_radius)
     prm = dict(start)
     step = float("inf")
@@ -354,6 +364,8 @@ def method_et(ref_centres, img, shape, settings, start, edge_radius):
             settings["norm_radius"],
         )
         rs = np.flatnonzero(counts > 0)
+        if rs.size == 0:  # every shifted patch left the tile: not converged
+            return prm["ty"], prm["tx"], float("inf")
         t = np.array([shift_fn(M[r].astype(np.float64)) for r in rs])
         dt = (t * counts[rs, None]).sum(0) / counts[rs].sum()
         prm["ty"] += float(dt[0])
@@ -368,7 +380,8 @@ def estimate_tile(ref: np.ndarray, images: dict, settings: dict) -> dict:
     :param ref: Reference (nuclear) channel, 2-D.
     :param images: Channel key -> 2-D image of the same shape.
     :param settings: :func:`scale_settings`.
-    :return: ``dict(n_nuclei, channels={key: dict(m, ty, tx, s_ty, s_tx, rms, et_step, error)})``.
+    :return: ``dict(n_nuclei, channels={key: dict(m, ty, tx, s_ty, s_tx, rms, et_step, error)})``. ``error`` is
+        the reason a tile can't be used ("no nuclei in the reference channel"), else ``None``. Exceptions propagate.
     """
     ref = np.asarray(ref, np.float64)
     shape = ref.shape
@@ -379,30 +392,21 @@ def estimate_tile(ref: np.ndarray, images: dict, settings: dict) -> dict:
         for c in images:
             out["channels"][c] = dict(error="no nuclei in the reference channel")
         return out
-    try:
-        edge_radius = nucleus_edge_radius(ref, cen, shape, settings)
-    except Exception as e:  # noqa: BLE001 - recorded per tile
-        for c in images:
-            out["channels"][c] = dict(error=f"nucleus radius: {type(e).__name__}: {e}")
-        return out
+    edge_radius = nucleus_edge_radius(ref, cen, shape, settings)
     for c, img in images.items():
-        try:
-            s_prm, rms, _ = method_s(cen, np.asarray(img, np.float64), shape, settings)
-            ty, tx, step = method_et(
-                cen, np.asarray(img, np.float64), shape, settings, s_prm, edge_radius
-            )
-            out["channels"][c] = dict(
-                m=s_prm["m"],
-                ty=ty,
-                tx=tx,
-                s_ty=s_prm["ty"],
-                s_tx=s_prm["tx"],
-                rms=rms,
-                et_step=step,
-                error=None,
-            )
-        except Exception as e:  # noqa: BLE001 - recorded per tile
-            out["channels"][c] = dict(error=f"{type(e).__name__}: {e}")
+        cp = _prep(img)  # shared by S and ET
+        s_prm, rms, _ = method_s(cen, cp, shape, settings)
+        ty, tx, step = method_et(cen, cp, shape, settings, s_prm, edge_radius)
+        out["channels"][c] = dict(
+            m=s_prm["m"],
+            ty=ty,
+            tx=tx,
+            s_ty=s_prm["ty"],
+            s_tx=s_prm["tx"],
+            rms=rms,
+            et_step=step,
+            error=None,
+        )
     return out
 
 
