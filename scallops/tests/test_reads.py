@@ -235,7 +235,7 @@ def nis_seq_fixtures(nis_seq_experiment, nis_seq_nuclear_mask, nis_seq_barcodes)
         filter_percentiles=[0, 90],
     )
 
-    # Channels 1,2,3 → ch03(C), ch04(A), ch06(T)
+    # Channels 1,2,3 → ch03(A), ch04(T), ch06(C)
     loged3 = transform_log(iss.isel(c=[1, 2, 3]))
     ba3 = peaks_to_bases(
         maxed=max_filter(loged3, width=5),
@@ -252,7 +252,7 @@ def nis_seq_fixtures(nis_seq_experiment, nis_seq_nuclear_mask, nis_seq_barcodes)
         "threshold"
     ]
 
-    # 2-col secondary threshold (from synthesised ch0=max(A,C), ch1=max(A,T) baseline)
+    # 2-col secondary threshold (from synthesized ch0=max(A,C), ch1=max(A,T) baseline)
     sp3 = np.clip(cor3.data, 0, None)
     bl2 = np.array(["G", "T", "A", "C"])
     ch0 = np.maximum(sp3[..., 0], sp3[..., 2])
@@ -322,12 +322,12 @@ def test_decoders_3ch_nis_seq(nis_seq_fixtures):
     assert pol_stats["mapping_rate"] > 0.42  # 0.45
     assert pol_stats["labels_with_mapped_reads"] / f.n_nuc > 0.81  # 0.84
     assert max_stats["mapping_rate"] > 0.40  # 0.43
-    assert max_stats["labels_with_mapped_reads"] / f.n_nuc  # 0.83
+    assert max_stats["labels_with_mapped_reads"] / f.n_nuc > 0.80  # 0.83
 
 
 @pytest.mark.basecalls
 def test_decoders_2col_nis_seq(nis_seq_fixtures):
-    """SE and polar decoders on synthesised 2-colour NIS-seq (G dark, non-orthogonal).
+    """SE and polar decoders on synthesized 2-color NIS-seq (G dark, non-orthogonal).
 
     Channels: ch0=max(A,C), ch1=max(A,T).  Notebook polar_basecalling.ipynb values:
       decode_se    map=17.66%   nuclei/1,001 = 71.07%
@@ -371,6 +371,7 @@ def test_decoders_2col_nis_seq(nis_seq_fixtures):
             encoding=E2,
             base_labels=["G", "T", "A", "C"],
             w_cor=f.w3,
+            w_cor_bases=list(f.ba3.c.values),
         )
     )
 
@@ -378,6 +379,184 @@ def test_decoders_2col_nis_seq(nis_seq_fixtures):
     assert se_stats["labels_with_mapped_reads"] / f.n_nuc > 0.68  # notebook: ~70.9%
     assert pol_stats["mapping_rate"] > 0.27  # notebook: ~29.5%
     assert pol_stats["labels_with_mapped_reads"] / f.n_nuc > 0.81  # notebook: ~83.9%
+
+
+@pytest.mark.basecalls
+def test_decode_polar_quality():
+    """Q reflects the margin of the polar call: ambiguous calls score lower than clear ones."""
+    # orthogonal: clear A, A vs C ambiguous, dark, near dark cutoff, clear C, clear T
+    x = np.array(
+        [[[100, 0, 0], [100, 95, 0], [0, 0, 0], [21, 0, 0], [0, 100, 0], [0, 0, 100]]],
+        dtype=float,
+    )
+    spots = xr.DataArray(
+        x, dims=("read", "t", "c"), coords={"read": [0], "c": list("ACT")}
+    )
+    df = decode_polar(spots, dark_bases=["G"], r_frac=0.2)
+    q = df["Q"].iloc[0]
+    assert df["barcode"].iloc[0] == "AAGGCT"
+    clear = q[[0, 2, 4, 5]]
+    assert clear.min() > 50
+    assert q[1] < clear.min() and q[3] < clear.min()
+    assert q[1] > 3 and q[3] > 3  # not capped like the old 2-class min
+
+    # non-orthogonal 2-color: clear T/A/C/dark, then a call near the t_lo bin edge
+    E = np.array([[0, 1], [1, 1], [1, 0], [0, 0]], dtype=float)
+    x2 = np.array(
+        [[[100, 100], [100, 0], [0, 100], [0, 0], [100, 70], [100, 45]]], dtype=float
+    )
+    spots2 = xr.DataArray(x2, dims=("read", "t", "c"), coords={"read": [0]})
+    df2 = decode_polar(spots2, encoding=E, base_labels=list("TACG"), r_frac=0.2)
+    q2 = df2["Q"].iloc[0]
+    assert df2["barcode"].iloc[0] == "ACTGAA"
+    assert q2[:5].min() > 50
+    assert q2[5] < q2[:5].min()
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize(
+    "encoding, base_labels, x, expected",
+    [
+        # ch0-only = C, both = A, ch1-only = T, none = G; only differs in row order
+        pytest.param(
+            [[0, 1], [1, 1], [1, 0], [0, 0]],
+            "TACG",
+            [[100, 100], [100, 0], [0, 100], [0, 0]],
+            "ACTG",
+            id="rows-TAC",
+        ),
+        pytest.param(
+            [[1, 1], [0, 1], [1, 0], [0, 0]],
+            "ATCG",
+            [[100, 100], [100, 0], [0, 100], [0, 0]],
+            "ACTG",
+            id="rows-ATC",
+        ),
+        pytest.param(
+            [[1, 0], [1, 1], [0, 1], [0, 0]],
+            "CATG",
+            [[100, 100], [100, 0], [0, 100], [0, 0]],
+            "ACTG",
+            id="rows-CAT",
+        ),
+        # only 2 bright bases
+        pytest.param(
+            [[1, 1], [1, 0], [0, 0]],
+            "ACG",
+            [[100, 100], [100, 0], [0, 0]],
+            "ACG",
+            id="2-bright-bases",
+        ),
+    ],
+)
+def test_decode_polar_non_orthogonal_row_order(encoding, base_labels, x, expected):
+    """Non-orthogonal calls should not depend on the row order of the encoding matrix."""
+    spots = xr.DataArray(
+        np.array([x], dtype=float), dims=("read", "t", "c"), coords={"read": [0]}
+    )
+    df = decode_polar(
+        spots,
+        encoding=np.array(encoding, dtype=float),
+        base_labels=list(base_labels),
+        r_frac=0.2,
+    )
+    assert df["barcode"].iloc[0] == expected
+
+
+def _polar_2col_spots(n_reads=200, n_t=8, seed=0):
+    rng = np.random.default_rng(seed)
+    x = rng.uniform(0, 100, (n_reads, n_t, 2))
+    return xr.DataArray(x, dims=("read", "t", "c"), coords={"read": np.arange(n_reads)})
+
+
+@pytest.mark.basecalls
+def test_decode_polar_w_cor_channel_order():
+    """Thresholds from a 3-channel w_cor depend on channel names, not channel order."""
+    E = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float)
+    labels = ["G", "T", "A", "C"]
+    # forward model over physical channels A, T, C: A bleeds into T, C into A
+    fwd = np.array([[1.0, 0.0, 0.3], [0.4, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    w = np.linalg.inv(fwd)
+    p = [2, 0, 1]  # same physics with channels stored as C, A, T
+    spots = _polar_2col_spots()
+    kwargs = dict(encoding=E, base_labels=labels, r_frac=0.2)
+    df = decode_polar(spots, w_cor=w, w_cor_bases=["A", "T", "C"], **kwargs)
+    df_perm = decode_polar(
+        spots, w_cor=w[np.ix_(p, p)], w_cor_bases=["C", "A", "T"], **kwargs
+    )
+    df_default = decode_polar(spots, **kwargs)
+    assert (df["barcode"] == df_perm["barcode"]).all()
+    assert (df["barcode"] != df_default["barcode"]).any()  # w_cor is used
+
+    with pytest.raises(ValueError, match="w_cor_bases"):
+        decode_polar(spots, w_cor=w, **kwargs)
+
+
+@pytest.mark.basecalls
+def test_decode_polar_w_cor_2_channels():
+    """A 2x2 w_cor (channels = dyes) gives distinct bin edges, so A is still called."""
+    E = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float)
+    # ch1 dye bleeds 20% into ch0: expected angles C = 0, A ~ 35.5, T ~ 78.7 degrees
+    w = np.linalg.inv(np.array([[1.0, 0.2], [0.0, 1.0]]))
+    x = np.array([[[100, 70], [100, 0], [20, 100], [0, 0]]], dtype=float)
+    spots = xr.DataArray(x, dims=("read", "t", "c"), coords={"read": [0]})
+    df = decode_polar(spots, encoding=E, base_labels=list("GTAC"), w_cor=w, r_frac=0.2)
+    assert df["barcode"].iloc[0] == "ACTG"
+
+
+@pytest.mark.basecalls
+def test_decode_polar_w_cor_2_channels_order():
+    """A 2x2 w_cor stored in the opposite channel order is reordered by w_cor_bases."""
+    E = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float)
+    labels = list("GTAC")  # C fires ch0, T fires ch1
+    w = np.linalg.inv(np.array([[1.0, 0.2], [0.0, 1.0]]))
+    w_swapped = w[::-1, ::-1]  # same physics, w_cor channels stored as T, C
+    spots = _polar_2col_spots()
+    kwargs = dict(encoding=E, base_labels=labels, r_frac=0.2)
+    df = decode_polar(spots, w_cor=w, **kwargs)
+    df_named = decode_polar(spots, w_cor=w, w_cor_bases=["C", "T"], **kwargs)
+    df_swapped = decode_polar(spots, w_cor=w_swapped, w_cor_bases=["T", "C"], **kwargs)
+    assert (df["barcode"] == df_named["barcode"]).all()
+    assert (df["barcode"] == df_swapped["barcode"]).all()
+
+    with pytest.raises(ValueError, match="exactly one data channel"):
+        decode_polar(spots, w_cor=w, w_cor_bases=["A", "T"], **kwargs)
+    with pytest.raises(ValueError, match="one base per data channel"):
+        decode_polar(spots, w_cor=w, w_cor_bases=["T", "T"], **kwargs)
+
+
+@pytest.mark.basecalls
+def test_decode_polar_single_bright_base():
+    """A non-orthogonal encoding with one bright base has no angle bin edges."""
+    E = np.array([[1, 1], [0, 0]], dtype=float)
+    x = np.array([[[100, 100], [0, 0], [100, 90]]], dtype=float)
+    spots = xr.DataArray(x, dims=("read", "t", "c"), coords={"read": [0]})
+    df = decode_polar(spots, encoding=E, base_labels=["A", "G"], r_frac=0.2)
+    assert df["barcode"].iloc[0] == "AGA"
+    assert np.all(df["Q"].iloc[0] > 50)
+
+
+@pytest.mark.basecalls
+def test_decode_polar_w_cor_out_of_order_falls_back(caplog):
+    """w_cor angles out of encoding order fall back to the encoding angles."""
+    E = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float)
+    # w_cor channels swapped relative to the data: C's dye points along ch1 and
+    # T's along ch0, so C's expected angle is above T's
+    w = np.linalg.inv(np.array([[0.2, 1.0], [1.0, 0.2]]))
+    spots = _polar_2col_spots()
+    kwargs = dict(encoding=E, base_labels=list("GTAC"), r_frac=0.2)
+    with caplog.at_level("WARNING", logger="scallops"):
+        df = decode_polar(spots, w_cor=w, **kwargs)
+    assert "not in encoding order" in caplog.text
+    assert (df["barcode"] == decode_polar(spots, **kwargs)["barcode"]).all()
+
+
+@pytest.mark.basecalls
+def test_decode_polar_multiple_dark_bases():
+    """Dark bases cannot be told apart, so more than one is rejected."""
+    spots = _polar_2col_spots()
+    with pytest.raises(ValueError, match="at most one dark base"):
+        decode_polar(spots, dark_bases=["G", "N"])
 
 
 @pytest.mark.basecalls
