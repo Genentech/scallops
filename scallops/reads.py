@@ -783,6 +783,869 @@ def decode_se(
     )
 
 
+def _resolve_encoding(
+    spots: xr.DataArray,
+    encoding: NDArray | None,
+    base_labels: list[str] | NDArray | None,
+    dark_bases: list[str] | None,
+) -> tuple[NDArray, NDArray]:
+    """Resolve ``encoding``/``base_labels``/``dark_bases`` as in :func:`decode_se`."""
+    if encoding is None and dark_bases is not None:
+        encoding, base_labels = make_encoding(
+            channel_bases=list(spots.c.values), dark_bases=dark_bases
+        )
+    if encoding is None:
+        encoding = np.eye(len(spots.c.values), dtype=float)
+        base_labels = np.array(list(spots.c.values))
+    if base_labels is None:
+        raise ValueError("base_labels is required with encoding")
+    return np.asarray(encoding, dtype=float), np.asarray(base_labels)
+
+
+def _em_cycle_gain(x: NDArray, q: float = 0.9) -> NDArray:
+    """Per-cycle, per-channel gain from the signal alone.
+
+    Every cycle has a similar mix of bases, so the ``q``-quantile of a cycle's
+    intensities across reads tracks that cycle's brightness (e.g. a bright first
+    cycle).  Returned relative to the median over cycles.
+
+    :param x: ``(read, t, c)`` intensities.
+    :return: ``(t, c)`` gain.
+    """
+    g = np.quantile(x, q, axis=0)  # (t, c)
+    med = np.median(g, axis=0, keepdims=True)
+    return np.where((g > 0) & (med > 0), g / np.where(med > 0, med, 1.0), 1.0)
+
+
+def _em_split_levels(x: NDArray, min_snr: float) -> tuple[NDArray, NDArray, NDArray]:
+    """Split each read's cycles into low and high groups per channel, without calls.
+
+    For each read and channel, the cycles are split at the point that maximizes the
+    between-group variance (Otsu's method on the read's T values).  The split is
+    accepted when the gap between the group means is at least ``min_snr`` times
+    the pooled within-group standard deviation; otherwise the channel is treated as
+    never on in that read.
+
+    :param x: ``(read, t, c)`` intensities.
+    :return: ``(b, gap, ok)``, each ``(read, c)``: background (low-group mean, or
+        the mean of all cycles when the split is rejected), gap between group means,
+        and whether the split was accepted.
+    """
+    v = np.sort(x, axis=1)  # (read, t, c)
+    T = v.shape[1]
+    k = np.arange(1, T)[np.newaxis, :, np.newaxis]  # size of the low group
+    csum = np.cumsum(v, axis=1)
+    total = csum[:, -1:, :]
+    lo_mean = csum[:, :-1, :] / k
+    hi_mean = (total - csum[:, :-1, :]) / (T - k)
+    between = k * (T - k) / T * (hi_mean - lo_mean) ** 2
+    best = between.argmax(axis=1)  # (read, c)
+    take = best[:, np.newaxis, :]
+    b = np.take_along_axis(lo_mean, take, axis=1)[:, 0, :]
+    gap = np.take_along_axis(hi_mean, take, axis=1)[:, 0, :] - b
+    rank = np.arange(T)[np.newaxis, :, np.newaxis]
+    is_lo = rank <= best[:, np.newaxis, :]
+    level = np.where(is_lo, b[:, np.newaxis, :], (b + gap)[:, np.newaxis, :])
+    pooled_sd = np.sqrt(((v - level) ** 2).sum(axis=1) / max(T - 2, 1))
+    ok = gap >= min_snr * np.maximum(pooled_sd, 1e-12)
+    b = np.where(ok, b, x.mean(axis=1))
+    return b, gap, ok
+
+
+def _em_global_scale(x: NDArray, min_snr: float) -> NDArray:
+    """Global bright scale per channel: median gap over reads whose split is accepted."""
+    _, gap, ok = _em_split_levels(x, min_snr)
+    S = np.array(
+        [
+            np.median(gap[ok[:, c], c]) if ok[:, c].any() else 1.0
+            for c in range(x.shape[2])
+        ]
+    )
+    return np.where(S > 0, S, 1.0)
+
+
+def _em_initial_levels(
+    x: NDArray, S: NDArray, min_snr: float, min_gap: float, k_low: NDArray
+) -> tuple[NDArray, NDArray]:
+    """Initial per-read background and bright level from :func:`_em_split_levels`.
+
+    The background is the mean of the read's ``k_low[c]`` lowest cycles in each
+    channel (about half the cycles the encoding expects to be off), rather than the
+    low group's mean, which can include dim on cycles when a channel is fired by
+    several bases with different dye brightness.  The bright level is the high
+    group's mean above that background.
+
+    A spot's brightness comes mostly from its size and amplification, which affect
+    every dye alike, so each read gets one amplitude ``a`` (the median over its
+    accepted channels of ``gap / S``).  Channels whose split is rejected, or whose
+    gap is below ``min_gap * a * S`` (e.g. channels that are mostly clipped to 0),
+    are treated as never on in the read and get ``a * S`` as their bright level, so
+    they are neither stretched to look bright nor given another read's scale.
+
+    :return: ``(b, s)``, each ``(read, c)``.
+    """
+    b_split, gap, ok = _em_split_levels(x, min_snr)
+    v = np.sort(x, axis=1)
+    rank = np.arange(x.shape[1])[np.newaxis, :, np.newaxis]
+    b = np.where(rank < k_low, v, 0.0).sum(axis=1) / k_low  # (read, c)
+    gap = np.where(ok, gap + b_split - b, gap)  # high-group mean minus background
+    ok &= gap >= min_gap * S
+    log_rel = np.where(ok, np.log(np.where(ok, gap, 1.0) / S), np.nan)
+    n_ok = ok.sum(axis=1)
+    a = np.ones(len(x))
+    has = n_ok > 0
+    if has.any():
+        a[has] = np.exp(np.nanmedian(log_rel[has], axis=1))
+    s_read = a[:, np.newaxis] * S
+    ok &= gap >= min_gap * s_read
+    return b, np.where(ok, gap, s_read)
+
+
+def _em_update_levels(
+    x: NDArray,
+    w_on: NDArray,
+    b0: NDArray,
+    s0: NDArray,
+    S: NDArray,
+    n0: float,
+    min_gap: float,
+) -> tuple[NDArray, NDArray]:
+    """Per-read background and bright level from the cycles the model calls off/on.
+
+    The background is the posterior-weighted mean of the read's off cycles and the
+    bright level the posterior-weighted mean of its on cycles above that
+    background.  Each is shrunk with ``n0`` pseudo-cycles
+    toward the read's initial levels ``b0`` and ``s0`` (which fall back to the global
+    scale for channels that never fire), so reads with few on or off cycles in a
+    channel keep sensible values, and the bright level is floored at ``min_gap * S``.
+
+    :param x: ``(read, t, c)`` intensities.
+    :param w_on: ``(read, t, c)`` posterior probability that each channel is on.
+    :return: ``(b, s)``, each ``(read, c)``.
+    """
+    w_off = 1 - w_on
+    b = ((w_off * x).sum(axis=1) + n0 * b0) / (w_off.sum(axis=1) + n0)
+    d = x - b[:, np.newaxis, :]
+    s = ((w_on * d).sum(axis=1) + n0 * s0) / (w_on.sum(axis=1) + n0)
+    return b, np.maximum(s, min_gap * S)
+
+
+def _em_update_amplitude(
+    x: NDArray,
+    post: NDArray,
+    model: dict,
+    b0: NDArray,
+    s0: NDArray,
+    n0: float,
+) -> tuple[NDArray, NDArray]:
+    """Per-read background and one amplitude shared across channels.
+
+    The background is updated as in :func:`_em_update_levels`.  The bright level is
+    ``a * S``, with a single amplitude ``a`` per read estimated from all of its on
+    channels and cycles, relative to each base's fitted on-state mean.  In encodings
+    where a channel is fired by several bases with different dye brightness (e.g.
+    2-color, where A and T both fire one channel), a per-channel bright level would
+    average over whichever of those bases the read contains, so the same cycle would
+    be normalized differently depending on the rest of the read.
+
+    :param x: ``(read, t, c)`` intensities, divided by the cycle gain.
+    :param post: ``(read, t, base)`` posterior.
+    :param b0: ``(read, c)`` initial background.
+    :param s0: ``(read, c)`` initial bright level, used for the initial amplitude.
+    :return: ``(b, s)``, each ``(read, c)``.
+    """
+    E, S = model["encoding"], model["S"]
+    w_on = post @ E
+    w_off = 1 - w_on
+    b = ((w_off * x).sum(axis=1) + n0 * b0) / (w_off.sum(axis=1) + n0)
+    log_a0 = np.median(np.log(s0 / S), axis=1)  # (read,)
+    d = x - b[:, np.newaxis, :]
+    pos = d > 0
+    log_d = np.log(np.where(pos, d, 1.0))[..., np.newaxis, :]  # (read, t, 1, c)
+    mu_on = np.where(E > 0, model["mu"], 0.0)  # (base, c), log space
+    resid = log_d - np.log(S) - mu_on  # (read, t, base, c)
+    wt = post[..., np.newaxis] * (E > 0) * pos[..., np.newaxis, :]
+    log_a = ((wt * resid).sum(axis=(1, 2, 3)) + n0 * log_a0) / (
+        wt.sum(axis=(1, 2, 3)) + n0
+    )
+    return b, np.exp(log_a)[:, np.newaxis] * S
+
+
+def _em_signal(x: NDArray, b: NDArray, s: NDArray) -> NDArray:
+    """Normalized signal ``(x - b) / s``: on near 1, off near 0."""
+    return (x - b[:, np.newaxis, :]) / s[:, np.newaxis, :]
+
+
+_EM_U_RANGE = (-1.0, 3.0)  # support of the outlier component, in normalized units
+
+
+def _em_values(u: NDArray, E: NDArray) -> tuple[NDArray, NDArray]:
+    """Values modelled by each base's channel states, ``(read, t, base, c)``.
+
+    Off states model ``u`` directly; on states model ``log u`` (lognormal), since on
+    signal varies multiplicatively and a symmetric on state would put spurious
+    density near 0, where it captures dark cycles.  ``u`` is clipped to
+    :data:`_EM_U_RANGE`.
+
+    :return: ``(val, valid)``: modelled value, and whether it is in the state's
+        support (on states need ``u > 0``).
+    """
+    lo, hi = _EM_U_RANGE
+    uc = np.clip(u, lo, hi)[..., np.newaxis, :]
+    on = E > 0  # (base, c)
+    pos = uc > 0
+    val = np.where(on, np.log(np.where(pos, uc, 1.0)), uc)
+    valid = np.where(on, pos, True)
+    return val, valid
+
+
+def _em_channel_logpdf(u: NDArray, model: dict) -> tuple[NDArray, NDArray]:
+    """Robust per-channel log densities ``(read, t, base, c)`` and inlier weights.
+
+    Each channel's density is ``(1 - eps) * f + eps * U``, with ``f`` a Gaussian in
+    ``u`` for off states and a lognormal for on states (:func:`_em_values`), and
+    ``U`` uniform on :data:`_EM_U_RANGE`, so a few outlying values (saturated
+    pixels, misestimated read levels) cannot dominate the fit.  The inlier weight is
+    the posterior probability of ``f``.
+    """
+    lo, hi = _EM_U_RANGE
+    eps = model["outlier"]
+    E = model["encoding"]
+    val, valid = _em_values(u, E)
+    mu, sd = model["mu"], model["sd"]  # (base, c); on states in log space
+    log_f = -0.5 * ((val - mu) / sd) ** 2 - np.log(sd) - 0.5 * np.log(2 * np.pi)
+    log_f = log_f - np.where(E > 0, val, 0.0)  # Jacobian of log u for on states
+    log_f = np.where(valid, log_f, -np.inf)
+    log_in = np.log1p(-eps) + log_f
+    log_out = np.log(eps) - np.log(hi - lo) if eps > 0 else -np.inf
+    log_p = np.logaddexp(log_in, log_out)
+    return log_p, np.exp(log_in - log_p)
+
+
+def _em_joint_logpdf(u: NDArray, model: dict) -> tuple[NDArray, NDArray]:
+    """Robust joint log densities ``(read, t, base)`` and inlier weights.
+
+    Like :func:`_em_channel_logpdf` but with a full covariance ``cov[b]`` across
+    channels per base (in the space of :func:`_em_values`), so channels that move
+    together for a base (e.g. both channels of a base that fires two) are modelled
+    jointly.  With ``t_dof``, each base's density is a multivariate t rather than a
+    Gaussian: a single wild channel then inflates the distance to every base but
+    the bases stay ranked by the rest of the cycle, whereas a per-cycle outlier
+    component alone would make the call uninformative.  The uniform outlier
+    component, per cycle, remains for values outside a state's support.
+
+    :return: ``(log_p, weight)``: log densities and M-step weights (inlier
+        probability times the t-distribution weight).
+    """
+    from scipy.special import gammaln
+
+    lo, hi = _EM_U_RANGE
+    eps = model["outlier"]
+    nu = model.get("t_dof")
+    E = model["encoding"]
+    val, valid = _em_values(u, E)  # (read, t, base, c)
+    C = val.shape[-1]
+    chol = np.linalg.cholesky(model["cov"])  # (base, c, c)
+    diff = val - model["mu"]
+    z = np.linalg.solve(chol, diff[..., np.newaxis])[..., 0]  # (read, t, base, c)
+    q = (z**2).sum(axis=-1)  # squared Mahalanobis distance
+    logdet = 2 * np.log(np.diagonal(chol, axis1=-2, axis2=-1)).sum(axis=-1)  # (base,)
+    if nu is None:
+        log_f = -0.5 * q - 0.5 * C * np.log(2 * np.pi)
+        tau = np.ones_like(q)
+    else:  # multivariate t
+        log_f = (
+            gammaln((nu + C) / 2)
+            - gammaln(nu / 2)
+            - 0.5 * C * np.log(nu * np.pi)
+            - 0.5 * (nu + C) * np.log1p(q / nu)
+        )
+        tau = (nu + C) / (nu + q)
+    log_f = log_f - 0.5 * logdet - (np.where(E > 0, val, 0.0)).sum(axis=-1)
+    log_f = np.where(valid.all(axis=-1), log_f, -np.inf)
+    log_in = np.log1p(-eps) + log_f
+    log_out = np.log(eps) - C * np.log(hi - lo) if eps > 0 else -np.inf
+    log_p = np.logaddexp(log_in, log_out)
+    return log_p, np.exp(log_in - log_p) * tau
+
+
+def _em_loglik(u: NDArray, model: dict) -> NDArray:
+    """``(read, t, c)`` normalized signal -> ``(read, t, base)`` log P(signal | base).
+
+    Robust per-base off (Gaussian) and on (lognormal) states, with a full covariance
+    across channels (:func:`_em_joint_logpdf`) when the model has ``cov``, and
+    channels independent given the base (:func:`_em_channel_logpdf`) otherwise.
+    """
+    if "cov" in model:
+        return _em_joint_logpdf(u, model)[0]
+    return _em_channel_logpdf(u, model)[0].sum(axis=-1)
+
+
+def _em_run(
+    u: NDArray,
+    E: NDArray,
+    model: dict,
+    n_iter: int,
+    tol: float,
+    var_floor: float,
+    tied: bool,
+    anneal: bool,
+    full: bool = False,
+    fixed_w: NDArray | None = None,
+) -> tuple[dict, float]:
+    """EM for the encoding-structured mixture from one starting point.
+
+    With ``tied``, each channel has one on and one off state shared across bases;
+    otherwise each base has its own parameters per channel, and with ``full`` a
+    full covariance across channels per base.  Parameters are weighted by the
+    inlier probability of each value, so outliers barely move them.  With
+    ``fixed_w`` (``(read, t, base)``, e.g. one-hot labels from whitelist-matched
+    reads), the base posteriors are held fixed and only the parameters (and
+    their inlier weights) are updated.
+    """
+    model = {
+        k: np.array(v, dtype=float) if isinstance(v, np.ndarray) else v
+        for k, v in model.items()
+    }
+    model["encoding"] = E
+    val, _ = _em_values(u, E)
+    on = E > 0
+    n_anneal = max(1, n_iter // 4) if anneal else 0
+    prev = -np.inf
+    ll = -np.inf
+    for it in range(n_iter):
+        beta = min(1.0, 0.5 + 0.5 * it / n_anneal) if n_anneal else 1.0
+        if full:
+            log_p, inlier = _em_joint_logpdf(u, model)
+            L = log_p + np.log(model["pi"])[np.newaxis]
+        else:
+            log_p, inlier = _em_channel_logpdf(u, model)
+            L = log_p.sum(axis=-1) + np.log(model["pi"])[np.newaxis]
+        ll = float(np.logaddexp.reduce(L, axis=-1).mean())
+        if beta == 1.0 and abs(ll - prev) < tol * max(1.0, abs(prev)):
+            break
+        prev = ll if beta == 1.0 else -np.inf
+        w = softmax(beta * L, axis=-1) if fixed_w is None else fixed_w
+        if full:
+            wb = w * inlier  # (read, t, base): includes the t weight
+            tot = wb.sum(axis=(0, 1)) + 1e-12
+            mu = np.einsum("ntb,ntbc->bc", wb, val) / tot[:, np.newaxis]
+            dv = val - mu
+            n_b = (w * (inlier > 0)).sum(axis=(0, 1)) + 1e-12
+            cov = np.einsum("ntb,ntbc,ntbd->bcd", wb, dv, dv) / n_b[:, None, None]
+            cov += var_floor * np.eye(val.shape[-1])
+            model["mu"], model["cov"] = mu, cov
+            model["sd"] = np.sqrt(np.diagonal(cov, axis1=-2, axis2=-1))
+            pi = w.mean(axis=0) + 1e-6
+            model["pi"] = pi / pi.sum(axis=1, keepdims=True)
+            continue
+        wc = w[..., np.newaxis] * inlier  # (read, t, base, c)
+        sw = wc.sum(axis=(0, 1))  # (base, c)
+        sx = np.einsum("ntbc,ntbc->bc", wc, val)
+        sxx = np.einsum("ntbc,ntbc->bc", wc, val**2)
+        if tied:  # pool on states and off states across bases, per channel
+            mu = np.zeros_like(sw)
+            var = np.zeros_like(sw)
+            for state in (on, ~on):
+                n_s = (sw * state).sum(axis=0) + 1e-12
+                m_s = (sx * state).sum(axis=0) / n_s
+                v_s = (sxx * state).sum(axis=0) / n_s - m_s**2
+                mu = np.where(state, m_s, mu)
+                var = np.where(state, v_s, var)
+        else:
+            mu = sx / (sw + 1e-12)
+            var = sxx / (sw + 1e-12) - mu**2
+        model["mu"] = mu
+        model["sd"] = np.sqrt(np.maximum(var, var_floor))
+        pi = w.mean(axis=0) + 1e-6
+        model["pi"] = pi / pi.sum(axis=1, keepdims=True)
+    return model, ll
+
+
+def _em_posterior(x: NDArray, model: dict, n_rescale: int) -> NDArray:
+    """Posterior P(base | signal) with per-read levels refined from the model.
+
+    :param x: ``(read, t, c)`` intensities, divided by the cycle gain.
+    :return: ``(read, t, base)`` posterior.
+    """
+    return _em_posterior_signal(x, model, n_rescale)[0]
+
+
+def _em_posterior_signal(
+    x: NDArray, model: dict, n_rescale: int
+) -> tuple[NDArray, NDArray]:
+    """:func:`_em_posterior`, also returning the normalized signal ``u``.
+
+    :return: ``(post, u)``: ``(read, t, base)`` posterior and ``(read, t, c)``
+        signal at the final per-read levels.
+    """
+    E = model["encoding"]
+    b0, s0 = _em_initial_levels(
+        x, model["S"], model["min_snr"], model["min_gap"], model["k_low"]
+    )
+    b, s = b0, s0
+    for it in range(n_rescale + 1):
+        u = _em_signal(x, b, s)
+        post = softmax(_em_loglik(u, model) + np.log(model["pi"])[np.newaxis], axis=-1)
+        if it < n_rescale:
+            if model.get("read_scale", "channel") == "shared":
+                b, s = _em_update_amplitude(x, post, model, b0, s0, model["n0"])
+            else:
+                b, s = _em_update_levels(
+                    x, post @ E, b0, s0, model["S"], model["n0"], model["min_gap"]
+                )
+    return post, u
+
+
+def fit_base_mixture(
+    spots: xr.DataArray,
+    encoding: NDArray | None = None,
+    base_labels: list[str] | NDArray | None = None,
+    dark_bases: list[str] | None = None,
+    n_reads: int = 50_000,
+    fit_peak_quantile: float | None = 0.5,
+    n_iter: int = 200,
+    n_restarts: int = 4,
+    n_rescale: int = 3,
+    tied: bool = False,
+    covariance: Literal["full", "diag"] = "full",
+    t_dof: float | None = 4.0,
+    read_scale: Literal["shared", "channel"] = "shared",
+    tol: float = 1e-7,
+    min_snr: float = 4.0,
+    min_gap: float = 0.2,
+    outlier: float = 0.01,
+    var_floor: float = 1e-3,
+    n0: float = 1.0,
+    whitelist: Sequence[str] | None = None,
+    n_whitelist_rounds: int = 3,
+    seed: int = 0,
+) -> dict:
+    """Fit an unsupervised model of log P(signal | base), without a whitelist or calls.
+
+    Each read's signal is normalized as :math:`u_{c,t} = (x_{c,t} / g_{c,t} - b_c) /
+    s_c`, with a per-cycle gain :math:`g_{c,t}` and a per-read background
+    :math:`b_c` and bright level :math:`s_c` per channel, so on channels sit near 1
+    and off channels near 0.  Channels are independent given the base, with a
+    Gaussian off state and a lognormal on state (on signal varies
+    multiplicatively, and a symmetric on state would put spurious density near 0,
+    where it captures dark cycles):
+
+    .. math::
+
+        \\log P(\\mathbf{u} \\mid b) = \\sum_c \\log \\Big[(1 - \\epsilon)\\,
+        f_{b,c}(u_c) + \\epsilon\\, U(u_c)\\Big], \\quad
+        f_{b,c} = \\begin{cases}
+            \\text{LogNormal}(\\mu_{b,c}, \\sigma_{b,c}) & E[b,c] = 1 \\\\
+            \\mathcal{N}(\\mu_{b,c}, \\sigma_{b,c}) & E[b,c] = 0
+        \\end{cases}
+
+    with a small uniform outlier component :math:`U` so saturated pixels or
+    misestimated read levels cannot dominate the fit.  With ``covariance="full"``
+    (the default), the per-base stage instead models each base's channels jointly,
+    with a full covariance in the same space (log for on channels, linear for off)
+    and a multivariate t density (``t_dof``), so channels that move together for a
+    base, such as both channels of a base that fires two, are modelled jointly,
+    while a single wild channel only lowers the fit of every base instead of making
+    the call uninformative.
+
+    The encoding matrix ``E`` gives the structure that makes this identifiable
+    without labels: fitting starts from a *tied* model in which each channel has one
+    on and one off state shared across bases, and is then released to per-base
+    parameters (unless ``tied``) warm-started from it.  Dark bases are the all-off
+    rows of ``E`` and need no special handling or radius threshold; the dark/bright
+    boundary is where the fitted posteriors cross.
+
+    Fitting uses no whitelist or other decoder:
+
+    * **Fit reads**: a random sample of up to ``n_reads`` reads, restricted to reads
+      with ``peak`` at or above the ``fit_peak_quantile`` quantile when ``spots``
+      has a ``peak`` coordinate, since low-peak spots are mostly not real reads.
+    * **Per-cycle gain** (:func:`_em_cycle_gain`): every cycle has a similar mix of
+      bases, so a high quantile of each cycle's intensities tracks its brightness.
+      Intensities are not clipped at 0, since values pushed negative by xtalk
+      correction are off-state noise.
+    * **Initial levels** (:func:`_em_initial_levels`): the background is the mean of
+      the read's lowest cycles per channel (about half the cycles the encoding
+      expects to be off), and the bright level comes from splitting the read's
+      cycles into low and high groups (Otsu's method).  Brightness is shared across
+      dyes (it comes mostly from spot size and amplification), so channels whose
+      split is rejected get the read's amplitude times the channel's scale.
+    * **Initialization** from the signal alone: a 1-D two-component mixture per
+      channel and a quantile split at the expected on-fraction
+      :math:`\\phi_c = \\sum_b E[b,c] / n_\\text{bases}`, plus jittered copies.
+      The tied model is fit by annealed EM from each, keeping the highest
+      log-likelihood.
+    * **Level refinement**: ``n_rescale`` times, each read's background and bright
+      level are re-estimated from the cycles the model calls off and on and the
+      model is refit.  With ``read_scale="shared"`` (the default), the bright level
+      is one amplitude per read times each channel's scale, estimated relative to
+      each base's fitted on-state mean (:func:`_em_update_amplitude`), so a channel
+      fired by several bases with different dye brightness is normalized the same
+      way whatever else the read contains; ``"channel"`` estimates it per channel
+      (:func:`_em_update_levels`).  Calls repeat the same
+      refinement per read, so they do not depend on Dask chunking.
+
+    :param spots: Spots DataArray with dims ``(read, t, c)``, ideally
+        xtalk-corrected via :func:`apply_channel_crosstalk_matrix`.
+    :param encoding: ``(n_bases, n_channels)`` binary encoding matrix.  All-zero
+        rows indicate dark bases.  Rows must be distinct.
+    :param base_labels: Base labels of length ``n_bases``, required with
+        ``encoding``.
+    :param dark_bases: Shorthand for 1:1 channel→base chemistry with named dark
+        bases, via :func:`make_encoding`.
+    :param n_reads: Number of reads sampled to fit the model.
+    :param fit_peak_quantile: Fit only on reads whose ``peak`` is at or above this
+        quantile (``None`` to use all reads).
+    :param n_iter: Maximum EM iterations per fit.
+    :param n_restarts: Number of starting points for the tied model (at least the
+        mixture and quantile starts; the rest are jittered copies).
+    :param n_rescale: Rounds of per-read level refinement, in fitting and calling.
+    :param tied: Keep one on and one off state per channel shared across bases
+        instead of releasing to per-base parameters.
+    :param covariance: ``"full"`` to model each base's channels jointly in the
+        per-base stage, or ``"diag"`` for channels independent given the base.
+    :param t_dof: Degrees of freedom of the multivariate t used with
+        ``covariance="full"``; ``None`` for a Gaussian.
+    :param read_scale: ``"shared"`` for one amplitude per read across channels, or
+        ``"channel"`` for a bright level per read and channel.
+    :param tol: Relative change in mean log-likelihood at which EM stops.
+    :param min_snr: Minimum gap between a read's low and high groups, in units of
+        their pooled standard deviation, for a channel to count as on in the read.
+    :param min_gap: Minimum gap, as a fraction of the read's expected bright level,
+        for a channel to count as on in the read; also floors refined bright levels.
+    :param outlier: Weight :math:`\\epsilon` of the uniform outlier component.
+    :param var_floor: Minimum variance of each state.
+    :param n0: Pseudo-cycles shrinking refined per-read levels toward the initial
+        levels.
+    :param whitelist: Optional barcode whitelist.  After the unsupervised fit, the
+        model is refit ``n_whitelist_rounds`` times on the fit reads whose calls
+        match it, holding their calls fixed: those calls are correct by
+        construction, so they act as labelled training data.  Only barcodes as long
+        as the number of cycles are used.  ``None`` (default) fits without labels.
+    :param n_whitelist_rounds: Number of refits on whitelist-matched reads.
+    :param seed: Random seed for read sampling and jitter.
+    :return: Model dict with per-base, per-channel ``mu`` and ``sd`` (log space for
+        on states), per-base ``cov`` and ``t_dof`` with ``covariance="full"``,
+        per-cycle base frequencies ``pi`` ``(t, base)``, the per-cycle ``gain``,
+        level parameters ``S``, ``k_low``, ``min_snr``, ``min_gap``, ``n0``,
+        ``n_rescale``, ``read_scale``, ``outlier``, the ``encoding`` and
+        ``base_labels``, the mean log-likelihood ``loglik``, and the number of
+        whitelist-matched fit reads per refit, ``n_whitelist_matched``.
+    """
+    from sklearn.mixture import GaussianMixture
+
+    E, labels = _resolve_encoding(spots, encoding, base_labels, dark_bases)
+    if len(np.unique(E, axis=0)) != len(E):
+        raise ValueError(
+            "Rows of the encoding must be distinct; identical rows (e.g. several "
+            "dark bases) cannot be told apart"
+        )
+    B, n_c = E.shape
+    phi = E.sum(axis=0) / B
+
+    candidates = np.arange(spots.sizes["read"])
+    if fit_peak_quantile is not None and "peak" in spots.coords:
+        peak = np.asarray(spots["peak"].values)
+        candidates = np.flatnonzero(peak >= np.quantile(peak, fit_peak_quantile))
+    rs = random.Random(seed)
+    sample = np.sort(rs.sample(list(candidates), min(n_reads, len(candidates))))
+    sp = spots.isel(read=sample).data
+    if isinstance(sp, da.Array):
+        sp = sp.compute()
+    # not clipped at 0: values pushed negative by xtalk correction are off-state
+    # noise, and clipping them would pile them into a spike the off state collapses on
+    x = np.asarray(sp, dtype=float)
+    T = x.shape[1]
+    gain = _em_cycle_gain(x)
+    x = x / gain[np.newaxis]
+
+    S = _em_global_scale(x, min_snr)
+    # background from about half the cycles the encoding expects to be off
+    k_low = np.maximum(1, np.floor(T * (1 - phi) / 2)).astype(int)
+    b0, s0 = _em_initial_levels(x, S, min_snr, min_gap, k_low)
+    s = s0
+    u = _em_signal(x, b0, s)
+
+    # Starting points for the tied model, from the signal alone
+    rng = np.random.default_rng(seed)
+    starts = []
+    gm = np.zeros((4, n_c))  # rows: m, z, s_on, s_off
+    qt = np.zeros((4, n_c))
+    for c in range(n_c):
+        v = u[..., c].ravel()
+        v_fit = rng.choice(v, size=min(len(v), 200_000), replace=False)[:, np.newaxis]
+        g2 = GaussianMixture(2, random_state=seed).fit(v_fit)
+        g1 = GaussianMixture(1, random_state=seed).fit(v_fit)
+        if g2.bic(v_fit) >= g1.bic(v_fit):
+            logger.warning(
+                f"Channel {spots.c.values[c]} does not look bimodal; on and off "
+                "states may be hard to separate"
+            )
+        off, on = np.argsort(g2.means_.ravel())
+        sd = np.sqrt(g2.covariances_.ravel())
+        gm[:, c] = g2.means_[on, 0], g2.means_[off, 0], sd[on], sd[off]
+        cut = np.quantile(v, 1 - phi[c]) if phi[c] > 0 else np.inf
+        hi, lo = v[v > cut], v[v <= cut]
+        qt[:, c] = (
+            hi.mean() if len(hi) else 1.0,
+            lo.mean(),
+            hi.std() if len(hi) > 1 else 0.3,
+            lo.std(),
+        )
+    starts = [gm, qt]
+    for i in range(max(0, n_restarts - 2)):
+        jitter = rng.uniform([[0.9], [0.9], [0.8], [0.8]], [[1.1], [1.1], [1.2], [1.2]])
+        starts.append(starts[i % 2] * jitter)
+
+    def tied_model(p: NDArray) -> dict:
+        m, z, s_on, s_off = p
+        # on states are lognormal: match the linear-space mean and sd
+        m = np.maximum(m, 0.05)
+        s_log = np.sqrt(np.log1p((s_on / m) ** 2))
+        m_log = np.log(m) - s_log**2 / 2
+        return {
+            "mu": E * m_log + (1 - E) * z,
+            "sd": np.sqrt(np.maximum((E * s_log + (1 - E) * s_off) ** 2, var_floor)),
+            "pi": np.full((T, B), 1.0 / B),
+            "outlier": outlier,
+            "encoding": E,
+        }
+
+    best: dict | None = None
+    best_ll = -np.inf
+    for p in starts[: max(n_restarts, 2)]:
+        model, ll = _em_run(
+            u, E, tied_model(p), n_iter, tol, var_floor, tied=True, anneal=True
+        )
+        if ll > best_ll:
+            best, best_ll = model, ll
+    assert best is not None
+    best.update(
+        encoding=E,
+        S=S,
+        gain=gain,
+        min_snr=min_snr,
+        min_gap=min_gap,
+        n0=n0,
+        read_scale=read_scale,
+        k_low=k_low,
+    )
+
+    # Refine per-read levels from the model and refit; then
+    # release to per-base parameters
+    stages = [True] * n_rescale + ([] if tied else [False] * max(1, n_rescale))
+    b = b0
+    for stage_tied in stages:
+        u = _em_signal(x, b, s)
+        post = softmax(_em_loglik(u, best) + np.log(best["pi"])[np.newaxis], axis=-1)
+        if read_scale == "shared":
+            b, s = _em_update_amplitude(x, post, best, b0, s0, n0)
+            # the overall scale is shared with the on-state means: pin its median
+            shift = np.median(np.log(s / best["S"])) - np.median(np.log(s0 / best["S"]))
+            s = s * np.exp(-shift)
+        else:
+            b, s = _em_update_levels(x, post @ E, b0, s0, best["S"], n0, min_gap)
+        full = covariance == "full" and not stage_tied
+        params = {k: best[k] for k in ("mu", "sd", "pi", "outlier")}
+        if full:
+            params["cov"] = best.get(
+                "cov", np.stack([np.diag(v**2) for v in best["sd"]])
+            )
+            params["t_dof"] = t_dof
+        refit, best_ll = _em_run(
+            _em_signal(x, b, s),
+            E,
+            params,
+            n_iter,
+            tol,
+            var_floor,
+            tied=stage_tied,
+            anneal=False,
+            full=full,
+        )
+        best.update(refit)
+
+    best.update(base_labels=labels, loglik=best_ll, n_rescale=n_rescale, tied=tied)
+
+    # Optionally refit on reads whose calls match the whitelist: their calls are
+    # correct by construction, so they serve as labelled training data
+    best["n_whitelist_matched"] = []
+    if whitelist is not None:
+        wl = {bc for bc in whitelist if len(bc) == T}
+        if not wl:
+            logger.warning(f"No whitelist barcodes of length {T}; fitting unsupervised")
+        for _ in range(n_whitelist_rounds if wl else 0):
+            post, u = _em_posterior_signal(x, best, n_rescale)
+            idx = post.argmax(axis=-1)
+            matched = np.isin(["".join(r) for r in labels[idx]], list(wl))
+            best["n_whitelist_matched"].append(int(matched.sum()))
+            if matched.sum() < 10:
+                logger.warning("Too few whitelist matches to refit on; stopping")
+                break
+            fixed_w = np.eye(B)[idx[matched]]  # (read, t, base) one-hot
+            full = covariance == "full" and not tied
+            params = {k: best[k] for k in ("mu", "sd", "pi", "outlier")}
+            if full:
+                params["cov"] = best.get(
+                    "cov", np.stack([np.diag(v**2) for v in best["sd"]])
+                )
+                params["t_dof"] = t_dof
+            refit, best_ll = _em_run(
+                u[matched],
+                E,
+                params,
+                n_iter,
+                tol,
+                var_floor,
+                tied=tied,
+                anneal=False,
+                full=full,
+                fixed_w=fixed_w,
+            )
+            best.update(refit)
+        best["loglik"] = best_ll
+    return best
+
+
+def _decode_em_chunk(
+    spots: NDArray,
+    model: dict,
+    meta_df: pd.DataFrame,
+    whitelist: NDArray | None,
+    offset: slice | None,
+    min_error: float = DEFAULT_MIN_P_ERROR,
+) -> pd.DataFrame:
+    """Call one chunk of spots with a model from :func:`fit_base_mixture`."""
+    x = np.asarray(spots, dtype=float) / model["gain"][np.newaxis]
+    post = _em_posterior(x, model, model["n_rescale"])
+    calls = model["base_labels"][post.argmax(axis=-1)]
+    p_error = 1 - post.max(axis=-1)
+    p_error[p_error < min_error] = min_error
+    Q = -10 * np.log10(p_error)
+
+    df = (
+        meta_df.iloc[offset.start : offset.stop].copy()
+        if offset is not None
+        else meta_df.copy()
+    )
+    df.index.name = None
+    df["barcode"] = ["".join(x) for x in calls]
+    df["Q"] = list(Q)
+    df["Q_mean"] = Q.mean(axis=1)
+    df["Q_min"] = Q.min(axis=1)
+    if whitelist is not None:
+        df["barcode_match"] = df["barcode"].isin(whitelist)
+    return df
+
+
+def decode_em(
+    spots: xr.DataArray,
+    barcodes: pd.DataFrame | None = None,
+    encoding: NDArray | None = None,
+    base_labels: list[str] | NDArray | None = None,
+    dark_bases: list[str] | None = None,
+    model: dict | None = None,
+    use_whitelist: bool = False,
+    **fit_kwargs,
+) -> pd.DataFrame | dd.DataFrame:
+    """Call reads with a mixture model of log P(signal | base) fitted to the spots.
+
+    Fits :func:`fit_base_mixture` (unless ``model`` is given) and calls each cycle
+    as the base with the highest posterior.  Each base is a combination of channel
+    states set by its row of the encoding matrix, off (Gaussian near 0) or on
+    (lognormal near 1), fitted by EM after normalizing each read by its background
+    and brightness.  Dark bases (all-zero rows) need no threshold, and
+    non-orthogonal encodings (a base that fires several channels, as A does in
+    2-color chemistry) are handled by modelling each base's channels jointly.  See
+    :func:`fit_base_mixture` for the model and fitting details.
+
+    No whitelist or other decoder is needed.  On the scallops test data, this maps
+    more reads than :func:`decode_se` and :func:`decode_polar` on 4-color and
+    3-color NIS-seq (dark G) data, and about as many as :func:`decode_polar` on
+    2-color data (slightly more with ``use_whitelist``).
+
+    **Inputs.** ``spots`` should be xtalk-corrected
+    (:func:`apply_channel_crosstalk_matrix`).  If it has a ``peak`` coordinate (as
+    from :func:`peaks_to_bases`), the model is fit on the higher-peak half of spots
+    (``fit_peak_quantile``), since low-peak spots are mostly not real reads; fitting
+    on all spots can lower the mapping rate substantially.  All reads are called.
+
+    **Whitelist mode.** With ``use_whitelist=True`` and ``barcodes``, the model is
+    refit on the fit reads whose calls match the whitelist, holding those calls
+    fixed (see ``whitelist`` in :func:`fit_base_mixture`).  This usually helps a
+    little, but the whitelist then both trains the model and scores it, so mapping
+    rates measured against the same whitelist favor this mode somewhat.
+
+    **Q.** The phred score of each call's posterior probability given the read's
+    signal, ``-10 log10(1 - P(base | signal))``, capped at 60.
+
+    Useful ``fit_kwargs``: ``fit_peak_quantile``, ``n_reads`` (reads sampled to fit,
+    default 50 000), ``covariance`` (``"full"`` or ``"diag"``), ``t_dof``,
+    ``read_scale`` and ``seed``.  To call several datasets with one model, or to
+    inspect it, fit it once with :func:`fit_base_mixture` and pass it as ``model``;
+    ``encoding``, ``base_labels``, ``dark_bases``, ``use_whitelist`` and
+    ``fit_kwargs`` are then ignored.
+
+    :example:
+
+    .. code-block:: python
+
+        from scallops.reads import decode_em, fit_base_mixture, read_statistics
+
+        # 3-color NIS-seq: A, T and C channels, G dark
+        reads = decode_em(spots, barcodes=barcodes, dark_bases=["G"])
+
+        # 2-color: rows G (dark), T (ch1), A (both), C (ch0)
+        E = [[0, 0], [0, 1], [1, 1], [1, 0]]
+        reads = decode_em(
+            spots_2col,
+            barcodes=barcodes,
+            encoding=E,
+            base_labels=["G", "T", "A", "C"],
+            use_whitelist=True,
+        )
+
+        # fit once, inspect, and reuse
+        model = fit_base_mixture(spots, dark_bases=["G"])
+        print(dict(zip(model["base_labels"], model["pi"].mean(axis=0))))
+        reads = decode_em(spots, barcodes=barcodes, model=model)
+        read_statistics(reads)
+
+    :param spots: Spots DataArray with dims ``(read, t, c)``, xtalk-corrected.
+    :param barcodes: Whitelist DataFrame with column ``'barcode'``.  Adds the
+        ``barcode_match`` column, and is used for fitting only with
+        ``use_whitelist``.
+    :param encoding: ``(n_bases, n_channels)`` binary encoding matrix.  All-zero
+        rows indicate dark bases (at most one, since dark bases cannot be told
+        apart).  When omitted with ``dark_bases`` also omitted, defaults to one base
+        per channel, named by ``spots.c``.
+    :param base_labels: Base labels of length ``n_bases``, required with
+        ``encoding``.
+    :param dark_bases: Shorthand for one base per channel (named by ``spots.c``)
+        plus the named dark bases, via :func:`make_encoding`.
+    :param model: A model from :func:`fit_base_mixture`; fitted if omitted.
+    :param use_whitelist: When fitting, also refit the model on reads whose calls
+        match ``barcodes``.  Off by default, so calls need no whitelist.  Ignored
+        without ``barcodes`` or with ``model``.
+    :param fit_kwargs: Passed to :func:`fit_base_mixture`.
+    :return: DataFrame (Dask DataFrame for Dask-backed ``spots``) with the read
+        metadata and columns ``barcode``, ``Q`` (per-cycle quality scores),
+        ``Q_mean``, ``Q_min``, and ``barcode_match`` when ``barcodes`` is given.
+    """
+    if model is None:
+        if use_whitelist and barcodes is not None:
+            fit_kwargs.setdefault("whitelist", barcodes["barcode"].values)
+        model = fit_base_mixture(
+            spots,
+            encoding=encoding,
+            base_labels=base_labels,
+            dark_bases=dark_bases,
+            **fit_kwargs,
+        )
+    return _decode(spots=spots, barcodes=barcodes, f=_decode_em_chunk, model=model)
+
+
 def _polar_thresholds_from_wcor(
     w_cor: NDArray,
     E: NDArray,

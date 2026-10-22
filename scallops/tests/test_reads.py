@@ -16,9 +16,11 @@ from scallops.reads import (
     assign_barcodes_to_labels,
     channel_crosstalk_matrix,
     correct_mismatches,
+    decode_em,
     decode_max,
     decode_polar,
     decode_se,
+    fit_base_mixture,
     peaks_to_bases,
     read_statistics,
 )
@@ -724,3 +726,112 @@ def test_annotated(experiment_c_A1_102_cells):
         )
         expected = outputs[f"width_{width}"]
         np.testing.assert_array_equal(expected, annotated)
+
+
+def _simulate_spots(E, labels, n=1500, T=12, gains=None, noise=0.05, seed=0):
+    """Simulated spots with known calls: per-read amplitude, background, decay."""
+    rng = np.random.default_rng(seed)
+    E = np.asarray(E, dtype=float)
+    B, C = E.shape
+    gains = np.ones(C) if gains is None else np.asarray(gains, dtype=float)
+    truth = rng.integers(0, B, (n, T))
+    amp = rng.lognormal(0, 0.4, (n, 1, 1))
+    signal = E[truth] * gains * amp * 0.97 ** np.arange(T)[np.newaxis, :, np.newaxis]
+    x = (
+        0.2 * rng.uniform(0.5, 1.5, (n, 1, C))
+        + signal
+        + rng.normal(0, noise, (n, T, C)) * (1 + 0.5 * signal)
+    )
+    spots = xr.DataArray(
+        x,
+        dims=("read", "t", "c"),
+        coords={"read": np.arange(n), "peak": ("read", amp.ravel())},
+    )
+    return spots, np.asarray(labels)[truth]
+
+
+def _calls(df):
+    return np.array([list(b) for b in df["barcode"]])
+
+
+@pytest.mark.basecalls
+def test_decode_em_dark_base():
+    """Unsupervised EM recovers a dark base without a whitelist or other decoder."""
+    E = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]])
+    spots, truth = _simulate_spots(E, list("ATCG"))
+    spots = spots.assign_coords(c=list("ATC"))
+    calls = _calls(decode_em(spots, dark_bases=["G"], n_restarts=2))
+    assert np.mean(calls == truth) > 0.99  # 0.999
+    assert np.mean(calls[truth == "G"] == "G") > 0.98  # 0.999
+    assert np.mean((calls == truth).all(axis=1)) > 0.95  # 0.996
+    # better than the signed-encoding decoder on the same reads (0.967)
+    se = _calls(decode_se(spots, dark_bases=["G"]))
+    assert np.mean(calls == truth) > np.mean(se == truth)
+
+
+@pytest.mark.basecalls
+def test_decode_em_non_orthogonal():
+    """EM handles a 2-color encoding where A fires both channels and G is dark."""
+    E = np.array([[0, 0], [0, 1], [1, 1], [1, 0]])
+    labels = list("GTAC")
+    spots, truth = _simulate_spots(E, labels, gains=[1, 0.6], seed=1)
+    calls = _calls(decode_em(spots, encoding=E, base_labels=labels, n_restarts=2))
+    assert np.mean(calls == truth) > 0.98  # 0.993
+
+
+@pytest.mark.basecalls
+def test_decode_em_chunking_and_whitelist():
+    """Calls do not depend on Dask chunking, and barcodes are only used for matching."""
+    E = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]])
+    spots, truth = _simulate_spots(E, list("ATCG"), n=600)
+    spots = spots.assign_coords(c=list("ATC"))
+    model = fit_base_mixture(spots, dark_bases=["G"], n_restarts=2)
+    df = decode_em(spots, model=model)
+    chunked = spots.copy(data=da.from_array(spots.data, chunks=(100, -1, -1)))
+    df_dask = decode_em(chunked, model=model).compute()
+    assert (df["barcode"].values == df_dask["barcode"].values).all()
+
+    whitelist = pd.DataFrame({"barcode": ["".join(r) for r in truth[:50]]})
+    df_wl = decode_em(spots, barcodes=whitelist, model=model)
+    assert (df["barcode"].values == df_wl["barcode"].values).all()
+    assert df_wl["barcode_match"].iloc[:50].mean() > 0.8
+
+
+@pytest.mark.basecalls
+def test_decode_em_use_whitelist():
+    """Refitting on whitelist-matched reads keeps calls accurate and uses the matches."""
+    E = np.array([[0, 0], [0, 1], [1, 1], [1, 0]])
+    labels = list("GTAC")
+    spots, truth = _simulate_spots(E, labels, gains=[1, 0.6], seed=1)
+    whitelist = pd.DataFrame({"barcode": np.unique(["".join(r) for r in truth])})
+    model = fit_base_mixture(
+        spots,
+        encoding=E,
+        base_labels=labels,
+        n_restarts=2,
+        whitelist=whitelist["barcode"],
+    )
+    assert len(model["n_whitelist_matched"]) > 0
+    assert model["n_whitelist_matched"][-1] > 0.9 * len(truth) / 2  # most fit reads
+    calls = _calls(decode_em(spots, barcodes=whitelist, model=model))
+    assert np.mean(calls == truth) > 0.98
+
+    # use_whitelist passes the barcodes to the fit
+    df = decode_em(
+        spots,
+        barcodes=whitelist,
+        encoding=E,
+        base_labels=labels,
+        n_restarts=2,
+        use_whitelist=True,
+    )
+    assert np.mean(_calls(df) == truth) > 0.98
+
+
+@pytest.mark.basecalls
+def test_fit_base_mixture_duplicate_rows():
+    spots, _ = _simulate_spots(np.eye(2), ["A", "C"], n=50)
+    with pytest.raises(ValueError, match="distinct"):
+        fit_base_mixture(
+            spots, encoding=[[1, 0], [0, 0], [0, 0]], base_labels=list("ACG")
+        )
