@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from argparse import (
     ArgumentDefaultsHelpFormatter,
     ArgumentParser,
@@ -7,6 +9,7 @@ from argparse import (
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.util import (
+    SubParsers,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -19,14 +22,20 @@ from scallops.cli.util import (
 )
 
 
+def _run_pipeline_overlap(arguments: Namespace) -> None:
+    from scallops.cli.segment import _run_overlap_pipeline
+
+    _run_overlap_pipeline(arguments)
+
+
 def _run_pipeline_segment_nuclei(arguments: Namespace) -> None:
     """Run the pipeline for nuclei segmentation.
 
     :param arguments: Parsed command-line arguments.
     """
-    from scallops.cli.segment import run_pipeline_segment_nuclei
+    from scallops.cli.segment import _run_pipeline_segment_nuclei
 
-    run_pipeline_segment_nuclei(arguments)
+    _run_pipeline_segment_nuclei(arguments)
 
 
 def _run_pipeline_segment_cell(arguments: Namespace) -> None:
@@ -34,12 +43,12 @@ def _run_pipeline_segment_cell(arguments: Namespace) -> None:
 
     :param arguments: Parsed command-line arguments.
     """
-    from scallops.cli.segment import run_pipeline_segment_cell
+    from scallops.cli.segment import _run_pipeline_segment_cell
 
-    run_pipeline_segment_cell(arguments)
+    _run_pipeline_segment_cell(arguments)
 
 
-def _create_parser(subparsers: ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Create the main segmentation parser.
 
     :param subparsers: Subparsers object to which segmentation parsers will be added.
@@ -56,6 +65,7 @@ def _create_parser(subparsers: ArgumentParser, default_help: bool) -> None:
     subparsers = parser.add_subparsers(help="sub-command help")
     _add_nuclei_parser(subparsers, default_help)
     _add_cell_parser(subparsers, default_help)
+    _overlap_parser(subparsers, default_help)
 
 
 def _add_common_args(parser: ArgumentParser) -> None:
@@ -74,15 +84,31 @@ def _add_common_args(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--min-area",
         type=float,
-        dest="min_area",
         help="Filter labels with area < `min-area`",
     )
 
     parser.add_argument(
         "--max-area",
         type=float,
-        dest="max_area",
-        help="Filter labels with area > `-max-area`",
+        help="Filter labels with area > `max-area`",
+    )
+
+    parser.add_argument(
+        "--min-intensity",
+        type=float,
+        help="Filter labels with mean intensity < `min-intensity` in `intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--max-intensity",
+        type=float,
+        help="Filter labels with mean intensity > `max-intensity` in `intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--intensity-channel",
+        type=int,
+        help="Channel index (0-based) to use for intensity filtering. Defaults to `dapi-channel`",
     )
 
     parser.add_argument(
@@ -95,11 +121,16 @@ def _add_common_args(parser: ArgumentParser) -> None:
         help="Chunk size overlap to use to perform segmentation using overlapping chunks",
         type=int,
     )
+    parser.add_argument(
+        "--seg-args",
+        type=str,
+        help="JSON URL or inline JSON containing additional segmentation parameters.",
+    )
     z_index_arg(parser)
     no_version_arg(parser)
 
 
-def _add_nuclei_parser(subparsers: ArgumentParser, default_help: bool = True) -> None:
+def _add_nuclei_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     """Add the parser for nuclei segmentation.
 
     :param subparsers: Subparsers object to which the nuclei parser will be added.
@@ -154,7 +185,7 @@ def _add_nuclei_parser(subparsers: ArgumentParser, default_help: bool = True) ->
     parser.set_defaults(func=_run_pipeline_segment_nuclei)
 
 
-def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> None:
+def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     """Add the parser for cell segmentation.
 
     :param subparsers: Subparsers object to which the cell parser will be added.
@@ -206,7 +237,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
         "--cyto-channel",
         type=int,
         nargs="*",
-        dest="cyto_channel",
         help="Channel index (0-based) to infer cell segmentation from. Default is all non-DAPI channels. If more than"
         " one channel specified, use minimum across time (cycles) then mean over channels, or if only one time "
         "point is present, use mean over channels.",
@@ -214,18 +244,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
     image_pattern_arg(parser)
     groupby_arg(parser)
     _add_common_args(parser)
-
-    parser.add_argument(
-        "--nuclei-min-area",
-        type=float,
-        help="Filter nuclei labels with area < `min-area`",
-    )
-
-    parser.add_argument(
-        "--nuclei-max-area",
-        type=float,
-        help="Filter nuclei labels with area > `-max-area`",
-    )
 
     parser.add_argument(
         "--rolling-ball",
@@ -245,7 +263,6 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
 
     parser.add_argument(
         "--closing-radius",
-        dest="closing_radius",
         help="Disk radius to use for binary closing cell labels post segmentation",
         default=None,
         type=int,
@@ -265,6 +282,36 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
         action="store_true",
     )
 
+    parser.add_argument(
+        "--nuclei-min-area",
+        type=float,
+        help="Filter nuclei with area < `nuclei-min-area`",
+    )
+
+    parser.add_argument(
+        "--nuclei-max-area",
+        type=float,
+        help="Filter nuclei with area > `nuclei-max-area`",
+    )
+
+    parser.add_argument(
+        "--nuclei-min-intensity",
+        type=float,
+        help="Filter nuclei with mean intensity < `nuclei-min-intensity` in `nuclei-intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--nuclei-max-intensity",
+        type=float,
+        help="Filter nuclei with mean intensity > `nuclei-max-intensity` in `nuclei-intensity-channel`",
+    )
+
+    parser.add_argument(
+        "--nuclei-intensity-channel",
+        type=int,
+        help="Channel index (0-based) to use for intensity filtering. Defaults to `dapi-channel`",
+    )
+
     subset_arg(parser)
     force_arg(parser)
     dask_client_arg(parser, value="none")
@@ -272,3 +319,65 @@ def _add_cell_parser(subparsers: ArgumentParser, default_help: bool = True) -> N
 
     _sort_groups(parser)
     parser.set_defaults(func=_run_pipeline_segment_cell)
+
+
+def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
+    parser = subparsers.add_parser(
+        "overlap",
+        help="Find the fraction of `label-1` contained within `label-2",
+        description="Find the fraction of `label-1` contained within `label-2",
+        formatter_class=(
+            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
+        ),
+    )
+    required = parser.add_argument_group("required arguments")
+    required.add_argument(
+        "--labels",
+        required=True,
+        nargs="+",
+        help="Path to zarr directory containing labels",
+    )
+    required.add_argument(
+        "--meta-output",
+        required=True,
+        help="Path to output directory containing label overlap statistics and mappings",
+    )
+    required.add_argument(
+        "--label-output",
+        required=True,
+        help="Path to label zarr directory.",
+    )
+    required.add_argument(
+        "--label-pattern",
+        required=True,
+        help="Format string to extract metadata from labels (e.g. {well})",
+    )
+    parser.add_argument(
+        "--label-suffix-1",
+        default="nuclei",
+        help="Label 1 suffix",
+    )
+    parser.add_argument(
+        "--label-suffix-2",
+        default="cell",
+        help="Label 2 suffix",
+    )
+    parser.add_argument(
+        "--additional-suffix",
+        default=["cytosol"],
+        nargs="*",
+        help="Additional labels suffixes to rewrite",
+    )
+
+    parser.add_argument(
+        "-s", "--subset", nargs="*", help="Subset of labels to include."
+    )
+    force_arg(parser)
+    dask_client_arg(parser)
+    dask_cluster_arg(parser)
+
+    no_version_arg(parser)
+    _sort_groups(parser)
+    parser.set_defaults(
+        func=_run_pipeline_overlap,
+    )

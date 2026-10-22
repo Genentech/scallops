@@ -24,7 +24,7 @@ Authors:
 """
 
 import argparse
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Union, cast
 
 import fsspec
 import pandas as pd
@@ -90,7 +90,7 @@ def single_agg_illumination_correction(
     if not force and (
         (
             output_image_format == "zarr"
-            and is_ome_zarr_array(root.get(f"images/{image_key}"))
+            and is_ome_zarr_array(cast(zarr.Group, root).get(f"images/{image_key}"))
         )
         or (
             output_image_format != "zarr"
@@ -102,7 +102,7 @@ def single_agg_illumination_correction(
     logger.info(f"Running illumination correction for {image_key}.")
     save_z_index = isinstance(z_index, str) and z_index == "focus"
 
-    image, keys, z_index = illumination_correction(
+    image, keys, tile_z_index = illumination_correction(
         image_tuple=image_tuple,
         smooth=smooth,
         rescale=rescale,
@@ -123,7 +123,9 @@ def single_agg_illumination_correction(
             path = f"{path}{_get_sep(root)}{image_key}-zindex.parquet"
         else:
             path = f"{root}{image_key}-zindex.parquet"
-        pd.DataFrame(data=dict(key=keys, z_index=z_index)).to_parquet(path, index=False)
+        pd.DataFrame(data=dict(key=keys, z_index=tile_z_index)).to_parquet(
+            path, index=False
+        )
     output_metadata = {}
 
     if not no_version:

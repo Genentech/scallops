@@ -9,16 +9,13 @@ Authors:
 import argparse
 import json
 import warnings
-from collections.abc import Sequence
+from collections.abc import Collection, Iterable, Sequence
 from itertools import zip_longest
-from typing import get_type_hints
 
 import dask.array
 import dask.array as da
 import fsspec
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 import xarray as xr
 import zarr
 from dask.delayed import Delayed
@@ -26,6 +23,7 @@ from natsort import natsorted
 from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -35,7 +33,6 @@ from scallops.cli.util import (
 )
 from scallops.features._plot import _plot_features
 from scallops.features.constants import (
-    _features,
     _features_multichannel,
     _features_single_channel,
     _label_name_to_prefix,
@@ -44,9 +41,10 @@ from scallops.features.find_objects import find_objects
 from scallops.features.generate import label_features, normalize_features
 from scallops.features.util import _get_names_from_pd_query
 from scallops.io import (
-    _images2fov,
+    _dd_to_parquet,
+    _images2fov_array,
+    _pd_to_parquet,
     _set_up_experiment,
-    _to_parquet,
     is_parquet_file,
     pluralize,
     read_anndata,
@@ -90,10 +88,10 @@ def _read_merged_or_objects(
                 for c in query_columns
                 if c not in merged_df.columns and c in data.var.index
             )
-        columns = list(columns)
-        values = data[:, columns].X.compute()
-        for i in range(len(columns)):
-            merged_df[columns[i]] = values[:, i]
+        column_list = list(columns)
+        values = data[:, column_list].X.compute()
+        for i in range(len(column_list)):
+            merged_df[column_list[i]] = values[:, i]
 
     else:
         merged_df = pd.read_parquet(merge_path)
@@ -117,7 +115,7 @@ def get_labels(labels_group: Group, name: str, suffix: str) -> zarr.Array | None
         raise e
 
 
-def _read_image(file_list: list[str], metadata: dict) -> xr.DataArray:
+def _read_image(file_list: Sequence[str | Group], metadata: dict) -> xr.DataArray:
     """Read image files and preprocess them into a standardized format.
 
     This function reads image files specified in the file_list and processes them into an
@@ -128,7 +126,7 @@ def _read_image(file_list: list[str], metadata: dict) -> xr.DataArray:
     :param metadata: Dictionary containing metadata associated with the images.
     :return: DataArray containing the processed image data.
     """
-    image = _images2fov(file_list, metadata, dask=True)
+    image = _images2fov_array(file_list, metadata, dask=True)
     dims = tuple([d for d in ["t", "c", "z"] if d in image.dims])
 
     if len(dims) > 0:
@@ -146,43 +144,19 @@ def _read_image(file_list: list[str], metadata: dict) -> xr.DataArray:
     return image
 
 
-def _get_feature_channel_indices(tokens):
-    """Get indices of channel parameters in a feature name.
-
-    This function identifies the positions of channel indices in the list of tokens representing a
-    feature name. It uses the feature method name to look up parameter types and returns the indices
-    of parameters that are channel indices.
-
-    :param tokens: List of tokens obtained by splitting the feature name.
-    :return: List of indices corresponding to channel parameters in the feature name.
-    """
-    method_name = tokens[0]
-    f = _features.get(method_name)
-    if f is None:
-        return []
-    parameters = get_type_hints(f)
-    parameter_names = list(parameters)
-    return [
-        i
-        for i in range(1, len(tokens))
-        if (parameter_name := parameter_names[i - 1]) in ["c", "c1", "c2"]
-        and parameters[parameter_name] in [int, Sequence[int]]
-    ]
-
-
 def single_feature(
-    stacked_image_tuple: tuple[tuple[str, ...], list[str | Group], dict] | None,
-    image_tuple: tuple[tuple[str, ...], list[str | Group], dict],
+    stacked_image_tuple: ImageTuple | None,
+    image_tuple: ImageTuple,
     labels_group: Group,
     output_dir: str,
     output_sep: str,
-    objects_dir: str,
-    objects_dir_sep: str,
+    objects_dir: str | None,
+    objects_dir_sep: str | None,
     label_name_to_features: dict[str, set[str]],
     label_name_to_min_max_area: dict[str, tuple[float | None, float | None]],
     features_plot: set[str],
     label_filter: str | None = None,
-    channel_names: dict[str, str] = None,
+    channel_names: dict[int | str, str] | None = None,
     force: bool = False,
     no_version: bool = False,
     normalize: bool = True,
@@ -251,7 +225,7 @@ def single_feature(
         image = xr.concat((image, stacked_image), dim="c")
 
     for label_name in label_name_to_features:
-        features = label_name_to_features[label_name]
+        features: Collection[str] = label_name_to_features[label_name]
         output_parquet_path = (
             f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}.parquet"
         )
@@ -272,6 +246,7 @@ def single_feature(
         label_prefix = _label_name_to_prefix[label_name]
         merged_df = None
         if objects_dir is not None:
+            assert objects_dir_sep is not None
             merged_df = _read_merged_or_objects(
                 merge_dir=objects_dir,
                 merge_dir_sep=objects_dir_sep,
@@ -289,7 +264,7 @@ def single_feature(
             objects_path = f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
             merged_df.index.name = "label"
             merged_df.columns = f"{label_prefix}_" + merged_df.columns
-            _to_parquet(
+            _dd_to_parquet(
                 merged_df,
                 objects_path,
                 write_index=True,
@@ -302,14 +277,15 @@ def single_feature(
 
         features = normalize_features(features)
         # strip nuclei_, etc. from features_plot
-        features_plot_label = []
+        features_plot_tokens = []
         for feature in features_plot:
             tokens = feature.lower().split("_")
             if tokens[0] == label_prefix:
-                features_plot_label.append("_".join(tokens[1:]))
+                features_plot_tokens.append("_".join(tokens[1:]))
 
-        features_plot_label = normalize_features(features_plot_label)
+        features_plot_label = normalize_features(features_plot_tokens)
         if stacked_image_tuple is not None:
+            assert n_channels1 is not None
             stacked_features = set()
             stacked_features_plot = set()
             for feature in features:  # add offset for image1
@@ -346,7 +322,7 @@ def single_feature(
         )
         if label_filter is not None:
             merged_df = merged_df.query(label_filter)
-        min_max_area = label_name_to_min_max_area.get(label_name)
+        min_max_area = label_name_to_min_max_area[label_name]
         area_column = f"{label_prefix}_AreaShape_Area"
         n_labels = len(merged_df)
         prefix = ""
@@ -395,23 +371,14 @@ def single_feature(
             df.columns = f"{label_prefix}_" + df.columns
 
             if isinstance(df, pd.DataFrame):
-                table = pa.Table.from_pandas(df, preserve_index=True)
-                if not no_version:
-                    table = table.replace_schema_metadata(
-                        {
-                            "scallops".encode(): json.dumps(cli_metadata()).encode(),
-                            **table.schema.metadata,
-                        }
-                    )
-                fs, output_file = fsspec.url_to_fs(output_parquet_path)
-                pq.write_table(
-                    table,
+                _pd_to_parquet(
+                    df,
                     output_parquet_path,
-                    filesystem=fs,
+                    cli_metadata() if not no_version else None,
                 )
 
             else:
-                _to_parquet(
+                _dd_to_parquet(
                     df,
                     output_parquet_path,
                     write_index=True,
@@ -422,12 +389,10 @@ def single_feature(
                 )
 
         if len(features_plot_label) > 0:
-            features_plot_label = [
+            plot_columns = [
                 label_prefix + "_" + feature for feature in features_plot_label
             ]
-            df_features = pd.read_parquet(
-                output_parquet_path, columns=features_plot_label
-            )
+            df_features = pd.read_parquet(output_parquet_path, columns=plot_columns)
             centroid_columns = [
                 label_prefix + "_centroid-1",
                 label_name + "_centroid-0",
@@ -436,7 +401,7 @@ def single_feature(
             pdf_path = (
                 f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}.pdf"
             )
-            _plot_features(df, features_plot_label, pdf_path, centroid_columns)
+            _plot_features(df, plot_columns, pdf_path, centroid_columns)
     return []
 
 
@@ -502,9 +467,9 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
         objects_dir_sep = fsspec.core.url_to_fs(objects_dir)[0].sep
         objects_dir = objects_dir.rstrip(objects_dir_sep)
     label_name_to_min_max_area = dict(
-        nuclei=[arguments.nuclei_min_area, arguments.nuclei_max_area],
-        cytosol=[arguments.cytosol_min_area, arguments.cytosol_max_area],
-        cell=[arguments.cell_min_area, arguments.cell_max_area],
+        nuclei=(arguments.nuclei_min_area, arguments.nuclei_max_area),
+        cytosol=(arguments.cytosol_min_area, arguments.cytosol_max_area),
+        cell=(arguments.cell_min_area, arguments.cell_max_area),
     )
 
     assert len(label_name_to_features) > 0, "No features provided"
@@ -532,6 +497,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
         group_by=groupby,
     )
 
+    image_pairs: Iterable[tuple[ImageTuple | None, ImageTuple]]
     if stack_images is not None:
         stack_image_gen = _set_up_experiment(
             stack_images,
@@ -539,10 +505,10 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
             subset=subset,
             group_by=groupby,
         )
-        image_gen = zip(stack_image_gen, image_gen)
+        image_pairs = zip(stack_image_gen, image_gen)
 
     else:
-        image_gen = zip_longest([None], image_gen)
+        image_pairs = zip_longest([None], image_gen)
 
     with (
         _create_default_dask_config(),
@@ -566,7 +532,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
                 features_plot=features_plot,
                 normalize=normalize,
             )
-            for img_tuple in image_gen
+            for img_tuple in image_pairs
         ]
         if len(delayed_objects) > 0:
             dask.compute(*delayed_objects)

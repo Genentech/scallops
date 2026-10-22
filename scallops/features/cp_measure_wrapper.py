@@ -28,10 +28,11 @@ from cp_measure.core.measureobjectsizeshape import (
 )
 from cp_measure.core.measuretexture import get_texture
 from cp_measure.multimask.measureobjectneighbors import D_EXPAND, measureobjectneighbors
+from numpy.typing import NDArray
 
 
 def cp_neighbors(
-    label_image: np.ndarray,
+    label_image: NDArray,
     distance: int = 5,
     distance_method: str = D_EXPAND,
     **kwargs,
@@ -42,8 +43,8 @@ def cp_neighbors(
 def cp_granularity(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -60,28 +61,37 @@ def cp_colocalization(
     c1: int,
     c2: int,
     channel_names: Sequence[str],
-    unique_labels: np.ndarray,
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
-) -> dict[str, np.ndarray]:
-    pass
+    unique_labels: NDArray,
+    label_image: NDArray,
+    intensity_image: NDArray,
+) -> dict[str, Any]:
+    raise NotImplementedError()
 
 
 def _cp_colocalization_pairs(
     c: list[tuple[int, int]],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
+    intensity_image_original_dtype: np.dtype,
     **kwargs,
 ) -> dict[str, Any]:
     all_results = {}
+    scale_max = (
+        np.iinfo(intensity_image_original_dtype).max
+        if intensity_image_original_dtype is not None
+        and np.issubdtype(intensity_image_original_dtype, np.integer)
+        else 65535
+    )
     for c_pair in c:
         results = {}
         img1 = intensity_image[..., c_pair[0]]
         img2 = intensity_image[..., c_pair[1]]
         channel_name1 = channel_names[c_pair[0]]
         channel_name2 = channel_names[c_pair[1]]
-        results.update(get_correlation_costes(img1, img2, label_image))
+        results.update(
+            get_correlation_costes(img1, img2, label_image, scale_max=scale_max)
+        )
         results.update(get_correlation_manders_fold(img1, img2, label_image))
         results.update(get_correlation_overlap(img1, img2, label_image))
         results.update(get_correlation_pearson(img1, img2, label_image))
@@ -102,8 +112,8 @@ def _cp_colocalization_pairs(
 def cp_intensity_distribution_radial(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -120,8 +130,8 @@ def cp_intensity_distribution_radial(
 def cp_intensity_distribution_zernike(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -138,8 +148,8 @@ def cp_intensity_distribution_zernike(
 def cp_intensity(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     offset: tuple[int, int] = (0, 0),
     **kwargs,
 ) -> dict[str, Any]:
@@ -167,8 +177,8 @@ def _texture_rename(key, channel_names, c):
 def cp_texture(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict[str, Any]:
     results = {}
@@ -196,7 +206,7 @@ size_shape_skip = {
 
 
 def cp_size_shape(
-    label_image: np.ndarray,
+    label_image: NDArray,
     remove_objects: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
@@ -213,7 +223,7 @@ def cp_size_shape(
     return results
 
 
-def _zernike(label_image: np.ndarray) -> dict[str, Any]:
+def _zernike(label_image: NDArray) -> dict[str, Any]:
     results_ = get_zernike(label_image, None)
     results = {}
     for key in results_:
@@ -221,7 +231,7 @@ def _zernike(label_image: np.ndarray) -> dict[str, Any]:
     return results
 
 
-def _feret(label_image: np.ndarray) -> dict[str, Any]:
+def _feret(label_image: NDArray) -> dict[str, Any]:
     results_ = get_feret(label_image, None)
     results = {}
     for key in results_:

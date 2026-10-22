@@ -2,6 +2,7 @@ import logging
 from collections.abc import Sequence
 
 import numpy as np
+from numpy.typing import NDArray
 from skimage.measure import regionprops
 
 logger = logging.getLogger("scallops")
@@ -10,10 +11,10 @@ logger = logging.getLogger("scallops")
 def intersects_boundary(
     c: Sequence[int],
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
-) -> dict[str, np.ndarray]:
+) -> dict[str, NDArray]:
     """Determine whether a label intersects a stitch boundary.
 
     :param c: Channels
@@ -40,10 +41,10 @@ def intersects_boundary(
 def corr_region(
     c1: int,
     c2: int,
-    unique_labels: np.ndarray,
+    unique_labels: NDArray,
     channel_names: Sequence[str],
-    label_image: np.ndarray,
-    intensity_image: np.ndarray,
+    label_image: NDArray,
+    intensity_image: NDArray,
     **kwargs,
 ) -> dict:
     """Calculate the Pearson correlation coefficient between two channels using all

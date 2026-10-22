@@ -12,16 +12,27 @@ Authors:
 
 import argparse
 import importlib
-from typing import Callable, Literal, Optional
+import math
+import os
+from collections import defaultdict
+from collections.abc import Sequence
+from functools import partial
+from typing import Any, Callable, Literal, Optional
 
+import dask
 import dask.array as da
 import fsspec
 import numpy as np
+import xarray as xr
 import zarr
 from dask.bag import from_sequence
+from fsspec.implementations.local import LocalFileSystem
+from numpy.typing import NDArray
+from skimage.measure import regionprops
 from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
@@ -29,12 +40,27 @@ from scallops.cli.util import (
     cli_metadata,
     load_json,
 )
-from scallops.io import _add_suffix, _images2fov, _set_up_experiment, get_image_spacing
-from scallops.segmentation import remove_labels_by_area
-from scallops.segmentation.util import _delete_lock_files, identify_tertiary_objects
+from scallops.io import (
+    _add_suffix,
+    _create_file_regex,
+    _images2fov_array,
+    _pd_to_parquet,
+    _set_up_experiment,
+    get_image_spacing,
+)
+from scallops.segmentation.util import (
+    _delete_lock_files,
+    assign_labels_by_overlap,
+    identify_tertiary_objects,
+    label_overlap,
+    relabel_by_assignment,
+    remove_labels_regionprops,
+)
 from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
+    _read_zarr_attrs,
+    _require_group,
     _write_zarr_labels,
     is_ome_zarr_array,
     open_ome_zarr,
@@ -44,6 +70,79 @@ from scallops.zarr_io import (
 logger = _get_cli_logger()
 
 
+def _create_filter(f, vmin, vmax):
+    if vmin is None:
+        vmin = -math.inf
+    if vmax is None:
+        vmax = math.inf
+    return partial(f, vmin=vmin, vmax=vmax)
+
+
+def _area_filter(r, vmin, vmax):
+    return vmin < r.area < vmax
+
+
+def _intensity_filter(r, vmin, vmax):
+    return vmin < r.intensity_mean < vmax
+
+
+def _filter_labels(
+    labels: NDArray | da.Array,
+    intensity_image: xr.DataArray,
+    intensity_channel: int | None,
+    min_area: float | None,
+    max_area: float | None,
+    min_intensity: float | None,
+    max_intensity: float | None,
+):
+    if (
+        min_area is not None
+        or max_area is not None
+        or min_intensity is not None
+        or max_intensity is not None
+    ):
+        filters = []
+
+        if min_area is not None or max_area is not None:
+            filters.append(_create_filter(_area_filter, min_area, max_area))
+        intensity_image_ = None
+        if min_intensity is not None or max_intensity is not None:
+            intensity_image = intensity_image.isel(
+                c=intensity_channel, t=0, missing_dims="ignore"
+            ).squeeze()
+            intensity_image_ = intensity_image.values
+            filters.append(
+                _create_filter(_intensity_filter, min_intensity, max_intensity)
+            )
+
+        def filter_func(r):
+            return all(f(r) for f in filters)
+
+        return remove_labels_regionprops(
+            labels=labels,
+            regions=regionprops(labels, intensity_image=intensity_image_),
+            func=filter_func,
+            relabel=False,
+        )
+    return labels
+
+
+def _update_seg_args(method_args: dict, seg_args: dict | None) -> None:
+    """Add user-supplied segmentation arguments to the method arguments.
+
+    :param method_args: Arguments set by the pipeline. Updated in place.
+    :param seg_args: Additional arguments from `--seg-args`.
+    """
+    if not seg_args:
+        return
+    duplicates = method_args.keys() & seg_args.keys()
+    if duplicates:
+        raise ValueError(
+            f"--seg-args keys already set by other options: {', '.join(sorted(duplicates))}"
+        )
+    method_args.update(seg_args)
+
+
 def segment_nuclei(
     group: str,  # NOT USED
     file_list: list[str],
@@ -51,7 +150,7 @@ def segment_nuclei(
     dapi_channel: int,
     method: Callable,
     root: Group,
-    z_index: int | str,
+    z_index: int | Literal["max"],
     min_area: float | None = None,
     max_area: float | None = None,
     chunks: None | tuple[int, int] = None,
@@ -61,6 +160,10 @@ def segment_nuclei(
     no_version: bool = False,
     pmin: float | None = None,
     pmax: float | None = None,
+    min_intensity: float | None = None,
+    max_intensity: float | None = None,
+    intensity_channel: int | None = None,
+    seg_args: dict | None = None,
 ) -> Group:
     """Segment nuclei in images.
 
@@ -80,6 +183,10 @@ def segment_nuclei(
     :param pmax: Maximum percentile for image normalization.
     :param force: Whether to overwrite existing output
     :param no_version: Whether to skip version/CLI information in output.
+    :param min_intensity: Remove labels with mean intensity below this value.
+    :param max_intensity: Remove labels with mean intensity above this value.
+    :param intensity_channel: Channel to use for intensity filtering. Defaults to dapi_channel.
+    :param seg_args: Additional arguments to pass to the segmentation method.
     :return: The root (for dask)
     """
 
@@ -88,10 +195,10 @@ def segment_nuclei(
         logger.info(f"Skipping nuclei segmentation for {image_key}")
         return root
     logger.info(f"Running nuclei segmentation for {image_key}")
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = _images2fov_array(file_list, metadata, dask=True).squeeze()
     image = _z_projection(image, z_index)
 
-    nuclei_seg_args = {}
+    nuclei_seg_args: dict[str, Any] = {}
     if method.__name__ in ["segment_nuclei_stardist"]:
         nuclei_seg_args["clip"] = clip
         if pmin is not None:
@@ -104,15 +211,31 @@ def segment_nuclei(
             nuclei_seg_args["chunks"] = chunks
         if chunk_overlap is not None:
             nuclei_seg_args["depth"] = chunk_overlap
-
+    _update_seg_args(nuclei_seg_args, seg_args)
+    all_nuclei = None
     nuclei = method(image=image, nuclei_channel=dapi_channel, **nuclei_seg_args)
-    all_nuclei = nuclei
-
-    if min_area is not None or max_area is not None:
-        nuclei = remove_labels_by_area(nuclei, min_area, max_area)
-
+    if (
+        min_area is not None
+        or max_area is not None
+        or min_intensity is not None
+        or max_intensity is not None
+    ):
+        if isinstance(nuclei, da.Array):
+            nuclei = nuclei.compute()
+        all_nuclei = nuclei
+        nuclei = _filter_labels(
+            labels=nuclei,
+            intensity_image=image,
+            intensity_channel=intensity_channel
+            if intensity_channel is not None
+            else dapi_channel,
+            min_area=min_area,
+            max_area=max_area,
+            min_intensity=min_intensity,
+            max_intensity=max_intensity,
+        )
     labels_dict = dict(nuclei=nuclei)
-    if all_nuclei is not nuclei:
+    if all_nuclei is not None:
         labels_dict["nuclei.all"] = all_nuclei
     spacing = get_image_spacing(image.attrs)
     label_metadata = dict()
@@ -146,12 +269,10 @@ def segment_cells(
     file_list: list[str],
     metadata: dict,
     dapi_channel: int,
-    cyto_channel: int | list[int] | None,
+    cyto_channel: Sequence[int] | NDArray | None,
     method: Callable,
     root: Group,
-    z_index: int | str,
-    min_area: float | None = None,
-    max_area: float | None = None,
+    z_index: int | Literal["max"],
     chunks: None | tuple[int, int] = None,
     chunk_overlap: None | int = None,
     nuclei_image_root: Group = None,
@@ -164,9 +285,18 @@ def segment_cells(
     force: bool = False,
     shrink_primary: bool = False,
     no_version: bool = False,
+    min_area: float | None = None,
+    max_area: float | None = None,
+    min_intensity: float | None = None,
+    max_intensity: float | None = None,
+    intensity_channel: int | None = None,
     nuclei_min_area: float | None = None,
     nuclei_max_area: float | None = None,
+    nuclei_min_intensity: float | None = None,
+    nuclei_max_intensity: float | None = None,
+    nuclei_intensity_channel: int | None = None,
     watershed_method: Literal["binary", "distance", "intensity"] = "distance",
+    seg_args: dict | None = None,
 ) -> Group:
     """Segment cells in images.
 
@@ -192,12 +322,13 @@ def segment_cells(
     :param force: Whether to overwrite existing output
     :param shrink_primary: Whether to shrink primary labels.
     :param no_version: Whether to skip version/CLI information in output.
+    :param seg_args: Additional arguments to pass to the segmentation method.
     """
     image_key = metadata["id"]
     if not force and is_ome_zarr_array(root.get(f"labels/{image_key}-cell")):
         logger.info(f"Skipping cell segmentation for {image_key}")
         return root
-    image = _images2fov(file_list, metadata, dask=True).squeeze()
+    image = _images2fov_array(file_list, metadata, dask=True).squeeze()
     image = _z_projection(image, z_index)
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), dapi_channel)
@@ -205,7 +336,7 @@ def segment_cells(
         cyto_channel = [dapi_channel]
     logger.info(f"Running cell segmentation for {image_key}")
 
-    cell_seg_args = {"nuclei_channel": dapi_channel}
+    cell_seg_args: dict[str, Any] = {"nuclei_channel": dapi_channel}
     nuclei = None
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
         nuclei = read_ome_zarr_array(
@@ -215,8 +346,18 @@ def segment_cells(
             image.sizes["y"],
             image.sizes["x"],
         ), "Size mismatch between nuclei and image"
-        if nuclei_min_area is not None or nuclei_max_area is not None:
-            nuclei = remove_labels_by_area(nuclei, nuclei_min_area, nuclei_max_area)
+        nuclei = _filter_labels(
+            labels=nuclei,
+            intensity_image=image,
+            intensity_channel=nuclei_intensity_channel
+            if nuclei_intensity_channel is not None
+            else dapi_channel,
+            min_area=nuclei_min_area,
+            max_area=nuclei_max_area,
+            min_intensity=nuclei_min_intensity,
+            max_intensity=nuclei_max_intensity,
+        )
+
         cell_seg_args["nuclei"] = nuclei
         cell_seg_args["threshold_correction_factor"] = threshold_correction_factor
         cell_seg_args["threshold"] = cell_segmentation_threshold
@@ -230,6 +371,7 @@ def segment_cells(
         cell_seg_args["chunks"] = chunks
     if chunk_overlap is not None:
         cell_seg_args["depth"] = chunk_overlap
+    _update_seg_args(cell_seg_args, seg_args)
     result = method(image=image, cyto_channel=cyto_channel, **cell_seg_args)
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
         cells = result[0]
@@ -238,14 +380,30 @@ def segment_cells(
         cells = result
         cell_threshold = None
 
-    all_cells = cells
-    if min_area is not None or max_area is not None:
+    all_cells = None
+    if (
+        min_area is not None
+        or max_area is not None
+        or min_intensity is not None
+        or max_intensity is not None
+    ):
         if isinstance(cells, da.Array):
             cells = cells.compute()
-        cells = remove_labels_by_area(cells, min_area, max_area, relabel=False)
+        all_cells = cells
+        cells = _filter_labels(
+            labels=cells,
+            intensity_image=image,
+            intensity_channel=intensity_channel
+            if intensity_channel is not None
+            else dapi_channel,
+            min_area=min_area,
+            max_area=max_area,
+            min_intensity=min_intensity,
+            max_intensity=max_intensity,
+        )
 
     labels_dict = dict(cell=cells)
-    if all_cells is not cells:
+    if all_cells is not None:
         labels_dict["cell.all"] = all_cells
     if nuclei is not None:
         cytosol = identify_tertiary_objects(nuclei, cells, shrink_primary)
@@ -258,8 +416,6 @@ def segment_cells(
         label_metadata.update(cli_metadata())
     spacing = get_image_spacing(image.attrs)
     if spacing is not None:
-        if label_metadata is None:
-            label_metadata = dict()
         for key in labels_dict.keys():
             label_metadata[key] = dict(physical_pixel_sizes=spacing)
 
@@ -283,12 +439,184 @@ def segment_cells(
     return root
 
 
-def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
-    """Run nuclei or cell segmentation pipeline.
+def _label_source_metadata(file_list: Sequence[str | Group]) -> dict:
+    """Get the stored metadata (e.g. physical pixel sizes).
+
+    :param file_list: List containing the label zarr group
+    :return: Label metadata, without the scallops version and command
+    """
+    group = file_list[0]
+    if not isinstance(group, Group):
+        group = zarr.open(group, mode="r")
+    _, metadata, _ = _read_zarr_attrs(group.attrs)
+
+    metadata = {
+        key: value
+        for key, value in (metadata or {}).items()
+        if key not in ("scallops_version", "scallops_command")
+    }
+
+    return metadata
+
+
+def _overlap(
+    label_tuple_1: ImageTuple,
+    label_tuple_2: ImageTuple,
+    additional_tuples: list[ImageTuple],
+    output_parquet_path: str,
+    output_root: zarr.Group,
+    force: bool = False,
+    no_version: bool = False,
+):
+    group_id1, file_list_1, metadata_1 = label_tuple_1
+    group_id2, file_list_2, metadata_2 = label_tuple_2
+    label_1 = _images2fov_array(file_list_1, metadata_1, dask=True)
+    label_2 = _images2fov_array(file_list_2, metadata_2, dask=True)
+    image_key = "-".join(group_id1[:-1]).replace("/", "_")
+    prefix = f"{output_parquet_path}{image_key}"
+    overlap_path = f"{prefix}-overlap.parquet"
+    assignment_path = f"{prefix}-assignment.parquet"
+    fs = fsspec.url_to_fs(overlap_path)[0]
+
+    label_suffixes = [group_id2[-1]] + [t[0][-1] for t in additional_tuples]
+    if all(fs.exists(path) for path in [overlap_path, assignment_path]) and all(
+        is_ome_zarr_array(output_root.get(f"labels/{image_key}-{suffix}"))
+        for suffix in label_suffixes
+    ):
+        if not force:
+            logger.info(f"Skipping overlap for {image_key}.")
+            return
+    logger.info(f"Finding overlapping objects for {image_key}.")
+    write_tuples = [(group_id2, file_list_2, label_2)]
+    for group_id, file_list, metadata in additional_tuples:
+        labels = _images2fov_array(file_list, metadata, dask=True)
+        write_tuples.append((group_id, file_list, labels))
+    overlap_df = label_overlap(label_1.data, label_2.data).compute()
+    assignment_df = assign_labels_by_overlap(overlap_df)
+    custom_metadata = cli_metadata() if not no_version else None
+    delayed = []
+    for group_id, file_list, labels in write_tuples:
+        label_metadata = _label_source_metadata(file_list)
+        if custom_metadata is not None:
+            label_metadata.update(custom_metadata)
+        # storage_options = None
+        # if isinstance(label_data, np.ndarray):
+        #     storage_options = {"chunks": image.data.chunksize[-2:]}
+
+        delayed += _write_zarr_labels(
+            name=f"{image_key}-{group_id[-1]}",
+            root=output_root,
+            metadata=label_metadata,
+            labels=relabel_by_assignment(labels.data, assignment_df=assignment_df),
+            compute=False,
+            # storage_options=xxx
+        )
+    dask.compute(*delayed)
+    for df, path in ((overlap_df, overlap_path), (assignment_df, assignment_path)):
+        _pd_to_parquet(
+            df,
+            path,
+            preserve_index=False,
+            custom_metadata=custom_metadata,
+        )
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize a path or URL so that equivalent locations compare equal."""
+    fs, path = fsspec.core.url_to_fs(url)
+    if isinstance(fs, LocalFileSystem):
+        path = os.path.realpath(path)
+    return fs.unstrip_protocol(path)
+
+
+def _run_overlap_pipeline(arguments: argparse.Namespace):
+    dask_server_url = arguments.client
+    dask_cluster_parameters = (
+        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
+    )
+
+    labels_paths = arguments.labels
+
+    label_pattern = arguments.label_pattern
+    label_suffix_1 = arguments.label_suffix_1
+    label_suffix_2 = arguments.label_suffix_2
+    additional_suffixes = arguments.additional_suffix
+
+    subset = arguments.subset
+    no_version = arguments.no_version
+    force = arguments.force
+    output_parquet_path = arguments.meta_output
+    output_zarr_path = arguments.label_output
+    output_zarr_path = _add_suffix(output_zarr_path, ".zarr")
+    normalized_output_path = _normalize_url(output_zarr_path)
+    for labels_path in labels_paths:
+        if _normalize_url(labels_path) == normalized_output_path:
+            raise ValueError("Input label path should not be the same as output path")
+    output_root = open_ome_zarr(output_zarr_path, mode="a")
+    _require_group(output_root, "labels")
+
+    output_parquet_fs, output_parquet_path = fsspec.core.url_to_fs(output_parquet_path)
+    output_parquet_fs.makedirs(output_parquet_path, exist_ok=True)
+    output_parquet_path = output_parquet_fs.unstrip_protocol(output_parquet_path)
+    paths = []
+    for path in labels_paths:
+        label_root = zarr.open(path, mode="r")
+        labels_group = label_root.get("labels")
+        if labels_group is None:
+            raise ValueError(f"Labels group not found for {path}")
+        paths.append(labels_group)
+    full_label_pattern = label_pattern + "-{label_suffix}"
+
+    if subset is not None:
+        subset = [s + "-*" for s in subset]
+    gen = _set_up_experiment(
+        image_path=paths,
+        files_pattern=full_label_pattern,
+        group_by=list(_create_file_regex(full_label_pattern)[2]),
+        subset=subset,
+    )
+    label_1_base_id_to_tuple = dict()
+    label_2_base_id_to_tuple = dict()
+    additional_base_id_to_tuples = defaultdict(list)
+    for g in gen:
+        group_id, file_list, metadata = g
+        # ('test', 'cell')
+        suffix = group_id[-1].replace("/", "_")
+        base_id = group_id[:-1]
+        if suffix == label_suffix_1:
+            label_1_base_id_to_tuple[base_id] = g
+        elif suffix == label_suffix_2:
+            label_2_base_id_to_tuple[base_id] = g
+        elif suffix in additional_suffixes:
+            additional_base_id_to_tuples[base_id].append(g)
+
+    with (
+        _create_default_dask_config(),
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
+    ):
+        for base_id in label_1_base_id_to_tuple:
+            label_tuple_1 = label_1_base_id_to_tuple[base_id]
+            label_tuple_2 = label_2_base_id_to_tuple.get(base_id)
+            if label_tuple_2 is None:
+                logger.info(f"No {label_suffix_2} labels found for {base_id}.")
+                continue
+            additional_tuples = additional_base_id_to_tuples[base_id]
+            _overlap(
+                label_tuple_1=label_tuple_1,
+                label_tuple_2=label_tuple_2,
+                additional_tuples=additional_tuples,
+                output_parquet_path=output_parquet_path + output_parquet_fs.sep,
+                output_root=output_root,
+                force=force,
+                no_version=no_version,
+            )
+
+
+def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
+    """Run nuclei or cell segmentation
 
     :param arguments: Command line arguments.
     :param nuclei: If True, perform nuclei segmentation; otherwise, perform cell segmentation.
-    :return: None
     """
     method = arguments.method
     dask_server_url = arguments.client
@@ -305,6 +633,7 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
             threads_per_worker=threads_per_worker
         )
 
+    seg_args = load_json(arguments.seg_args) if arguments.seg_args is not None else {}
     data_path = arguments.images
     z_index = arguments.z_index
 
@@ -326,16 +655,18 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
     if chunks is not None:
         chunks = (chunks, chunks)
     output = _add_suffix(output, ".zarr")
-
     fs, _ = fsspec.core.url_to_fs(output)
     fs.makedirs(output, exist_ok=True)
     output_root = open_ome_zarr(output, mode="a")
-
+    _require_group(output_root, "labels")
     kwargs = dict()
 
     if not nuclei:
         kwargs["nuclei_min_area"] = arguments.nuclei_min_area
         kwargs["nuclei_max_area"] = arguments.nuclei_max_area
+        kwargs["nuclei_min_intensity"] = arguments.nuclei_min_intensity
+        kwargs["nuclei_max_intensity"] = arguments.nuclei_max_intensity
+        kwargs["nuclei_intensity_channel"] = arguments.nuclei_intensity_channel
         kwargs["cyto_channel"] = arguments.cyto_channel
         kwargs["shrink_primary"] = arguments.shrink_nuclei
         threshold = arguments.threshold.lower()
@@ -381,6 +712,11 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
         kwargs["clip"] = arguments.stardist_clip
         kwargs["pmin"] = arguments.stardist_pmin
         kwargs["pmax"] = arguments.stardist_pmax
+
+    kwargs["min_intensity"] = arguments.min_intensity
+    kwargs["max_intensity"] = arguments.max_intensity
+    kwargs["intensity_channel"] = arguments.intensity_channel
+    kwargs["seg_args"] = seg_args
     method = getattr(
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",
@@ -409,18 +745,18 @@ def run_pipeline(arguments: argparse.Namespace, nuclei: bool):
     _delete_lock_files()
 
 
-def run_pipeline_segment_nuclei(arguments: argparse.Namespace):
+def _run_pipeline_segment_nuclei(arguments: argparse.Namespace):
     """Run nuclei segmentation pipeline.
 
     :param arguments: Command line arguments.
     :return: None
     """
-    run_pipeline(arguments, True)
+    _run_segment_pipeline(arguments, True)
 
 
-def run_pipeline_segment_cell(arguments: argparse.Namespace):
+def _run_pipeline_segment_cell(arguments: argparse.Namespace):
     """Run cell segmentation pipeline.
 
     :param arguments: Command line arguments.
     """
-    run_pipeline(arguments, False)
+    _run_segment_pipeline(arguments, False)

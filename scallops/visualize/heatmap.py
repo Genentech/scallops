@@ -20,7 +20,7 @@ import warnings
 from collections.abc import Callable, Sequence
 from itertools import permutations, product
 from string import ascii_uppercase
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -41,10 +41,10 @@ logger = logging.getLogger("scallops")
 def plate_heatmap(
     df: pd.DataFrame,
     column: str,
-    tile_shape: tuple[int, int] = None,
+    tile_shape: tuple[int, int] | None = None,
     tile_layout: int = SNAKE_BY_ROWS_RIGHT_DOWN,
     cmap: str | Colormap = "viridis",
-    figsize: tuple[float, float] = None,
+    figsize: tuple[float, float] | None = None,
     colorbar_location: Literal["top", "bottom", "right", "left"] | None = "top",
     vmin_quantile: float = 0,
     vmax_quantile: float = 1,
@@ -136,6 +136,7 @@ def plate_heatmap(
         df = df[[column]]
     # Catch the case in which wells are named by numbers with no rows
     title_only = False
+    well_rows: Sequence[Any]  # None entries fall back to well_iter below
     values_0 = df.copy().index.get_level_values(0)
     if (
         pd.api.types.is_numeric_dtype(df.index.dtypes.iloc[0])
@@ -181,6 +182,10 @@ def plate_heatmap(
         else:
             well_rows = [None] * nrows
         if not title_only:
+            if row_names is None or column_names is None:
+                raise ValueError(
+                    "Both row_names and column_names are required to rename wells"
+                )
             new_map = dict(
                 zip(all_wells, [f"{x}{y}" for x in row_names for y in column_names])
             )
@@ -440,7 +445,7 @@ def in_situ_identity_matrix_plot(
 
 def plot_well_aggregated_heatmaps(
     df: pd.DataFrame,
-    agg_function: callable,
+    agg_function: Callable,
     feature: str,
     grid_size: int = 40,
     plate_shape: tuple[int, int] = (2, 3),

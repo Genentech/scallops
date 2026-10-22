@@ -5,7 +5,7 @@ import argparse
 import os
 from collections.abc import Sequence
 from itertools import zip_longest
-from typing import Literal
+from typing import Literal, cast
 
 import fsspec
 import itk
@@ -17,6 +17,7 @@ from dask.bag import from_sequence
 from zarr import Group
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _get_cli_logger,
@@ -80,9 +81,9 @@ def _flip(image: xr.DataArray, flip_y: bool, flip_x: bool) -> xr.DataArray:
 
 
 def single_registration(
-    fixed_tuple: tuple[tuple[str, ...], list[str | Group], dict] | None,
-    moving_tuple: tuple[tuple[str, ...], list[str | Group], dict],
-    moving_channel: list[int],
+    fixed_tuple: ImageTuple | None,
+    moving_tuple: ImageTuple,
+    moving_channel: int,
     fixed_channel: int | None,
     label_output_root: zarr.Group | None,
     image_output_root: zarr.Group | None,
@@ -95,11 +96,11 @@ def single_registration(
     reference_timepoint: int | str,
     unroll_channels: bool = False,
     force: bool = False,
-    z_index: int | str = "max",
+    z_index: int | Literal["max"] = "max",
     initial_transform: str | None = None,
     landmarks_initialize: bool = False,
     landmark_slice_size: float = 200,
-    landmark_template_padding: Sequence[float] = 500,
+    landmark_template_padding: Sequence[float] = (500,),
     landmark_step_size: float = 1000,
     landmark_min_score: float = 0.6,
     landmark_initializations: Sequence[Literal["com", "none"]] = ("com", "none"),
@@ -167,7 +168,7 @@ def single_registration(
                     image_key=matching_label_prefix, image_dir=moving_label, labels=True
                 )
             )
-        moving_label_keys = sorted(moving_label_keys)
+
         if len(moving_label_keys) == 0:
             logger.warning(f"No labels found for {image_key}")
 
@@ -201,7 +202,8 @@ def single_registration(
     else:
         logger.info(f"Running registration for {image_key}")
 
-    if not register_self:
+    if not register_self:  # register fixed t=0 to moving
+        assert fixed_tuple is not None
         _, fixed_file_list, fixed_metadata = fixed_tuple
 
         assert fixed_metadata["id"] == moving_metadata["id"], (
@@ -241,6 +243,8 @@ def single_registration(
     if not register_self:
         if isinstance(moving_image, Sequence):
             moving_image = moving_image[0]
+        moving_image = cast(xr.DataArray, moving_image)
+        fixed_image = cast(xr.DataArray, fixed_image)
         if (
             moving_image_spacing is None
             and get_image_spacing(moving_image.attrs) is None
@@ -293,11 +297,17 @@ def single_registration(
         if landmarks_initialize:
             template_labels = None
             if len(moving_label_keys) > 0:
-                template_label_key = None
+                nuclei_key = None
+                cell_key = None
+
                 for key in reversed(moving_label_keys):
-                    if key.endswith("-nuclei") or key.endswith("-cell"):
-                        template_label_key = key
-                        break
+                    if nuclei_key is None and key.endswith("-nuclei"):
+                        nuclei_key = key
+
+                    if cell_key is None and key.endswith("-cell"):
+                        cell_key = key
+
+                template_label_key = nuclei_key if nuclei_key is not None else cell_key
                 if template_label_key is not None:
                     template_labels = read_ome_zarr_array(
                         template_label_key, dask=True
@@ -410,6 +420,7 @@ def single_registration(
                 raise ValueError(
                     f"Reference timepoint not found: {reference_timepoint}."
                 )
+        assert isinstance(reference_timepoint, int)
 
         set_automatic_transform_initialization(parameter_object, False)
         if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
@@ -594,7 +605,7 @@ def _transform_labels(
     attrs: None | dict,
     flip_y: bool = False,
     flip_x: bool = False,
-    chunksize: tuple[int, int] = (1024, 1024),
+    chunksize: tuple[int, int] | None = (1024, 1024),
 ):
     """Transform and save labels.
 
@@ -612,9 +623,15 @@ def _transform_labels(
     """
     if output_names is None:
         output_names = [os.path.basename(key) for key in matching_keys]
-    for i in range(len(matching_keys)):
+    # if keys clash, keep the last one
+    unique_outputs = set()
+    for i in range(len(matching_keys) - 1, -1, -1):
         key = matching_keys[i]
         name = os.path.basename(key)
+        if output_names[i] in unique_outputs:
+            logger.info(f"Skipping transforming {key}")
+            continue
+        unique_outputs.add(output_names[i])
         array = read_ome_zarr_array(key)
 
         if attrs is not None:
@@ -804,7 +821,12 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = dict(threads_per_worker=1, n_workers=_cpu_count())
 
-    sort_order = arguments.sort
+    moving_sort_order = arguments.sort
+    if moving_sort_order is not None:
+        moving_sort_order = dict(t=moving_sort_order)
+    # fixed_sort_order = arguments.fixed_sort
+    # if fixed_sort_order is not None:
+    #     fixed_sort_order = dict(t=fixed_sort_order)
     moving_image_path = arguments.moving
     fixed_image_path = arguments.fixed
     flip_moving_y = arguments.flip_moving_y
@@ -897,7 +919,7 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
         moving_image_pattern,
         group_by,
         subset=subset,
-        file_sort_order=sort_order,
+        file_sort_order=moving_sort_order,
     )
 
     if fixed_image_path is not None:  # aligned moving image to self at specified time
@@ -906,7 +928,6 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
             fixed_image_pattern,
             group_by,
             subset=subset,
-            file_sort_order=sort_order,
         )
         image_bag = from_sequence(zip(fixed_image_gen, moving_image_gen))
 

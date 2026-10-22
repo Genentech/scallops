@@ -4,21 +4,24 @@ This module provides classes and methods for managing spatial experiments, inclu
 data. The experiments are saved in the Zarr format, leveraging Dask for handling large datasets.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 
-import numpy as np
 import xarray as xr
+from numpy.typing import NDArray
 from zarr.storage import StoreLike
 
 from scallops.experiment.abc import _LazyLoadData
 
 
-class _DataAccessorDict:
+class _DataAccessorDict(MutableMapping):
     """A dictionary-like class for managing and lazy-loading data.
 
-    This class is designed to store data, which may be loaded lazily, meaning that the data is only
+    This class is designed to store data which may be loaded lazily, meaning that the data is only
     loaded into memory when it is accessed.
     """
+
+    __eq__ = object.__eq__  # identity, no loading
+    __hash__ = object.__hash__  # hashable again
 
     def __init__(self):
         """Initialize an empty DataAccessorDict."""
@@ -28,11 +31,12 @@ class _DataAccessorDict:
         """Retrieve an item from the data accessor dictionary.
 
         :param key: The key associated with the data.
-        :return: The data associated with the key, or None if not found.
+        :return: The data associated with the key.
+        :raises KeyError: If the key is not found.
         """
-        value = self._d.get(key)
-        if value is None:
-            return None
+        if key not in self._d:
+            raise KeyError(key)
+        value = self._d[key]
         return value.data if isinstance(value, _LazyLoadData) else value
 
     def __contains__(self, key):
@@ -95,8 +99,8 @@ class Experiment:
 
     def __init__(
         self,
-        images: Mapping[str, xr.DataArray] = None,
-        labels: Mapping[str, np.ndarray | xr.DataArray] = None,
+        images: Mapping[str, xr.DataArray] | None = None,
+        labels: Mapping[str, NDArray | xr.DataArray] | None = None,
     ):
         """Create an experiment.
 
@@ -113,12 +117,12 @@ class Experiment:
                 self._labels[key] = labels[key]
 
     @property
-    def images(self) -> Mapping[str, xr.DataArray]:
+    def images(self) -> MutableMapping[str, xr.DataArray]:
         """The image dictionary."""
         return self._images
 
     @property
-    def labels(self) -> Mapping[str, np.ndarray | xr.DataArray]:
+    def labels(self) -> MutableMapping[str, NDArray | xr.DataArray]:
         """The labels dictionary."""
         return self._labels
 
@@ -150,6 +154,7 @@ class Experiment:
                 labels=labels,
             )
         if len(self._labels) > 0:
+            assert root is not None
             labels_grp = root["labels"]
             labels_grp.attrs["labels"] = list(self._labels.keys())
 

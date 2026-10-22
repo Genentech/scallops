@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import argparse
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.util import (
+    SubParsers,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -170,7 +173,7 @@ def metadata_args(parser: argparse.ArgumentParser):
 
 
 def _create_similarity_matrix_parser(
-    subparsers: argparse.ArgumentParser, default_help: bool
+    subparsers: SubParsers, default_help: bool
 ) -> None:
     parser = subparsers.add_parser(
         "similarity-matrix",
@@ -194,9 +197,7 @@ def _create_similarity_matrix_parser(
     parser.set_defaults(func=_run_similarity_matrix)
 
 
-def _create_aggregate_parser(
-    subparsers: argparse.ArgumentParser, default_help: bool
-) -> None:
+def _create_aggregate_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "aggregate",
         help="Run aggregatation",
@@ -231,7 +232,7 @@ def _create_aggregate_parser(
     parser.set_defaults(func=_run_aggregate)
 
 
-def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_tvn_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "tvn",
         help="Run TNV",
@@ -272,7 +273,7 @@ def _create_tvn_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     parser.set_defaults(func=_run_tvn)
 
 
-def _create_set_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_set_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "enrichment",
         help="Run enrichment",
@@ -308,9 +309,7 @@ def _create_set_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     parser.set_defaults(func=_run_set_enrichment)
 
 
-def _create_recall_parser(
-    subparsers: argparse.ArgumentParser, default_help: bool
-) -> None:
+def _create_recall_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "recall",
         help="Run recall",
@@ -353,7 +352,7 @@ def _create_recall_parser(
     parser.set_defaults(func=_run_recall)
 
 
-def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_pca_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "pca",
         help="Run PCA",
@@ -398,9 +397,7 @@ def _create_pca_parser(subparsers: argparse.ArgumentParser, default_help: bool) 
     parser.set_defaults(func=_run_pca)
 
 
-def _create_normalize_parser(
-    subparsers: argparse.ArgumentParser, default_help: bool
-) -> None:
+def _create_normalize_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "normalize",
         help="Normalize features",
@@ -482,9 +479,7 @@ def _create_normalize_parser(
     parser.set_defaults(func=_run_norm_features)
 
 
-def _create_filter_parser(
-    subparsers: argparse.ArgumentParser, default_help: bool
-) -> None:
+def _create_filter_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "filter",
         help="Filter labels and features",
@@ -554,9 +549,7 @@ def _run_rank_features(arguments: argparse.Namespace):
     run_rank_features(arguments)
 
 
-def _create_rank_parser(
-    subparsers: argparse.ArgumentParser, default_help: bool
-) -> None:
+def _create_rank_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "rank",
         help="Rank features from output of `merge` command",
@@ -616,7 +609,7 @@ def _create_rank_parser(
     parser.set_defaults(func=_run_rank_features)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool):
+def _create_parser(subparsers: SubParsers, default_help: bool):
     parser = subparsers.add_parser(
         "pert-map",
         help="Perturbation map processing",

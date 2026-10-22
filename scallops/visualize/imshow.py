@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from copy import deepcopy
 from itertools import chain, cycle, groupby
 from random import choice
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -89,25 +89,31 @@ def plot_plate(
     grouped = groupby(exp.images.keys(), lambda x: x.split("-")[0])
     wells, tiles = zip(*[x.split("-") for x in exp.images.keys()])
     wells = natsorted(set(wells))
+    rows: Sequence[Any]
     cols, rows = zip(*[(x[0], x[1:]) for x in wells])
     if plate_shape == "infer":
         plate_shape = (len(set(cols)), len(set(rows)))
     if not any(rows):
         rows = range(plate_shape[0])
 
+    well_to_full_well: dict | None
     if full_well == "infer":
-        full_well = _infer_positions(exp, max_workers)
+        well_to_full_well = _infer_positions(exp, max_workers)
     elif full_well is not None:
-        full_well = dict(zip(wells, cycle([full_well])))
+        well_to_full_well = dict(zip(wells, cycle([full_well])))
+    else:
+        well_to_full_well = None
 
-    groups = defaultdict(list)
-    if full_well is not None:
-        for well, tiles in grouped:
+    groups: dict[str, Any] = defaultdict(list)
+    if well_to_full_well is not None:
+        for well, well_tiles in grouped:
             well = set(well)
             assert len(well) == 1, f"Well grouping went wrong: {well}"
             well = next(iter(well))
-            idxs = _well_grid(well_shape, tuple(full_well[well]), layout=well_layout)
-            si = iter(sorted(zip(idxs[idxs >= 0], tiles), key=lambda x: x[0]))
+            idxs = _well_grid(
+                well_shape, tuple(well_to_full_well[well]), layout=well_layout
+            )
+            si = iter(sorted(zip(idxs[idxs >= 0], well_tiles), key=lambda x: x[0]))
             flat = chain.from_iterable(
                 [tuple(zip(cycle([i]), arr.astype(int))) for i, arr in enumerate(idxs)]
             )
@@ -148,11 +154,11 @@ def plot_plate(
     width, height = 1 / well_shape[0], 1 / well_shape[1]
     if vmin == "" or vmax == "":
         key = choice(list(exp.images))
-        vmin, vmax = (
+        vmin_auto, vmax_auto = (
             exp.images[key].isel(c=channel, t=0, z=0).quantile([0.1, 0.9]).values
         )
-        vmin -= vmin % +100
-        vmax -= vmax % -1000
+        vmin = vmin_auto - vmin_auto % +100
+        vmax = vmax_auto - vmax_auto % -1000
 
     def _grid(idx, well_, gr):
         axis = None
@@ -352,10 +358,10 @@ def plot_percentile_montage(
         assert not context, "Provide either labels or set context to True, not both"
 
     desired_order.extend([gene_name_col, feature])
-    required_cols = set(group_by + desired_order)
-    missing_cols = required_cols - set(df.columns)
+    required_cols_set = set(group_by + desired_order)
+    missing_cols = required_cols_set - set(df.columns)
     assert not missing_cols, f"Missing columns in dataframe: {', '.join(missing_cols)}"
-    remaining_columns = list(required_cols - set(desired_order))
+    remaining_columns = list(required_cols_set - set(desired_order))
     required_cols = desired_order + remaining_columns
 
     # Filter and prepare the dataframe
@@ -365,8 +371,8 @@ def plot_percentile_montage(
     df = df[df[gene_name_col].isin(genes_to_plot)]
 
     # tokenize feature
-    _, _, ch, *_ = feature.split("_")
-    ch = int(ch)
+    _, _, ch_str, *_ = feature.split("_")
+    ch = int(ch_str)
     # if array, make sure the channel is there or assume is first
     if isinstance(images, xr.DataArray):
         if ch > images.c.size:

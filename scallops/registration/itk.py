@@ -28,6 +28,7 @@ import numpy as np
 import xarray as xr
 import zarr
 from natsort import natsorted
+from numpy.typing import NDArray
 
 from scallops.io import _download_file, _get_fs_protocol, get_image_spacing
 from scallops.registration.landmarks import _get_translation, find_landmarks
@@ -110,7 +111,7 @@ def _get_chunk_size(image: xr.DataArray) -> tuple[int, int]:
         ):
             chunk_size[1] = image.data.chunksize[-1]
 
-    return tuple(chunk_size)
+    return chunk_size[0], chunk_size[1]
 
 
 def _load_itk_parameters(itk_parameters: list[str] | None) -> itk.ParameterObject:
@@ -224,7 +225,7 @@ def _load_itk_parameters_from_dir(directory: str) -> itk.ParameterObject:
 
 
 def _array_to_itk(
-    image: xr.DataArray | np.ndarray, image_spacing: None | tuple[float, float] = None
+    image: xr.DataArray | NDArray, image_spacing: None | tuple[float, float] = None
 ) -> itk.Image:
     """Convert a NumPy or xarray image to an ITK image with specified spacing.
 
@@ -336,7 +337,7 @@ def _itk_align_reference_time_zarr(
         if image_root is not None:
             images_group = _require_group(image_root, "images")
             group = images_group.create_group(
-                image_name.replace("/", "-"), overwrite=True
+                image_name.replace("/", "_"), overwrite=True
             )
             zarr_array = group.create_array(
                 "s0",
@@ -510,7 +511,7 @@ def _write_itk_point_set(
             f.write(f"{x[i]} {y[i]}\n")
 
 
-def _read_itk_transformix_point_set_output(path: str) -> tuple[np.ndarray, np.ndarray]:
+def _read_itk_transformix_point_set_output(path: str) -> tuple[NDArray, NDArray]:
     # Point	0	; InputIndex = [ 1 1 ]	; InputPoint = [ 1.000000 1.000000 ]	; OutputIndexFixed = [ 26 51 ]	; OutputPoint = [ 25.712395 51.221179 ]	; Deformation = [ 24.712395 50.221180 ]	; OutputIndexMoving = [ 26 51 ]
     y = []
     x = []
@@ -551,8 +552,9 @@ def _itk_align_reference_time(
     attrs_keep: Sequence[str] | None = ("stitch_coords",),
     parameter_object_across_channels: itk.ParameterObject | None = None,
     write_callback: Callable[
-        [np.ndarray | zarr.Array, tuple[int, ...], np.ndarray], None
-    ] = None,
+        [NDArray | zarr.Array, tuple[int, ...] | int, NDArray], None
+    ]
+    | None = None,
 ):
     """Align a time-series of moving images to the reference time point using ITK registration.
 
@@ -661,7 +663,7 @@ def _itk_align_reference_time(
                 unique_channels.add(channel_name)
                 all_channels.append(channel_name)
         coords = dict(c=all_channels)
-        leading_dims_shape = (len(all_channels),)
+        leading_dims_shape: tuple[int, ...] = (len(all_channels),)
         result_image_attrs["src_channels"] = channels
         result_image_attrs["src_times"] = times
 
@@ -720,6 +722,7 @@ def _itk_align_reference_time(
             moving_image_ti_moving_c = moving_image_ti_moving_c.squeeze()
             dest = None
             if output_dir is not None:
+                assert output_fs is not None
                 dest = f"{output_dir}{output_fs.sep}t={times[i]}{output_fs.sep}"
                 if output_fs.isdir(dest):
                     output_fs.rm(dest, recursive=True)
@@ -860,10 +863,10 @@ def _itk_align_reference_time(
 
 
 def _itk_align_landmarks(
-    fixed_y: np.ndarray,
-    fixed_x: np.ndarray,
-    moving_y: np.ndarray,
-    moving_x: np.ndarray,
+    fixed_y: NDArray,
+    fixed_x: NDArray,
+    moving_y: NDArray,
+    moving_x: NDArray,
     transform: Literal["affine", "rigid"] = "affine",
 ):
     if transform == "affine":
@@ -897,18 +900,18 @@ def _itk_align_landmarks(
 
 
 def itk_align(
-    fixed_image: xr.DataArray | np.ndarray,
-    moving_image: xr.DataArray | np.ndarray,
+    fixed_image: xr.DataArray | NDArray,
+    moving_image: xr.DataArray | NDArray,
     parameter_object: itk.ParameterObject,
     fixed_image_spacing: None | tuple[float, float] = None,
     moving_image_spacing: None | tuple[float, float] = None,
     output_directory: None | str = None,
-    fixed_mask: xr.DataArray | np.ndarray[np.uint8] | da.Array | None = None,
-    moving_mask: xr.DataArray | np.ndarray[np.uint8] | da.Array | None = None,
+    fixed_mask: xr.DataArray | NDArray[np.uint8] | da.Array | None = None,
+    moving_mask: xr.DataArray | NDArray[np.uint8] | da.Array | None = None,
     initial_transform: str | None = None,
-    landmarks: dict[str, np.ndarray[float]] | None = None,
-    additional_fixed_image: xr.DataArray | np.ndarray | None = None,
-    additional_moving_image: xr.DataArray | np.ndarray | None = None,
+    landmarks: dict[str, NDArray[float]] | None = None,
+    additional_fixed_image: xr.DataArray | NDArray | None = None,
+    additional_moving_image: xr.DataArray | NDArray | None = None,
 ) -> itk.ElastixRegistrationMethod:
     """Align a moving image to a fixed image using ITK registration.
 
@@ -1027,7 +1030,7 @@ def itk_align(
     if initial_transform is not None:
         fs = fsspec.core.url_to_fs(initial_transform)[0]
         if _get_fs_protocol(fs) != "file":
-            tmp_path = _download_file(initial_transform)
+            tmp_path = _download_file(fs, initial_transform)
             initial_transform = tmp_path
             tmp_paths.append(tmp_path)
         elastix_object.SetInitialTransformParameterFileName(initial_transform)
@@ -1054,13 +1057,15 @@ def itk_align(
             output_directory = output_directory.rstrip(fs.sep)
             local_directory = tempfile.mkdtemp()
         else:
-            os.makedirs(local_directory, exist_ok=True)
+            os.makedirs(output_directory, exist_ok=True)
         elastix_object.SetLogToFile(True)
         elastix_object.SetOutputDirectory(local_directory)
     elastix_object.UpdateLargestPossibleRegion()
     for tmp_path in tmp_paths:
         os.remove(tmp_path)
     if output_directory != local_directory:
+        # only reached when output_directory is remote and local_directory is a temp dir
+        assert output_directory is not None and local_directory is not None
         for name in os.listdir(local_directory):
             fs.put(
                 os.path.join(local_directory, name), output_directory + fs.sep + name
@@ -1105,7 +1110,7 @@ def itk_transform_labels(
     image: xr.DataArray,
     transform_parameter_object: itk.ParameterObject | str | Sequence[dict],
     image_spacing: None | tuple[float, float] = None,
-) -> np.ndarray:
+) -> NDArray:
     """Apply an ITK transform to image labels.
 
     :param image: The input image represented as an xarray DataArray.
@@ -1189,7 +1194,7 @@ def _itk_transform_image_zarr(
     dim_sizes = tuple([image.sizes[d] for d in transform_dims])
 
     group = _require_group(image_root, "images").require_group(
-        image_name.replace("/", "-"), overwrite=True
+        image_name.replace("/", "_"), overwrite=True
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
     data = group.create_array(
@@ -1225,8 +1230,8 @@ def _itk_transform_image_zarr(
 def _itk_transform_image(
     image: xr.DataArray,
     transform_parameter_object: itk.ParameterObject | str | Sequence[dict],
-    image_spacing: None | tuple[float],
-    result: np.ndarray | zarr.Array,
+    image_spacing: None | tuple[float, float],
+    result: NDArray | zarr.Array,
 ):
     """Apply ITK-based transformation to each (t, c, z) slice individually.
 

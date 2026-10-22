@@ -8,13 +8,11 @@ Authors:
 
 from collections.abc import Callable
 from math import comb
-from typing import Any
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
-from matplotlib.axes import Axes
 from xarray import DataArray
 
 from scallops.reads import li_speed_slope
@@ -23,8 +21,8 @@ from scallops.visualize.utils import _figsize
 
 def pairwise_channel_scatter_plot(
     bases: DataArray | pd.DataFrame,
-    plot_func: Callable[[np.ndarray, np.ndarray, int, int, Axes, Any], None] = None,
-    q: tuple[float, ...] = None,
+    plot_func: Callable[..., None] | None = None,
+    q: tuple[float, float] | None = None,
     col_wrap: int = 3,
     intensity_column: str = "intensity",
     **plot_args,
@@ -124,7 +122,7 @@ def pairwise_channel_scatter_plot(
     _axes = axes
     axes = axes.ravel()
     max_slopes = []
-    max_slope = 0
+    max_slope: float = 0
     k = 0
 
     def default_plot_func(x, y, i, j, ax, **plot_kwargs):
@@ -188,13 +186,11 @@ def pairwise_channel_scatter_plot(
                 )
 
                 pad = (axis_range[1] - axis_range[0]) * 0.05
-                axis_range = list(axis_range)
-                axis_range[0] = axis_range[0] - pad
-                axis_range[1] = axis_range[1] + pad
+                padded_range = [axis_range[0] - pad, axis_range[1] + pad]
                 ax.set_xlabel(f"{channels[i]}, slope: {x_slope:.3f}", rotation=0)
                 ax.set_ylabel(f"{channels[j]}, slope: {y_slope:.3f}", rotation=90)
-                ax.set_xlim(axis_range)
-                ax.set_ylim(axis_range)
+                ax.set_xlim(padded_range)
+                ax.set_ylim(padded_range)
 
             else:
                 ax.set_xlabel(f"{channels[i]}", rotation=0)

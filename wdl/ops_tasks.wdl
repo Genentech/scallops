@@ -1,5 +1,56 @@
 version 1.0
 
+task segment_overlap {
+    input {
+
+        String label_pattern
+        Array[String] labels
+
+        String meta_output_directory
+        String label_output_directory
+        String subset
+        Boolean? force
+
+
+        String docker
+        String zones
+        Int preemptible
+        String aws_queue_arn
+        Int cpu
+        String disks
+        String memory
+        Int max_retries
+    }
+
+    command <<<
+        set -ex
+
+        scallops segment overlap \
+        --labels ~{sep=" " labels} \
+        --label-pattern  "~{label_pattern}" \
+        --meta-output "~{meta_output_directory}" \
+        --label-output "~{label_output_directory}" \
+        --subset ~{subset} \
+        ~{true="--force" false="" force}
+    >>>
+
+    output {
+        String meta_output_url = "~{meta_output_directory}"
+        String label_output_url = "~{label_output_directory}"
+
+    }
+
+    runtime {
+        docker:docker
+        disks: disks
+        zones: zones
+        memory: memory
+        cpu : cpu
+        preemptible: preemptible
+        queueArn: aws_queue_arn
+        maxRetries : max_retries
+    }
+}
 task segment_nuclei {
     input {
         String? method
@@ -142,7 +193,7 @@ task register_elastix {
         String? moving_output_directory
         String subset
         Boolean? force
-        String? moving_label
+        Array[String]? moving_label
         String? extra_arguments
 
         String docker
@@ -166,7 +217,8 @@ task register_elastix {
         ~{"--moving-channel " + moving_channel} \
         ~{if defined(moving_output_directory) && moving_output_directory !="" then '--moving-output "' + moving_output_directory + '"' else ''} \
         --moving ~{sep=" " moving} \
-        ~{if defined(moving_label) then '--moving-label "' + moving_label + '"' else ''} \
+        ~{if defined(moving_label) then '--moving-label ' else ''} \
+        ~{sep=" " moving_label} \
         ~{if defined(fixed) then '--fixed "' + fixed + '"' else ''} \
         ~{"--fixed-channel " + fixed_channel} \
         ~{if defined(fixed_image_pattern) then '--fixed-image-pattern "' + fixed_image_pattern + '"' else ''} \

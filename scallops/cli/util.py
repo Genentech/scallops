@@ -15,23 +15,23 @@ import os
 import sys
 import time
 import types
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from importlib.metadata import version
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 import dask
-import dask.array as da
 import fsspec
-import numpy as np
-import xarray as xr
 import zarr
-from dask.delayed import Delayed
 from distributed import Client
 
-from scallops.io import save_ome_tiff
 from scallops.utils import _cpu_count
-from scallops.zarr_io import _write_zarr_image
+
+SubParsers: TypeAlias = argparse._SubParsersAction
+"""Type of the object returned by :meth:`argparse.ArgumentParser.add_subparsers`."""
+
+ImageTuple: TypeAlias = tuple[tuple[str, ...], Sequence[str | zarr.Group], dict]
+"""Group key, image sources, and metadata yielded by :func:`scallops.io._set_up_experiment`."""
 
 
 class ContextFilter(logging.Filter):
@@ -64,7 +64,7 @@ def _dask_workers_threads(
     n_workers: int | None = None,
     threads_per_worker: int | None = None,
     processes: bool = True,
-) -> dict[str, int]:
+) -> dict[str, int | None]:
     # adopted from LocalCluster
     if n_workers is None and threads_per_worker is None:
         if processes:
@@ -106,7 +106,7 @@ def _create_default_dask_config(config: dict | None = None) -> dask.config.set:
     return dask.config.set(conf_)
 
 
-def _log_function_call(func: types.FunctionType) -> types.FunctionType:
+def _log_function_call(func: Callable) -> Callable:
     """Decorator to log function calls and execution time.
 
     :param func: Function to wrap.
@@ -167,8 +167,8 @@ def _group_src_attrs(
 ) -> tuple[list[Any], list[Any], list[Any]]:
     file_metadata = metadata["file_metadata"]
     src = metadata["group_metadata"]["src"]
-    group_to_src = dict()
-    group_to_attrs = dict()
+    group_to_src: dict[tuple, list] = dict()
+    group_to_attrs: dict[tuple, dict[str, list]] = dict()
     for i in range(len(file_metadata)):
         meta = file_metadata[i]
         group = tuple([meta[key] for key in meta.keys() if key not in metadata_fields])
@@ -176,63 +176,21 @@ def _group_src_attrs(
         sources = group_to_src.get(group)
         if sources is None:
             sources = []
-            attrs = dict(file_metadata=[])
+            attrs: dict[str, list] = dict(file_metadata=[])
             group_to_src[group] = sources
             group_to_attrs[group] = attrs
+        else:
+            attrs = group_to_attrs[group]
         sources.append(src[i])
         attrs["file_metadata"].append(meta)
     filelist = []
-    attrs = []
+    attrs_list = []
     keys = []
     for key in group_to_src:
         filelist.append(group_to_src[key])
-        attrs.append(group_to_attrs[key])
+        attrs_list.append(group_to_attrs[key])
         keys.append(key)
-    return keys, filelist, attrs
-
-
-def _write_image(
-    name: str,
-    root: zarr.Group | str,
-    image: np.ndarray | xr.DataArray | da.Array,
-    output_format: str,
-    file_separator: str = "/",
-    metadata: dict | None = None,
-    compute: bool = True,
-    **kwargs,
-) -> list[Delayed]:
-    """Write image data to Zarr or TIFF format.
-
-    :param name: Name of the image.
-    :param root: Zarr root or directory path for saving the image.
-    :param image: Image data to be saved.
-    :param output_format: Format for saving the image ('zarr' or 'tiff').
-    :param file_separator: Separator used in file paths.
-    :param metadata: Optional metadata for the image.
-    :param compute: Whether to compute the Dask array before saving.
-    """
-    if output_format == "zarr":
-        return _write_zarr_image(
-            name=name,
-            root=root,
-            image=image,
-            metadata=metadata,
-            compute=compute,
-            **kwargs,
-        )
-    elif output_format == "tiff":
-        image_path = f"{root}{file_separator}{name}.tif"
-        if isinstance(image, xr.DataArray):
-            save_ome_tiff(
-                data=image.data,
-                uri=image_path,
-                channel_names=image.coords.get("c"),
-                dim_order="".join(image.dims).upper(),
-            )
-        else:
-            save_ome_tiff(data=image, uri=image_path)
-    else:
-        raise ValueError(f"Unknown output format: {output_format}")
+    return keys, filelist, attrs_list
 
 
 def images_arg(parser: argparse.ArgumentParser) -> None:
@@ -322,7 +280,7 @@ def force_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _z_index_type(s: str) -> int | str:
+def _z_index_type(s: str) -> int | Literal["max"]:
     """Parse and validate the z-index argument.
 
     This function ensures that the input is a non-negative integer 'max'
@@ -345,7 +303,7 @@ def _z_index_type(s: str) -> int | str:
 
     s = s.strip()
     if s == "max":
-        return s
+        return "max"
     try:
         value = int(s)
     except ValueError:

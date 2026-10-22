@@ -12,7 +12,8 @@ import json
 import logging
 import os
 import re
-from typing import Literal
+from collections.abc import Sequence
+from typing import Any, Literal, cast
 
 import anndata
 import dask
@@ -27,13 +28,14 @@ import xarray as xr
 import zarr
 from dask.delayed import Delayed, delayed
 from matplotlib import pyplot as plt
+from numpy.typing import NDArray
 from skimage.segmentation import expand_labels
 
 from scallops.cli.util import (
+    ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
     _dask_workers_threads,
-    _write_image,
     cli_metadata,
     load_json,
 )
@@ -42,10 +44,11 @@ from scallops.features.constants import _metadata_columns_whitelist_str
 from scallops.io import (
     _add_suffix,
     _create_subset_function,
+    _dd_to_parquet,
     _get_fs_protocol,
     _images2fov,
+    _pd_to_parquet,
     _set_up_experiment,
-    _to_parquet,
     is_anndata,
     is_parquet_file,
     write_anndata_zarr,
@@ -146,7 +149,7 @@ def _read_qc_stats(df_reads: pd.DataFrame, df_labels: pd.DataFrame) -> dict:
 def _peaks_to_bases(
     maxed: xr.DataArray,
     peaks: pd.DataFrame,
-    labels: np.ndarray,
+    labels: NDArray,
     labels_only: bool,
     bases: list[str],
 ) -> xr.DataArray:
@@ -178,14 +181,13 @@ def _peaks_to_bases(
 
 
 def spot_detection_pipeline(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: ImageTuple,
     iss_channels: list[int],
     output: str,
     max_filter_width: int,
     sigma_log: float | list[float],
-    z_index: int | str,
-    save_keys: tuple[str] | list[str] = ("max", "log", "std", "peaks"),
-    output_image_format: str = "zarr",
+    z_index: int | Literal["max"],
+    save_keys: Sequence[str] = ("max", "log", "std", "peaks"),
     cycles: None | list[int] = None,
     percentile_min: float | None = None,
     percentile_max: float | None = None,
@@ -209,7 +211,6 @@ def spot_detection_pipeline(
     :param z_index: Either 'max' or z-index
     :param sigma_log: Sigma parameter for log transformation in spot detection.
     :param save_keys: List of keys specifying which results to save.
-    :param output_image_format: Output format for saved images.
     :param cycles: Optional list of cycle indices to process.
     :param percentile_min: Minimum percentile for normalization
     :param percentile_max: Maximum percentile for normalization
@@ -276,14 +277,14 @@ def spot_detection_pipeline(
             method=spot_detection_method,
         )
     else:
-        sigma_log = np.array(sigma_log)
-        if sigma_log.ndim == 0:
-            sigma_log = np.expand_dims(sigma_log, 0)
+        sigma_log_array = np.array(sigma_log)
+        if sigma_log_array.ndim == 0:
+            sigma_log_array = np.expand_dims(sigma_log_array, 0)
         loged_list = []
         maxed_list = []
         std_arr_list = []
         peaks_list = []
-        for sigma in sigma_log:
+        for sigma in sigma_log_array:
             if match_ops_image_scale:
                 # include DAPI channel to match ops rescaling
                 loged = transform_log(image, sigma=sigma)
@@ -314,20 +315,20 @@ def spot_detection_pipeline(
             else std_arr_list[0]
         )
         peaks = dd.concat(peaks_list) if len(peaks_list) > 1 else peaks_list[0]
-    dask_delayed = []
+    dask_delayed: list = []
     compute = True
     metadata = cli_metadata() if not no_version else dict()
     metadata["image_metadata"] = image_metadata
     if "log" in save_keys and loged is not None:
         loged.attrs.update(metadata)
+
         dask_delayed.append(
-            _write_image(
+            _write_zarr_image(
                 name=f"{image_key}-log",
                 root=root,
                 image=loged,
-                output_format=output_image_format,
-                zarr_format="zarr",
                 compute=compute,
+                zarr_format="zarr",
             )
         )
     else:
@@ -335,12 +336,10 @@ def spot_detection_pipeline(
     if "std" in save_keys and std_arr is not None:
         std_arr.attrs.update(metadata)
         dask_delayed.append(
-            _write_image(
+            _write_zarr_image(
                 name=f"{image_key}-std",
                 root=root,
                 image=std_arr,
-                output_format=output_image_format,
-                metadata=dict(parent=image_key),
                 compute=compute,
             )
         )
@@ -349,13 +348,12 @@ def spot_detection_pipeline(
     if "max" in save_keys and maxed is not None:
         maxed.attrs.update(metadata)
         dask_delayed.append(
-            _write_image(
+            _write_zarr_image(
                 name=f"{image_key}-max",
                 root=root,
                 image=maxed,
-                output_format=output_image_format,
-                zarr_format="zarr",
                 compute=compute,
+                zarr_format="zarr",
             )
         )
     else:
@@ -367,7 +365,7 @@ def spot_detection_pipeline(
             output_fs.rm(peaks_path, recursive=True)
 
         dask_delayed.append(
-            _to_parquet(
+            _dd_to_parquet(
                 peaks,
                 peaks_path,
                 compute=compute,
@@ -493,7 +491,7 @@ def merge_sbs_phenotype_pipeline(
     image_key: str,
     sbs_path: str | None,
     phenotype_paths: list[str],
-    phenotype_suffix: list[str],
+    phenotype_suffix: list[str] | None,
     df_barcode: pd.DataFrame | None,
     output_dir: str,
     sbs_prefix: str | None = None,
@@ -583,7 +581,8 @@ def merge_sbs_phenotype_pipeline(
         if phenotype_suffix is not None:
             df.columns = df.columns + phenotype_suffix[i]
 
-        prefixes.append(phenotype_paths[i].split("/")[-3])
+        prefix = phenotype_paths[i].split("/")[-3]
+        prefixes.append(prefix)
 
         if output_format == "zarr":  # read index and metadata
             if len(_metadata_cols) > 0:
@@ -618,6 +617,8 @@ def merge_sbs_phenotype_pipeline(
             f"Duplicate columns: {', '.join(df_phenotype.columns[df_phenotype.columns.duplicated()].to_list())}"
         )
     if df_labels is not None and df_phenotype is not None and df_barcode is not None:
+        # set from metadata or inferred from barcodes whenever df_barcode is given
+        assert sbs_cycles is not None
         merged_df = merge_sbs_phenotype(
             df_labels=df_labels,
             df_phenotype=df_phenotype,
@@ -670,19 +671,7 @@ def merge_sbs_phenotype_pipeline(
         write_anndata_zarr(data, output_file)
 
     elif isinstance(merged_df, pd.DataFrame):
-        table = pa.Table.from_pandas(merged_df, preserve_index=True)
-        table = table.replace_schema_metadata(
-            {
-                "scallops".encode(): json.dumps(metadata).encode(),
-                **table.schema.metadata,
-            }
-        )
-        fs, output_file = fsspec.url_to_fs(output_file)
-        pq.write_table(
-            table,
-            output_file,
-            filesystem=fs,
-        )
+        _pd_to_parquet(merged_df, output_file, metadata)
 
 
 def _find_phenotype_paths(
@@ -881,7 +870,6 @@ def spot_detect_main(arguments: argparse.Namespace):
                 iss_channels=channels,
                 output=output,
                 z_index=z_index,
-                output_image_format="zarr",
                 max_filter_width=max_filter_width,
                 sigma_log=sigma_log,
                 save_keys=save_keys,
@@ -993,7 +981,9 @@ def reads_pipeline(
         barcode_to_prefix, args=(iss_cycles,)
     )
     output_dir = output_dir + file_separator
-    crosstalk_correction_method = crosstalk_correction_method.lower()
+    crosstalk_method = cast(
+        Literal["median", "li_and_speed", "none"], crosstalk_correction_method.lower()
+    )
     bases_peaks = peaks.compute()  # load all peaks
     bases_array_reads = _peaks_to_bases(
         maxed=maxed,
@@ -1010,14 +1000,13 @@ def reads_pipeline(
     crosstalk_bases_array = bases_array_reads
 
     iss_cycles = maxed.coords["t"].values
-    custom_metadata = dict(scallops=dict(sbs_cycles=iss_cycles.tolist()))
+    custom_metadata: dict[str, Any] = dict(
+        scallops=dict(sbs_cycles=iss_cycles.tolist())
+    )
     w = None
     if not labels_only:
         crosstalk_bases_array = crosstalk_bases_array.query(dict(read="label>0"))
-    if (
-        crosstalk_correction_method != "none"
-        and threshold_peaks_crosstalk_correction is not None
-    ):
+    if crosstalk_method != "none" and threshold_peaks_crosstalk_correction is not None:
         if isinstance(threshold_peaks_crosstalk_correction, float):
             crosstalk_bases_array = crosstalk_bases_array.query(
                 dict(read=f"peak>{threshold_peaks_crosstalk_correction}")
@@ -1056,7 +1045,7 @@ def reads_pipeline(
             )
         w = channel_crosstalk_matrix(
             crosstalk_bases_array,
-            method=crosstalk_correction_method,
+            method=crosstalk_method,
             by_t=crosstalk_correction_by_t,
             **crosstalk_correction_method_args,
         )
@@ -1113,7 +1102,7 @@ def reads_pipeline(
         df_reads.query(" & ".join(reads_to_labels_query))
     )
 
-    delayed_results = []
+    delayed_results: list[Any] = []
 
     points_fs, points_path = fsspec.core.url_to_fs(points_path)
     points_ds = pq.ParquetDataset(points_path, filesystem=points_fs)
@@ -1145,7 +1134,7 @@ def reads_pipeline(
         df_bases = bases_dataset.to_dask_dataframe()
 
         delayed_results.append(
-            _to_parquet(
+            _dd_to_parquet(
                 df_bases,
                 f"{output_dir}bases{file_separator}{image_key}.parquet",
                 compute=False,
@@ -1161,7 +1150,7 @@ def reads_pipeline(
 
     if "reads" in save_keys:
         delayed_results.append(
-            _to_parquet(
+            _dd_to_parquet(
                 df_reads,
                 f"{output_dir}reads{file_separator}{image_key}.parquet",
                 compute=False,
@@ -1173,7 +1162,7 @@ def reads_pipeline(
 
     if "labels" in save_keys:
         delayed_results.append(
-            _to_parquet(
+            _dd_to_parquet(
                 df_labels,
                 f"{output_dir}labels{file_separator}{image_key}.parquet",
                 compute=False,
@@ -1264,7 +1253,7 @@ def reads_main(arguments: argparse.Namespace):
     bases = list(arguments.bases)
     crosstalk_correction_method = arguments.crosstalk_correction_method
     force = arguments.force
-    crosstalk_correction_method_args = dict()
+    crosstalk_correction_method_args: dict[str, Any] = dict()
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)

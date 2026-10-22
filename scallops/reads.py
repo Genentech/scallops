@@ -23,6 +23,7 @@ import xarray as xr
 from dask import delayed
 from dask.utils import cached_cumsum
 from numpy import ndarray
+from numpy.typing import NDArray
 from scipy.special import softmax
 from skimage.segmentation import expand_labels
 from skimage.util import img_as_float
@@ -37,7 +38,7 @@ DEFAULT_MIN_P_ERROR = 1e-6
 
 
 def _hamming_distance(
-    whitelist_barcodes: np.ndarray, read_barcodes: np.ndarray
+    whitelist_barcodes: NDArray, read_barcodes: NDArray
 ) -> pd.DataFrame:
     """Computes the Hamming distance between read barcodes and a whitelist of barcodes.
 
@@ -137,9 +138,7 @@ def summarize_base_call_mismatches(
     return df
 
 
-def quality_softmax(
-    x: np.ndarray, min_error: float = DEFAULT_MIN_P_ERROR
-) -> np.ndarray:
+def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
     """Computes the phred quality score of transformed data using the softmax function.
 
     :param x: Array with transformed data (read, cycle, channel).
@@ -216,7 +215,7 @@ def channel_crosstalk_matrix(
     method: Literal["median", "li_and_speed"] = "median",
     by_t: bool = False,
     **kwargs,
-) -> ndarray | da.Array | dict[str, list[str] | np.ndarray]:
+) -> ndarray | da.Array | dict[str, list[str] | NDArray]:
     """Estimate and correct differences in channel intensity and spectral overlap among sequencing
     channels using either median or Li and Speed method.
 
@@ -228,26 +227,26 @@ def channel_crosstalk_matrix(
     :return: The inverse matrix, w (c,c) or an array of (t, c, c) if `by_t`
     """
 
-    method = str(method).lower()
-    assert method in ["median", "li_and_speed"]
+    method_name = str(method).lower()
+    assert method_name in ["median", "li_and_speed"]
 
     nchannels = a.sizes["c"]
-    if isinstance(a.data, da.Array) and method == "median":
+    if isinstance(a.data, da.Array) and method_name == "median":
         dims = a.dims
         a = a.data
-        chunksize = list(a.chunksize)
+        chunksize_list = list(a.chunksize)
         dims_no_chunk = ["c"]
         if not by_t:
             dims_no_chunk.append("t")
         else:
             # timepoints separate
-            chunksize[dims.index("t")] = 1
+            chunksize_list[dims.index("t")] = 1
         # no chunking in t or c dimensions
         for i in range(len(dims)):
             if dims[i] in dims_no_chunk and a.chunksize[i] != a.shape[i]:
-                chunksize[i] = -1
+                chunksize_list[i] = -1
 
-        chunksize = tuple(chunksize)
+        chunksize = tuple(chunksize_list)
         if chunksize != a.chunksize:
             a = a.rechunk(chunksize)
         chunks = list(a.chunks)
@@ -274,9 +273,9 @@ def channel_crosstalk_matrix(
             w_inv = da.stack(w_inv, axis=0)
             return w_inv
 
-    method = (
+    correct_crosstalk = (
         _correct_channel_crosstalk_li_and_speed
-        if method == "li_and_speed"
+        if method_name == "li_and_speed"
         else _correct_channel_crosstalk_median
     )
     if by_t:
@@ -286,14 +285,14 @@ def channel_crosstalk_matrix(
 
         for dim_val in itertools.product(*dim_vals):
             sel = dict(zip(dims, dim_val))
-            w = method(a.sel(sel).data.reshape(-1, a.sizes["c"]), **kwargs)
+            w = correct_crosstalk(a.sel(sel).data.reshape(-1, a.sizes["c"]), **kwargs)
             w_arrays.append(w)
 
         return np.array(w_arrays)
-    return method(a.data.reshape(-1, a.sizes["c"]), **kwargs)
+    return correct_crosstalk(a.data.reshape(-1, a.sizes["c"]), **kwargs)
 
 
-def _crosstalk_median_ratio_per_chunk(x: np.ndarray) -> np.ndarray:
+def _crosstalk_median_ratio_per_chunk(x: NDArray) -> NDArray:
     """Compute the crosstalk median ratio for a given chunk of data.
 
     :param x: Input 2 or 3d array representing the chunk data.
@@ -304,7 +303,7 @@ def _crosstalk_median_ratio_per_chunk(x: np.ndarray) -> np.ndarray:
     return _crosstalk_median_ratio(x).reshape(1, 1, nchannels * nchannels)
 
 
-def _correct_channel_crosstalk_median(a: np.ndarray) -> np.ndarray:
+def _correct_channel_crosstalk_median(a: NDArray) -> NDArray:
     """Estimate and correct differences in channel intensity and spectral overlap among
     sequencing channels. For each channel, find points where the largest signal is from
     that channel. Use the median of these points to define new basis vectors.
@@ -319,7 +318,7 @@ def _correct_channel_crosstalk_median(a: np.ndarray) -> np.ndarray:
 
 
 def apply_channel_crosstalk_matrix(
-    a: xr.DataArray, w: np.ndarray | da.Array, dtype=np.float32
+    a: xr.DataArray, w: NDArray | da.Array, dtype=np.float32
 ) -> xr.DataArray:
     """Applies a linear transformation w * a = y, where y is the corrected data.
 
@@ -349,15 +348,15 @@ def apply_channel_crosstalk_matrix(
     attrs = a.attrs.copy()
     a = a.data
     if isinstance(a, da.Array):
-        chunksize = list(a.chunksize)
+        chunksize_list = list(a.chunksize)
         # no chunking in t or c dimensions
         no_chunk_dims = ["c"]
         if w.ndim == 3:
             no_chunk_dims.append("t")
         for i in range(len(dims)):
             if dims[i] in no_chunk_dims and a.chunksize[i] != a.shape[i]:
-                chunksize[i] = -1
-        chunksize = tuple(chunksize)
+                chunksize_list[i] = -1
+        chunksize = tuple(chunksize_list)
         if chunksize != a.chunksize:
             a = a.rechunk(chunksize)
 
@@ -374,7 +373,7 @@ def apply_channel_crosstalk_matrix(
     return xr.DataArray(data=vals, coords=coords, dims=dims, attrs=attrs)
 
 
-def _crosstalk_median_ratio(a: np.ndarray) -> np.ndarray:
+def _crosstalk_median_ratio(a: NDArray) -> NDArray:
     """Compute the median ratio of the input array to quantify crosstalk between channels.
 
     :param a: Input 2D array where each row represents data for a specific observation, and each
@@ -484,7 +483,15 @@ def assign_barcodes_to_labels(
         apply_args["meta"] = dd.utils.make_meta(columns)
 
     apply_args["sort_by"] = sort_by
-    columns_needed = ["label", "barcode"] + agg_columns + top2_columns
+
+    columns_needed = list(
+        set(
+            ["label", "barcode"]
+            + agg_columns
+            + top2_columns
+            + ([sort_by] if isinstance(sort_by, str) else sort_by)
+        )
+    )
 
     if "mismatches" in df_reads.columns:
         columns_needed.append("mismatches")
@@ -556,7 +563,7 @@ def correct_mismatches(
 
 
 def _decode_max_chunk(
-    spots: np.ndarray,
+    spots: NDArray,
     bases: list[str],
     meta_df: pd.DataFrame,
     offset: slice | None,
@@ -641,11 +648,11 @@ def _decode(
     else:
         # no chunking in t or c dimension
         dims = spots.dims
-        chunksize = list(spots.data.chunksize)
+        chunksize_list = list(spots.data.chunksize)
         for i in range(len(dims)):
             if dims[i] in ("c", "t") and spots.data.chunksize[i] != spots.data.shape[i]:
-                chunksize[i] = -1
-        chunksize = tuple(chunksize)
+                chunksize_list[i] = -1
+        chunksize = tuple(chunksize_list)
         if chunksize != spots.data.chunksize:
             spots.data = spots.data.rechunk(chunksize)
 
@@ -1150,7 +1157,7 @@ def decode_polar(
 def peaks_to_bases(
     maxed: xr.DataArray,
     peaks: pd.DataFrame | dd.DataFrame,
-    labels: np.ndarray | xr.DataArray | None = None,
+    labels: NDArray | xr.DataArray | None = None,
     labels_only: bool = True,
     bases: Sequence[str] | None = ("G", "T", "A", "C"),
 ) -> xr.DataArray:
@@ -1363,7 +1370,7 @@ def base_counts(reads_df: pd.DataFrame, normalize: bool = False) -> pd.DataFrame
 
 def peaks_to_spot_labels(
     peaks: dd.DataFrame | pd.DataFrame, shape: tuple[int, int]
-) -> np.ndarray:
+) -> NDArray:
     """Convert peaks to spot labels.
 
     :param peaks: Peaks data frame which has been filtered to retain only peaks of interest
@@ -1462,11 +1469,11 @@ def annotated_spots(reads_df, shape, bases_order, expand_width=3):
 
 
 def query_spots(
-    spots_labels: np.ndarray,
-    calls: np.ndarray | pd.DataFrame,
+    spots_labels: NDArray,
+    calls: NDArray | pd.DataFrame,
     query: Sequence[str],
     expand_width: int = 1,
-) -> np.ndarray:
+) -> NDArray:
     """Returns expanded (optional) labels that match a set of query barcodes.
 
     :param spots_labels: An array of spot labels to be queried.
@@ -1497,7 +1504,7 @@ def query_spots(
 
 
 def li_speed_slope(
-    x: np.ndarray, y: np.ndarray, quantile_range: tuple[float, float] = (0.6, 0.999)
+    x: NDArray, y: NDArray, quantile_range: tuple[float, float] = (0.6, 0.999)
 ) -> Tuple[pd.DataFrame, float]:
     """Computes the slope using the Li and Speed method for crosstalk correction.
 
@@ -1547,7 +1554,7 @@ def _correct_channel_crosstalk_li_and_speed(
     slope_threshold: float = 0.05,
     quantile_range: tuple[float, float] = (0.6, 0.999),
     normalize_w: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray]:
     """Estimate and correct differences in channel intensity and spectral overlap among sequencing
     channels using the method in Li and Speed.
 
@@ -1617,7 +1624,7 @@ def li_and_speed_cc_number(bases: xr.DataArray) -> float:
     """
     a = bases.where(bases.label > 0, drop=True)
     channels = a.c.values
-    max_slope = 0
+    max_slope: float = 0
     for i, j in product(range(len(channels)), repeat=2):
         x = a.sel(c=channels[i]).to_numpy().flatten()
         if i != j:
