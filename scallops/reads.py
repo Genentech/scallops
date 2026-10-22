@@ -138,7 +138,7 @@ def summarize_base_call_mismatches(
     return df
 
 
-def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
+def quality_softmax(x: NDArray, min_error: float = 1e-6) -> NDArray:
     """Computes the phred quality score of transformed data using the softmax function.
 
     :param x: Array with transformed data (read, cycle, channel).
@@ -153,7 +153,7 @@ def quality_softmax(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
     return -10 * np.log10(p_error)
 
 
-def channel_probs(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
+def channel_probs(x: NDArray, min_error: float = 1e-6) -> NDArray:
     """Step 1 of Bernoulli basecalling: per-channel P(bright) via two-class softmax
     against the per-read dark reference (minimum intensity across cycles).
 
@@ -172,7 +172,7 @@ def channel_probs(x: np.ndarray, min_error: float = 1e-6) -> np.ndarray:
     return np.clip(p[..., 0], min_error, 1 - min_error)
 
 
-def base_probs(p: np.ndarray, E: np.ndarray) -> np.ndarray:
+def base_probs(p: NDArray, E: NDArray) -> NDArray:
     """Step 2 of Bernoulli basecalling: per-base probabilities via encoding matrix.
 
     For each base b, P(b) = product_c [ p_c^E[b,c] * (1-p_c)^(1-E[b,c]) ], normalised
@@ -192,7 +192,7 @@ def base_probs(p: np.ndarray, E: np.ndarray) -> np.ndarray:
 def make_encoding(
     channel_bases: list[str],
     dark_bases: list[str],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray]:
     """Build a Bernoulli encoding matrix for the common case where each channel maps
     1:1 to one base and remaining bases are dark (no fluorescent signal).
 
@@ -716,9 +716,9 @@ def decode_max(
 
 
 def _decode_se_chunk(
-    spots: np.ndarray,
-    encoding: np.ndarray,
-    base_labels: np.ndarray,
+    spots: NDArray,
+    encoding: NDArray,
+    base_labels: NDArray,
     meta_df: pd.DataFrame,
     offset: slice | None,
     whitelist: list[str] | None,
@@ -776,8 +776,8 @@ def _decode_se_chunk(
 def decode_se(
     spots: xr.DataArray,
     barcodes: pd.DataFrame | None = None,
-    encoding: np.ndarray | None = None,
-    base_labels: list[str] | np.ndarray | None = None,
+    encoding: NDArray | None = None,
+    base_labels: list[str] | NDArray | None = None,
     dark_bases: list[str] | None = None,
 ) -> pd.DataFrame | dd.DataFrame:
     """Call reads using the signed-encoding (SE) decoder with data-adaptive f = alpha/3.
@@ -818,7 +818,7 @@ def decode_se(
 
 
 def _polar_thresholds_from_wcor(
-    w_cor: np.ndarray,
+    w_cor: NDArray,
     channel_bases: list[str],
 ) -> dict:
     """Infer polar angle thresholds from the xtalk correction matrix.
@@ -887,11 +887,11 @@ def _polar_thresholds_from_wcor(
 
 
 def _rfrac_from_sweep(
-    Rn: np.ndarray,
-    bright_calls: np.ndarray,
+    Rn: NDArray,
+    bright_calls: NDArray,
     dark_base_idx: int,
-    base_labels_arr: np.ndarray,
-    whitelist: np.ndarray,
+    base_labels_arr: NDArray,
+    whitelist: NDArray,
     n_grid: int = 20,
 ) -> float:
     """Find the r_frac that maximises whitelist mapping rate via a vectorised grid sweep.
@@ -945,18 +945,18 @@ def _rfrac_from_sweep(
 
 
 def _decode_polar_chunk(
-    spots: np.ndarray,
-    E: np.ndarray,
-    base_labels_arr: np.ndarray,
-    bright_rows: np.ndarray,
-    dark_rows: np.ndarray,
+    spots: NDArray,
+    E: NDArray,
+    base_labels_arr: NDArray,
+    bright_rows: NDArray,
+    dark_rows: NDArray,
     has_dark: bool,
     r_frac: float,
     non_orthogonal: bool,
     t_lo: float,
     t_hi: float,
     meta_df: pd.DataFrame,
-    whitelist: np.ndarray | None,
+    whitelist: NDArray | None,
     offset: slice | None,
 ) -> pd.DataFrame:
     """Process one chunk of spots through the polar decoder (numpy-only)."""
@@ -1006,10 +1006,10 @@ def _decode_polar_chunk(
 def decode_polar(
     spots: xr.DataArray,
     barcodes: pd.DataFrame | None = None,
-    encoding: np.ndarray | None = None,
-    base_labels: list[str] | np.ndarray | None = None,
+    encoding: NDArray | None = None,
+    base_labels: list[str] | NDArray | None = None,
     dark_bases: list[str] | None = None,
-    w_cor: np.ndarray | None = None,
+    w_cor: NDArray | None = None,
     r_frac: float | None = None,
     n_reads: int = 50_000,
 ) -> pd.DataFrame:
@@ -1493,9 +1493,9 @@ def query_spots(
     """
     error = f"calls is of type {type(calls)} but array or dataframe were expected"
 
-    assert isinstance(calls, (np.ndarray, pd.DataFrame)), error
+    assert isinstance(calls, (NDArray, pd.DataFrame)), error
 
-    if isinstance(calls, np.ndarray):
+    if isinstance(calls, NDArray):
         joined = np.apply_along_axis("".join, 1, calls)
         matches = np.where(np.isin(joined, query))[0] + 1
     else:
