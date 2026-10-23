@@ -68,7 +68,7 @@ def _read_tile(
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
     img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     if img.ndim > 2:
-        img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
+        img = img.max(dim="z") if not isinstance(z_index, (int, np.integer)) else img.isel(z=z_index)
     img = img.values
 
     if radial_correction_k is not None:
@@ -766,7 +766,7 @@ def _init_tiles(
 ):
     # z selection: "max", "focus", an int, a per-tile data frame/array, or computed per-tile indices
     z_selection: int | str | pd.DataFrame | NDArray | tuple = z_index
-    if not isinstance(z_index, int) and z_index not in ("max", "focus"):
+    if not isinstance(z_index, (int, np.integer)) and z_index not in ("max", "focus"):
         z_index_df = pd.read_parquet(
             z_index.format(**image_metadata["file_metadata"][0])
         )

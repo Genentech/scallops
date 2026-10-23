@@ -469,7 +469,7 @@ def _fuse_image(
         if path is not None:
             os.remove(path)
     if "z" in img.dims:
-        img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
+        img = img.max(dim="z") if not isinstance(z_index, (int, np.integer)) else img.isel(z=z_index)
     img = img.values
 
     if output_channels is not None and channel_reference is None:

@@ -527,7 +527,7 @@ def _write_arrays(
             if "z" in ffp.dims:
                 if isinstance(z_index, str) and z_index == "max":
                     ffp = ffp.max(dim="z")
-                elif isinstance(z_index, int):
+                elif isinstance(z_index, (int, np.integer)):
                     ffp = ffp.isel(z=z_index)
                 else:
                     raise ValueError(f"Unknown z index:{z_index}")
@@ -549,7 +549,7 @@ def _write_arrays(
             if "z" in dfp.dims:
                 if isinstance(z_index, str) and z_index == "max":
                     dfp = dfp.max(dim="z")
-                elif isinstance(z_index, int):
+                elif isinstance(z_index, (int, np.integer)):
                     dfp = dfp.isel(z=z_index)
                 else:
                     raise ValueError(f"Unknown z index:{z_index}")
