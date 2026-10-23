@@ -254,31 +254,8 @@ def nis_seq_fixtures(nis_seq_experiment, nis_seq_nuclear_mask, nis_seq_barcodes)
         "threshold"
     ]
 
-    # 2-col secondary threshold (from synthesized ch0=max(A,C), ch1=max(A,T) baseline)
-    sp3 = np.clip(cor3.data, 0, None)
-    bl2 = np.array(["G", "T", "A", "C"])
-    ch0 = np.maximum(sp3[..., 0], sp3[..., 2])
-    ch1 = np.maximum(sp3[..., 0], sp3[..., 1])
-    sp2 = np.stack([ch0, ch1], axis=-1)
-    above2 = sp2.max(axis=2) > 0.20 * sp2.max(axis=(1, 2), keepdims=True).squeeze(-1)
-    df_t2 = pd.DataFrame(
-        {
-            "peak": cor3.peak.values,
-            "label": cor3.label.values,
-            "Q_mean": 60.0,
-            "Q_min": 60.0,
-            "barcode": [
-                "".join(bl2[r]) for r in np.where(above2, sp2.argmax(axis=2), 2)
-            ],
-        }
-    )
-    df_t2["barcode_match"] = df_t2["barcode"].isin(set(df_bcn["barcode"]))
-    try:
-        thr_r2 = peak_thresholds_from_reads(df_t2.query("barcode_match")).iloc[0][
-            "threshold"
-        ]
-    except Exception:
-        thr_r2 = 3.0
+    # the synthesized 2-color spots are the 3-color spots, so they share its threshold
+    thr_r2 = thr_r3
 
     return SimpleNamespace(
         iss=iss,
@@ -297,7 +274,7 @@ def nis_seq_fixtures(nis_seq_experiment, nis_seq_nuclear_mask, nis_seq_barcodes)
 def test_decoders_3ch_nis_seq(nis_seq_fixtures):
     """SE, max, and polar decoders on NIS-seq 3-channel (G dark), shared xtalk-corrected input.
 
-    Notebook polar_basecalling.ipynb values:
+    Notebook base_calling_methods.ipynb values:
       decode_se    map=44.90%   nuclei/1,001 = 84.58%
       decode_polar map=43.84%   nuclei/1,001 = 85.39%
     """
@@ -331,9 +308,10 @@ def test_decoders_3ch_nis_seq(nis_seq_fixtures):
 def test_decoders_2col_nis_seq(nis_seq_fixtures):
     """SE and polar decoders on synthesized 2-color NIS-seq (G dark, non-orthogonal).
 
-    Channels: ch0=max(A,C), ch1=max(A,T).  Notebook polar_basecalling.ipynb values:
-      decode_se    map=17.66%   nuclei/1,001 = 71.07%
-      decode_polar map=29.46%   nuclei/1,001 = 84.08%   (recommended — atan2 is amplitude-independent)
+    Channels: ch0=max(A,C), ch1=max(A,T).  Notebook base_calling_methods.ipynb values:
+      decode_se    map=23.9%   nuclei/1,001 = 70.2%
+      decode_polar map=39.7%   nuclei/1,001 = 83.1%
+    Reads are counted above the 3-color threshold, since the spots are the same.
     Polar outperforms SE because θ=atan2(ch1,ch0) resolves the A/C score ambiguity.
     """
 
@@ -357,9 +335,7 @@ def test_decoders_2col_nis_seq(nis_seq_fixtures):
     E2 = np.array([[0, 0], [0, 1], [1, 1], [1, 0]], dtype=float)
 
     def s(df):
-        return read_statistics(
-            df.query(f"peak>{f.thr_r2}")
-        )  # 2-col uses its own threshold
+        return read_statistics(df.query(f"peak>{f.thr_r2}"))
 
     se_stats = s(
         decode_se(
@@ -377,10 +353,10 @@ def test_decoders_2col_nis_seq(nis_seq_fixtures):
         )
     )
 
-    assert se_stats["mapping_rate"] > 0.15  # notebook: ~17.7%
-    assert se_stats["labels_with_mapped_reads"] / f.n_nuc > 0.68  # notebook: ~70.9%
-    assert pol_stats["mapping_rate"] > 0.27  # notebook: ~29.5%
-    assert pol_stats["labels_with_mapped_reads"] / f.n_nuc > 0.81  # notebook: ~83.9%
+    assert se_stats["mapping_rate"] > 0.21  # notebook: ~23.9%
+    assert se_stats["labels_with_mapped_reads"] / f.n_nuc > 0.68  # notebook: ~70.2%
+    assert pol_stats["mapping_rate"] > 0.37  # notebook: ~39.7%
+    assert pol_stats["labels_with_mapped_reads"] / f.n_nuc > 0.81  # notebook: ~83.1%
 
 
 @pytest.mark.basecalls
@@ -554,11 +530,13 @@ def test_decode_polar_w_cor_out_of_order_falls_back(caplog):
 
 
 @pytest.mark.basecalls
-def test_decode_polar_multiple_dark_bases():
+def test_decode_multiple_dark_bases():
     """Dark bases cannot be told apart, so more than one is rejected."""
     spots = _polar_2col_spots()
     with pytest.raises(ValueError, match="at most one dark base"):
         decode_polar(spots, dark_bases=["G", "N"])
+    with pytest.raises(ValueError, match="at most one dark base"):
+        decode_se(spots, dark_bases=["G", "N"])
 
 
 @pytest.mark.basecalls
@@ -826,6 +804,35 @@ def test_decode_em_use_whitelist():
         use_whitelist=True,
     )
     assert np.mean(_calls(df) == truth) > 0.98
+
+
+@pytest.mark.basecalls
+def test_decode_em_crosstalk():
+    """Uncorrected crosstalk is estimated and corrected; corrected spots are left as is."""
+    E = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]])
+    spots, truth = _simulate_spots(E, list("ATCG"), n=800)
+    spots = spots.assign_coords(c=list("ATC"))
+    # A bleeds into T and C into A, as in the NIS-seq test data
+    M = np.array([[1.0, 0.0, 0.35], [0.35, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    mixed = spots.copy(data=spots.data @ M.T)
+    model = fit_base_mixture(mixed, dark_bases=["G"], n_restarts=2)
+    assert model["xtalk"] is not None
+    df = decode_em(mixed, model=model)
+    assert np.mean(_calls(df) == truth) > 0.99
+    chunked = mixed.copy(data=da.from_array(mixed.data, chunks=(100, -1, -1)))
+    df_dask = decode_em(chunked, model=model).compute()
+    assert (df["barcode"].values == df_dask["barcode"].values).all()
+
+    corrected = apply_channel_crosstalk_matrix(mixed, model["xtalk"])
+    assert fit_base_mixture(corrected, dark_bases=["G"], n_restarts=2)["xtalk"] is None
+    off = fit_base_mixture(mixed, dark_bases=["G"], n_restarts=2, xtalk_tol=None)
+    assert off["xtalk"] is None
+
+    # non-orthogonal encodings are not corrected
+    E2 = np.array([[0, 0], [0, 1], [1, 1], [1, 0]])
+    spots2, _ = _simulate_spots(E2, list("GTAC"), n=400, seed=1)
+    model2 = fit_base_mixture(spots2, encoding=E2, base_labels=list("GTAC"))
+    assert model2["xtalk"] is None
 
 
 @pytest.mark.basecalls

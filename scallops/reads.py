@@ -87,8 +87,8 @@ def summarize_base_call_mismatches(
     """Summarize single base call mismatches in called barcodes in reads_df against whitelist in
     barcodes_df.
 
-    :param: reads_df: DataFrame containing called reads
-    :param: barcodes_df: DataFrame containing whitelisted barcodes
+    :param reads_df: DataFrame containing called reads
+    :param barcodes_df: DataFrame containing whitelisted barcodes
     :param n_mismatches: Include reads where number of mismatches to the closest barcode is less than or equal to
         `n_mismatches`
     :param delta_mismatches: Include reads where number of mismatches to 2nd closest barcode minus number of mismatches
@@ -157,17 +157,39 @@ def make_encoding(
     channel_bases: list[str],
     dark_bases: list[str],
 ) -> tuple[NDArray, NDArray]:
-    """Build a Bernoulli encoding matrix for the common case where each channel maps
-    1:1 to one base and remaining bases are dark (no fluorescent signal).
+    """Build an encoding matrix in which each bright base fires only its own channel.
 
-    For chemistries where a base lights up multiple channels (e.g. Illumina 2-color
-    where A appears in both red and green), construct the encoding matrix directly
-    and pass it to decode_max via the `encoding` and `base_labels` parameters.
+    The encoding matrix ``E`` says which channels each base lights up: one row per
+    base, one column per channel, with ``E[b, c] = 1`` if base ``b`` fires channel
+    ``c`` and 0 otherwise.  Here each base in ``channel_bases`` fires only its own
+    channel, and each base in ``dark_bases`` fires none (an all-zero row), e.g.
+    G in 3-color NIS-seq:
 
-    :param channel_bases: Ordered base label for each channel, length = n_channels.
-    :param dark_bases: Bases that have no dedicated channel.
-    :return: (E, base_labels) where E is (n_bases, n_channels) float array and
-        base_labels is the full ordered base array (channel_bases + dark_bases).
+    >>> E, labels = make_encoding(["A", "T", "C"], dark_bases=["G"])
+    >>> labels
+    array(['A', 'T', 'C', 'G'], dtype='<U1')
+    >>> E
+    array([[1., 0., 0.],
+           [0., 1., 0.],
+           [0., 0., 1.],
+           [0., 0., 0.]])
+
+    :func:`decode_se`, :func:`decode_polar` and :func:`decode_em` call this
+    themselves when given ``dark_bases``, using ``spots.c`` as ``channel_bases``.
+    Use at most one dark base: dark bases have identical rows and cannot be told
+    apart, so the decoders raise an error for more.
+
+    This function cannot express a base that fires several channels.  For those
+    chemistries, write the matrix directly and pass it as ``encoding`` with
+    ``base_labels`` instead.  For example, in 2-color chemistry where A fires both
+    channels: ``E = [[0, 0], [0, 1], [1, 1], [1, 0]]`` with
+    ``base_labels=["G", "T", "A", "C"]``.
+
+    :param channel_bases: Base imaged in each channel, in channel order.
+    :param dark_bases: Bases with no channel.
+    :return: ``(E, base_labels)``: ``E`` is a float array of shape
+        ``(n_bases, n_channels)``, and ``base_labels`` names its rows
+        (``channel_bases`` followed by ``dark_bases``).
     """
     all_bases = list(channel_bases) + list(dark_bases)
     E = np.eye(len(all_bases), len(channel_bases), dtype=float)
@@ -188,6 +210,8 @@ def channel_crosstalk_matrix(
     :param a: data to compute crosstalk matrix for (read, t, c)
     :param by_t: Compute separate matrices per cycle.
     :param method: Either median or li_and_speed
+    :param kwargs: Passed to the ``li_and_speed`` estimator (``n_iter_max``,
+        ``slope_threshold``, ``quantile_range``).  Ignored by ``median``.
     :return: The inverse matrix, w (c,c) or an array of (t, c, c) if `by_t`
     """
 
@@ -414,7 +438,7 @@ def assign_barcodes_to_labels(
 ) -> pd.DataFrame | dd.DataFrame:
     """Call the barcode for each label.
 
-    :param df_reads: Table of all called reads. See :func:`~decode_max`
+    :param df_reads: Table of all called reads from one of the ``decode_*`` functions.
     :param sort_by: Which column(s) to sort aggregated barcodes by.
     :return: Table of all labels containing sequencing reads.
     """
@@ -476,7 +500,7 @@ def correct_mismatches(
 
     Note that if a read is equidistant to more than one barcode, it will not be corrected.
 
-    :param reads: reads from decode_max
+    :param reads: Reads from one of the ``decode_*`` functions.
     :param barcodes: Data frame of designed barcode sequences. Expected to have column 'barcode'
     :param n_mismatches: Correct mismatch if number of mismatches to the closest barcode is less than or equal to
         `n_mismatches`
@@ -748,15 +772,16 @@ def decode_se(
 ) -> pd.DataFrame | dd.DataFrame:
     """Call reads using the signed-encoding (SE) decoder with data-adaptive f = alpha/3.
 
-    Outperforms softmax argmax for all SBS chemistries.  Handles dark bases (all-zero
-    rows in ``E``) automatically — their score ``-Σ d_ct`` is maximized at quiet cycles.
-    Per-channel range weighting acts as an SNR proxy, down-weighting dim channels.
+    Handles dark bases (all-zero rows in ``E``) automatically — their score
+    ``-Σ d_ct`` is maximized at quiet cycles.  Per-channel range weighting acts as an
+    SNR proxy, down-weighting dim channels.
 
     :param spots: Spots DataArray with dims ``(read, t, c)``.
     :param barcodes: Whitelist DataFrame with column ``'barcode'``; adds ``barcode_match``.
     :param encoding: ``(n_bases, n_channels)`` binary encoding matrix.  All-zero rows
-        indicate dark bases.  When omitted and ``dark_bases`` is also omitted, defaults
-        to the identity (one bright base per channel, no dark bases).
+        indicate dark bases; at most one is allowed.  When omitted and ``dark_bases``
+        is also omitted, defaults to the identity (one bright base per channel, no
+        dark bases).
     :param base_labels: Ordered base labels of length n_bases, required with ``encoding``.
     :param dark_bases: Shorthand for 1:1 channel→base chemistry with named dark bases.
         Builds the encoding via :func:`make_encoding`.
@@ -774,6 +799,13 @@ def decode_se(
 
     encoding = np.asarray(encoding, dtype=float)
     base_labels = np.asarray(base_labels)
+    dark_rows = np.where(encoding.sum(axis=1) == 0)[0]
+    if len(dark_rows) > 1:
+        raise ValueError(
+            "decode_se supports at most one dark base, got "
+            f"{list(base_labels[dark_rows])}: dark bases have no signal and "
+            "cannot be told apart"
+        )
     return _decode(
         spots=spots,
         barcodes=barcodes,
@@ -1219,6 +1251,7 @@ def fit_base_mixture(
     n0: float = 1.0,
     whitelist: Sequence[str] | None = None,
     n_whitelist_rounds: int = 3,
+    xtalk_tol: float | None = 0.15,
     seed: int = 0,
 ) -> dict:
     """Fit an unsupervised model of log P(signal | base), without a whitelist or calls.
@@ -1261,6 +1294,16 @@ def fit_base_mixture(
     * **Fit reads**: a random sample of up to ``n_reads`` reads, restricted to reads
       with ``peak`` at or above the ``fit_peak_quantile`` quantile when ``spots``
       has a ``peak`` coordinate, since low-peak spots are mostly not real reads.
+    * **Crosstalk** (``xtalk_tol``): for orthogonal encodings (each channel fired
+      by exactly one base, as in 4-color or 3-color with a dark base), the
+      crosstalk matrix of :func:`channel_crosstalk_matrix` (median method) is
+      estimated on the fit reads.  It is applied, in fitting and calling, only when
+      its largest off-diagonal term relative to the diagonal exceeds
+      ``xtalk_tol``, so spots already corrected with
+      :func:`apply_channel_crosstalk_matrix` are not corrected twice (which costs
+      0.1 to 0.3 points of mapping rate on the scallops test data).  Non-orthogonal
+      encodings are not corrected, since the median method would take a base that
+      fires several channels (2-color A) for crosstalk.
     * **Per-cycle gain** (:func:`_em_cycle_gain`): every cycle has a similar mix of
       bases, so a high quantile of each cycle's intensities tracks its brightness.
       Intensities are not clipped at 0, since values pushed negative by xtalk
@@ -1286,8 +1329,8 @@ def fit_base_mixture(
       (:func:`_em_update_levels`).  Calls repeat the same
       refinement per read, so they do not depend on Dask chunking.
 
-    :param spots: Spots DataArray with dims ``(read, t, c)``, ideally
-        xtalk-corrected via :func:`apply_channel_crosstalk_matrix`.
+    :param spots: Spots DataArray with dims ``(read, t, c)``, with or without xtalk
+        correction (see ``xtalk_tol``).
     :param encoding: ``(n_bases, n_channels)`` binary encoding matrix.  All-zero
         rows indicate dark bases.  Rows must be distinct.
     :param base_labels: Base labels of length ``n_bases``, required with
@@ -1324,11 +1367,16 @@ def fit_base_mixture(
         construction, so they act as labelled training data.  Only barcodes as long
         as the number of cycles are used.  ``None`` (default) fits without labels.
     :param n_whitelist_rounds: Number of refits on whitelist-matched reads.
+    :param xtalk_tol: Largest off-diagonal term of the estimated crosstalk matrix,
+        relative to its diagonal, that is left uncorrected; ``None`` to never
+        correct.  On the scallops test data, corrected spots measure 0.03 to 0.06
+        and uncorrected spots 0.43 to 0.55.  Ignored for non-orthogonal encodings.
     :param seed: Random seed for read sampling and jitter.
     :return: Model dict with per-base, per-channel ``mu`` and ``sd`` (log space for
         on states), per-base ``cov`` and ``t_dof`` with ``covariance="full"``,
-        per-cycle base frequencies ``pi`` ``(t, base)``, the per-cycle ``gain``,
-        level parameters ``S``, ``k_low``, ``min_snr``, ``min_gap``, ``n0``,
+        per-cycle base frequencies ``pi`` ``(t, base)``, the crosstalk matrix
+        ``xtalk`` applied to the spots (``None`` if not corrected), the per-cycle
+        ``gain``, level parameters ``S``, ``k_low``, ``min_snr``, ``min_gap``, ``n0``,
         ``n_rescale``, ``read_scale``, ``outlier``, the ``encoding`` and
         ``base_labels``, the mean log-likelihood ``loglik``, and the number of
         whitelist-matched fit reads per refit, ``n_whitelist_matched``.
@@ -1357,6 +1405,15 @@ def fit_base_mixture(
     # noise, and clipping them would pile them into a spike the off state collapses on
     x = np.asarray(sp, dtype=float)
     T = x.shape[1]
+    xtalk = None
+    orthogonal = (E.sum(axis=1) <= 1).all() and (E.sum(axis=0) == 1).all()
+    if xtalk_tol is not None and orthogonal and n_c > 1:
+        w = _correct_channel_crosstalk_median(x.reshape(-1, n_c))
+        resid = np.abs(w / np.diag(w)[:, np.newaxis] - np.eye(n_c)).max()
+        if resid > xtalk_tol:
+            logger.info(f"Correcting residual crosstalk ({resid:.2f}) in the spots")
+            xtalk = w
+            x = x @ w.T
     gain = _em_cycle_gain(x)
     x = x / gain[np.newaxis]
 
@@ -1425,6 +1482,7 @@ def fit_base_mixture(
         encoding=E,
         S=S,
         gain=gain,
+        xtalk=xtalk,
         min_snr=min_snr,
         min_gap=min_gap,
         n0=n0,
@@ -1517,7 +1575,10 @@ def _decode_em_chunk(
     min_error: float = DEFAULT_MIN_P_ERROR,
 ) -> pd.DataFrame:
     """Call one chunk of spots with a model from :func:`fit_base_mixture`."""
-    x = np.asarray(spots, dtype=float) / model["gain"][np.newaxis]
+    x = np.asarray(spots, dtype=float)
+    if model.get("xtalk") is not None:
+        x = x @ model["xtalk"].T
+    x = x / model["gain"][np.newaxis]
     post = _em_posterior(x, model, model["n_rescale"])
     calls = model["base_labels"][post.argmax(axis=-1)]
     p_error = 1 - post.max(axis=-1)
@@ -1565,11 +1626,40 @@ def decode_em(
     3-color NIS-seq (dark G) data, and about as many as :func:`decode_polar` on
     2-color data (slightly more with ``use_whitelist``).
 
-    **Inputs.** ``spots`` should be xtalk-corrected
-    (:func:`apply_channel_crosstalk_matrix`).  If it has a ``peak`` coordinate (as
-    from :func:`peaks_to_bases`), the model is fit on the higher-peak half of spots
+    **Inputs.** If ``spots`` has a ``peak`` coordinate (as from
+    :func:`peaks_to_bases`), the model is fit on the higher-peak half of spots
     (``fit_peak_quantile``), since low-peak spots are mostly not real reads; fitting
     on all spots can lower the mapping rate substantially.  All reads are called.
+
+    **Crosstalk.** Spots need not be xtalk-corrected first.  For orthogonal
+    encodings (4-color, or 3-color with a dark base), :func:`fit_base_mixture`
+    estimates the crosstalk matrix on its fit reads, as
+    :func:`channel_crosstalk_matrix` does, and corrects the spots when the estimated
+    crosstalk exceeds ``xtalk_tol``; spots already corrected with
+    :func:`apply_channel_crosstalk_matrix` are left as they are.  Uncorrected spots
+    then map about as well as corrected ones.  The matrix is stored in the model as
+    ``xtalk`` and applied to every chunk, so calls do not depend on chunking.
+
+    Crosstalk that remains (non-orthogonal encodings, or residual bleed after
+    correction) matters much less than for :func:`decode_se` or
+    :func:`decode_max`, because the model absorbs crosstalk itself.  Bleed-through
+    from a base's dye into another channel makes that channel's *off* state for the
+    base sit above zero, and each base has its own mean (and, with
+    ``covariance="full"``, its own covariance) per channel, so the bleed simply
+    becomes part of the base's fitted signature: a base is identified by its whole
+    pattern across channels, not by which channel is brightest.  Correction is an
+    invertible linear transform, so it adds little information for a model that
+    learns each base's pattern (it is not exactly neutral, because the model and
+    its per-read normalization act on each channel separately); decoders that
+    compare channels directly need it.
+
+    Absorbing crosstalk needs per-base off states, which matters when the built-in
+    correction is off (``xtalk_tol=None``) or does not apply.  The fit starts from a
+    *tied* model, in which each channel has a single off state shared by every base;
+    there the bleed cannot be represented (channel T's off state would have to fit
+    both A cycles, with bleed, and C and G cycles, without), so it only inflates the
+    off state's spread.  The second stage gives each base its own parameters, and
+    the bleed becomes part of the base's signature.
 
     **Whitelist mode.** With ``use_whitelist=True`` and ``barcodes``, the model is
     refit on the fit reads whose calls match the whitelist, holding those calls
@@ -1582,10 +1672,10 @@ def decode_em(
 
     Useful ``fit_kwargs``: ``fit_peak_quantile``, ``n_reads`` (reads sampled to fit,
     default 50 000), ``covariance`` (``"full"`` or ``"diag"``), ``t_dof``,
-    ``read_scale`` and ``seed``.  To call several datasets with one model, or to
-    inspect it, fit it once with :func:`fit_base_mixture` and pass it as ``model``;
-    ``encoding``, ``base_labels``, ``dark_bases``, ``use_whitelist`` and
-    ``fit_kwargs`` are then ignored.
+    ``read_scale``, ``xtalk_tol`` and ``seed``.  To call several datasets with one
+    model, or to inspect it, fit it once with :func:`fit_base_mixture` and pass it
+    as ``model``; ``encoding``, ``base_labels``, ``dark_bases``, ``use_whitelist``
+    and ``fit_kwargs`` are then ignored.
 
     :example:
 
@@ -1612,7 +1702,8 @@ def decode_em(
         reads = decode_em(spots, barcodes=barcodes, model=model)
         read_statistics(reads)
 
-    :param spots: Spots DataArray with dims ``(read, t, c)``, xtalk-corrected.
+    :param spots: Spots DataArray with dims ``(read, t, c)``, with or without xtalk
+        correction (see **Crosstalk** above).
     :param barcodes: Whitelist DataFrame with column ``'barcode'``.  Adds the
         ``barcode_match`` column, and is used for fitting only with
         ``use_whitelist``.
@@ -1946,18 +2037,8 @@ def decode_polar(
     w_cor_bases: Sequence[str] | None = None,
     r_frac: float | None = None,
     n_reads: int = 50_000,
-) -> pd.DataFrame:
+) -> pd.DataFrame | dd.DataFrame:
     """Call reads using polar-coordinate classification.
-
-    .. note::
-        For **orthogonal** encodings (each bright base fires exactly one channel),
-        :func:`decode_se` with ``dark_bases`` or ``encoding`` is the preferred
-        method, its SE formula accounts for per-channel dynamic range
-        (SNR proxy) and consistently outperforms the polar dot-product argmax.
-        Use ``decode_polar`` when the encoding is **non-orthogonal**, i.e. when at
-        least one bright base fires more than one channel (e.g. Illumina 2-color
-        where A appears in both the red and green channels).  In that case the
-        amplitude-independent angle :math:`\\theta` is a reliable discriminant.
 
     Separates signal into two independent properties:
 
@@ -2413,7 +2494,7 @@ def _save_annotated_spots(df_reads, maxed, bases, output_annotated_spots):
 def annotated_spots(reads_df, shape, bases_order, expand_width=3):
     """Generate an annotated image of spots based on decoded reads.
 
-    This function takes a DataFrame of decoded reads produced by the `scallops.reads.decode_max` function
+    This function takes a DataFrame of decoded reads produced by one of the ``decode_*`` functions
     and generates an annotated image of spots based on the decoded information.
 
     :param reads_df: DataFrame containing decoded reads with columns 'y', 'x', and 'barcode'.
