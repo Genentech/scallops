@@ -21,9 +21,15 @@ from sklearn.cluster import AgglomerativeClustering
 
 from scallops.io import _images2fov, _images2fov_array, _localize_path, pluralize
 from scallops.registration.crosscorrelation import _apply_window, _filter_percentiles
+from scallops.stitch._channel_align import channel_coords, warp_image
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import calc_best_shift
-from scallops.stitch.utils import _crop_image, _select_t_index, dtype_convert
+from scallops.stitch.utils import (
+    _crop_image,
+    _select_t_index,
+    _select_z_index,
+    dtype_convert,
+)
 from scallops.utils import _cpu_count
 from scallops.zarr_io import (
     _attrs_axes_scales,
@@ -54,6 +60,7 @@ def _fuse(
     channel_cross_correlation_upsample: int = 2,
     channel_filter_percentiles: tuple[float, float] | None = None,
     t_index: int | None = None,
+    channel_alignment: dict[int, dict] | None = None,
 ):
     """Use stitching coordinates to fuse tiles.
 
@@ -80,8 +87,16 @@ def _fuse(
         [q1,q2] for registration across channels.
     :param t_index: The t-index to select from images with a time dimension. Required
         when images have more than one timepoint (e.g. live imaging data).
+    :param channel_alignment: Optional per-channel alignment to the reference channel, keyed by input channel
+        index (``dict(m, ty, tx, ...)``; see :mod:`scallops.stitch._channel_align`). When given, every output
+        channel is resampled once (alignment composed with the radial correction) with a quintic B-spline instead of
+        the bilinear radial correction.
     """
     assert blend in ["none", "linear"]
+    if channel_alignment is not None and channel_reference is not None:
+        raise ValueError(
+            "channel_alignment and channel_reference cannot be used together."
+        )
     if crop_width is not None and crop_width[0] <= 0 and crop_width[1] <= 0:
         crop_width = None
 
@@ -122,6 +137,7 @@ def _fuse(
     if blend != "none":
         # weights are cropped when fusing image so use full tile size
         weights = _tile_blending_weights(img.shape[1:])
+    full_tile_shape = img.shape[1:]
     img = _crop_image(img, crop_width)
     target_dtype = img.dtype
 
@@ -231,13 +247,27 @@ def _fuse(
         # shuffle to minimize lock contention
         df = df.sample(frac=1)
 
+    coords = None
+    if channel_alignment is not None:
+        # one coordinate map per output channel, computed once and shared by all tiles
+        coords = channel_coords(
+            full_tile_shape, radial_correction_k, output_channels, channel_alignment
+        )
+
     if ffp is not None:
-        if radial_correction_k is not None:
+        if coords is not None:
+            ffp = img_as_float(ffp, force_copy=True)
+            for c in output_channels:
+                ffp[c] = warp_image(ffp[c], coords[c], cval=1)
+        elif radial_correction_k is not None:
             ffp = radial_correct(ffp, radial_correction_k, cval=1)
 
     if dfp is not None:
         dfp = dfp / np.iinfo(target_dtype).max
-        if radial_correction_k is not None:
+        if coords is not None:
+            for c in output_channels:
+                dfp[c] = warp_image(dfp[c], coords[c], cval=0)
+        elif radial_correction_k is not None:
             dfp = radial_correct(dfp, radial_correction_k, cval=0)
 
     y = df["y"].values
@@ -349,6 +379,9 @@ def _fuse(
                 channel_window=channel_window,
                 channel_filter_percentiles=channel_filter_percentiles,
                 t_index=t_index,
+                channel_coords=[coords[c] for c in channels]
+                if coords is not None
+                else None,
             )
 
             delayed_results.append(d)
@@ -456,6 +489,7 @@ def _fuse_image(
     channel_window: int = 1,
     channel_filter_percentiles: tuple[float, float] | None = None,
     t_index: int | None = None,
+    channel_coords: Sequence[np.ndarray | None] | None = None,
 ):
     local_image_paths = [_localize_path(path) for path in image_paths]
     image_paths = [
@@ -468,19 +502,24 @@ def _fuse_image(
     for path in local_image_paths:
         if path is not None:
             os.remove(path)
-    if "z" in img.dims:
-        img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
+    img = _select_z_index(img, z_index)
     img = img.values
 
     if output_channels is not None and channel_reference is None:
         img = img[output_channels]
 
-    # order: radial, illumination, channel registration, crop
-    if radial_correction_k is not None:
+    # order: radial (with channel alignment if given), illumination, channel registration, crop
+    if channel_coords is not None:
+        # one quintic B-spline resampling per channel; channel_coords follows the output channel order. The result
+        # stays float (a new array) until the final conversion to target_dtype
+        img = np.stack(
+            [warp_image(img[i], channel_coords[i]) for i in range(img.shape[0])]
+        )
+    elif radial_correction_k is not None:
         img = radial_correct(img, radial_correction_k)
         img = dtype_convert(img, target_dtype)
 
-    img = img_as_float(img, force_copy=True)
+    img = img_as_float(img, force_copy=channel_coords is None)
     if dfp is not None:
         img -= dfp
     if ffp is not None:
