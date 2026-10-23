@@ -682,6 +682,36 @@ def test_stitch_z_stack(tmp_path):
     focus_img = read_image(str(tmp_path / "focus.zarr")).squeeze().data
     assert np.all(focus_img < constant_img_val)
 
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-tile{tile}-z{z}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "z1.zarr"),
+        "--report-output",
+        str(tmp_path / "z1"),
+        "--radial-correction-k",
+        "none",
+        "--z-index",
+        "1",
+        "--no-save-labels",
+    ]
+
+    subprocess.check_call(cmd)
+
+    df_positions_z1 = pd.read_parquet(str(tmp_path / "z1" / "test-positions.parquet"))
+    for s in df_positions_z1["source"].values:  # should only have selected z
+        assert s[0].endswith("-z1.zarr")
+        assert len(s) == 1, s
+    assert all(df_positions_z1["separate_z"])
+    z1_img = read_image(str(tmp_path / "z1.zarr")).squeeze().data
+    np.testing.assert_array_equal(z1_img, focus_img)
+
 
 @pytest.mark.io
 def test_stitch_align_across_channels(tmp_path, experiment_c_A1_102_pheno):

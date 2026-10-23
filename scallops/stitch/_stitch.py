@@ -143,7 +143,7 @@ def _single_stitch(
 
     separate_z = (
         "z" in metadata_fields
-        and isinstance(tile_z_index, (Sequence, np.ndarray))
+        and isinstance(tile_z_index, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(tile_z_index, str)
     )
 
@@ -271,8 +271,8 @@ def _single_stitch(
         tile_z_index, str
     ):
         stitch_positions_df["z_index"] = tile_z_index
-        if separate_z:
-            stitch_positions_df["separate_z"] = separate_z
+    if separate_z:
+        stitch_positions_df["separate_z"] = separate_z
     del stitch_result
 
     stitch_position_coords = stitch_positions_df[["y", "x"]].values
