@@ -68,7 +68,11 @@ def _read_tile(
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
     img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     if img.ndim > 2:
-        img = img.max(dim="z") if not isinstance(z_index, (int, np.integer)) else img.isel(z=z_index)
+        img = (
+            img.max(dim="z")
+            if not isinstance(z_index, (int, np.integer))
+            else img.isel(z=z_index)
+        )
     img = img.values
 
     if radial_correction_k is not None:
@@ -836,7 +840,7 @@ def _init_tiles(
         logger.info("Determined best focus z-index for all tiles.")
     if (
         "z" in metadata_fields
-        and isinstance(z_selection, (Sequence, np.ndarray, int))
+        and isinstance(z_selection, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(z_selection, str)
     ):  # only keep needed files with computed z
         filepaths, fileattrs = _filter_filepaths(

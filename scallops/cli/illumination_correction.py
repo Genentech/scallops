@@ -169,11 +169,6 @@ def run_illumination_correction_agg(arguments: argparse.Namespace):
     z_index = arguments.z_index
     channel = arguments.channel
     t_index = arguments.t_index
-    if z_index not in ("max", "focus"):
-        try:
-            z_index = int(z_index)
-        except ValueError:
-            pass
     smooth = arguments.smooth
     force = arguments.force
     agg_method = arguments.agg_method

@@ -250,6 +250,10 @@ def _fuse(
         df["source_metadata"].values if "source_metadata" in df.columns else None
     )
     tile_z_indices = df["z_index"].values if "z_index" in df.columns else None
+    separate_z = "separate_z" in df.columns
+    if separate_z:
+        tile_z_indices = None
+        z_index = 0
 
     tile_priorities = df["priority"].values if blend == "none" else None
 
@@ -469,7 +473,11 @@ def _fuse_image(
         if path is not None:
             os.remove(path)
     if "z" in img.dims:
-        img = img.max(dim="z") if not isinstance(z_index, (int, np.integer)) else img.isel(z=z_index)
+        img = (
+            img.isel(z=z_index)
+            if isinstance(z_index, (int, np.integer))
+            else img.max(dim="z")
+        )
     img = img.values
 
     if output_channels is not None and channel_reference is None:
