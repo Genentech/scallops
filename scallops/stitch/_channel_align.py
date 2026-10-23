@@ -58,22 +58,22 @@ def parse_correction_channels(
         return "all"
     if isinstance(values, (str, int)):
         values = [values]
-    values = [str(v).strip() for v in values]
-    if len(values) == 0:
+    tokens = [str(v).strip() for v in values]
+    if len(tokens) == 0:
         return None
-    if any(v.lower() in ALL_TOKENS for v in values):
-        if len(values) > 1:
+    if any(v.lower() in ALL_TOKENS for v in tokens):
+        if len(tokens) > 1:
             raise ValueError(
                 "--alignment-correction-channels: use either channel indices or one of "
                 f"{', '.join(ALL_TOKENS)}, not both."
             )
         return "all"
     try:
-        indices = [int(v) for v in values]
+        indices = [int(v) for v in tokens]
     except ValueError:
         raise ValueError(
             "--alignment-correction-channels must be channel indices (0-based) or one of "
-            f"{', '.join(ALL_TOKENS)}; got {' '.join(values)}."
+            f"{', '.join(ALL_TOKENS)}; got {' '.join(tokens)}."
         ) from None
     if any(i < 0 for i in indices):
         raise ValueError(
@@ -409,19 +409,24 @@ def fusion_crop(
     :raises ValueError: If a counted band is wider than both ``crop`` and ``max_crop`` on an axis: the tile overlap is
         too small for the correction.
     """
-    allowed = [
-        None if max_crop[i] is None else max(crop[i], max_crop[i]) for i in range(2)
-    ]
+    allowed = [None if lim is None else max(cr, lim) for cr, lim in zip(crop, max_crop)]
     radial = edge_band_width(shape, radial_correction_k)
-    bands = {}
+    bands: dict[int, tuple[int, int]] = {}
     for c, a in channel_alignment.items():
-        b = edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"])
-        bands[c] = tuple(b[i] if b[i] > radial[i] else 0 for i in range(2))
+        full = edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"])
+        bands[c] = (
+            full[0] if full[0] > radial[0] else 0,
+            full[1] if full[1] > radial[1] else 0,
+        )
     too_wide = []
     for c, b in sorted(bands.items()):
-        over = [i for i in range(2) if allowed[i] is not None and b[i] > allowed[i]]
+        over = {
+            i: b[i] - limit
+            for i, limit in enumerate(allowed)
+            if limit is not None and b[i] > limit
+        }
         if over:
-            i = max(over, key=lambda i: b[i] - allowed[i])
+            i = max(over, key=over.__getitem__)
             too_wide.append(
                 f"Tile overlap is too small to correct channel {c} ({channel_alignment[c]['name']}) of {image_key}: "
                 f"its alignment leaves a {b[i]} px band of missing pixels at the tile edge"

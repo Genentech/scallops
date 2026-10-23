@@ -15,7 +15,7 @@ import zarr
 from sklearn.cluster import AgglomerativeClustering
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
-from scallops.io import _images2fov, is_parquet_file, read_image
+from scallops.io import _images2fov, _images2fov_array, is_parquet_file, read_image
 from scallops.stitch._align import stitch_align
 from scallops.stitch._channel_align import (
     check_channel_order,
@@ -165,7 +165,7 @@ def _single_stitch(
     channel_alignment = None
     if alignment_correction is not None and not no_save_image:
         # resolve before the (long) alignment so that option and parameter-file errors stop the run early
-        tile0 = _images2fov(
+        tile0 = _images2fov_array(
             filepaths[0],
             fileattrs[0] if fileattrs is not None else None,
             dask=True,  # only the shape is needed
@@ -227,6 +227,7 @@ def _single_stitch(
 
     estimation = None
     if channel_alignment is not None and to_estimate:
+        assert alignment_correction is not None
         estimated, estimation = _estimate_channel_alignment(
             to_estimate=to_estimate,
             channel_order=alignment_correction["channel_order"],
@@ -297,6 +298,7 @@ def _single_stitch(
     output_metadata["null_params"] = null_params
     output_metadata["radial_correction_k"] = fitted_radial_correction_k
     if channel_alignment is not None:
+        assert alignment_correction is not None
         output_metadata["channel_alignment"] = alignment_record(
             resolved=channel_alignment,
             metadata_names=metadata_names,
@@ -560,7 +562,8 @@ def _max_fusion_crop(stitch_result: dict) -> tuple[int | None, int | None]:
             other = 1 - axis
             if d[axis] >= d[other] and d[other] <= shape[other] / 2:
                 overlaps[axis].append(shape[axis] - d[axis])
-    return tuple(int(np.median(o) // 2) if o else None for o in overlaps)
+    y, x = (int(np.median(o) // 2) if o else None for o in overlaps)
+    return y, x
 
 
 def _estimate_channel_alignment(

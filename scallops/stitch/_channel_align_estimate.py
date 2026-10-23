@@ -480,7 +480,8 @@ def sampling_plan(
     steps = np.diff(np.unique(np.round(positions[:, 1], 3)))
     step = float(np.median(steps[steps > 0.25 * steps.max()])) if len(steps) else 1.0
     spacing = SPACING_FACTOR * math.sqrt(pool.sum() / n_tiles) * step
-    first, rest = {}, {}
+    first: dict[int, list[int]] = {}
+    rest: dict[int, list[int]] = {}
     drawn: list[int] = []
     order = {
         q: list(rng.permutation(np.flatnonzero(pool & (quadrant == q))))
@@ -539,8 +540,8 @@ def _replay(plan: dict, valid_of: Callable[[int], bool | None]):
     seq = {q: plan["first"][q] + plan["rest"][q] for q in range(N_QUADRANTS)}
     quota = list(plan["quota"])
     pos = [0] * N_QUADRANTS
-    valid = {q: [] for q in range(N_QUADRANTS)}
-    tried = {q: [] for q in range(N_QUADRANTS)}
+    valid: dict[int, list[int]] = {q: [] for q in range(N_QUADRANTS)}
+    tried: dict[int, list[int]] = {q: [] for q in range(N_QUADRANTS)}
     closed = [False] * N_QUADRANTS
     requests: list[int] = []
     cap = None if plan["all_tiles"] else QUADRANT_CAP
