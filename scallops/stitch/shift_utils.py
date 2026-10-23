@@ -11,6 +11,7 @@ import numpy as np
 from dask import delayed
 from dask.diagnostics import ProgressBar
 from numba import njit
+from numpy.typing import NDArray
 from scipy import ndimage as ndi
 from scipy.fft import fftfreq, fftn, ifftn
 from scipy.optimize import minimize
@@ -40,9 +41,9 @@ def _collect_stats(ref, mov):
 
 
 def _eval_pair(
-    ref: np.ndarray,
-    mov: np.ndarray,
-    shift: np.ndarray,
+    ref: NDArray,
+    mov: NDArray,
+    shift: NDArray,
 ):
     sy, sx = ref.shape
     dy = round(shift[0])
@@ -55,11 +56,11 @@ def _eval_pair(
 
 
 def evaluate_shifts(
-    pairs: np.ndarray,
-    shifts: np.ndarray,
-    tiles: Sequence[np.ndarray | da.Array],
+    pairs: NDArray,
+    shifts: NDArray,
+    tiles: Sequence[NDArray | da.Array],
     progress: bool = True,
-) -> tuple[float, np.ndarray]:
+) -> tuple[float, NDArray]:
     """Compute overall ZNCC and ZNCCs for specified pairs
 
     :param pairs: Pair indices in tiles
@@ -97,13 +98,13 @@ def _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels) -> float:
 
 
 @njit
-def _zncc(ref: np.ndarray, mov: np.ndarray) -> float:
+def _zncc(ref: NDArray, mov: NDArray) -> float:
     mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref, mov)
     return _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, float(ref.size))
 
 
 @njit
-def _ncc(ref: np.ndarray, mov: np.ndarray) -> float:
+def _ncc(ref: NDArray, mov: NDArray) -> float:
     mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref, mov)
     denom = (sum_x2**0.5) * (sum_y2**0.5)
     ncc_value = sum_xy / denom if denom > 1e-15 else 0.0
@@ -111,7 +112,7 @@ def _ncc(ref: np.ndarray, mov: np.ndarray) -> float:
 
 
 def ncc_after_shift(
-    ref: np.ndarray, mov: np.ndarray, shift, order=1, ncc_func=_zncc
+    ref: NDArray, mov: NDArray, shift, order=1, ncc_func=_zncc
 ) -> float:
     mov_shift = ndi.shift(mov, shift=shift, order=order)
 
@@ -362,11 +363,11 @@ def _get_overlap_frac(dy, dx, sy, sx):
 
 
 def calc_best_shift(
-    ref: np.ndarray,
-    mov: np.ndarray,
+    ref: NDArray,
+    mov: NDArray,
     orig_shift: tuple[float, float] = (0.0, 0.0),
     upsample_factor: int = 10,
-    ncc_func: Callable[[np.ndarray, np.ndarray], float] = _zncc,
+    ncc_func: Callable[[NDArray, NDArray], float] = _zncc,
     overlap_min: float = 0.01,
     center_img: bool = False,
 ):
@@ -606,7 +607,7 @@ def _swap(imgs, coords, mshift):
 
 def determine_layout(
     read_images: Sequence,
-    stage_positions: np.ndarray,
+    stage_positions: NDArray,
     image_spacing: tuple[float, float],
     max_shifts: Sequence[float] = (100.0,),  # max shift guard
     min_ncc: float = 0.55,  # adjust it to 0.55 to be safe
@@ -715,8 +716,8 @@ def _find_all_overlap(coords, tile_shape, frac_thre=0.0):
 
 
 def find_overlaps(
-    coords: np.ndarray, tile_shape: tuple[int, int], fraction_overlap: float = 0.0
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    coords: NDArray, tile_shape: tuple[int, int], fraction_overlap: float = 0.0
+) -> tuple[NDArray, NDArray, NDArray]:
     """Find overlaps between tiles
 
     :param coords: Tile coordinates.
@@ -733,8 +734,8 @@ def find_overlaps(
 
 def sample_null(
     n_tiles: int,
-    pairs: np.ndarray,
-    shifts: np.ndarray,
+    pairs: NDArray,
+    shifts: NDArray,
     n_samples: int = 1000,
     seed: int = 239753,
 ):
@@ -1026,7 +1027,10 @@ def _get_overlap_bounding_box(y0, x0, dy, dx, sy, sx):
 
 
 def _estimate_crop_width(
-    fracs, min_frac, tile_shape: tuple[int, int], crop_width: tuple[int, int]
+    fracs,
+    min_frac,
+    tile_shape: tuple[int, int],
+    crop_width: tuple[int, int] | None,
 ) -> tuple[int, int]:
     pct = max(
         np.median(fracs[fracs > min_frac]) / 2.0 - 0.015, 0.0

@@ -10,6 +10,8 @@ Authors:
 Note: This module requires the BWA tool for indexing and mapping.
 """
 
+from __future__ import annotations
+
 import argparse
 import glob
 import os
@@ -27,9 +29,10 @@ import seaborn as sns
 from dask.bag import from_sequence
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from numpy.typing import NDArray
 from sklearn.metrics import pairwise_distances_argmin_min
 
-from scallops.cli.util import _get_cli_logger
+from scallops.cli.util import SubParsers, _get_cli_logger
 from scallops.io import _get_fs_protocol
 
 logger = _get_cli_logger()
@@ -50,7 +53,7 @@ def bwa_index(fasta: str):
 
 def hamming_distance(
     query_df: pd.DataFrame, design_df: pd.DataFrame
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray]:
     """
     Compute Hamming distance between sequences in the query DataFrame and the design
     DataFrame.
@@ -157,8 +160,8 @@ def single_pool(
     )
     basename = os.path.splitext(os.path.basename(fastq))[0].split("_")[0]
     with AlignmentFile(bwa_output, "rb") as aligned:
-        seq_2_counts = defaultdict(lambda: 0)
-        unaligned_seq_2_counts = defaultdict(lambda: 0)
+        seq_2_counts: defaultdict[str, int] = defaultdict(lambda: 0)
+        unaligned_seq_2_counts: defaultdict[str, int] = defaultdict(lambda: 0)
         for read in aligned.fetch(until_eof=True):
             seq = read.seq
             if read.is_mapped:
@@ -173,12 +176,12 @@ def single_pool(
     if len(unaligned_seq_2_counts) > 0 and save_unaligned_fasta:
         with open(
             os.path.join(output_dir, f"{basename}-reference-unaligned.fa"), "wt"
-        ) as fasta:
+        ) as fasta_file:
             for counter, (seq, count) in enumerate(
                 sorted(unaligned_seq_2_counts.items(), key=itemgetter(1), reverse=True)
             ):
                 line = f">seq{counter};count={count}\n{seq}\n"
-                fasta.write(line)
+                fasta_file.write(line)
 
     # convert to dataframe
     sequences = []
@@ -230,8 +233,8 @@ def single_pool(
             ]
             with open(
                 os.path.join(output_dir, f"{basename}-dialout-unaligned.fa"), "wt"
-            ) as fasta:
-                fasta.write("\n".join(lines))
+            ) as fasta_file:
+                fasta_file.write("\n".join(lines))
     mapped_counts_df.to_csv(
         os.path.join(output_dir, f"{basename}.counts.csv"), index=False
     )
@@ -479,6 +482,8 @@ def combine_stats(
         path = os.path.join(output_dir, pool + ".stats.csv")
         _df = pd.read_csv(path)
         df = pd.concat((df, _df)) if df is not None else _df
+    if df is None:
+        raise ValueError("No pools provided")
     if index_rename is not None:
         df["index"] = df["index"].replace(index_rename)
     return df
@@ -529,6 +534,8 @@ def join_counts(
         _df = _df.set_index("sequence").drop(["mismatches", "closest_match"], axis=1)
         _df.columns = _df.columns + "_" + index_rename.get(pool, pool)
         df = df.join(_df, how="outer") if df is not None else _df
+    if df is None or mismatches_df is None:
+        raise ValueError("No pools provided")
 
     df = (
         df.reset_index()
@@ -653,7 +660,7 @@ def run_dialout_pipeline(arguments: argparse.Namespace) -> None:
         os.remove(local_path)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Sets up the argument parsers for the 'dialout' command and its subcommands.
 
     This internal function configures the command-line interface for the 'dialout' tool,

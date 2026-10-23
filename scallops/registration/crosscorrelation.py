@@ -16,6 +16,7 @@ from typing import Any, Union
 import numpy as np
 import xarray as xr
 from numpy.random import RandomState
+from numpy.typing import NDArray
 from skimage.registration import phase_cross_correlation
 from skimage.transform import SimilarityTransform, warp
 
@@ -23,8 +24,8 @@ from scallops.utils import applyIJ, match_size
 
 
 def _apply_window(
-    data: Union[xr.DataArray, np.ndarray], window: int = 2
-) -> Union[xr.DataArray, np.ndarray]:
+    data: Union[xr.DataArray, NDArray], window: int = 2
+) -> Union[xr.DataArray, NDArray]:
     """Find borders in window slices.
 
     :param data: Array with image data
@@ -43,7 +44,7 @@ def _align_between_t(
     upsample_factor: int = 2,
     window: int = 2,
     channel_index: int = 0,
-) -> Union[xr.DataArray, np.ndarray]:
+) -> Union[xr.DataArray, NDArray]:
     """Align data between timepoints.
 
     :param channel_index: Channel index to align
@@ -232,7 +233,7 @@ def _apply_transforms(data: xr.DataArray, transforms: list[dict[str, Any]]) -> N
 
 
 @applyIJ
-def _filter_percentiles(data: np.ndarray, q1: float, q2: float) -> np.ndarray:
+def _filter_percentiles(data: NDArray, q1: float, q2: float) -> NDArray:
     """Replaces data outside of percentile range [q1, q2] with uniform noise over the range [q1,
     q2].
 
@@ -243,7 +244,7 @@ def _filter_percentiles(data: np.ndarray, q1: float, q2: float) -> np.ndarray:
     return _fill_noise(data, mask, x1, x2)
 
 
-def _fill_noise(data: np.ndarray, mask: np.ndarray, x1: float, x2: float) -> np.ndarray:
+def _fill_noise(data: NDArray, mask: NDArray, x1: float, x2: float) -> NDArray:
     """Replace the masked indexes with random uniform values.
 
     :param data: Array with the image data
@@ -313,7 +314,7 @@ def align_image(
             filter_percentiles=(0, 90),
         )
     """
-    registration_attrs = dict()
+    registration_attrs: dict[str, Any] = dict()
     if align_within_time_channels is not None and len(align_within_time_channels) > 1:
         # if filter percentiles is not None, values outside of filter_percentiles are modified
         image = _align_within_t(

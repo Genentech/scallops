@@ -31,6 +31,7 @@ from dask.array.overlap import ensure_minimum_chunksize
 from dask.system import CPU_COUNT
 from decorator import decorator
 from kneed import KneeLocator
+from numpy.typing import NDArray
 from skimage import restoration
 from skimage.feature import hog
 from skimage.measure import label
@@ -47,7 +48,7 @@ BlockFunc = Callable[..., pd.DataFrame]
 
 
 def _broadcast_block(
-    block: np.ndarray,
+    block: NDArray,
     broadcast_axes: Sequence[int],
     starts: Sequence[int],
     stops: Sequence[int],
@@ -55,7 +56,7 @@ def _broadcast_block(
     left_pads: Sequence[int],
     right_pads: Sequence[int],
     boundary: Mapping[int, str | int],
-) -> np.ndarray:
+) -> NDArray:
     """Stretch a block's size-1 broadcast axes to the size of the overlapped block.
 
     :param block: Block with size 1 and no overlap along ``broadcast_axes``.
@@ -93,7 +94,7 @@ def _broadcast_block(
 
 def _block_wrapper(
     func: BlockFunc,
-    blocks: Sequence[np.ndarray],
+    blocks: Sequence[NDArray],
     broadcast_axes: Sequence[Sequence[int]],
     chunk_location,
     boundary: Mapping[int, str | int],
@@ -209,10 +210,10 @@ def map_overlap_ragged(
         )
     shape = np.broadcast_shapes(*(a.shape for a in args))
     ndim = len(shape)
-    depth = da.overlap.coerce_depth(ndim, depth)
-    if any(isinstance(d, tuple) for d in depth.values()):
+    depth_by_axis: dict[int, int] = da.overlap.coerce_depth(ndim, depth)
+    if any(isinstance(d, tuple) for d in depth_by_axis.values()):
         raise NotImplementedError("Asymmetric overlap depth is not supported")
-    boundary = da.overlap.coerce_boundary(ndim, boundary)
+    boundary_by_axis: dict[int, str | int] = da.overlap.coerce_boundary(ndim, boundary)
     # Add missing leading axes, and find the size-1 axes each array is broadcast along
     arrays = [a[(None,) * (ndim - a.ndim)] for a in args]
     broadcast_axes = [
@@ -221,7 +222,7 @@ def map_overlap_ragged(
 
     # Find common chunks so block b_id covers the same region in every array, by splitting
     # each axis at every chunk boundary of the arrays that are not broadcast along it
-    chunks = []
+    chunk_list = []
     for ax in range(ndim):
         boundaries = sorted(
             {
@@ -231,19 +232,20 @@ def map_overlap_ragged(
                 for offset in itertools.accumulate(a.chunks[ax])
             }
         )
-        chunks.append(tuple(np.diff([0, *boundaries]).tolist()) or (shape[ax],))
+        chunk_list.append(tuple(np.diff([0, *boundaries]).tolist()) or (shape[ax],))
     # Rechunk up front the same way da.overlap.overlap would (every chunk must be >= depth),
     # so the block locations below are computed from the chunks actually used
     chunks = tuple(
-        ensure_minimum_chunksize(depth[ax], c) for ax, c in enumerate(chunks)
+        ensure_minimum_chunksize(depth_by_axis[ax], c)
+        for ax, c in enumerate(chunk_list)
     )
 
     delayed_blocks = []
     for a, axes in zip(arrays, broadcast_axes):
         # Broadcast axes stay as one size-1 chunk with no overlap
         a = a.rechunk(tuple(-1 if ax in axes else c for ax, c in enumerate(chunks)))
-        a_depth = {ax: 0 if ax in axes else depth[ax] for ax in range(ndim)}
-        a_boundary = {ax: boundary[ax] for ax in range(ndim) if ax not in axes}
+        a_depth = {ax: 0 if ax in axes else depth_by_axis[ax] for ax in range(ndim)}
+        a_boundary = {ax: boundary_by_axis[ax] for ax in range(ndim) if ax not in axes}
         delayed_blocks.append(
             da.overlap.overlap(a, depth=a_depth, boundary=a_boundary).to_delayed()
         )
@@ -267,8 +269,8 @@ def map_overlap_ragged(
             ],
             broadcast_axes=broadcast_axes,
             chunk_location=chunk_slice,
-            depth=depth,
-            boundary=boundary,
+            depth=depth_by_axis,
+            boundary=boundary_by_axis,
             shape=shape,
             kwargs=kwargs,
         )
@@ -291,10 +293,12 @@ def _tqdm_shim(iterator, *args, **kwargs):
 
 def tqdm_func(progress: bool | str = True):
     progress_args = dict()
-    tqdm_ = _tqdm_shim
+    tqdm_: Any = _tqdm_shim
     if progress != False:  # noqa: E712
         try:
-            from tqdm import tqdm as tqdm_
+            from tqdm import tqdm
+
+            tqdm_ = tqdm
 
             if isinstance(progress, str):
                 progress_args["desc"] = progress
@@ -350,7 +354,7 @@ def is_dask_distributed():
     return "distributed" in dask.config.config
 
 
-def high_pass_filter(image: np.ndarray, sigma: float) -> np.ndarray:
+def high_pass_filter(image: NDArray, sigma: float) -> NDArray:
     """High pass filter typically used to remove background.
 
     :param image: Input image to filter.
@@ -363,7 +367,7 @@ def high_pass_filter(image: np.ndarray, sigma: float) -> np.ndarray:
     return highpass
 
 
-def gaussian_kernel(size: tuple[int, ...] = (3, 3), sigma: float = 0.5) -> np.ndarray:
+def gaussian_kernel(size: tuple[int, ...] = (3, 3), sigma: float = 0.5) -> NDArray:
     """Returns a gaussian kernel of specified size and standard deviation.
 
     The kernel is normalized to one.
@@ -383,8 +387,8 @@ def gaussian_kernel(size: tuple[int, ...] = (3, 3), sigma: float = 0.5) -> np.nd
 
 @decorator
 def applyIJ(
-    f: Callable, arr: Union[np.ndarray, DataArray], *args: Any, **kwargs: Any
-) -> np.ndarray:
+    f: Callable, arr: Union[NDArray, DataArray], *args: Any, **kwargs: Any
+) -> NDArray:
     """Apply a function that expects 2D input to the trailing two dimensions of an array. The
     function must output an array whose shape depends only on the input shape.
 
@@ -404,9 +408,7 @@ def applyIJ(
     return np.array(arr_).reshape(output_shape)
 
 
-def match_size(
-    image: np.ndarray, target: np.ndarray, order: Optional[str] = None
-) -> np.ndarray:
+def match_size(image: NDArray, target: NDArray, order: Optional[str] = None) -> NDArray:
     """Resize image to target without changing data range or type.
 
     :param image: Array with image data.
@@ -435,7 +437,9 @@ def mlcs(strings: Sequence[str]):
     strings = list(set(strings))  # deduplicate
     alphabet = set.intersection(*(set(s) for s in strings))
 
-    indexes = {letter: [[] for _ in strings] for letter in alphabet}
+    indexes: dict[str, list[list[int]]] = {
+        letter: [[] for _ in strings] for letter in alphabet
+    }
     for i, s in enumerate(strings):
         for j, letter in enumerate(s):
             if letter in alphabet:
@@ -458,7 +462,7 @@ def mlcs(strings: Sequence[str]):
             else:
                 yield distance, letter, candidate
 
-    result = []
+    result: list[str] = []
     while True:
         try:
             # Choose the closest candidate position, if any.
@@ -472,7 +476,7 @@ def mlcs(strings: Sequence[str]):
         result.append(letter)
 
 
-def id_well_edge(data_: np.ndarray) -> np.ndarray:
+def id_well_edge(data_: NDArray) -> NDArray:
     """ID the bright edge of a well and return the mask of it.
 
     :param data_: Image array with potentially an edge of a well to be identified.
@@ -503,7 +507,7 @@ def id_well_edge(data_: np.ndarray) -> np.ndarray:
     return new_mask
 
 
-def rm_edge(dt, rm_bkgr=True) -> tuple[np.ndarray, np.ndarray]:
+def rm_edge(dt, rm_bkgr=True) -> tuple[NDArray, NDArray]:
     """Remove the well edge from an image.
 
     :param dt: Image array with potentially an edge of a well to be removed.
@@ -518,7 +522,7 @@ def rm_edge(dt, rm_bkgr=True) -> tuple[np.ndarray, np.ndarray]:
     return d, new_mask
 
 
-def id_edge_hog(stack: np.ndarray) -> np.ndarray:
+def id_edge_hog(stack: NDArray) -> NDArray:
     """Identify the edge of a well and return its mask using Histogram of Oriented Gradients (HOG).
     This is faster, but coarser than the :func:`id_well_edge`. It is is also *less* prone to
     overcorrecting.
@@ -553,7 +557,7 @@ def id_edge_hog(stack: np.ndarray) -> np.ndarray:
     return mask
 
 
-def curate_segmentation(seg_data: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def curate_segmentation(seg_data: NDArray, mask: NDArray) -> NDArray:
     """Given segmentation data with potential edge of a well, curate the segmentation given the well
     mask.
 
@@ -756,16 +760,17 @@ def forceTCZYX(array: DataArray, requires_dims: str = "tczyx") -> DataArray:
 
 
 def _block_full(
-    a: np.ndarray,
-    b: np.ndarray | None = None,
-    f: Callable[[np.ndarray, np.ndarray | None], float] = None,
-    ndim: int = None,
-) -> np.ndarray:
+    a: NDArray,
+    b: NDArray | None = None,
+    *,
+    f: Callable[[NDArray, NDArray | None], float],
+    ndim: int,
+) -> NDArray:
     return np.full((1,) * ndim, f(a, b))
 
 
 def dask_chunk_stats(
-    f: Callable[[np.ndarray, np.ndarray | None], float],
+    f: Callable[[NDArray, NDArray | None], float],
     a: da.Array,
     b: da.Array | None = None,
 ) -> da.Array:
@@ -788,7 +793,7 @@ def dask_chunk_stats(
 
 
 def _write_img_size(file_list: list[str]):
-    from scallops.io import _images2fov, _localize_path
+    from scallops.io import _images2fov_array, _localize_path
 
     local_file_list = []
     cleanup_file_list = []
@@ -799,7 +804,8 @@ def _write_img_size(file_list: list[str]):
             local_file_list.append(local_path)
         else:
             local_file_list.append(path)
-    sizes = _images2fov(local_file_list, dask=True).sizes
+    img = _images2fov_array(local_file_list, attrs=None, dask=True)
+    sizes = img.sizes
     for path in cleanup_file_list:
         os.remove(path)
     with open("img_size.txt", "wt") as f:
@@ -831,7 +837,7 @@ def _list_images_wdl(
     subset: list[str],
     batch_size_str: str,
     save_group_size: bool = False,
-    expected_cycles_str: int | None = None,
+    expected_cycles_str: str = "",
 ):
     """Used by WDL workflow to output info about images"""
     from scallops.io import _set_up_experiment
@@ -843,12 +849,16 @@ def _list_images_wdl(
     if batch_size_str != "":
         batch_size = int(batch_size_str)
 
-    if len(subset) == 0 or (len(subset) == 1 and subset[0] == ""):
-        subset = None
+    subset_filter = (
+        None if len(subset) == 0 or (len(subset) == 1 and subset[0] == "") else subset
+    )
     if image_pattern != "":
         groupby = [g for g in groupby if "{" + g + "}" in image_pattern]
     exp_gen = _set_up_experiment(
-        image_path=urls, files_pattern=image_pattern, group_by=groupby, subset=subset
+        image_path=urls,
+        files_pattern=image_pattern,
+        group_by=groupby,
+        subset=subset_filter,
     )
     # "groups.txt" is passed to --subset in cli
     # "groupby.txt" filtered groupby
@@ -861,7 +871,7 @@ def _list_images_wdl(
 
     first = True
     subset_ids = []
-    for g, file_list, metadata in exp_gen:
+    for _, file_list, metadata in exp_gen:
         subset_ids.append(metadata["id"])
 
         if first:

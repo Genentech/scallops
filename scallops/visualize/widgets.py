@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
+from numpy.typing import NDArray
 
 from scallops.io import get_image_spacing
 from scallops.stitch.utils import min_zncc
@@ -44,8 +45,8 @@ def browse_labels(
 def browse_image_regions(
     image1: xr.DataArray,
     image2: xr.DataArray | None,
-    y_indices: np.ndarray[int],
-    x_indices: np.ndarray[int],
+    y_indices: NDArray[np.integer],
+    x_indices: NDArray[np.integer],
     labels: xr.DataArray | None = None,
     figsize: tuple[int, int] = (10, 10),
 ) -> widgets.Widget:
@@ -73,8 +74,8 @@ def _browse_regions_or_labels(
     image1: xr.DataArray,
     image2: xr.DataArray | None = None,
     labels: xr.DataArray | None = None,
-    y_indices: np.ndarray[int] | None = None,
-    x_indices: np.ndarray[int] | None = None,
+    y_indices: NDArray[int] | None = None,
+    x_indices: NDArray[int] | None = None,
     labels_df: pd.DataFrame | None = None,
     padding: float | None = None,
     figsize: tuple[int, int] = (10, 10),
@@ -82,12 +83,18 @@ def _browse_regions_or_labels(
     if image2 is not None:
         assert image1.shape == image2.shape
     image_spacing = get_image_spacing(image1.attrs)
-    if padding is not None:
-        padding = np.array([padding, padding]) / image_spacing
-        padding = padding.astype(int)
+
+    padding_px = (
+        np.zeros(2, dtype=int)
+        if padding is None
+        else (np.array([padding, padding]) / image_spacing).astype(int)
+    )
+
     chunk_out = widgets.Output()
     if y_indices is not None:
         assert x_indices is not None
+        if image_spacing is None:
+            raise ValueError("Unable to determine image spacing from metadata")
         img_slice_size = image1.data.chunksize[-2:]
 
         selector = widgets.Dropdown(
@@ -127,10 +134,10 @@ def _browse_regions_or_labels(
 
             else:
                 sel = labels_df.iloc[[index]]
-                y1 = sel[labels_df.columns[0]].values[0] - padding[0]
-                x1 = sel[labels_df.columns[1]].values[0] - padding[1]
-                y2 = sel[labels_df.columns[2]].values[0] + padding[0]
-                x2 = sel[labels_df.columns[3]].values[0] + padding[1]
+                y1 = sel[labels_df.columns[0]].values[0] - padding_px[0]
+                x1 = sel[labels_df.columns[1]].values[0] - padding_px[1]
+                y2 = sel[labels_df.columns[2]].values[0] + padding_px[0]
+                x2 = sel[labels_df.columns[3]].values[0] + padding_px[1]
                 y = slice(
                     y1,
                     y2,

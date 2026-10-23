@@ -556,7 +556,8 @@ def test_features_cli(tmp_path, experiment_c_A1_102_cells):
     labels.values[labels.values != 17] = 0
     rng = np.random.default_rng(1)
     image = xr.DataArray(
-        rng.integers(low=10, high=50, size=(4,) + labels.shape), dims=["c", "y", "x"]
+        rng.integers(low=10, high=50, size=(4,) + labels.shape, dtype=np.int16),
+        dims=["c", "y", "x"],
     )
     zarr_path = str(tmp_path / "test.zarr")
     features_output_path = str(tmp_path / "features-out")

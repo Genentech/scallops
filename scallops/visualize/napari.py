@@ -13,8 +13,8 @@ Make sure to have Napari installed before using these functions.
 """
 
 import os
-import re
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 import dask.array as da
 import dask.dataframe as dd
@@ -22,17 +22,21 @@ import fsspec
 import numpy as np
 import pandas as pd
 import zarr
+from numpy.typing import NDArray
 from skimage.util import img_as_float
 from xarray import DataArray
 
 from scallops.experiment.elements import Experiment
 from scallops.io import read_image
+
+if TYPE_CHECKING:
+    import napari
 from scallops.stitch._radial import radial_correct
 from scallops.utils import forceTCZYX
 
 
 def add_bases(
-    viewer: "napari.Viewer",  # noqa: F821
+    viewer: "napari.Viewer",
     df_reads: pd.DataFrame | dd.DataFrame,
     y_slice: slice | None = None,
     x_slice: slice | None = None,
@@ -43,7 +47,7 @@ def add_bases(
         "C": "green",
     },
     **params,
-) -> "napari.layers.Points":  # noqa: F821
+) -> "napari.layers.Points":
     """Add bases to napari viewer.
 
     :param viewer: The napari viewer
@@ -94,8 +98,8 @@ def add_bases(
 
 def pooled_iss(
     url: str,
-    viewer: "napari.Viewer" = None,  # noqa: F821
-) -> "napari.Viewer":  # noqa: F821
+    viewer: "napari.Viewer | None" = None,
+) -> "napari.Viewer":
     """View pooled in-situ sequencing results in Napari.
 
     Napari is a powerful multi-dimensional image viewer that allows interactive exploration
@@ -251,11 +255,11 @@ def pooled_iss(
 
 def experiment_napari(
     experiment: Experiment,
-    labels: Experiment | dict[str, np.ndarray | DataArray] | None = None,
+    labels: Experiment | dict[str, NDArray | DataArray] | None = None,
     title_attribute: str = "common_src",
-    viewer: "napari.Viewer" = None,  # noqa: F821
+    viewer: "napari.Viewer | None" = None,
     **kwargs,
-) -> "napari.Viewer":  # noqa: F821
+) -> "napari.Viewer":
     """View an exp in Napari.
 
     Napari is a versatile multi-dimensional image viewer, and this function facilitates
@@ -302,7 +306,7 @@ def experiment_napari(
         label = None
         if labels is not None:
             if isinstance(labels, Experiment):
-                label = labels.labels[name]
+                label = labels.labels.get(name)
             else:
                 label = labels.get(name)
         imnapari(
@@ -326,13 +330,13 @@ def experiment_napari(
 
 def imnapari(
     image: DataArray | dict[str, DataArray] | None,
-    labels: None | np.ndarray | DataArray | dict[str, np.ndarray | DataArray] = None,
+    labels: None | NDArray | DataArray | dict[str, NDArray | DataArray] = None,
     points: pd.DataFrame | None = None,
     title_attribute: str = "common_src",
-    viewer: "napari.Viewer" = None,  # noqa: F821
+    viewer: "napari.Viewer | None" = None,
     point_size: int = 5,
     **kwargs,
-) -> "napari.Viewer":  # noqa: F821
+) -> "napari.Viewer":
     """View image in Napari.
 
     Napari is a versatile multi-dimensional image viewer, and this function facilitates
@@ -391,26 +395,27 @@ def imnapari(
     if viewer is None:
         viewer = napari.Viewer()
     if image is not None:
-        for name, image in images.items():
+        assert images is not None
+        for name, img in images.items():
             axis_labels = []
             channel_axis = 1
-            for i, x in enumerate(image.dims):
+            for i, x in enumerate(img.dims):
                 if x == "c":
                     channel_axis = i
                 else:
                     axis_labels.append(x)
 
-            channel_labels = [f"{name}::Channel {x}" for x in image.coords["c"].values]
+            channel_labels = [f"{name}::Channel {x}" for x in img.coords["c"].values]
 
             viewer.add_image(
-                image,
+                img,
                 channel_axis=channel_axis,
                 name=channel_labels,
-                metadata=image.attrs,
+                metadata=img.attrs,
                 **kwargs,
             )
             viewer.dims.axis_labels = axis_labels
-            viewer.title = image.attrs.get(title_attribute, "")
+            viewer.title = img.attrs.get(title_attribute, "")
 
     if labels is not None:
         if isinstance(labels, (np.ndarray, DataArray)):
@@ -436,17 +441,14 @@ def imnapari(
             size=point_size,
         )
 
-        for feat, values in feats.items():
-            mini, maxi = min(values), max(values)
-            dtype = re.sub("[0-9]", "", points[feat].dtype.name)
-            dtype = str if dtype == "object" else exec(dtype)
-
+        def _make_slider(feat: str, mini: float, maxi: float):
+            # factory binds feat per widget; a loop closure would see only the last
             @magicgui(
                 call_button=f"{feat} filter",
                 slider={"widget_type": "FloatSlider", "min": mini, "max": maxi},
                 auto_call=True,
             )
-            def slider(slider: dtype) -> None:
+            def slider(slider) -> None:
                 filtered_indices = [
                     i for i, val in enumerate(feats[feat]) if val > slider
                 ]
@@ -454,7 +456,10 @@ def imnapari(
                     ["y", "x"]
                 ].values
 
-            viewer.window.add_dock_widget(slider)
+            return slider
+
+        for feat, values in feats.items():
+            viewer.window.add_dock_widget(_make_slider(feat, min(values), max(values)))
 
     return viewer
 

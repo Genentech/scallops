@@ -12,11 +12,12 @@ import numpy as np
 import pandas as pd
 import skimage.measure
 import xarray as xr
+from numpy.typing import NDArray
 from skimage.measure import label, regionprops
 from sklearn.metrics.pairwise import ArgKmin
 
 
-def image_to_codes(array: xr.DataArray) -> np.ndarray:
+def image_to_codes(array: xr.DataArray) -> NDArray:
     """Reshape a 5-dimensional array of shape (t, c, z, y, x) to a 2-dimensional array of shape
     (z+y+x, t+c).
 
@@ -50,11 +51,11 @@ def image_to_codes(array: xr.DataArray) -> np.ndarray:
 
 
 def _regionprops(
-    argmin: np.ndarray,
-    distances: np.ndarray,
-    passes_filters: np.ndarray,
+    argmin: NDArray,
+    distances: NDArray,
+    passes_filters: NDArray,
     sizes: dict[Hashable, int],
-) -> tuple[np.ndarray, np.ndarray, list[object]]:
+) -> tuple[NDArray, NDArray, list[object]]:
     """Compute labeled regions and their properties for the given input arrays.
 
     This function labels the regions in the input `argmin` array, filtered by
@@ -131,7 +132,7 @@ def decode_metric(
         "sqeuclidean",
     ] = "euclidean",
     norm_order: int = 2,
-    scale_factors: np.ndarray = None,
+    scale_factors: NDArray = None,
     min_intensity: float = 0,
     max_distance: float = np.inf,
 ) -> pd.DataFrame:
@@ -171,8 +172,8 @@ def decode_metric(
 
 
 def _regionprops_to_table(
-    argmin_: np.ndarray,
-    distances_: np.ndarray,
+    argmin_: NDArray,
+    distances_: NDArray,
     codebook: xr.DataArray,
     props: list[skimage.measure._regionprops.RegionProperties],
     has_z: bool = False,
@@ -264,8 +265,8 @@ def _regionprops_to_table(
 
 
 def _pairwise_distances_argmin_min(
-    X: np.ndarray, Y: np.ndarray, metric: str = "euclidean"
-) -> tuple[np.ndarray, np.ndarray]:
+    X: NDArray, Y: NDArray, metric: str = "euclidean"
+) -> tuple[NDArray, NDArray]:
     """Compute the pairwise distances between two arrays, handling NaN values.
 
     This function extends the functionality of `pairwise_distances_argmin_min` from
@@ -316,14 +317,14 @@ def _pairwise_distances_argmin_min(
 
 
 def _decode_metric(
-    array: np.ndarray,
+    array: NDArray,
     codebook: xr.DataArray,
     metric: str = "euclidean",
     norm_order: int = 2,
-    scale_factors: np.ndarray = None,
+    scale_factors: NDArray = None,
     min_intensity: float = 0,
     max_distance: float = np.inf,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray, NDArray, NDArray]:
     """Call features using the supplied codebook.
 
     :param array: 2-d array. First dimension is read, the second time and channel
@@ -357,9 +358,9 @@ def _decode_metric(
 
 
 def unit_norm(
-    array: np.ndarray | xr.DataArray,
+    array: NDArray | xr.DataArray,
     norm_order: int = 2,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[NDArray, NDArray]:
     """Unit normalize each feature.
 
     :param array: 2-dimensional array. First dimension is f (feature), the second t+c.
@@ -388,7 +389,7 @@ def unit_norm(
 def estimate_scale_factors(
     array: xr.DataArray,
     codebook: xr.DataArray,
-    initial_scale_factors: np.ndarray = None,
+    initial_scale_factors: NDArray = None,
     max_iter: int = 10,
     metric: Literal[
         "braycurtis",
@@ -411,7 +412,7 @@ def estimate_scale_factors(
     norm_order: int = 2,
     min_intensity: float = 0,
     max_distance: float = np.inf,
-) -> np.ndarray:
+) -> NDArray:
     """Calculate the scale factors that would result in the mean on bit intensity for each bit to be
     equal.
 
@@ -488,12 +489,12 @@ def estimate_scale_factors(
 
 
 def _update_scale_factors(
-    array: np.ndarray | xr.DataArray,
-    passes_filters: np.ndarray,
-    values_norms: np.ndarray,
-    codebook_pixel_array: np.ndarray | xr.DataArray,
-    argmin: np.ndarray,
-) -> np.ndarray:
+    array: NDArray | xr.DataArray,
+    passes_filters: NDArray,
+    values_norms: NDArray,
+    codebook_pixel_array: NDArray | xr.DataArray,
+    argmin: NDArray,
+) -> NDArray:
     """Update scale factors based on normalized values and bit indicators.
 
     This function calculates new scale factors by normalizing the input array's

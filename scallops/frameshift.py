@@ -13,6 +13,7 @@ import logging
 import numpy as np
 import pandas as pd
 import xarray as xr
+from numpy.typing import NDArray
 from skimage.measure import regionprops_table
 from sklearn.feature_selection import mutual_info_regression
 from sklearn.mixture import GaussianMixture
@@ -33,7 +34,7 @@ logger = logging.getLogger("scallops")
 
 
 def classify_epitope(
-    image: np.ndarray, label: np.ndarray, th_prob: float = 0.9
+    image: NDArray, label: NDArray, th_prob: float = 0.9
 ) -> pd.DataFrame:
     """Classifies an epitope based on input features.
 
@@ -74,9 +75,7 @@ def classify_epitope(
     return df
 
 
-def peaks_to_bases(
-    spots: np.ndarray, maxed: np.ndarray, labels: np.ndarray
-) -> np.ndarray:
+def peaks_to_bases(spots: NDArray, maxed: NDArray, labels: NDArray) -> NDArray:
     """Converts peak data to base sequence positions.
 
     :param: spots: np.ndarray
@@ -117,7 +116,7 @@ def peaks_to_bases(
 
 def detect_barcode(
     image: xr.DataArray,
-    label: np.ndarray,
+    label: NDArray,
     channels: list[int] = [1, 2, 3, 4],
     distance: int = 50,
     n_smallest_clusters: int = 3,

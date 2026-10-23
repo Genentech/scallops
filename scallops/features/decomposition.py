@@ -1,9 +1,9 @@
 import logging
 
 import dask.array as da
-import numpy as np
 from anndata import AnnData
 from array_api_compat import get_namespace
+from numpy.typing import NDArray
 from sklearn.utils import gen_batches
 
 from scallops.utils import tqdm_func
@@ -56,7 +56,7 @@ class PCA:
     def explained_variance_(self):
         return self.d.explained_variance_
 
-    def fit(self, X: np.ndarray | da.Array, y: None = None):
+    def fit(self, X: NDArray | da.Array, y: None = None):
         """Fit the model.
 
         :param X: Training data.
@@ -128,7 +128,7 @@ class PCA:
         self.d = d
         return self
 
-    def add_uns(self, data: AnnData, features: np.ndarray | None = None):
+    def add_uns(self, data: AnnData, features: NDArray | None = None):
         """Add metadata for storing PCA parameters in uns slot
 
         :param data: Data to add metadata to.
@@ -145,11 +145,11 @@ class PCA:
 
     def transform(
         self,
-        X: np.ndarray | da.Array,
+        X: NDArray | da.Array,
         y: None = None,
         *,
         components_chunksize: tuple[int, int] | None = None,
-    ) -> np.ndarray | da.Array:
+    ) -> NDArray | da.Array:
         """Apply dimensionality reduction.
 
         :param X: Data to project.

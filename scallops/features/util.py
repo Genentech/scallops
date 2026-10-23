@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Sequence
 from tokenize import NAME
+from typing import Any
 
 import anndata
 import dask.array as da
@@ -26,7 +27,9 @@ def _trim_by(by: str | Sequence[str]) -> str | Sequence[str]:
     return by
 
 
-def _xarray_by_values(data: anndata.AnnData, by: str | Sequence[str]) -> xr.DataArray:
+def _xarray_by_values(
+    data: anndata.AnnData, by: str | Sequence[str]
+) -> pd.Series | np.ndarray:
     by_multi = not isinstance(by, str) and isinstance(by, Sequence)
     if by_multi:
         by = list(by)
@@ -88,7 +91,7 @@ def pandas_to_anndata(
             obs[c] = obs[c].astype(str)  # to save with anndata
     return anndata.AnnData(
         obs=obs,
-        var=pd.DataFrame(index=features),
+        var=pd.DataFrame(index=list(features)),
         X=data,
     )
 
@@ -165,7 +168,7 @@ def _slice_anndata(
 
 def _update_coords(
     df: pd.DataFrame,
-    df_coords: bool | str | Sequence[str],
+    df_coords: bool | str | Sequence[str] | None,
     coord_name: str,
     coords_keys: set,
     xarray_coords: dict,
@@ -173,7 +176,7 @@ def _update_coords(
     if df_coords:
         xarray_coords[coord_name] = df.index.to_numpy(copy=False)
         if isinstance(df_coords, str):
-            columns = [df_coords]
+            columns: Sequence[str] | pd.Index = [df_coords]
         elif isinstance(df_coords, Sequence):
             columns = df_coords
         else:
@@ -190,10 +193,10 @@ def _update_coords(
 
 def _anndata_to_xr(
     data: anndata.AnnData,
-    obs_coords: bool | str | Sequence[str] = True,
-    var_coords: bool | str | Sequence[str] = False,
+    obs_coords: bool | str | Sequence[str] | None = True,
+    var_coords: bool | str | Sequence[str] | None = False,
 ) -> xr.DataArray:
-    coords = dict()
+    coords: dict[str, Any] = dict()
     coords_keys = {"obs", "var"}
     _update_coords(
         df=data.obs,
@@ -235,7 +238,7 @@ def _get_names_from_pd_query(source) -> set[str]:
     return result
 
 
-def infer_feature_columns(df: dd.DataFrame | dd.DataFrame) -> Sequence[str]:
+def infer_feature_columns(df: pd.DataFrame | dd.DataFrame) -> Sequence[str]:
     """Find Cell Profiler named feature columns from a data frame.
 
     :param df: Data frame

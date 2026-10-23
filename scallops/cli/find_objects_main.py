@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import argparse
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.util import (
+    SubParsers,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -16,7 +19,7 @@ def _run_pipeline_find_objects(arguments: argparse.Namespace):
     run_pipeline_find_objects(arguments)
 
 
-def _create_parser(subparsers: argparse.ArgumentParser, default_help: bool) -> None:
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "find-objects",
         help="Find objects in a labeled array.",

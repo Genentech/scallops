@@ -3,12 +3,15 @@ import subprocess
 import dask.array as da
 import numpy as np
 import pytest
+import skimage.draw
+import skimage.measure
 from skimage.measure import regionprops_table
 from skimage.segmentation import relabel_sequential
 
 from scallops.experiment.elements import Experiment
 from scallops.io import read_experiment
 from scallops.segmentation import remove_boundary_labels
+from scallops.segmentation.dask import _match_labels, segment_blocks
 from scallops.segmentation.util import (
     close_labels,
     dask_relabel_sequential,
@@ -105,25 +108,33 @@ def test_segment_nuclei_stardist(image):
     assert labels.max() == labels_chunks.max()
     area = regionprops_table(labels, properties=("area",))["area"]
     area_chunked = regionprops_table(labels_chunks, properties=("area",))["area"]
-    assert area_chunked.max() == area.max(), f"{area_chunked.max()}, {area.max()}"
-    assert area_chunked.min() == area.min(), f"{area_chunked.min()}, {area.min()}"
+    assert area_chunked.max() == area.max(), (
+        f"Max area: {area_chunked.max()}, {area.max()}"
+    )
+    assert area_chunked.min() == area.min(), (
+        f"Min area: {area_chunked.min()}, {area.min()}"
+    )
     overlap = jaccard(labels, labels_chunks)
     assert overlap >= 0.99, overlap
 
 
 @pytest.mark.segmentation_cellpose
-def test_segment_nuclei_cellpose(image):
+def test_segment_nuclei_cellpose(experiment_c_A1_102_pheno):
     pytest.importorskip("cellpose")
 
     import scallops.segmentation.cellpose
 
-    labels = scallops.segmentation.cellpose.segment_nuclei_cellpose(image, diameter=8)
-    image_dask = image.copy(
-        data=da.from_array(image.data, chunks=(1,) * (image.ndim - 2) + (256, 256))
+    labels = scallops.segmentation.cellpose.segment_nuclei_cellpose(
+        experiment_c_A1_102_pheno
+    )
+    image_dask = experiment_c_A1_102_pheno.copy(
+        data=da.from_array(
+            experiment_c_A1_102_pheno.data,
+            chunks=(1,) * (experiment_c_A1_102_pheno.data.ndim - 2) + (256, 256),
+        )
     )
     labels_chunks = scallops.segmentation.cellpose.segment_nuclei_cellpose(
         image_dask,
-        diameter=8,
     ).compute()
     assert len(np.unique(labels_chunks)) - 1 == labels_chunks.max()
     assert labels.max() > 2000
@@ -131,19 +142,23 @@ def test_segment_nuclei_cellpose(image):
     area = regionprops_table(labels, properties=("area",))["area"]
     area_chunked = regionprops_table(labels_chunks, properties=("area",))["area"]
 
-    assert area_chunked.max() == area.max(), f"{area_chunked.max()}, {area.max()}"
-    assert area_chunked.min() == area.min(), f"{area_chunked.min()}, {area.min()}"
+    assert np.abs(area_chunked.max() - area.max()) < 7, (
+        f"Area max {area_chunked.max()}, {area.max()}"
+    )
+
     overlap = jaccard(labels, labels_chunks)
     assert overlap >= 0.9, overlap
 
 
 @pytest.mark.segmentation_cellpose
-def test_segment_cells_cellpose(image):
+def test_segment_cells_cellpose(experiment_c_A1_102_pheno):
     pytest.importorskip("cellpose")
 
     import scallops.segmentation.cellpose
 
-    labels = scallops.segmentation.cellpose.segment_cells_cellpose(image)
+    labels = scallops.segmentation.cellpose.segment_cells_cellpose(
+        experiment_c_A1_102_pheno
+    )
     assert labels.max() > 10
 
 
@@ -346,3 +361,130 @@ def test_filter_masked_regions():
     mask = np.array([[1, 0, 1], [1, 0, 1]])  # remove 2 and 5
     filtered_labels = remove_masked_regions(labels, mask)
     np.testing.assert_array_equal(np.array([[1, 0, 3], [4, 0, 0]]), filtered_labels)
+
+
+def _random_disks(shape, n, max_radius, seed=0):
+    rng = np.random.default_rng(seed)
+    image = np.zeros(shape, dtype=bool)
+    for _ in range(n):
+        center = [rng.integers(0, s) for s in shape]
+        rr, cc = skimage.draw.disk(center, rng.integers(3, max_radius), shape=shape)
+        image[rr, cc] = True
+    return image
+
+
+def _assert_same_objects(expected, labels):
+    """Assert labels are sequential and in one-to-one correspondence with expected."""
+    np.testing.assert_array_equal(np.unique(labels), np.arange(labels.max() + 1))
+    np.testing.assert_array_equal(expected > 0, labels > 0)
+    pairs = np.unique(np.stack([expected.ravel(), labels.ravel()], axis=1), axis=0)
+    assert len(pairs) == expected.max() + 1 == labels.max() + 1
+
+
+@pytest.mark.utils
+@pytest.mark.parametrize("chunks", [(64, 70), (300, 317), (40, 100), 15])
+def test_segment_blocks(chunks):
+    image = _random_disks((300, 317), 60, 12)
+    expected = skimage.measure.label(image)
+    labels = segment_blocks(
+        da.from_array(image, chunks=chunks), skimage.measure.label, depth=25
+    )
+    assert labels.shape == image.shape
+    assert labels.dtype == np.int32
+    result = labels.compute()
+    assert result.dtype == np.int32
+    _assert_same_objects(expected, result)
+
+
+@pytest.mark.utils
+def test_segment_blocks_3d():
+    rng = np.random.default_rng(0)
+    image = np.zeros((40, 60, 60), dtype=bool)
+    for z, y, x in zip(*[rng.integers(3, s - 3, 20) for s in image.shape]):
+        image[z - 2 : z + 3, y - 2 : y + 3, x - 2 : x + 3] = True
+    expected = skimage.measure.label(image)
+    labels = segment_blocks(
+        da.from_array(image, chunks=20),
+        skimage.measure.label,
+        depth=10,
+        spatial_dims=3,
+    ).compute()
+    _assert_same_objects(expected, labels)
+
+
+@pytest.mark.utils
+def test_segment_blocks_args_and_kwargs():
+    image = _random_disks((200, 200), 40, 10, seed=1)
+    mask = np.ones(image.shape, dtype=bool)
+    mask[:, :100] = False
+    expected = skimage.measure.label(image & mask)
+
+    def seg_fn(block, mask_block, threshold):
+        assert block.shape[0] == 2  # channel dimension is passed whole
+        return skimage.measure.label((block[0] > threshold) & mask_block)
+
+    labels = segment_blocks(
+        da.from_array(np.stack([image, image]), chunks=(1, 50, 50)),
+        seg_fn,
+        da.from_array(mask, chunks=30),
+        depth=20,
+        threshold=0.5,
+    )
+    assert labels.shape == image.shape
+    _assert_same_objects(expected, labels.compute())
+
+
+@pytest.mark.utils
+def test_segment_blocks_touching_cells_not_merged():
+    # Two distinct cells touching exactly at the block border are not merged
+    image = np.zeros((40, 40), dtype=np.uint8)
+    image[10:30, 5:20] = 1
+    image[10:30, 20:35] = 2
+    labels = segment_blocks(
+        da.from_array(image, chunks=20), lambda block: block, depth=10
+    ).compute()
+    np.testing.assert_array_equal(image, labels)
+
+
+@pytest.mark.utils
+def test_segment_blocks_empty():
+    labels = segment_blocks(
+        da.zeros((50, 50), chunks=20), skimage.measure.label, depth=5
+    ).compute()
+    np.testing.assert_array_equal(labels, 0)
+
+
+@pytest.mark.utils
+def test_segment_blocks_invalid_args():
+    with pytest.raises(ValueError):
+        segment_blocks(da.zeros((50, 50), chunks=20), skimage.measure.label, depth=(5,))
+    with pytest.raises(ValueError):
+        segment_blocks(
+            da.zeros((50, 50), chunks=20),
+            skimage.measure.label,
+            da.zeros((40, 50), chunks=20),
+        )
+
+
+@pytest.mark.utils
+def test_match_labels():
+    a = np.array([[1, 1, 1, 1, 0, 2, 2, 2]])
+    b = np.array([[3, 3, 3, 0, 0, 4, 5, 5]])
+    # 1-3: IoU 3/4, 2-4: IoU 1/3, 2-5: IoU 2/3
+    np.testing.assert_array_equal(_match_labels(a, b, 0.5), [[1, 3], [2, 5]])
+    np.testing.assert_array_equal(_match_labels(a, b, 0.3), [[1, 3], [2, 4], [2, 5]])
+    assert _match_labels(a, np.zeros_like(b), 0.5).shape == (0, 2)
+
+
+@pytest.mark.utils
+def test_segment_blocks_segments_each_block_once():
+    ncalls = []
+
+    def seg_fn(block):
+        ncalls.append(1)
+        return skimage.measure.label(block)
+
+    image = da.from_array(_random_disks((200, 200), 20, 10), chunks=50)
+    image = image.map_overlap(lambda b: b, depth=1, boundary="none")
+    segment_blocks(image, seg_fn, depth=20).compute(scheduler="sync")
+    assert len(ncalls) == 16

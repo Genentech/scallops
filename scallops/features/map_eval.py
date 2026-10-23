@@ -1,6 +1,6 @@
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import Literal, Tuple
+from typing import Literal, Tuple, cast
 
 import anndata
 import dask
@@ -9,6 +9,7 @@ import fsspec
 import numpy as np
 import pandas as pd
 from array_api_compat import get_namespace
+from numpy.typing import NDArray
 from scipy.stats import ks_2samp
 from sklearn.metrics.pairwise import cosine_similarity
 from statsmodels.stats.multitest import multipletests
@@ -17,8 +18,8 @@ from scallops.features.util import _slice_anndata
 
 
 def recall(
-    null_distribution: np.ndarray | da.Array,
-    query_distribution: np.ndarray | da.Array,
+    null_distribution: NDArray | da.Array,
+    query_distribution: NDArray | da.Array,
     recall_thresholds: Sequence[Tuple[float, float] | float] = [
         (0.01, 0.99),
         (0.05, 0.95),
@@ -42,8 +43,9 @@ def recall(
     # validate inputs and check which directions are needed
     for threshold in recall_thresholds:
         if np.isscalar(threshold):
-            assert 0 <= threshold <= 1
-            if threshold >= 0.5:
+            scalar_threshold = cast(float, threshold)
+            assert 0 <= scalar_threshold <= 1
+            if scalar_threshold >= 0.5:
                 left = True
             else:
                 right = True
@@ -80,7 +82,7 @@ def recall(
         result = dict()
         if np.isscalar(threshold):
             result["threshold"] = threshold
-            if threshold >= 0.5:
+            if cast(float, threshold) >= 0.5:
                 result["recall"] = xp.sum(
                     (query_percentage_ranks_left >= threshold)
                 ) / len(query_distribution)
@@ -165,7 +167,7 @@ def set_benchmark(
 
 def pairwise_similarities(
     data: anndata.AnnData, metric: Literal["cosine", "pearson"] = "cosine"
-) -> np.ndarray:
+) -> NDArray:
     """Compute pairwise similarities between observations in data.
 
     :param data: Anndata object

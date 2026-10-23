@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from array_api_compat import get_namespace
+from numpy.typing import NDArray
 from scipy.sparse import coo_array, issparse, sparray
 
 from scallops.io import get_image_spacing
@@ -19,8 +20,8 @@ from scallops.zarr_io import _write_zarr_labels, open_ome_zarr, read_ome_zarr_ar
 
 
 def _label_overlap_to_iou(
-    overlap: np.ndarray | sparray | da.Array,
-) -> np.ndarray | sparray:
+    overlap: NDArray | sparray | da.Array,
+) -> NDArray | sparray:
     if issparse(overlap):  # no keepdims
         n_pixels_x = overlap.sum(axis=0)
         n_pixels_true = overlap.sum(axis=1)
@@ -186,9 +187,9 @@ def test_relabel_by_assignment(
 
 
 def _check_renumbered_cells(
-    cells: np.ndarray,
-    nuclei: np.ndarray,
-    renumbered_cells: np.ndarray,
+    cells: NDArray,
+    nuclei: NDArray,
+    renumbered_cells: NDArray,
     assignment_df: pd.DataFrame,
 ):
     assert renumbered_cells.shape == cells.shape

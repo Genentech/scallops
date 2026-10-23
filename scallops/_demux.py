@@ -1,8 +1,10 @@
 import logging
+from typing import Any
 
 import numpy as np
 import scipy.stats
 import statsmodels.api as sm
+from numpy.typing import NDArray
 from scipy.stats import gmean
 
 from scallops.spots import _find_peaks
@@ -10,7 +12,7 @@ from scallops.spots import _find_peaks
 logger = logging.getLogger("scallops")
 
 
-def clr_2d(matrix: np.ndarray) -> np.ndarray:
+def clr_2d(matrix: NDArray) -> NDArray:
     """Perform centered log-ratio (CLR) transformation on a 2D matrix.
 
     This function replaces zero values with the smallest non-zero value in the same column to avoid
@@ -28,7 +30,7 @@ def clr_2d(matrix: np.ndarray) -> np.ndarray:
 
 
 def fit_kmedoids(
-    data: np.ndarray,
+    data: NDArray,
     n_clusters: int = 5,
     random_state: int = 0,
     init: str = "k-medoids++",
@@ -55,11 +57,11 @@ def fit_kmedoids(
 
 
 def find_min_mean_indices(
-    data: np.ndarray,
-    k_medoids: object,
+    data: NDArray,
+    k_medoids: Any,
     n_clusters: int = 5,
     n_smallest_clusters: int = 1,
-) -> list[np.ndarray]:
+) -> list[NDArray]:
     """Find the indices of the clusters with the smallest mean values for each feature.
 
     This function calculates the mean value of each feature within each cluster. It then returns the
@@ -81,7 +83,7 @@ def find_min_mean_indices(
     ]
 
 
-def negbinomial_fit(x: np.ndarray) -> tuple[float, float, bool]:
+def negbinomial_fit(x: NDArray) -> tuple[float, float, bool]:
     """Fit a Negative Binomial distribution to the given data.
 
     This function fits a Negative Binomial model to the input data using
@@ -103,9 +105,9 @@ def negbinomial_fit(x: np.ndarray) -> tuple[float, float, bool]:
 
 
 def compute_quantiles(
-    pixel_array: np.ndarray,
-    k_medoids: object,
-    index_lst: list[np.ndarray],
+    pixel_array: NDArray,
+    k_medoids: Any,
+    index_lst: list[NDArray],
     percentile_threshold: float = 99.5,
     quantile_val: float = 0.99,
 ) -> list[float]:
@@ -150,7 +152,7 @@ def compute_quantiles(
 
 
 def compute_threshold(
-    pixel_array: np.ndarray, n_clusters: int = 5, n_smallest_clusters: int = 1
+    pixel_array: NDArray, n_clusters: int = 5, n_smallest_clusters: int = 1
 ) -> list[float]:
     """Compute thresholds for pixel intensities using k-medoids clustering.
 
@@ -179,8 +181,8 @@ def compute_threshold(
 
 
 def extract_peaks(
-    img_data: np.ndarray, lbs_data: np.ndarray, dist_peaks: int
-) -> tuple[np.ndarray, np.ndarray]:
+    img_data: NDArray, lbs_data: NDArray, dist_peaks: int
+) -> tuple[NDArray, NDArray]:
     """Extract peaks from image data based on labeled regions.
 
     This function sets the intensity to zero where labels are zero, finds peaks
@@ -202,11 +204,11 @@ def extract_peaks(
 
 
 def process_spots(
-    images_list: list[np.ndarray],
-    labels_list: list[np.ndarray],
+    images_list: list[NDArray],
+    labels_list: list[NDArray],
     thresholds: list[float],
     remove_all: bool = True,
-) -> list[np.ndarray]:
+) -> list[NDArray]:
     """Process and filter spots based on intensity thresholds across multiple channels.
 
     This function applies intensity thresholds to identify spots in each image channel.
