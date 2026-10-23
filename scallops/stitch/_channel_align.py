@@ -177,7 +177,7 @@ def load_params(path: str) -> dict:
 def resolve_channel_alignment(
     correction_channels: list[int] | Literal["all"],
     params: dict | None,
-    channel_order: Sequence[str] | None,
+    channel_order: Sequence[str],
     n_channels: int,
     reference_channel: int,
     output_channels: Sequence[int] | None,
@@ -197,11 +197,6 @@ def resolve_channel_alignment(
         ``dict(name, m, ty, tx, same_as, source)``; and the input indices of the requested channels to estimate from
         the images (no parameter file, or no entry in it).
     """
-    if channel_order is None or len(channel_order) == 0:
-        raise ValueError(
-            "--alignment-correction-channel-order is required with --alignment-correction-channels: give the "
-            "parameter-file name of every input channel, in input order (use - for a channel with no entry)."
-        )
     if len(channel_order) != n_channels:
         raise ValueError(
             f"--alignment-correction-channel-order has {len(channel_order)} names, but the images have "
@@ -362,21 +357,35 @@ def check_stage_positions_only(
     image_key: str,
 ) -> None:
     """Stop when tiles were placed at their stage positions and a corrected channel would leave a band of missing
-    pixels: without tile alignment, fusion doesn't crop, so the bands would stay in the stitched image.
+    pixels wider than the radial correction's own: without tile alignment, fusion doesn't crop, so the bands would
+    stay in the stitched image.
 
     :raises ValueError: Naming the channels that would leave bands.
     """
+    radial = edge_band_width(shape, radial_correction_k)
     banded = [
         f"{c} ({a['name']})"
         for c, a in sorted(channel_alignment.items())
-        if any(edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"]))
+        if any(
+            b > r
+            for b, r in zip(
+                edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"]),
+                radial,
+            )
+        )
     ]
     if banded:
+        beyond = (
+            f" wider than the {max(radial)} px the radial correction alone leaves"
+            if any(radial)
+            else ""
+        )
         raise ValueError(
             f"Tiles of {image_key} could not be aligned (no tile pairs overlap enough) and were placed at their "
             f"stage positions, so nothing is cropped and correcting channel(s) {', '.join(banded)} would leave bands "
-            "of missing pixels at the tile edges. Remove only these channel(s) from --alignment-correction-channels; "
-            "the other requested channels leave no bands and can still be corrected."
+            f"of missing pixels at the tile edges{beyond}. Remove only these channel(s) from "
+            "--alignment-correction-channels; the other requested channels leave no such bands and can still be "
+            "corrected."
         )
 
 
@@ -390,20 +399,24 @@ def fusion_crop(
 ) -> tuple[tuple[int, int], dict]:
     """Fusion crop that removes the zero bands the corrected channels leave at the tile edges.
 
+    Bands are measured on the combined map, so they include the radial correction's own band, which every channel
+    has, corrected or not. A channel's band counts on an axis only where it is wider than that radial-only band.
+
     :param crop: SCALLOPS's fusion crop (y, x).
-    :param max_crop: Per axis, the largest crop that opens no gaps between tiles (half the smallest tile overlap);
-        ``None`` where any crop opens no gaps.
-    :return: The crop to use (each axis at least the widest band), and a record of the values.
-    :raises ValueError: If a channel's band is wider than both ``crop`` and ``max_crop`` on an axis: the tile overlap
-        is too small for the correction.
+    :param max_crop: Per axis, the largest crop allowed: half the typical (median) overlap between side-by-side tiles,
+        as SCALLOPS's own crop uses the median overlap; ``None`` where any crop opens no gaps.
+    :return: The crop to use (each axis at least the widest counted band), and a record of the values.
+    :raises ValueError: If a counted band is wider than both ``crop`` and ``max_crop`` on an axis: the tile overlap is
+        too small for the correction.
     """
     allowed = [
         None if max_crop[i] is None else max(crop[i], max_crop[i]) for i in range(2)
     ]
-    bands = {
-        c: edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"])
-        for c, a in channel_alignment.items()
-    }
+    radial = edge_band_width(shape, radial_correction_k)
+    bands = {}
+    for c, a in channel_alignment.items():
+        b = edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"])
+        bands[c] = tuple(b[i] if b[i] > radial[i] else 0 for i in range(2))
     too_wide = []
     for c, b in sorted(bands.items()):
         over = [i for i in range(2) if allowed[i] is not None and b[i] > allowed[i]]
@@ -411,9 +424,14 @@ def fusion_crop(
             i = max(over, key=lambda i: b[i] - allowed[i])
             too_wide.append(
                 f"Tile overlap is too small to correct channel {c} ({channel_alignment[c]['name']}) of {image_key}: "
-                f"its alignment leaves a {b[i]} px band of missing pixels at the tile edge, but the overlap allows "
-                f"cropping only {allowed[i]} px. Leave the channel out of --alignment-correction-channels or give "
-                "smaller parameters for it."
+                f"its alignment leaves a {b[i]} px band of missing pixels at the tile edge"
+                + (
+                    f" (the radial correction alone leaves {radial[i]} px)"
+                    if radial[i]
+                    else ""
+                )
+                + f", but the overlap allows cropping only {allowed[i]} px. Leave the channel out of "
+                "--alignment-correction-channels or give smaller parameters for it."
             )
     if too_wide:
         raise ValueError("\n".join(too_wide))
@@ -425,7 +443,11 @@ def fusion_crop(
             f"(widest band {band} px)."
         )
     return used, dict(
-        scallops=list(crop), edge_band=list(band), used=list(used), max=list(max_crop)
+        scallops=list(crop),
+        edge_band=list(band),
+        radial_band=list(radial),
+        used=list(used),
+        max=list(max_crop),
     )
 
 
@@ -543,6 +565,10 @@ def record(
         if metadata_names is not None
         else [None] * len(channel_order)
     )
+
+    def name_of(c):  # --channel-name may not cover every input channel
+        return channel_names[c] if channel_names and c < len(channel_names) else None
+
     return dict(
         model="corrected(y, x) = raw(c + (1 + m) * ((y, x) - c) + (ty, tx)); c = (H/2, W/2); px; "
         "relative to the reference channel; composed with the radial correction",
@@ -551,7 +577,7 @@ def record(
         reference_channel=dict(
             index=reference_channel,
             name=channel_order[reference_channel],
-            channel_name=channel_names[reference_channel] if channel_names else None,
+            channel_name=name_of(reference_channel),
             metadata_name=meta[reference_channel],
         ),
         params_file=dict(path=params["path"], sha256=params["sha256"])
@@ -561,7 +587,7 @@ def record(
             dict(
                 index=c,
                 name=channel_order[c],
-                channel_name=channel_names[c] if channel_names else None,
+                channel_name=name_of(c),
                 metadata_name=meta[c],
             )
             for c in range(len(channel_order))
@@ -570,7 +596,7 @@ def record(
             dict(
                 index=c,
                 name=a["name"],
-                channel_name=channel_names[c] if channel_names else None,
+                channel_name=name_of(c),
                 metadata_name=meta[c],
                 m=a["m"],
                 ty=a["ty"],

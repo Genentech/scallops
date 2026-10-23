@@ -17,6 +17,7 @@ from scallops.stitch._channel_align import (
     load_params,
     metadata_channel_names,
     parse_correction_channels,
+    record,
     resolve_channel_alignment,
     warp_image,
 )
@@ -131,8 +132,6 @@ def test_resolve_channel_alignment(tmp_path):
         )
     with pytest.raises(ValueError, match="out of range"):
         resolve_channel_alignment([5], channel_order=order, **kw)
-    with pytest.raises(ValueError, match="required"):
-        resolve_channel_alignment("all", channel_order=None, **kw)
 
 
 def test_channel_names_are_text_and_case_insensitive(tmp_path):
@@ -355,6 +354,25 @@ def test_stitch_alignment_correction_refuses_channel_reference(tmp_path):
     assert "--channel-reference" in result.stderr
 
 
+def test_correction_channels_need_the_channel_order(tmp_path):
+    r = subprocess.run(
+        [
+            "scallops",
+            "stitch",
+            "--images",
+            str(tmp_path),
+            "--report-output",
+            str(tmp_path / "stitch"),
+            "--alignment-correction-channels",
+            "1",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0
+    assert "--alignment-correction-channel-order is required" in r.stderr
+
+
 def test_bare_correction_channels_flag_is_an_error(tmp_path):
     r = subprocess.run(
         [
@@ -466,7 +484,11 @@ def test_fusion_crop_covers_zero_bands_or_stops():
     assert used == (24, 24)
     used, rec = fusion_crop(shifted(30.0), (512, 512), None, (24, 24), (32, 32), "A1")
     assert used == (30, 24) and rec == dict(
-        scallops=[24, 24], edge_band=[30, 0], used=[30, 24], max=[32, 32]
+        scallops=[24, 24],
+        edge_band=[30, 0],
+        radial_band=[0, 0],
+        used=[30, 24],
+        max=[32, 32],
     )
     with pytest.raises(
         ValueError,
@@ -481,6 +503,23 @@ def test_fusion_crop_covers_zero_bands_or_stops():
     assert fusion_crop(shifted(40.0), (512, 512), None, (0, 0), (None, None), "A1")[
         0
     ] == (40, 0)
+
+
+def test_fusion_crop_ignores_the_radial_band():
+    k = 2e-7  # radial correction alone: 7 px band on a 512 px tile
+    zero = {1: dict(name="CY7", m=0.0, ty=0.0, tx=0.0)}
+    # the radial band alone neither widens the crop nor stops the run, even beyond the overlap limit
+    used, rec = fusion_crop(zero, (512, 512), k, (2, 2), (3, 3), "A1")
+    assert (
+        used == (2, 2) and rec["edge_band"] == [0, 0] and rec["radial_band"] == [7, 7]
+    )
+    # a band wider than the radial band counts, and the message gives the radial share
+    shifted = {1: dict(name="CY7", m=0.0, ty=30.0, tx=0.0)}
+    with pytest.raises(
+        ValueError,
+        match=r"36 px band .* \(the radial correction alone leaves 7 px\), .* only 32 px",
+    ):
+        fusion_crop(shifted, (512, 512), k, (24, 24), (32, 32), "A1")
 
 
 def _shifted_stitch(tmp_path, ty, positions=POSITIONS):
@@ -586,6 +625,39 @@ def test_stage_positions_only_stops_when_bands_would_remain():
     assert (
         "Remove only these channel(s) from --alignment-correction-channels" in message
     )
+
+
+def test_stage_positions_only_ignores_the_radial_band():
+    k = 2e-7  # radial correction alone: 7 px band on a 512 px tile
+    alignment = {
+        1: dict(name="FITC", m=0.0, ty=1.5, tx=0.0),  # 8 px: wider than the radial band
+        2: dict(name="CY7", m=0.0, ty=0.0, tx=0.0),
+        3: dict(name="CY5", m=-0.002, ty=0.0, tx=0.0),  # 6 px: narrower
+    }
+    check_stage_positions_only({c: alignment[c] for c in (2, 3)}, (512, 512), k, "A1")
+    with pytest.raises(ValueError) as err:
+        check_stage_positions_only(alignment, (512, 512), k, "A1")
+    message = str(err.value)
+    assert "channel(s) 1 (FITC) would leave bands" in message
+    assert "wider than the 7 px the radial correction alone leaves" in message
+
+
+def test_record_with_fewer_channel_names_than_channels():
+    resolved = {1: dict(name="CY7", m=0.0, ty=1.0, tx=0.0, source="params_file")}
+    rec = record(
+        resolved,
+        None,
+        ["DAPI", "CY7", "CY5"],
+        ["dapi", "cy7"],  # --channel-name for output channels 0 and 1 only
+        0,
+        None,
+    )
+    assert [c["channel_name"] for c in rec["channel_identification"]] == [
+        "dapi",
+        "cy7",
+        None,
+    ]
+    assert rec["channels"][0]["channel_name"] == "cy7"
 
 
 @pytest.mark.io
