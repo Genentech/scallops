@@ -250,7 +250,7 @@ def single_stitch_preview(
 
 def run_stitch_preview(args: argparse.Namespace) -> None:
     """Run the stitch preview pipeline."""
-    z_index = args.z_index
+
     if not args.bounds and not args.numbers and args.no_tiles:
         raise ValueError("Please provide bounds or numbers or disable tiles.")
     from_sequence(
@@ -267,7 +267,7 @@ def run_stitch_preview(args: argparse.Namespace) -> None:
         log=args.log,
         stage_positions_path=args.stage_positions,
         show_image=not args.no_tiles,
-        z_index=z_index,
+        z_index=args.z_index,
         t_index=args.t_index,
     ).compute()
 

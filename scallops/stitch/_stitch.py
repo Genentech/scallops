@@ -436,7 +436,6 @@ def _single_stitch(
         channel_window=channel_window,
         channel_filter_percentiles=channel_filter_percentiles,
         t_index=t_index,
-        separate_z=separate_z,
     )
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -465,7 +464,6 @@ def _write_arrays(
     channel_window,
     channel_filter_percentiles,
     t_index=None,
-    separate_z=False,
 ):
     gc.collect()
     fmt = _current_format()
