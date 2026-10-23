@@ -166,7 +166,7 @@ def single_stitch_preview(
     tile_shape = np.round(np.array(tile_shape_no_crop) * resolution_scale).astype(int)
     z_tiles_removed = (
         "z" in metadata_fields
-        and isinstance(z_index, (Sequence, np.ndarray, int))
+        and isinstance(z_index, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(z_index, str)
     )
     if z_tiles_removed:
