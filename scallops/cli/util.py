@@ -342,13 +342,14 @@ def _z_index_tile_type(s: str) -> int | str:
     s = s.strip()
     if s in ("max", "focus"):
         return s
+
     try:
         value = int(s)
-        if value < 0:
-            raise ValueError("z-index must be >=0")
-        return value
     except ValueError:
         return s
+    if value < 0:
+        raise ValueError("z-index must be >=0")
+    return value
 
 
 def z_index_tile_arg(parser: argparse.ArgumentParser) -> None:
