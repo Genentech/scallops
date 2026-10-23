@@ -581,7 +581,6 @@ def _write_arrays(
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
             t_index=t_index,
-            separate_z=separate_z,
         )
 
     # cleanup

@@ -348,9 +348,6 @@ def _z_index_tile_type(s: str) -> int | str:
             raise ValueError("z-index must be >=0")
         return value
     except ValueError:
-        fs, url = fsspec.url_to_fs(s)
-        if not fs.exists(url):
-            raise ValueError(f"{s} is not a valid z-index")
         return s
 
 

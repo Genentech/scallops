@@ -250,7 +250,12 @@ def _fuse(
         df["source_metadata"].values if "source_metadata" in df.columns else None
     )
     tile_z_indices = df["z_index"].values if "z_index" in df.columns else None
-    separate_z = "separate_z" in df.columns
+    separate_z = False
+    if "separate_z" in df.columns:
+        separate_z = df["separate_z"].iloc[0]
+        assert df["separate_z"].eq(separate_z).all(), (
+            "separate_z must be equal to True or False"
+        )
     if separate_z:
         tile_z_indices = None
         z_index = 0
