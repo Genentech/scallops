@@ -166,7 +166,7 @@ def single_stitch_preview(
     tile_shape = np.round(np.array(tile_shape_no_crop) * resolution_scale).astype(int)
     z_tiles_removed = (
         "z" in metadata_fields
-        and isinstance(z_index, (Sequence, np.ndarray, int))
+        and isinstance(z_index, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(z_index, str)
     )
     if z_tiles_removed:
@@ -250,6 +250,7 @@ def single_stitch_preview(
 
 def run_stitch_preview(args: argparse.Namespace) -> None:
     """Run the stitch preview pipeline."""
+
     if not args.bounds and not args.numbers and args.no_tiles:
         raise ValueError("Please provide bounds or numbers or disable tiles.")
     from_sequence(
@@ -326,11 +327,6 @@ def run_stitch(args: argparse.Namespace) -> None:
     channel = args.align_channel
     upsample_factor = args.cross_correlation_upsample
     z_index = args.z_index
-    if z_index not in ("max", "focus"):
-        try:
-            z_index = int(z_index)
-        except ValueError:
-            pass
     t_index = args.t_index
 
     expected_images = args.expected_images
