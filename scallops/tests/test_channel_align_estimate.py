@@ -96,6 +96,25 @@ def test_estimate_tile_recovers_known_alignment():
     assert abs(r["ty"] - TY) < 0.06 and abs(r["tx"] - TX) < 0.06
 
 
+def test_magnification_needs_three_occupied_regions():
+    # one occupied region can't separate m from (ty, tx): the fit is exact (rms 0) whatever m is
+    rng = np.random.default_rng(3)
+    shape = (768, 768)  # regions of 153.6 px
+    settings = E.scale_settings(9.0)
+    cp = E._prep(rng.normal(300, 30, shape))
+
+    def rms(centres):
+        return E.method_s(np.asarray(centres, float), cp, shape, settings)[1]
+
+    one = rng.uniform(170, 290, (30, 2))  # all in region (1, 1)
+    two = np.vstack([one, one + [0, 307]])  # regions (1, 1) and (1, 3)
+    row = np.column_stack([rng.uniform(170, 290, 60), rng.uniform(60, 700, 60)])
+    assert rms(one) == float("inf") and rms(two) == float("inf")
+    assert np.isfinite(
+        rms(row)
+    )  # one row of regions is enough: m is one value for both axes
+
+
 def test_region_mean_patches_drops_patches_outside_the_tile():
     rng = np.random.default_rng(3)
     img = rng.random((200, 200)).astype(np.float32)

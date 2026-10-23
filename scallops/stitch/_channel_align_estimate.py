@@ -29,11 +29,12 @@ Per tile (:func:`estimate_tile`):
 - **ET** gives ``(ty, tx)`` with ``m`` fixed at the tile's S value (geometry of the nucleus outline in the mean
   patch, 10 iterations from S's translation).
 
-A tile is valid for a channel when its reference channel has nuclei, S's regional fit rms is < 3 px, ET converged
-(last step < 0.01 px), and the tile has at least 25% of the median nucleus count of the well's first-drawn tiles. An
-exception while estimating a tile is not caught: it stops the estimation. Pixel sizes
-of all settings scale with the nucleus radius measured on the reference channel (anchored to the validated settings
-of a 20x IXM, nucleus radius 12 px); the minimum nucleus area scales with the pixel size when it is known.
+A tile is valid for a channel when its reference channel has nuclei, S's regional fit has nuclei in at least 3
+regions and an rms < 3 px, ET converged (last step < 0.01 px), and the tile has at least 25% of the median nucleus
+count of the well's first-drawn tiles. An exception while estimating a tile is not caught: it stops the estimation.
+Pixel sizes of all settings scale with the nucleus radius measured on the reference channel (anchored to the
+validated settings of a 20x IXM, nucleus radius 12 px); the minimum nucleus area scales with the pixel size when it
+is known.
 
 Per well (:func:`estimate_well`): up to 100 valid tiles, sampled at random, spread over 4 quadrants around the well
 centre (25 each, minimum spacing for the first draws), interior tiles only for wells with more than 100 tiles;
@@ -69,6 +70,7 @@ REF_PEAK_DISTANCE = 16.0  # px (full resolution): watershed seed spacing
 REF_RADIUS_SEARCH = (4.0, 45.0)  # px: where the nucleus edge is searched for
 REF_BORDER = 8.0  # px: extra margin beyond the patch at the tile border
 N_REGIONS = 5  # regions per axis
+MIN_REGIONS = 3  # occupied regions S needs: one can't separate m from (ty, tx), two leave one spare equation
 S_ITERATIONS = 3
 ET_ITERATIONS = 10
 ET_STEP_TOL = 0.01  # px
@@ -277,8 +279,8 @@ def method_s(ref_centres, cp, shape, settings):
         )
         rs = np.flatnonzero(counts > 0)
         if (
-            rs.size == 0
-        ):  # every shifted patch left the tile: the tile fails the rms rule
+            rs.size < MIN_REGIONS
+        ):  # too few occupied regions (or every patch left the tile): fails the rms rule
             return prm, float("inf"), int(ok.sum())
         t = np.array([_sym_shift(M[r].astype(np.float64)) for r in rs])
         ry = np.array([cy[region == r].mean() for r in rs])
