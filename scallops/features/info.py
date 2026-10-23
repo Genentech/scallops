@@ -101,6 +101,44 @@ Other Features
      3. radius: Radius of the disk footprint used for non-maximum
         suppression in peak_local_max (default 3).
 
+* puncta
+     Detects puncta with an adaptive threshold (pixel > alpha * local
+     background) followed by a watershed split on a highpass gaussian
+     filtered image, and measures puncta counts, areas, intensities,
+     and spatial distribution. Watershed pieces that share one
+     saturated (flat-topped) plateau are rejoined into a single
+     punctum. Outputs 33 features per channel, including the quality
+     flag FlagNoNuclearCentroid. Spatial features are measured from
+     the centroid of each label's nucleus (the nuclei label with the
+     same ID, read from the "-nuclei" labels in "--labels", used only
+     if it overlaps or touches the label); a label without such a
+     nucleus uses its own centroid and gets FlagNoNuclearCentroid = 1.
+     If fewer than half of the labels sampled in an image overlap or
+     touch a nucleus with the same ID (e.g. cellpose cells, which are
+     numbered independently of the nuclei), the nuclei are not used
+     for that image, every label gets FlagNoNuclearCentroid = 1, and a
+     warning is logged. Parameters are encoded in the feature names
+     (e.g. "Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2").
+     Parameters:
+
+     1. c: Channel index.
+
+     2. sigma: Gaussian sigma for calculating local background used
+        for foreground calculation and for high-pass filter; 0 skips
+        the filter and uses the ROI mean as the background (default
+        10).
+
+     3. alpha: Threshold multiplier on the local background; must be
+        >= 1 when sigma > 0 (default 1.5).
+
+     4. min_size_fg_objects: Minimum puncta area in pixels; smaller
+        foreground objects are discarded; smaller puncta after
+        watershed are merged (default 2).
+
+     5. peak_min_distance: Minimum distance in pixels between
+        watershed peaks; larger values merge nearby peaks into one
+        punctum (default 2).
+
 
 Shortcuts
 =========

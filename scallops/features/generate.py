@@ -21,6 +21,11 @@ from dask import delayed
 from numpy.typing import NDArray
 
 from scallops.features.constants import _features, _features_rewrite
+from scallops.features.puncta import (
+    NUCLEI_MATCH_MIN_FRACTION,
+    nuclei_label_match_fraction,
+    puncta,
+)
 from scallops.features.spots import _download_ufish_model
 from scallops.segmentation.util import relabel_sequential
 
@@ -163,6 +168,64 @@ def _rewrite_channels(
     return channel_names_subset
 
 
+def _bind_nuclei_labels(
+    funcs: list[partial],
+    label_image: da.Array | zarr.Array,
+    nuclei_label_image: da.Array | zarr.Array | NDArray,
+    objects_df: pd.DataFrame,
+    min_cols: Sequence[str],
+    max_cols: Sequence[str],
+    chunks: tuple[tuple[int, ...], ...],
+) -> list[partial]:
+    """Bind nuclei labels to the puncta feature function if they match the ROI labels.
+
+    Checked once per image, on the ROIs assigned to the chunk containing the most
+    objects (a ROI belongs to the chunk holding its bounding-box minimum, as in feature
+    extraction), read over their bounding boxes plus 1 pixel so that no sampled ROI is
+    cut off from its nucleus. Only ROIs no larger than a chunk are sampled, so one
+    giant object cannot make the region read much larger than a chunk. ROI labels
+    grown from the nuclei (propagation, watershed) or derived from them (cytoplasm)
+    share their IDs; cellpose cell labels do not, and pairing those with nuclei by ID
+    would attach unrelated nuclei to cells.
+    """
+    assert nuclei_label_image.shape[:2] == label_image.shape[:2], (
+        f"{nuclei_label_image.shape} != {label_image.shape}"
+    )
+    if len(objects_df) == 0:
+        # Nothing to sample. Return the functions unchanged so label_features
+        # continues exactly as it does without nuclei labels.
+        return funcs
+    fits = np.ones(len(objects_df), dtype=bool)
+    for lo, hi, c in zip(min_cols, max_cols, chunks):
+        fits &= (objects_df[hi] - objects_df[lo]).to_numpy() <= max(c)
+    candidates = objects_df[fits] if fits.any() else objects_df
+    edges = [np.cumsum(c) for c in chunks]
+    iy = np.searchsorted(edges[0], candidates[min_cols[0]].to_numpy(), side="right")
+    ix = np.searchsorted(edges[1], candidates[min_cols[1]].to_numpy(), side="right")
+    chunk_ids = iy * len(chunks[1]) + ix
+    sample = candidates[chunk_ids == np.bincount(chunk_ids).argmax()]
+    region = tuple(
+        slice(
+            max(int(sample[lo].min()) - 1, 0),
+            min(int(sample[hi].max()) + 1, label_image.shape[i]),
+        )
+        for i, (lo, hi) in enumerate(zip(min_cols, max_cols))
+    )
+    fraction = nuclei_label_match_fraction(
+        label_image, nuclei_label_image, region, labels=sample.index.to_numpy()
+    )
+    if fraction < NUCLEI_MATCH_MIN_FRACTION:
+        logger.warning(
+            f"Only {fraction:.0%} of sampled labels overlap the nucleus with the same "
+            "ID; puncta spatial features will use each ROI's centroid."
+        )
+        return funcs
+    return [
+        partial(f, nuclei_label_image=nuclei_label_image) if f.func is puncta else f
+        for f in funcs
+    ]
+
+
 def label_features(
     objects_df: pd.DataFrame,
     label_image: da.Array | zarr.Array,
@@ -172,6 +235,7 @@ def label_features(
     normalize: bool = True,
     bounding_box_columns: Sequence[str] | None = None,
     overlap: int | None = None,
+    nuclei_label_image: da.Array | zarr.Array | NDArray | None = None,
 ) -> dd.DataFrame | pd.DataFrame:
     """Extract features from labeled regions in the image.
 
@@ -185,6 +249,9 @@ def label_features(
     :param bounding_box_columns: Columns to use for BoundingBoxMinimum_Y,
         BoundingBoxMinimum_X, BoundingBoxMaximum_Y, and BoundingBoxMaximum_X
     :param overlap: Chunk overlap.
+    :param nuclei_label_image: Optional nuclei labels with the same shape as
+        `label_image`. Used only by `puncta`, to anchor its spatial features on
+        each ROI's nucleus.
     :return: DataFrame with extracted features.
     """
     is_numpy = False
@@ -283,7 +350,7 @@ def label_features(
         raise ValueError("No features to compute.")
 
     unique_func_names = {func.func.__name__ for func in funcs}
-    DEFAULT_PADDING = {"cp_intensity": 1, "neighbors": 100}
+    DEFAULT_PADDING = {"cp_intensity": 1, "neighbors": 100, "puncta": 1}
     padding = overlap if overlap is not None else 0
     for key in DEFAULT_PADDING.keys():
         if key in unique_func_names:
@@ -301,9 +368,23 @@ def label_features(
         else:
             funcs_.append(func)
     funcs = funcs_
-    chunk_slices = da.core.slices_from_chunks(
+    label_chunks = (
         label_image.chunks if is_dask_array else da.from_zarr(label_image).chunks
     )
+    chunk_slices = da.core.slices_from_chunks(label_chunks)
+    # The output metadata (_create_dd_metadata) is computed on a synthetic 50 x 50
+    # block, so it uses the functions before the real nuclei labels are bound.
+    meta_funcs = funcs
+    if nuclei_label_image is not None and "puncta" in unique_func_names:
+        funcs = _bind_nuclei_labels(
+            funcs,
+            label_image,
+            nuclei_label_image,
+            objects_df,
+            min_cols,
+            max_cols,
+            label_chunks,
+        )
     _feature_block_delayed = delayed(_feature_block)
     if len(uniform_chunk_funcs) > 0:
         results = []
@@ -406,7 +487,7 @@ def label_features(
         df = dd.from_delayed(
             results,
             meta=_create_dd_metadata(
-                intensity_image_dtype, nchannels, normalize, channel_names_, funcs
+                intensity_image_dtype, nchannels, normalize, channel_names_, meta_funcs
             ),
             verify_meta=False,
         )
