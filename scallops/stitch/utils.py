@@ -68,7 +68,11 @@ def _read_tile(
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
     img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     if img.ndim > 2:
-        img = img.max(dim="z") if not isinstance(z_index, (int, np.integer)) else img.isel(z=z_index)
+        img = (
+            img.max(dim="z")
+            if not isinstance(z_index, (int, np.integer))
+            else img.isel(z=z_index)
+        )
     img = img.values
 
     if radial_correction_k is not None:
