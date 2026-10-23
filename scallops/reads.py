@@ -1234,7 +1234,7 @@ def fit_base_mixture(
     encoding: NDArray | None = None,
     base_labels: list[str] | NDArray | None = None,
     dark_bases: list[str] | None = None,
-    n_reads: int = 50_000,
+    n_reads: int = 500_000,
     fit_peak_quantile: float | None = 0.5,
     n_iter: int = 200,
     n_restarts: int = 4,
@@ -1426,7 +1426,7 @@ def fit_base_mixture(
 
     # Starting points for the tied model, from the signal alone
     rng = np.random.default_rng(seed)
-    starts = []
+
     gm = np.zeros((4, n_c))  # rows: m, z, s_on, s_off
     qt = np.zeros((4, n_c))
     for c in range(n_c):
