@@ -360,10 +360,6 @@ def _read_image(
     if scene_id is not None:
         img.set_scene(scene_id=scene_id)
     data = img.xarray_data if not dask else img.xarray_dask_data
-    try:
-        data.attrs["ome"] = img.ome_metadata.model_dump()
-    except NotImplementedError:
-        pass
     for c in ["Z", "Y", "X"]:
         if c in data.coords:
             del data.coords[c]
