@@ -163,7 +163,7 @@ def _single_stitch(
     original_filepaths = init["original_filepaths"]
 
     channel_alignment = None
-    if alignment_correction is not None and not no_save_image:
+    if alignment_correction is not None:
         # resolve before the (long) alignment so that option and parameter-file errors stop the run early
         tile0 = _images2fov_array(
             filepaths[0],
