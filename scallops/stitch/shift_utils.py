@@ -25,7 +25,7 @@ logger = logging.getLogger("scallops")
 # Functions to calculate zero-normalized cross correlation and normalized cross correlation
 
 
-@njit
+@njit(nogil=True)
 def _collect_stats(ref, mov):
     mean_x = mean_y = sum_xy = sum_x2 = sum_y2 = 0.0
     for i in range(ref.shape[0]):
@@ -84,7 +84,7 @@ def evaluate_shifts(
     return zncc_val, results[:, 0].copy()
 
 
-@njit
+@njit(nogil=True)
 def _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels) -> float:
     if s_pixels < 2.0:
         return 0.0
@@ -97,13 +97,13 @@ def _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels) -> float:
     return zncc_value
 
 
-@njit
+@njit(nogil=True)
 def _zncc(ref: NDArray, mov: NDArray) -> float:
     mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref, mov)
     return _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, float(ref.size))
 
 
-@njit
+@njit(nogil=True)
 def _ncc(ref: NDArray, mov: NDArray) -> float:
     mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref, mov)
     denom = (sum_x2**0.5) * (sum_y2**0.5)
@@ -127,7 +127,7 @@ def ncc_after_shift(
 # Find shift trys to find the best shift to consider both phase and non-phase correlations
 
 
-@njit
+@njit(nogil=True)
 def _disam_shift(ref, mov, pos_shift, ncc_func=_zncc, frac_min=0.01):
     ## 4 cases, assume pos_shift is a np.array; note that ref does not need to be a square
     ## frac_min = 0.01, at least 1% of the area
@@ -334,7 +334,7 @@ def find_shift(
 # Calculate best shift between two square tiles
 
 
-@njit
+@njit(nogil=True)
 def _get_crops(ref, mov, dy, dx, sy, sx):
     # Assume shift = (dy, dx) is integer here
     if dy >= 0:
@@ -355,7 +355,7 @@ def _get_crops(ref, mov, dy, dx, sy, sx):
     return ref_crop, mov_crop
 
 
-@njit
+@njit(nogil=True)
 def _get_overlap_frac(dy, dx, sy, sx):
     return ((sy - dy if dy >= 0.0 else sy + dy) / float(sy)) * (
         (sx - dx if dx >= 0.0 else sx + dx) / float(sx)
@@ -664,7 +664,7 @@ def convert_stage_positions(staged, swap, flip_y, flip_x, pixel_size):
     return converted
 
 
-@njit
+@njit(nogil=True)
 def _overlap_two_tiles(fov1, fov2, coord1, coord2, tile_shape):
     if coord1[0] > coord2[0]:
         fov1, fov2 = fov2, fov1
@@ -694,7 +694,7 @@ def _overlap_two_tiles(fov1, fov2, coord1, coord2, tile_shape):
         )
 
 
-@njit
+@njit(nogil=True)
 def _find_all_overlap(coords, tile_shape, frac_thre=0.0):
     """Find all overlaps between tiles"""
     # Only return overlaps with area > frac_thre
