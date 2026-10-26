@@ -195,10 +195,11 @@ def _overlapping_regions_plot(
         ax.add_patch(rect)
 
     if show_pairs_cutoff is not None:
-        for i, (pair, shift) in enumerate(
-            zip(pairs_after_stitching[idx], shifts_after_stitching[idx])
+        # filter zncc values with idx so they line up with the filtered pairs
+        for pair, shift, zncc in zip(
+            pairs_after_stitching[idx], shifts_after_stitching[idx], zncc_values[idx]
         ):
-            if zncc_values[i] < show_pairs_cutoff:
+            if zncc < show_pairs_cutoff:
                 top_left, bottom_right = _get_overlap_bounding_box(
                     final_positions[pair[0], 0],
                     final_positions[pair[0], 1],
