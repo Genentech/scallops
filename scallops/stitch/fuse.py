@@ -306,8 +306,11 @@ def _fuse(
         tile_tree = shapely.STRtree(boxes)
     for channel_batch in range(0, len(output_channels), channels_per_batch):
         channels = output_channels[channel_batch : channel_batch + channels_per_batch]
-        _ffp = ffp[channels] if ffp is not None else None
-        _dfp = dfp[channels] if dfp is not None else None
+        # with channel_reference, _fuse_image corrects all input channels before registering across channels and
+        # selects the output channels afterwards, so it needs the full ffp/dfp
+        select = channels if channel_reference is None else slice(None)
+        _ffp = ffp[select] if ffp is not None else None
+        _dfp = dfp[select] if dfp is not None else None
 
         logger.info(
             f"Fusing {pluralize('channel', len(channels))} {', '.join([str(c) for c in channels])}."
@@ -532,6 +535,7 @@ def _fuse_image(
         img = dtype_convert(img, target_dtype)
 
     img = img_as_float(img, force_copy=channel_coords is None)
+    # dfp/ffp match img's channels ( the output channels), or contain all input channels when registering across channels
     if dfp is not None:
         img -= dfp
     if ffp is not None:
