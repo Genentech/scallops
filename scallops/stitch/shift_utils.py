@@ -262,7 +262,8 @@ def _find_shift_no_upsample(
     ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=False, full_spectrum=True
 ):
     # full_spectrum: return the full complex spectrum, needed for upsampling. Otherwise
-    # use real FFTs (about half the work) and return the half spectrum.
+    # use real FFTs (about half the work) and return None for the spectrum, since the
+    # half spectrum from rfftn can't be upsampled.
     fft, ifft = (
         (fftn, ifftn) if full_spectrum else (rfftn, partial(irfftn, s=ref.shape))
     )
@@ -291,10 +292,12 @@ def _find_shift_no_upsample(
         ncc_value = ncc2
         image_product = image_product2
 
-    return shift, ncc_value, image_product
+    return shift, ncc_value, image_product if full_spectrum else None
 
 
 def _upsample(image_product, shift, upsample_factor):
+    if image_product is None:
+        raise ValueError("Upsampling requires the full spectrum (full_spectrum=True).")
     # Initial shift estimate in upsampled grid
     upsample_factor = float(upsample_factor)
     shift = np.round(shift * upsample_factor) / upsample_factor
