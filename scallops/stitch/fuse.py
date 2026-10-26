@@ -614,6 +614,6 @@ def _tile_blending_weights(tile_shape: tuple[int, int]) -> NDArray:
     weights = np.zeros(tile_shape)
     for i in range(tile_shape[0]):
         for j in range(tile_shape[1]):
-            weights[i, j] = _dist_from_tile_edge(i, j, tile_shape[0], tile_shape[1])
+            weights[i, j] = _dist_from_tile_edge(i, j, tile_shape[1], tile_shape[0])
     weights /= weights.max()
     return weights
