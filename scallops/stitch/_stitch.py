@@ -190,7 +190,7 @@ def _single_stitch(
 
     separate_z = (
         "z" in metadata_fields
-        and isinstance(tile_z_index, (Sequence, np.ndarray))
+        and isinstance(tile_z_index, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(tile_z_index, str)
     )
 
@@ -254,6 +254,7 @@ def _single_stitch(
         if isinstance(image_spacing, np.ndarray)
         else image_spacing
     )
+
     output_metadata["physical_pixel_sizes"] = output_metadata["image_spacing"]
     output_metadata["physical_pixel_units"] = ["micrometer", "micrometer"]
     auto_radial_correction = radial_correction_k == "auto"
@@ -372,6 +373,8 @@ def _single_stitch(
         tile_z_index, str
     ):
         stitch_positions_df["z_index"] = tile_z_index
+    if separate_z:
+        stitch_positions_df["separate_z"] = separate_z
     del stitch_result
 
     stitch_position_coords = stitch_positions_df[["y", "x"]].values
@@ -732,12 +735,13 @@ def _write_arrays(
             if len(squeeze_dims) > 0:
                 ffp = ffp.squeeze(squeeze_dims)
             if "z" in ffp.dims:
-                if isinstance(z_index, str) and z_index == "max":
-                    ffp = ffp.max(dim="z")
-                elif isinstance(z_index, int):
+                if isinstance(z_index, (int, np.integer)):
                     ffp = ffp.isel(z=z_index)
-                else:
-                    raise ValueError(f"Unknown z index:{z_index}")
+                elif isinstance(z_index, str) and z_index == "max":
+                    ffp = ffp.max(dim="z")
+                else:  # when z_index is 'focus', z_index will be an array
+                    logger.warning("Using max z-projection for ffp.")
+                    ffp = ffp.max(dim="z")
 
             ffp = ffp.values
 
@@ -754,12 +758,13 @@ def _write_arrays(
             if len(squeeze_dims) > 0:
                 dfp = dfp.squeeze(squeeze_dims)
             if "z" in dfp.dims:
-                if isinstance(z_index, str) and z_index == "max":
-                    dfp = dfp.max(dim="z")
-                elif isinstance(z_index, int):
+                if isinstance(z_index, (int, np.integer)):
                     dfp = dfp.isel(z=z_index)
-                else:
-                    raise ValueError(f"Unknown z index:{z_index}")
+                elif isinstance(z_index, str) and z_index == "max":
+                    dfp = dfp.max(dim="z")
+                else:  # when z_index is 'focus', z_index will be an array
+                    logger.warning("Using max z-projection for dfp.")
+                    dfp = dfp.max(dim="z")
 
             dfp = dfp.values
 

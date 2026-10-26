@@ -27,7 +27,6 @@ from scallops.stitch.shift_utils import calc_best_shift
 from scallops.stitch.utils import (
     _crop_image,
     _select_t_index,
-    _select_z_index,
     dtype_convert,
 )
 from scallops.utils import _cpu_count
@@ -280,6 +279,14 @@ def _fuse(
         df["source_metadata"].values if "source_metadata" in df.columns else None
     )
     tile_z_indices = df["z_index"].values if "z_index" in df.columns else None
+    separate_z = False
+    if "separate_z" in df.columns:
+        separate_z = df["separate_z"].iloc[0]
+        if not df["separate_z"].eq(separate_z).all():
+            raise ValueError("separate_z must be all equal to True or False")
+    if separate_z:
+        tile_z_indices = None
+        z_index = 0
 
     tile_priorities = df["priority"].values if blend == "none" else None
 
@@ -502,7 +509,12 @@ def _fuse_image(
     for path in local_image_paths:
         if path is not None:
             os.remove(path)
-    img = _select_z_index(img, z_index)
+    if "z" in img.dims:
+        img = (
+            img.isel(z=z_index)
+            if isinstance(z_index, (int, np.integer))
+            else img.max(dim="z")
+        )
     img = img.values
 
     if output_channels is not None and channel_reference is None:
