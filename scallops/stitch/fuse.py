@@ -168,7 +168,7 @@ def _fuse(
             )
         channels_per_batch = max(1, int(available_mem / size_per_channel))
         n_batches = math.ceil(len(output_channels) / channels_per_batch)
-        channels_per_batch = max(1, int(len(output_channels) / n_batches))
+        channels_per_batch = max(1, math.ceil(len(output_channels) / n_batches))
         logger.debug(
             f"Available memory {available_mem:,}, memory per channel: {size_per_channel:,}"
         )
