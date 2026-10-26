@@ -3,6 +3,7 @@ import logging
 import math
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
+from functools import partial
 
 import dask
 import dask.array as da
@@ -13,7 +14,7 @@ from dask.diagnostics import ProgressBar
 from numba import njit
 from numpy.typing import NDArray
 from scipy import ndimage as ndi
-from scipy.fft import fftfreq, fftn, ifftn
+from scipy.fft import fftfreq, fftn, ifftn, irfftn, rfftn
 from scipy.optimize import minimize
 from scipy.stats import norm
 from sklearn.linear_model import LinearRegression
@@ -257,12 +258,19 @@ def _upsampled_dft(data, upsampled_region_size, upsample_factor=1, axis_offsets=
     return data
 
 
-def _find_shift_no_upsample(ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=False):
+def _find_shift_no_upsample(
+    ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=False, full_spectrum=True
+):
+    # full_spectrum: return the full complex spectrum, needed for upsampling. Otherwise
+    # use real FFTs (about half the work) and return the half spectrum.
+    fft, ifft = (
+        (fftn, ifftn) if full_spectrum else (rfftn, partial(irfftn, s=ref.shape))
+    )
     # normalization == None
-    src_freq = fftn(ref if not center_img else ref - ref.mean())
-    target_freq = fftn(mov if not center_img else mov - mov.mean())
+    src_freq = fft(ref if not center_img else ref - ref.mean())
+    target_freq = fft(mov if not center_img else mov - mov.mean())
     image_product = src_freq * target_freq.conj()
-    cc = ifftn(image_product)
+    cc = ifft(image_product)
     pos_shift = np.array(np.unravel_index(np.argmax(np.abs(cc)), cc.shape))
     shift, ncc_value = _disam_shift(
         ref, mov, pos_shift, ncc_func=ncc_func, frac_min=frac_min
@@ -271,7 +279,7 @@ def _find_shift_no_upsample(ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=
     # normalization == 'phase'
     eps = np.finfo(image_product.real.dtype).eps
     image_product2 = image_product / np.maximum(np.abs(image_product), 100 * eps)
-    cc = ifftn(image_product2)
+    cc = ifft(image_product2)
     pos_shift = np.array(np.unravel_index(np.argmax(np.abs(cc)), cc.shape))
     shift2, ncc2 = _disam_shift(
         ref, mov, pos_shift, ncc_func=ncc_func, frac_min=frac_min
@@ -321,7 +329,12 @@ def find_shift(
     # frac_min is the minimal area fraction used for disambigute
 
     shift, ncc_value, image_product = _find_shift_no_upsample(
-        ref, mov, ncc_func=ncc_func, frac_min=frac_min, center_img=center_img
+        ref,
+        mov,
+        ncc_func=ncc_func,
+        frac_min=frac_min,
+        center_img=center_img,
+        full_spectrum=upsample_factor > 1,
     )
 
     # Upsampling
@@ -395,7 +408,12 @@ def calc_best_shift(
         overlap_min / overlap_frac
     )  # consider relative area of the crop with respect to the tile
     shift, ncc1, image_product = _find_shift_no_upsample(
-        ref_crop, mov_crop, ncc_func=ncc_func, frac_min=frac_min, center_img=center_img
+        ref_crop,
+        mov_crop,
+        ncc_func=ncc_func,
+        frac_min=frac_min,
+        center_img=center_img,
+        full_spectrum=upsample_factor > 1,
     )
     crop_frac = (
         _get_overlap_frac(shift[0], shift[1], ref_crop.shape[0], ref_crop.shape[1])
@@ -420,6 +438,7 @@ def calc_best_shift(
             ncc_func=ncc_func,
             frac_min=frac_min2,
             center_img=center_img,
+            full_spectrum=upsample_factor > 1,
         )
         crop_frac2 = (
             _get_overlap_frac(
@@ -635,8 +654,11 @@ def determine_layout(
                     quintet[0],
                     max_shift,
                 )  # in addition return one center tile
-            imgs, coords, mshift = _swap(imgs, coords, mshift)  # swap y & x
-            flip_y, flip_x, area_frac = _detect_flip(imgs, coords, min_ncc, mshift)
+            # swap y & x
+            imgs, coords, mshift_swapped = _swap(imgs, coords, mshift)
+            flip_y, flip_x, area_frac = _detect_flip(
+                imgs, coords, min_ncc, mshift_swapped
+            )
             if flip_y * flip_x != 0.0:
                 return (
                     True,
@@ -832,7 +854,8 @@ def _find_spanning_trees(g):
             errors = -np.log(
                 gc.es["ncc"]
             )  # negative log as errors, assume ncc <=0 are all filtered already
-            paths = gc.get_all_shortest_paths(
+            # one shortest path per vertex (ties are broken arbitrarily)
+            paths = gc.get_shortest_paths(
                 center, weights=errors, mode="all"
             )  # ignore edge direction
 
@@ -1033,8 +1056,10 @@ def _estimate_crop_width(
     tile_shape: tuple[int, int],
     crop_width: tuple[int, int] | None,
 ) -> tuple[int, int]:
-    pct = max(
-        np.median(fracs[fracs > min_frac]) / 2.0 - 0.015, 0.0
+    fracs = fracs[fracs > min_frac]
+    # no overlaps above min_frac, so no additional crop
+    pct = (
+        max(np.median(fracs) / 2.0 - 0.015, 0.0) if len(fracs) > 0 else 0.0
     )  # 0.015 can be adjusted
     y = (0 if crop_width is None else crop_width[0]) + int(tile_shape[0] * pct)
     x = (0 if crop_width is None else crop_width[1]) + int(tile_shape[1] * pct)
