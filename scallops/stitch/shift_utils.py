@@ -614,15 +614,16 @@ def _detect_flip(imgs, coords, min_ncc, max_shift):
     return flip_y, flip_x, area_frac
 
 
-def _swap(imgs, coords, mshift):
+def _swap(imgs, coords):
+    # Reorder the quintet and swap the y & x coordinates. The images themselves are not
+    # transposed, so pixel spacings and max shifts stay on the image axes.
     imgs_new = []
     coords_new = coords.copy()
     for i, j in enumerate([0, 3, 4, 1, 2]):
         imgs_new.append(imgs[j])
         coords_new[i, 0] = coords[j, 1]
         coords_new[i, 1] = coords[j, 0]
-    mshift_new = np.array([mshift[1], mshift[0]])
-    return imgs_new, coords_new, mshift_new
+    return imgs_new, coords_new
 
 
 def determine_layout(
@@ -642,7 +643,8 @@ def determine_layout(
                 imgs.append(read_images[quintet[i]])
             imgs = dask.compute(*imgs)
             tile_shape = imgs[0].shape
-            coords = stage_positions[quintet] / image_spacing
+            stage = stage_positions[quintet]
+            coords = stage / image_spacing
             flip_y, flip_x, area_frac = _detect_flip(imgs, coords, min_ncc, mshift)
             if flip_y * flip_x != 0.0:
                 return (
@@ -654,11 +656,11 @@ def determine_layout(
                     quintet[0],
                     max_shift,
                 )  # in addition return one center tile
-            # swap y & x
-            imgs, coords, mshift_swapped = _swap(imgs, coords, mshift)
-            flip_y, flip_x, area_frac = _detect_flip(
-                imgs, coords, min_ncc, mshift_swapped
-            )
+            # swap stage y & x, then convert to pixels on the image axes, as in
+            # convert_stage_positions
+            imgs, stage = _swap(imgs, stage)
+            coords = stage / image_spacing
+            flip_y, flip_x, area_frac = _detect_flip(imgs, coords, min_ncc, mshift)
             if flip_y * flip_x != 0.0:
                 return (
                     True,
@@ -851,9 +853,9 @@ def _find_spanning_trees(g):
 
         if n_v > 1:
             center = _get_center(gc)
-            errors = -np.log(
-                gc.es["ncc"]
-            )  # negative log as errors, assume ncc <=0 are all filtered already
+            # negative log as errors, assume ncc <=0 are all filtered already. Clip
+            # ncc to 1 so rounding (ncc slightly > 1) can't give a negative weight.
+            errors = -np.log(np.minimum(gc.es["ncc"], 1.0))
             # one shortest path per vertex (ties are broken arbitrarily)
             paths = gc.get_shortest_paths(
                 center, weights=errors, mode="all"
