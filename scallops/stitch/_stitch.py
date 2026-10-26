@@ -356,7 +356,10 @@ def _single_stitch(
             flip_x,
             (1, 1),
         ),
-        final_shifts=final_shifts,
+        # stage positions are in µm, so convert shifts from pixels to µm
+        final_shifts=(final_shifts * image_spacing)
+        if final_shifts is not None
+        else None,
         spanning_tree_edges=spanning_tree_edges,
         pairs=pairs,
         zncc_val=zncc_val,
@@ -526,7 +529,9 @@ def _write_arrays(
             # check for swap
             if ffp.sizes["z"] > 1 and ffp.sizes["c"] == 1:
                 ffp = ffp.rename({"z": "c", "c": "z"})
-            squeeze_dims = [d for d in ["t", "z"] if d in ffp.dims]
+            squeeze_dims = [
+                d for d in ["t", "z"] if d in ffp.dims and ffp.sizes[d] == 1
+            ]
 
             if len(squeeze_dims) > 0:
                 ffp = ffp.squeeze(squeeze_dims)
@@ -550,7 +555,9 @@ def _write_arrays(
             # check for swap
             if dfp.sizes["z"] > 1 and dfp.sizes["c"] == 1:
                 dfp = dfp.rename({"z": "c", "c": "z"})
-            squeeze_dims = [d for d in ["t", "z"] if d in dfp.dims]
+            squeeze_dims = [
+                d for d in ["t", "z"] if d in dfp.dims and dfp.sizes[d] == 1
+            ]
             if len(squeeze_dims) > 0:
                 dfp = dfp.squeeze(squeeze_dims)
             if "z" in dfp.dims:
