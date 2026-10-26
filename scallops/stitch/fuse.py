@@ -591,29 +591,19 @@ def _fuse_image(
                 lock.release()
 
 
-def _dist_from_tile_edge(i: int, j: int, tile_width: int, tile_height: int) -> int:
-    """Calculates a distance metric from pixel coordinates to tile edges.
-
-    :param i: Vertical (row) coordinate of the pixel
-    :param j: Horizontal (column) coordinate of the pixel
-    :param tile_width: Width of the tile in pixels
-    :param tile_height:  Height of the tile in pixels
-    :return: Distance metric calculated as product of minimum horizontal and vertical distances to edges
-    """
-
-    left = j + 1
-    up = i + 1
-    right = tile_width - j
-    bottom = tile_height - i
-    hor = min(right, left)
-    vert = min(up, bottom)
-    return hor * vert
-
-
 def _tile_blending_weights(tile_shape: tuple[int, int]) -> NDArray:
-    weights = np.zeros(tile_shape)
-    for i in range(tile_shape[0]):
-        for j in range(tile_shape[1]):
-            weights[i, j] = _dist_from_tile_edge(i, j, tile_shape[1], tile_shape[0])
+    """Blending weights that decrease towards the tile edges.
+
+    Each weight is the product of the pixel's distance to the nearest horizontal edge
+    and its distance to the nearest vertical edge (both 1 at the edge), normalized so
+    the maximum is 1.
+
+    :param tile_shape: Tile (height, width)
+    :return: Weights array of shape `tile_shape`
+    """
+    height, width = tile_shape
+    vert = np.minimum(np.arange(1, height + 1), np.arange(height, 0, -1))
+    hor = np.minimum(np.arange(1, width + 1), np.arange(width, 0, -1))
+    weights = np.outer(vert, hor).astype(float)
     weights /= weights.max()
     return weights
