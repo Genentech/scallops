@@ -382,10 +382,6 @@ def run_stitch(args: argparse.Namespace) -> None:
             else None,
             channel_order=args.alignment_correction_channel_order,
         )
-        if no_save_image:
-            logger.warning(
-                "--alignment-correction-channels has no effect with --no-save-image (no image is fused)."
-            )
     elif (
         args.alignment_correction_params is not None
         or args.alignment_correction_channel_order
