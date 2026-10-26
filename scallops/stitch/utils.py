@@ -18,7 +18,7 @@ import xarray as xr
 import zarr
 from dask import delayed
 from numpy.typing import NDArray
-from ome_types import from_xml
+from ome_types import OME, from_xml
 from pint import UndefinedUnitError, UnitRegistry
 from skimage.util import img_as_float, img_as_ubyte, img_as_uint
 
@@ -322,7 +322,7 @@ def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str)
 
 def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | None:
     # get from image metadata
-    if len(filepaths) == 1:
+    if len(filepaths) == 1:  # single nd2 file with all tiles
         img = _create_image(filepaths[0])
         ome_metadata = _get_ome(img)
         if ome_metadata is None:
@@ -330,7 +330,7 @@ def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | 
         n_images = len(ome_metadata.images)
         stage_positions = np.zeros((n_images, 2))
         for i in range(n_images):
-            pos = get_tile_position(img, i)
+            pos = get_tile_position(img, i, ome_metadata=ome_metadata)
             if pos is None:
                 return None
             y, x = pos
@@ -349,7 +349,7 @@ def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | 
     return stage_positions
 
 
-def _get_ome(image: bioio.BioImage):
+def _get_ome(image: bioio.BioImage) -> OME | None:
     try:
         metadata = image.ome_metadata
         if metadata is not None:
@@ -365,8 +365,11 @@ def _get_ome(image: bioio.BioImage):
     return None
 
 
-def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> NDArray | None:
-    ome_metadata = _get_ome(image)
+def get_tile_position(
+    image: bioio.BioImage, image_index: int = 0, ome_metadata: OME | None = None
+) -> NDArray | None:
+    if ome_metadata is None:
+        ome_metadata = _get_ome(image)
     physical_size_y_unit = None
     physical_size_x_unit = None
     values = None
@@ -782,6 +785,8 @@ def _init_tiles(
     if len(image_filepaths) == 1:
         img = _create_image(image_filepaths[0])
         ome_metadata = _get_ome(img)
+        if ome_metadata is None:
+            raise ValueError("Unable to read ome_metadata")
         n_scenes = len(ome_metadata.images)
 
     fileattrs = None
