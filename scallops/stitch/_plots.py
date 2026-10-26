@@ -13,6 +13,16 @@ from scallops.cli.util import cli_metadata
 from scallops.stitch.shift_utils import _get_overlap_bounding_box
 
 
+def _in_spanning_tree(
+    pairs: Sequence[tuple[int, int]], spanning_tree_edges: Sequence[tuple[int, int]]
+) -> NDArray[np.bool_]:
+    """Whether each pair is a spanning tree edge, ignoring edge direction."""
+    spanning_tree_edges_set = {tuple(sorted(edge)) for edge in spanning_tree_edges}
+    return np.array(
+        [tuple(sorted(pair)) in spanning_tree_edges_set for pair in pairs], dtype=bool
+    )
+
+
 def _max_shift_vs_zncc_plot(
     nccs_before_stitching: NDArray,
     shifts_before_stitching: NDArray,
@@ -32,12 +42,7 @@ def _max_shift_vs_zncc_plot(
     )
     in_spanning_tree = None
     if spanning_tree_edges is not None:
-        spanning_tree_edges_set = set()
-        for edge in spanning_tree_edges:
-            spanning_tree_edges_set.add(tuple(sorted(edge)))
-        in_spanning_tree = np.zeros(len(nccs_before_stitching), dtype=bool)
-        for i in range(len(pairs)):
-            in_spanning_tree[i] = tuple(pairs[i]) in spanning_tree_edges_set
+        in_spanning_tree = _in_spanning_tree(pairs, spanning_tree_edges)
         df["In Spanning Tree"] = in_spanning_tree
     sns.scatterplot(
         df.sort_values(
