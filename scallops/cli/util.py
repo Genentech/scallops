@@ -327,11 +327,12 @@ def _z_index_tile_type(s: str) -> int | str:
 
     :param s: The input string: 'max', 'focus', a z-index, or a Parquet path.
     :return: 'max', 'focus', the z-index as an integer, or the Parquet path.
-    :raises ValueError: If the input is a negative integer.
+    :raises argparse.ArgumentTypeError: If the input is a negative integer or an
+        unrecognized keyword that does not look like a path.
 
     .. example::
 
-       >>> _z_index_tile_type("focus")
+       >>> _z_index_tile_type("Focus")
        'focus'
        >>> _z_index_tile_type("3")
        3
@@ -340,15 +341,16 @@ def _z_index_tile_type(s: str) -> int | str:
     """
 
     s = s.strip()
-    if s in ("max", "focus"):
-        return s
+    if s.lower() in ("max", "focus"):
+        return s.lower()
 
     try:
         value = int(s)
     except ValueError:
+        # parquet path
         return s
     if value < 0:
-        raise ValueError("z-index must be >=0")
+        raise argparse.ArgumentTypeError("z-index must be >=0")
     return value
 
 
@@ -356,7 +358,7 @@ def z_index_tile_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--z-index",
         help="Either `max`, `focus`, z-index (0-based), or a path to a Parquet file "
-        "containing columns `key` and `z_index`. `Focus` selects the best "
+        "containing columns `key` and `z_index`. `focus` selects the best "
         "z-index using the slope of the image log-log power spectrum.",
         default="max",
         type=_z_index_tile_type,
