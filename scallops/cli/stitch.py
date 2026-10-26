@@ -219,7 +219,11 @@ def single_stitch_preview(
             if bounds:
                 ax.add_patch(
                     mpatches.Rectangle(
-                        (x, y), *tile_shape, edgecolor="black", fill=False
+                        (x, y),
+                        tile_shape[1],  # width
+                        tile_shape[0],  # height
+                        edgecolor="black",
+                        fill=False,
                     )
                 )
             if numbers:
