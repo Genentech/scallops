@@ -167,10 +167,11 @@ def _disam_shift(ref, mov, pos_shift, ncc_func=_zncc, frac_min=0.01):
         max_corr = corr
     # D
     area_frac = (float(dy) / sy) * (float(sx - dx) / sx)
+    corr = 0.0
     if area_frac >= frac_min:
         ref_crop = ref[:dy, dx:]
         mov_crop = mov[sy - dy :, : sx - dx]
-    corr = ncc_func(ref_crop, mov_crop)
+        corr = ncc_func(ref_crop, mov_crop)
     if corr > max_corr:
         shift[0] = dy - sy
         shift[1] = dx
