@@ -91,10 +91,11 @@ FAQ
 
     Correcting a channel's shift leaves a band of missing pixels along some tile edges (pixels that would come from
     outside the tile). The radial correction leaves such a band in every channel on its own; only bands wider than
-    that count. The crop applied when writing the stitched image is widened to remove these bands. If a band is
-    wider than half the typical overlap between neighbouring tiles, cropping it would open gaps between tiles, so
-    stitching stops with an error: leave that channel out of ``--alignment-correction-channels`` or give smaller
-    parameters for it (which may correct it only partly). If the tiles could not be aligned and were placed at their
+    that count. The crop SCALLOPS applies when writing the stitched image removes bands up to its width. A wider band
+    would need a larger crop, which could open gaps between tiles, so stitching stops with an error: leave that
+    channel out of ``--alignment-correction-channels`` or give smaller parameters for it (which may correct it only
+    partly). Along an axis without neighbouring tiles (e.g. a single tile), the crop is widened to remove the band
+    instead. If the tiles could not be aligned and were placed at their
     stage positions, nothing is cropped, so stitching stops with an error naming the channels that would leave a band;
     leave those out of ``--alignment-correction-channels``. The crop used is saved in the per-image record
     (``fusion_crop``).

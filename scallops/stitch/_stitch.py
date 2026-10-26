@@ -325,7 +325,7 @@ def _single_stitch(
             tile_shape_no_crop,
             fitted_radial_correction_k,
             fuse_crop_width,
-            _max_fusion_crop(stitch_result),
+            _has_neighbours(stitch_result),
             image_key,
         )
         output_metadata["channel_alignment"]["fusion_crop"] = crop_record
@@ -551,22 +551,21 @@ def _single_stitch(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _max_fusion_crop(stitch_result: dict) -> tuple[int | None, int | None]:
-    """The largest fusion crop per axis (y, x) for the channel alignment: half the typical (median) overlap between
-    side-by-side tiles along that axis (pairs that overlap by at least half a tile across it, so diagonal neighbours
-    don't count). ``None`` for an axis without such neighbours (e.g. a single tile), where any crop opens no gaps."""
+def _has_neighbours(stitch_result: dict) -> tuple[bool, bool]:
+    """Per axis (y, x), whether tiles have side-by-side neighbours along it after stitching (pairs that overlap by at
+    least half a tile across it, so diagonal neighbours don't count). Without them (e.g. a single tile), any fusion
+    crop opens no gaps between tiles."""
     positions = np.asarray(stitch_result["stitched_positions"], float)
     pairs = stitch_result["pairs_after_stitching"]
     shape = stitch_result["tile_shape"]
-    overlaps: list[list[float]] = [[], []]
+    found = [False, False]
     for i, j in np.asarray(pairs if pairs is not None else [], int).reshape(-1, 2):
         d = np.abs(positions[j] - positions[i])
         for axis in (0, 1):
             other = 1 - axis
             if d[axis] >= d[other] and d[other] <= shape[other] / 2:
-                overlaps[axis].append(shape[axis] - d[axis])
-    y, x = (int(np.median(o) // 2) if o else None for o in overlaps)
-    return y, x
+                found[axis] = True
+    return found[0], found[1]
 
 
 def _estimate_channel_alignment(

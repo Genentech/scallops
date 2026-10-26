@@ -326,28 +326,57 @@ def channel_coords(
     return result
 
 
+def _out_of_tile(
+    shape: tuple[int, int],
+    radial_correction_k: float | None,
+    m: float = 0.0,
+    ty: float = 0.0,
+    tx: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Output pixels that resampling fills with zeros: sampled from above or below the tile, and from left or right
+    of it; ``None`` for the identity map."""
+    coords = alignment_coords(shape, radial_correction_k, m, ty, tx)
+    if coords is None:
+        return None
+    h, w = shape
+    return (coords[0] < 0) | (coords[0] > h - 1), (coords[1] < 0) | (coords[1] > w - 1)
+
+
+def _band(
+    out: tuple[np.ndarray, np.ndarray] | None, crop: tuple[int, int] = (0, 0)
+) -> tuple[int, int]:
+    """Crop (rows, cols) that removes every zero-filled pixel, the wider side of each axis: rows for pixels sampled
+    from above or below the tile, counted only within the columns the column crop keeps; columns the other way
+    round. Cropping at least this much on both axes leaves no zero-filled pixel."""
+    if out is None:
+        return 0, 0
+    out_y, out_x = out
+    h, w = out_y.shape
+    rows = np.flatnonzero(out_y[:, crop[1] : w - crop[1]].any(axis=1))
+    cols = np.flatnonzero(out_x[crop[0] : h - crop[0], :].any(axis=0))
+
+    def need(idx, n):
+        low, high = idx[idx < n / 2], idx[idx >= n / 2]
+        return max(
+            int(low.max()) + 1 if low.size else 0,
+            n - int(high.min()) if high.size else 0,
+        )
+
+    return need(rows, h), need(cols, w)
+
+
 def edge_band_width(
     shape: tuple[int, int],
     radial_correction_k: float | None,
     m: float = 0.0,
     ty: float = 0.0,
     tx: float = 0.0,
+    crop: tuple[int, int] = (0, 0),
 ) -> tuple[int, int]:
     """Width (px) of the band at the tile edge that resampling fills with zeros (output pixels sampled from outside
-    the tile), as rows (y) and columns (x), the wider of the two sides of each axis."""
-    coords = alignment_coords(shape, radial_correction_k, m, ty, tx)
-    if coords is None:
-        return 0, 0
-    h, w = shape
-    rows = max(
-        int((coords[0] < 0).any(axis=1).sum()),
-        int((coords[0] > h - 1).any(axis=1).sum()),
-    )
-    cols = max(
-        int((coords[1] < 0).any(axis=0).sum()),
-        int((coords[1] > w - 1).any(axis=0).sum()),
-    )
-    return rows, cols
+    the tile), as rows (y) and columns (x), the wider of the two sides of each axis. With ``crop``, rows count only
+    within the columns that crop keeps, and the other way round."""
+    return _band(_out_of_tile(shape, radial_correction_k, m, ty, tx), crop)
 
 
 def check_stage_positions_only(
@@ -394,39 +423,52 @@ def fusion_crop(
     shape: tuple[int, int],
     radial_correction_k: float | None,
     crop: tuple[int, int],
-    max_crop: tuple[int | None, int | None],
+    neighbours: tuple[bool, bool],
     image_key: str,
 ) -> tuple[tuple[int, int], dict]:
     """Fusion crop that removes the zero bands the corrected channels leave at the tile edges.
 
-    Bands are measured on the combined map, so they include the radial correction's own band, which every channel
-    has, corrected or not. A channel's band counts on an axis only where it is wider than that radial-only band.
+    On an axis with side-by-side neighbouring tiles, SCALLOPS's crop is kept (it already leaves a safety margin
+    below half the overlap; cropping more could open gaps between tiles), and a band wider than it stops the run. On
+    an axis without neighbours (e.g. a single tile), the crop is widened to the band.
+
+    Bands are measured within the part of the tile the other axis's crop keeps, and include the radial correction's
+    own band, which every channel has, corrected or not: a channel's band counts on an axis only where it is wider
+    than that radial-only band.
 
     :param crop: SCALLOPS's fusion crop (y, x).
-    :param max_crop: Per axis, the largest crop allowed: half the typical (median) overlap between side-by-side tiles,
-        as SCALLOPS's own crop uses the median overlap; ``None`` where any crop opens no gaps.
-    :return: The crop to use (each axis at least the widest counted band), and a record of the values.
-    :raises ValueError: If a counted band is wider than both ``crop`` and ``max_crop`` on an axis: the tile overlap is
-        too small for the correction.
+    :param neighbours: Per axis (y, x), whether tiles have side-by-side neighbours along it.
+    :return: The crop to use, and a record of the values.
+    :raises ValueError: If a counted band is wider than SCALLOPS's crop on an axis with neighbours.
     """
-    allowed = [None if lim is None else max(cr, lim) for cr, lim in zip(crop, max_crop)]
-    radial = edge_band_width(shape, radial_correction_k)
-    bands: dict[int, tuple[int, int]] = {}
-    for c, a in channel_alignment.items():
-        full = edge_band_width(shape, radial_correction_k, a["m"], a["ty"], a["tx"])
-        bands[c] = (
-            full[0] if full[0] > radial[0] else 0,
-            full[1] if full[1] > radial[1] else 0,
+    radial_out = _out_of_tile(shape, radial_correction_k)
+    outs = {
+        c: _out_of_tile(shape, radial_correction_k, a["m"], a["ty"], a["tx"])
+        for c, a in channel_alignment.items()
+    }
+    used = (crop[0], crop[1])
+    while True:  # widening one axis can narrow the other's band; the crop only grows, so this ends
+        radial = _band(radial_out, used)
+        bands = {}
+        for c, out in outs.items():
+            b = _band(out, used)
+            bands[c] = (
+                b[0] if b[0] > radial[0] else 0,
+                b[1] if b[1] > radial[1] else 0,
+            )
+        band = tuple(max([b[i] for b in bands.values()], default=0) for i in range(2))
+        widened = (
+            used[0] if neighbours[0] else max(used[0], band[0]),
+            used[1] if neighbours[1] else max(used[1], band[1]),
         )
+        if widened == used:
+            break
+        used = widened
     too_wide = []
     for c, b in sorted(bands.items()):
-        over = {
-            i: b[i] - limit
-            for i, limit in enumerate(allowed)
-            if limit is not None and b[i] > limit
-        }
+        over = [i for i in range(2) if neighbours[i] and b[i] > used[i]]
         if over:
-            i = max(over, key=over.__getitem__)
+            i = max(over, key=lambda i: b[i] - used[i])
             too_wide.append(
                 f"Tile overlap is too small to correct channel {c} ({channel_alignment[c]['name']}) of {image_key}: "
                 f"its alignment leaves a {b[i]} px band of missing pixels at the tile edge"
@@ -435,13 +477,12 @@ def fusion_crop(
                     if radial[i]
                     else ""
                 )
-                + f", but the overlap allows cropping only {allowed[i]} px. Leave the channel out of "
-                "--alignment-correction-channels or give smaller parameters for it."
+                + f", but the crop for this tile overlap is only {used[i]} px, and cropping more could open gaps "
+                "between tiles. Leave the channel out of --alignment-correction-channels or give smaller parameters "
+                "for it."
             )
     if too_wide:
         raise ValueError("\n".join(too_wide))
-    band = tuple(max([b[i] for b in bands.values()], default=0) for i in range(2))
-    used = (max(crop[0], band[0]), max(crop[1], band[1]))
     if used != tuple(crop):
         logger.info(
             f"Crop for writing increased to {used} to remove the zero bands of the channel alignment correction "
@@ -452,7 +493,6 @@ def fusion_crop(
         edge_band=list(band),
         radial_band=list(radial),
         used=list(used),
-        max=list(max_crop),
     )
 
 
@@ -494,8 +534,9 @@ def _file_channel_names(path: str, n_channels: int = 1) -> list[str | None]:
         xml = attrs.get("unprocessed", {}).get(270) if isinstance(attrs, dict) else None
         if isinstance(xml, str):
             m = re.search(r'<prop id="_IllumSetting_"[^>]*value="([^"]*)"', xml)
-            if m:
-                return [m.group(1)] * n_channels
+            # an IXM description names the one channel of its file
+            if m and n_channels == 1:
+                return [m.group(1)]
     except Exception:  # noqa: BLE001 - metadata is optional
         pass
     result: list[str | None] = [None] * n_channels

@@ -414,6 +414,22 @@ def test_metadata_channel_names_open_a_multichannel_file_once(tmp_path, monkeypa
     assert len(opens) == 1
 
 
+def test_ixm_channel_name_only_for_single_channel_files(tmp_path):
+    import tifffile
+
+    from scallops.stitch._channel_align import _file_channel_names
+
+    xml = '<MetaData><prop id="_IllumSetting_" type="string" value="DAPI"/></MetaData>'
+    one, three = tmp_path / "one.tif", tmp_path / "three.tif"
+    tifffile.imwrite(one, np.zeros((16, 16), np.uint16), description=xml, metadata=None)
+    tifffile.imwrite(
+        three, np.zeros((3, 16, 16), np.uint16), description=xml, metadata=None
+    )
+    assert _file_channel_names(str(one)) == ["DAPI"]
+    # the description names one channel: a file holding three gets no names, not "DAPI" for each
+    assert _file_channel_names(str(three), 3) == [None, None, None]
+
+
 def test_estimation_reads_the_z_plane_fusion_uses(tmp_path, monkeypatch):
     import tifffile
 
@@ -543,40 +559,52 @@ def test_edge_band_width():
     assert edge_band_width((512, 512), None, 0.0, -12.5, 7.2) == (13, 8)
 
 
-def test_fusion_crop_covers_zero_bands_or_stops():
+def test_edge_band_width_counts_only_what_the_crop_keeps():
+    # with the radial correction, the corners reach furthest; columns cropped anyway don't count
+    shape, k, crop = (512, 512), 2e-7, (24, 24)
+    assert edge_band_width(shape, k, 0.0, 19.0, 0.0) == (25, 7)
+    assert edge_band_width(shape, k, 0.0, 19.0, 0.0, crop=crop) == (24, 6)
+    assert edge_band_width(shape, k, 0.0, 20.0, 0.0, crop=crop) == (25, 6)
+    for ty, clean in (
+        (19.0, True),
+        (20.0, False),
+    ):  # does the 24 px crop remove every zero-filled pixel?
+        c = alignment_coords(shape, k, 0.0, ty, 0.0)[:, 24:-24, 24:-24]
+        assert (((c < 0) | (c > 511)).any()) != clean
+
+
+def test_fusion_crop_keeps_scallops_crop_or_stops():
     def shifted(ty):
         return {1: dict(name="CY7", m=0.0, ty=ty, tx=0.0)}
 
-    used, rec = fusion_crop(shifted(10.0), (512, 512), None, (24, 24), (32, 32), "A1")
-    assert used == (24, 24)
-    used, rec = fusion_crop(shifted(30.0), (512, 512), None, (24, 24), (32, 32), "A1")
-    assert used == (30, 24) and rec == dict(
-        scallops=[24, 24],
-        edge_band=[30, 0],
-        radial_band=[0, 0],
-        used=[30, 24],
-        max=[32, 32],
+    # neighbours along both axes: SCALLOPS's crop is kept, and covers bands up to its width
+    used, rec = fusion_crop(
+        shifted(20.0), (512, 512), None, (24, 24), (True, True), "A1"
     )
+    assert used == (24, 24) and rec == dict(
+        scallops=[24, 24], edge_band=[20, 0], radial_band=[0, 0], used=[24, 24]
+    )
+    # a wider band would need a larger crop, which could open gaps between tiles: stop
     with pytest.raises(
         ValueError,
-        match=r"Tile overlap is too small to correct channel 1 \(CY7\) of A1: .* 40 px band .* only 32 px",
+        match=r"Tile overlap is too small to correct channel 1 \(CY7\) of A1: .* 30 px band .* only 24 px",
     ):
-        fusion_crop(shifted(40.0), (512, 512), None, (24, 24), (32, 32), "A1")
-    # a band inside SCALLOPS's own crop is accepted even where the overlap limit is smaller
-    assert fusion_crop(shifted(30.0), (512, 512), None, (32, 24), (20, 20), "A1")[
+        fusion_crop(shifted(30.0), (512, 512), None, (24, 24), (True, True), "A1")
+    # no neighbours along y (one row of tiles): the crop widens along y only
+    assert fusion_crop(shifted(30.0), (512, 512), None, (0, 24), (False, True), "A1")[
         0
-    ] == (32, 24)
-    # no neighbours along an axis (e.g. a single tile): any crop opens no gaps
-    assert fusion_crop(shifted(40.0), (512, 512), None, (0, 0), (None, None), "A1")[
+    ] == (30, 24)
+    # no neighbours at all (a single tile)
+    assert fusion_crop(shifted(40.0), (512, 512), None, (0, 0), (False, False), "A1")[
         0
     ] == (40, 0)
 
 
 def test_fusion_crop_ignores_the_radial_band():
-    k = 2e-7  # radial correction alone: 7 px band on a 512 px tile
+    k = 2e-7  # radial correction alone: 7 px band on a 512 px tile (6 px within a 24 px crop)
     zero = {1: dict(name="CY7", m=0.0, ty=0.0, tx=0.0)}
-    # the radial band alone neither widens the crop nor stops the run, even beyond the overlap limit
-    used, rec = fusion_crop(zero, (512, 512), k, (2, 2), (3, 3), "A1")
+    # the radial band alone neither widens the crop nor stops the run, even beyond SCALLOPS's crop
+    used, rec = fusion_crop(zero, (512, 512), k, (2, 2), (True, True), "A1")
     assert (
         used == (2, 2) and rec["edge_band"] == [0, 0] and rec["radial_band"] == [7, 7]
     )
@@ -584,9 +612,21 @@ def test_fusion_crop_ignores_the_radial_band():
     shifted = {1: dict(name="CY7", m=0.0, ty=30.0, tx=0.0)}
     with pytest.raises(
         ValueError,
-        match=r"36 px band .* \(the radial correction alone leaves 7 px\), .* only 32 px",
+        match=r"35 px band .* \(the radial correction alone leaves 6 px\), .* only 24 px",
     ):
-        fusion_crop(shifted, (512, 512), k, (24, 24), (32, 32), "A1")
+        fusion_crop(shifted, (512, 512), k, (24, 24), (True, True), "A1")
+
+
+def test_fusion_crop_measures_bands_within_the_crop():
+    # 25 px across the full width, 24 px within the columns the 24 px crop keeps: accepted
+    k = 2e-7
+    shifted = {1: dict(name="CY7", m=0.0, ty=19.0, tx=0.0)}
+    used, rec = fusion_crop(shifted, (512, 512), k, (24, 24), (True, True), "A1")
+    assert used == (24, 24) and rec["edge_band"] == [24, 0]
+    with pytest.raises(ValueError, match=r"25 px band"):
+        fusion_crop(
+            {1: dict(shifted[1], ty=20.0)}, (512, 512), k, (24, 24), (True, True), "A1"
+        )
 
 
 def _shifted_stitch(tmp_path, ty, positions=POSITIONS):
@@ -616,19 +656,20 @@ def _shifted_stitch(tmp_path, ty, positions=POSITIONS):
 
 @pytest.mark.io
 def test_stitch_crop_removes_zero_bands(tmp_path):
-    # 64 px overlap: SCALLOPS's crop is 24 px, half the overlap 32 px; a 30 px shift leaves a 30 px band
-    subprocess.check_call(_shifted_stitch(tmp_path, 30.0))
+    # 64 px overlap: SCALLOPS's crop is 24 px; a 20 px shift leaves a 20 px band, inside it
+    subprocess.check_call(_shifted_stitch(tmp_path, 20.0))
     fused = read_image(str(tmp_path / "stitch.zarr")).values
     assert (fused[1] == 0).sum() == 0
     record = json.loads((tmp_path / "stitch" / "A1-channel-alignment.json").read_text())
     crop = record["fusion_crop"]
-    assert crop["scallops"] == [24, 24] and crop["edge_band"] == [30, 0]
-    assert crop["used"] == [30, 24] and min(crop["max"]) >= 30
+    assert crop["scallops"] == [24, 24] and crop["edge_band"] == [20, 0]
+    assert crop["used"] == [24, 24]
 
 
 @pytest.mark.io
 def test_stitch_stops_when_overlap_is_too_small(tmp_path):
-    r = subprocess.run(_shifted_stitch(tmp_path, 40.0), capture_output=True, text=True)
+    # a 30 px band is wider than SCALLOPS's 24 px crop
+    r = subprocess.run(_shifted_stitch(tmp_path, 30.0), capture_output=True, text=True)
     assert r.returncode != 0
     assert (
         "Tile overlap is too small to correct channel 1 (CY7) of A1"
@@ -636,21 +677,29 @@ def test_stitch_stops_when_overlap_is_too_small(tmp_path):
     )
 
 
-def test_max_fusion_crop_counts_side_by_side_neighbours():
-    from scallops.stitch._stitch import _max_fusion_crop
+def test_has_neighbours_counts_side_by_side_pairs():
+    from scallops.stitch._stitch import _has_neighbours
 
-    # 2 x 2 grid, 64 px overlaps; one pair 12 px further apart in x; the diagonal pairs don't count
-    positions = [(0, 0), (0, 460), (448, 0), (448, 448)]
-    pairs = [(0, 1), (0, 2), (1, 3), (2, 3), (0, 3), (1, 2)]
-    result = dict(
-        stitched_positions=positions, pairs_after_stitching=pairs, tile_shape=(512, 512)
-    )
-    # typical overlap per axis: y pairs overlap 64 and 64 px, x pairs 52 and 64 px (median 58)
-    assert _max_fusion_crop(result) == (32, 29)
-    # a single tile: no neighbours, any crop opens no gaps
-    assert _max_fusion_crop(
-        dict(result, stitched_positions=[(0, 0)], pairs_after_stitching=None)
-    ) == (None, None)
+    def result(positions, pairs):
+        return dict(
+            stitched_positions=positions,
+            pairs_after_stitching=pairs,
+            tile_shape=(512, 512),
+        )
+
+    grid = [(0, 0), (0, 460), (448, 0), (448, 448)]
+    assert _has_neighbours(
+        result(grid, [(0, 1), (0, 2), (1, 3), (2, 3), (0, 3), (1, 2)])
+    ) == (True, True)
+    assert _has_neighbours(result([(0, 0), (0, 448)], [(0, 1)])) == (
+        False,
+        True,
+    )  # one row
+    assert _has_neighbours(result([(0, 0), (448, 448)], [(0, 1)])) == (
+        False,
+        False,
+    )  # diagonal only
+    assert _has_neighbours(result([(0, 0)], None)) == (False, False)  # a single tile
 
 
 def test_estimators_survive_patches_leaving_the_tile(monkeypatch):
