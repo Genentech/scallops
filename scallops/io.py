@@ -271,7 +271,7 @@ def _create_image(path: str, **kwargs) -> bioio.BioImage:
         # Example usage of _create_image
         image = _create_image("data/sample_image.tiff", reconstruct_mosaic=True)
     """
-    img_args = dict(reconstruct_mosaic=False)
+    img_args = dict(reconstruct_mosaic=False, use_plugin_cache=True)
     img_args.update(**kwargs)
     path_lc = path.lower()
     base_path_lc, ext = os.path.splitext(path_lc)
