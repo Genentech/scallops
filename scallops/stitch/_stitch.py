@@ -237,7 +237,7 @@ def _single_stitch(
             n_scenes=n_scenes,
             stage_positions=stage_positions,
             image_spacing=image_spacing,
-            z_index=tile_z_index,
+            z_index=tile_z_index if not separate_z else 0,
             t_index=t_index,
             random_seed=random_seed,
             image_key=image_key,

@@ -469,6 +469,73 @@ def test_estimation_reads_the_z_plane_fusion_uses(tmp_path, monkeypatch):
         )
         np.testing.assert_array_equal(captured["ref"], target[0])
 
+    # one file per z plane: _init_tiles keeps only the selected plane's file, so the estimate (like tile alignment
+    # and fusion) must read plane 0 of what is left, not the original --z-index
+    from scallops.io import _set_up_experiment
+
+    input_path = tmp_path / "separate_z"
+    for z in range(3):
+        _write_zarr_image(
+            name=None,
+            root=input_path / f"A1-tile0-z{z}.zarr",
+            image=xr.DataArray(data[z], dims=["c", "y", "x"]),
+            metadata=dict(
+                position_y=0,
+                position_x=0,
+                position_x_unit="micrometer",
+                position_y_unit="micrometer",
+                physical_size_y=1,
+                physical_size_x=1,
+                physical_size_y_unit="micrometer",
+                physical_size_x_unit="micrometer",
+            ),
+            group=None,
+        )
+    (image_tuple,) = _set_up_experiment(
+        str(input_path), "{well}-tile{tile}-z{z}.zarr", ["well"]
+    )
+    captured.clear()
+    with pytest.raises(Stop):
+        S._single_stitch(
+            image_tuple,
+            stage_positions_path=None,
+            image_output_root=None,
+            ffp_path=None,
+            dfp_path=None,
+            channel=0,
+            upsample_factor=1,
+            z_index=1,
+            image_spacing=None,
+            radial_correction_k="none",
+            blend="none",
+            crop_width=None,
+            stitch_alpha=0.01,
+            evaluate=False,
+            no_save_labels=True,
+            no_save_image=True,
+            output_channels=None,
+            no_version=True,
+            other_output_path=str(tmp_path / "separate_z_report") + "/",
+            rename=None,
+            expected_images=None,
+            force=True,
+            min_overlap_fraction=None,
+            random_seed=0,
+            max_shifts=(),
+            flip_y_axis=None,
+            flip_x_axis=None,
+            swap_axes=None,
+            channel_names=None,
+            channel_reference=None,
+            channel_cross_correlation_upsample=None,
+            channel_window=None,
+            channel_filter_percentiles=None,
+            alignment_correction=dict(
+                channels=[1], params=None, channel_order=["DAPI", "CY7"]
+            ),
+        )
+    np.testing.assert_array_equal(captured["ref"], data[1, 0])
+
 
 def test_edge_band_width():
     assert edge_band_width((512, 512), None) == (0, 0)
