@@ -57,6 +57,11 @@ from scallops.zarr_io import (
 logger = _get_cli_logger()
 
 
+def _distance_to_center(coords: np.ndarray) -> np.ndarray:
+    """Euclidean distance from each tile position to the mean tile position."""
+    return np.sqrt(np.sum((coords - coords.mean(axis=0)) ** 2, axis=1))
+
+
 def _single_stitch(
     image_tuple: tuple[tuple[str, ...], list[str], dict],
     stage_positions_path: str | None,
@@ -377,10 +382,8 @@ def _single_stitch(
         stitch_positions_df["separate_z"] = separate_z
     del stitch_result
 
-    stitch_position_coords = stitch_positions_df[["y", "x"]].values
-    center = stitch_position_coords.mean(axis=0)
-    stitch_positions_df["distance_to_center"] = np.sqrt(
-        np.sum(stitch_position_coords - center, axis=1) ** 2
+    stitch_positions_df["distance_to_center"] = _distance_to_center(
+        stitch_positions_df[["y", "x"]].values
     )
 
     stitch_positions_df["source"] = (
@@ -455,7 +458,10 @@ def _single_stitch(
             flip_x,
             (1, 1),
         ),
-        final_shifts=final_shifts,
+        # stage positions are in µm, so convert shifts from pixels to µm
+        final_shifts=(final_shifts * image_spacing)
+        if final_shifts is not None
+        else None,
         spanning_tree_edges=spanning_tree_edges,
         pairs=pairs,
         zncc_val=zncc_val,
@@ -729,7 +735,9 @@ def _write_arrays(
             # check for swap
             if ffp.sizes["z"] > 1 and ffp.sizes["c"] == 1:
                 ffp = ffp.rename({"z": "c", "c": "z"})
-            squeeze_dims = [d for d in ["t", "z"] if d in ffp.dims]
+            squeeze_dims = [
+                d for d in ["t", "z"] if d in ffp.dims and ffp.sizes[d] == 1
+            ]
 
             if len(squeeze_dims) > 0:
                 ffp = ffp.squeeze(squeeze_dims)
@@ -753,7 +761,9 @@ def _write_arrays(
             # check for swap
             if dfp.sizes["z"] > 1 and dfp.sizes["c"] == 1:
                 dfp = dfp.rename({"z": "c", "c": "z"})
-            squeeze_dims = [d for d in ["t", "z"] if d in dfp.dims]
+            squeeze_dims = [
+                d for d in ["t", "z"] if d in dfp.dims and dfp.sizes[d] == 1
+            ]
             if len(squeeze_dims) > 0:
                 dfp = dfp.squeeze(squeeze_dims)
             if "z" in dfp.dims:
