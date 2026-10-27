@@ -283,6 +283,7 @@ def run_stitch(args: argparse.Namespace) -> None:
     dask_cluster_parameters = (
         load_json(args.dask_cluster) if args.dask_cluster is not None else {}
     )
+    # each worker needs to hold ~10 tiles in memory
     if dask_server_url is None and args.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
 
