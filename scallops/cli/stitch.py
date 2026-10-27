@@ -26,7 +26,6 @@ import pandas as pd
 import skimage.transform
 import skimage.util
 from dask.bag import from_sequence
-from distributed import Client
 from skimage.util import img_as_uint
 
 from scallops.cli.util import (
@@ -412,14 +411,8 @@ def run_stitch(args: argparse.Namespace) -> None:
         image_output_root = open_ome_zarr(image_output, mode="a")
     with (
         _create_default_dask_config(),
-        _create_dask_client(dask_server_url, **dask_cluster_parameters) as client,
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        if (
-            no_save_image
-            and isinstance(client, Client)
-            and len(client.cluster.workers) != 1
-        ):
-            raise ValueError("Stitching can only be run with 1 worker.")
         from_sequence(
             _set_up_experiment(
                 args.images, args.image_pattern, args.groupby, subset=args.subset

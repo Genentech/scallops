@@ -14,7 +14,7 @@ from skimage.registration import phase_cross_correlation
 
 from scallops.io import _create_image, read_image
 from scallops.stitch._radial import radial_correct
-from scallops.stitch.fuse import _fuse, _fuse_image
+from scallops.stitch.fuse import _fuse, _fuse_chunk
 from scallops.stitch.utils import (
     _pixel_size_from_image,
     get_pixel_size,
@@ -426,16 +426,25 @@ def test_stitch_cli(tmp_path):
         expected_value[
             ..., y[i] : y[i] + tile_shape[0], x[i] : x[i] + tile_shape[1]
         ] = image_values[i]
-        _fuse_image(
-            image_paths=source[i],
-            image_attrs=image_attrs[i],
-            y=y[i],
-            x=x[i],
-            blend="none",
-            target_shape=test_fused_sequential.shape,
-            target_dtype=test_fused_sequential.dtype,
-            target=test_fused_sequential,
-        )
+    # one chunk covering the whole image; tiles are in ascending priority order
+    _fuse_chunk(
+        out=test_fused_sequential,
+        channel_slice=slice(0, fused_image_shape[0]),
+        box=(0, 0) + fused_image_shape[1:],
+        tiles=[
+            dict(
+                image_paths=source[i],
+                image_attrs=image_attrs[i],
+                y=y[i],
+                x=x[i],
+                z_index="max",
+                scene_id=None,
+            )
+            for i in range(len(y))
+        ],
+        target_dtype=test_fused_sequential.dtype,
+        blend="none",
+    )
     np.testing.assert_array_equal(
         test_fused_sequential, expected_value, err_msg="Fused image differs"
     )

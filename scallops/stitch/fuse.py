@@ -1,15 +1,12 @@
-import gc
 import logging
 import math
 import os
-import threading
 from collections.abc import Sequence
 from typing import Any, Literal
 
 import dask
 import numpy as np
 import pandas as pd
-import psutil
 import shapely
 import zarr
 from dask import delayed
@@ -29,7 +26,6 @@ from scallops.stitch.utils import (
     _select_t_index,
     dtype_convert,
 )
-from scallops.utils import _cpu_count
 from scallops.zarr_io import (
     _attrs_axes_scales,
     _create_array_kwargs,
@@ -119,7 +115,6 @@ def _fuse(
             os.remove(path)
 
     n_channels = img.sizes["c"]
-    size_z = img.sizes["z"] if "z" in img.dims else 1
     img = _select_t_index(img, t_index).isel(z=0, missing_dims="ignore")
     # Capture channel names from the tiles (e.g. from nd2 metadata via bioio) so
     # they can be written to the output OMERO metadata. Skip integer/positional
@@ -156,76 +151,31 @@ def _fuse(
     fused_y_size = (df["y"] + ysize).max()
     fused_x_size = (df["x"] + xsize).max()
 
-    if channels_per_batch is None:
-        if blend == "none":
-            size_per_channel = fused_y_size * fused_x_size * target_dtype.itemsize
-        else:
-            size_per_channel = (
-                np.dtype("float").itemsize * 2 * fused_y_size * fused_x_size
-            )
-        gc.collect()
-        available_mem = None
-        if os.environ.get("SCALLOPS_MEMORY") is not None:
-            try:
-                available_mem = int(os.environ["SCALLOPS_MEMORY"])
-            except ValueError:
-                logger.warning(
-                    "Unable to determine available memory from SCALLOPS_MEMORY environment variable."
-                )
-        if available_mem is None:
-            available_mem = 0.7 * psutil.virtual_memory().available - (
-                _cpu_count()
-                * size_z
-                * n_channels
-                * ysize
-                * xsize
-                * target_dtype.itemsize
-            )
-        channels_per_batch = max(1, int(available_mem / size_per_channel))
-        n_batches = math.ceil(len(output_channels) / channels_per_batch)
-        channels_per_batch = max(1, int(len(output_channels) / n_batches))
-        logger.debug(
-            f"Available memory {available_mem:,}, memory per channel: {size_per_channel:,}"
-        )
-    if channels_per_batch < 0:
+    # each task fuses all output channels in a batch for one y, x chunk, so the batch size only bounds the memory
+    # of a single task
+    if channels_per_batch is None or channels_per_batch < 0:
         channels_per_batch = len(output_channels)
     channels_per_batch = min(channels_per_batch, len(output_channels))
-    # AgglomerativeClustering requires at least 2 samples; a well with a single tile
-    # (e.g. a sparse live-imaging FOV) trivially has one partition.
-    single_tile = len(df) <= 1
-    if single_tile:
-        y_step_size = fused_y_size
-    else:
-        cluster = AgglomerativeClustering(
-            n_clusters=None, distance_threshold=tile_shape[0] * 0.1, linkage="single"
-        )
-        cluster.fit_predict(df[["y"]])
-        y_step_size = math.ceil(fused_y_size / len(np.unique(cluster.labels_)))
 
     if chunk_size is None:
-        if single_tile:
-            x_step_size = fused_x_size
+        # AgglomerativeClustering requires at least 2 samples; a well with a single tile
+        # (e.g. a sparse live-imaging FOV) trivially has one partition.
+        if len(df) <= 1:
+            chunk_size = fused_y_size, fused_x_size
         else:
-            cluster = AgglomerativeClustering(
-                n_clusters=None,
-                distance_threshold=tile_shape[1] * 0.1,
-                linkage="single",
-            )
-            cluster.fit_predict(df[["x"]])
-            x_step_size = math.ceil(fused_x_size / len(np.unique(cluster.labels_)))
-        chunk_size = y_step_size, x_step_size
-    partition_tree = None
-    locks = None
+            step_sizes = []
+            for dim, size, fused_size in zip(
+                ["y", "x"], tile_shape, [fused_y_size, fused_x_size]
+            ):
+                cluster = AgglomerativeClustering(
+                    n_clusters=None, distance_threshold=size * 0.1, linkage="single"
+                )
+                cluster.fit_predict(df[[dim]])
+                step_sizes.append(
+                    math.ceil(fused_size / len(np.unique(cluster.labels_)))
+                )
+            chunk_size = step_sizes[0], step_sizes[1]
 
-    if blend != "none":
-        partition_boxes = []
-        locks = []
-        for i in np.arange(0, fused_y_size, y_step_size):
-            b = shapely.box(0, i, fused_x_size, i + y_step_size)
-            partition_boxes.append(b)
-            locks.append(threading.Lock())
-        locks = np.array(locks)
-        partition_tree = shapely.STRtree(partition_boxes)
     fmt = _current_format()
     result_zarr_array = group.create_array(
         shape=(
@@ -239,12 +189,6 @@ def _fuse(
         overwrite=True,
         **_create_array_kwargs(fmt),
     )
-
-    _fuse_image_delayed = delayed(_fuse_image)
-
-    if blend != "none":
-        # shuffle to minimize lock contention
-        df = df.sample(frac=1)
 
     coords = None
     if channel_alignment is not None:
@@ -269,144 +213,106 @@ def _fuse(
         elif radial_correction_k is not None:
             dfp = radial_correct(dfp, radial_correction_k, cval=0)
 
-    y = df["y"].values
-    x = df["x"].values
-    source = df["source"].values
-    # convert scenes to list to convert numpy int to int (read_image does not like numpy ints for scene ids)
-    scene_ids = df["scene"].tolist() if has_scenes else None
+    # weights are computed on the full tile so crop them like the tiles
+    if weights is not None:
+        weights = _crop_image(weights, crop_width)
 
-    source_attrs = (
-        df["source_metadata"].values if "source_metadata" in df.columns else None
-    )
-    tile_z_indices = df["z_index"].values if "z_index" in df.columns else None
+    has_z_index = "z_index" in df.columns
     separate_z = False
     if "separate_z" in df.columns:
         separate_z = df["separate_z"].iloc[0]
         if not df["separate_z"].eq(separate_z).all():
             raise ValueError("separate_z must be all equal to True or False")
     if separate_z:
-        tile_z_indices = None
+        has_z_index = False
         z_index = 0
 
-    tile_priorities = df["priority"].values if blend == "none" else None
-
-    boxes = None
-    tile_tree = None
-    if blend == "none":
-        boxes = []
-        for i in range(len(x)):
-            boxes.append(
-                shapely.box(
-                    x[i],
-                    y[i],
-                    min(fused_x_size - 1, x[i] + xsize - 1),
-                    min(fused_y_size - 1, y[i] + ysize - 1),
-                )
+    # with blend "none", df is sorted by ascending priority. _fuse_chunk paints tiles in the given order so tiles
+    # with higher priority win where tiles overlap
+    source = df["source"].values
+    source_attrs = (
+        df["source_metadata"].values if "source_metadata" in df.columns else None
+    )
+    # convert scenes to list to convert numpy int to int (read_image does not like numpy ints for scene ids)
+    scene_ids = df["scene"].tolist() if has_scenes else None
+    tile_z_indices = df["z_index"].values if has_z_index else None
+    tiles = [
+        dict(
+            image_paths=source[i],
+            image_attrs=source_attrs[i] if source_attrs is not None else None,
+            y=int(df["y"].values[i]),
+            x=int(df["x"].values[i]),
+            z_index=tile_z_indices[i] if tile_z_indices is not None else z_index,
+            scene_id=scene_ids[i] if scene_ids is not None else None,
+        )
+        for i in range(len(df))
+    ]
+    tile_tree = shapely.STRtree(
+        [
+            shapely.box(
+                tile["x"],
+                tile["y"],
+                min(fused_x_size, tile["x"] + xsize) - 1,
+                min(fused_y_size, tile["y"] + ysize) - 1,
             )
-        tile_tree = shapely.STRtree(boxes)
+            for tile in tiles
+        ]
+    )
+
+    _fuse_chunk_delayed = delayed(_fuse_chunk)
+    # wrap shared arrays once so they are single graph keys instead of being copied into every task
+    weights_delayed = delayed(weights) if weights is not None else None
     for channel_batch in range(0, len(output_channels), channels_per_batch):
         channels = output_channels[channel_batch : channel_batch + channels_per_batch]
-        # with channel_reference, _fuse_image corrects all input channels before registering across channels and
+        # with channel_reference, _load_tile corrects all input channels before registering across channels and
         # selects the output channels afterwards, so it needs the full ffp/dfp
         select = channels if channel_reference is None else slice(None)
-        _ffp = ffp[select] if ffp is not None else None
-        _dfp = dfp[select] if dfp is not None else None
-
+        _ffp = delayed(ffp[select]) if ffp is not None else None
+        _dfp = delayed(dfp[select]) if dfp is not None else None
+        _coords = delayed([coords[c] for c in channels]) if coords is not None else None
+        channel_slice = slice(channel_batch, channel_batch + len(channels))
         logger.info(
             f"Fusing {pluralize('channel', len(channels))} {', '.join([str(c) for c in channels])}."
         )
 
         delayed_results = []
-        target_shape = (len(channels), fused_y_size, fused_x_size)
-        if blend != "none":
-            weights_sum = np.zeros(
-                (fused_y_size, fused_x_size),
-            )
-            target = np.zeros(
-                target_shape,
-                dtype="float",
-            )
-        else:
-            weights_sum = None
-            target = np.zeros(
-                target_shape,
-                dtype=target_dtype,
-            )
-
-        for i in range(len(y)):
-            tile_box = shapely.box(
-                x[i],
-                y[i],
-                min(fused_x_size - 1, x[i] + xsize - 1),
-                min(fused_y_size - 1, y[i] + ysize - 1),
-            )
-            if blend != "none":
-                assert partition_tree is not None and locks is not None
-                lock_indices = partition_tree.query(tile_box, predicate="intersects")
-            intersecting_boxes = []
-            if blend == "none":
-                assert tile_tree is not None and tile_priorities is not None
-                intersect_indices = tile_tree.query(tile_box, predicate="intersects")
-                # higher tile priority values have priority
-                for intersect_index in intersect_indices:
-                    if tile_priorities[intersect_index] > tile_priorities[i]:
-                        b = shapely.intersection(
-                            tile_box, boxes[intersect_index]
-                        ).bounds
-                        # change order to y1, x1, y2, x2
-                        # bounding box is inclusive
-                        b = (
-                            int(b[1]),
-                            int(b[0]),
-                            int(b[3]),
-                            int(b[2]),
-                        )
-                        intersecting_boxes.append(b)
-            d = _fuse_image_delayed(
-                image_paths=source[i],
-                image_attrs=source_attrs[i] if source_attrs is not None else None,
-                y=y[i],
-                x=x[i],
-                radial_correction_k=radial_correction_k,
-                crop_width=crop_width,
-                ffp=_ffp,
-                dfp=_dfp,
-                blend=blend,
-                z_index=tile_z_indices[i] if tile_z_indices is not None else z_index,
-                output_channels=channels,
-                target_shape=target_shape,
-                target_dtype=target_dtype,
-                weights=weights,
-                locks=locks[lock_indices] if locks is not None else None,
-                weights_sum=weights_sum,
-                target=target,
-                intersecting_boxes=intersecting_boxes
-                if len(intersecting_boxes) > 0
-                else None,
-                scene_id=scene_ids[i] if scene_ids is not None else None,
-                channel_reference=channel_reference,
-                channel_cross_correlation_upsample=channel_cross_correlation_upsample,
-                channel_window=channel_window,
-                channel_filter_percentiles=channel_filter_percentiles,
-                t_index=t_index,
-                channel_coords=[coords[c] for c in channels]
-                if coords is not None
-                else None,
-            )
-
-            delayed_results.append(d)
+        for y0 in range(0, fused_y_size, chunk_size[0]):
+            y1 = min(fused_y_size, y0 + chunk_size[0])
+            for x0 in range(0, fused_x_size, chunk_size[1]):
+                x1 = min(fused_x_size, x0 + chunk_size[1])
+                tile_indices = np.sort(
+                    tile_tree.query(
+                        shapely.box(x0, y0, x1 - 1, y1 - 1), predicate="intersects"
+                    )
+                )
+                if len(tile_indices) == 0:
+                    # the zarr array fill value (0) is the output where no tile is present
+                    continue
+                delayed_results.append(
+                    _fuse_chunk_delayed(
+                        out=result_zarr_array,
+                        channel_slice=channel_slice,
+                        box=(y0, x0, y1, x1),
+                        tiles=[tiles[i] for i in tile_indices],
+                        target_dtype=target_dtype,
+                        blend=blend,
+                        weights=weights_delayed,
+                        radial_correction_k=radial_correction_k,
+                        output_channels=channels,
+                        crop_width=crop_width,
+                        ffp=_ffp,
+                        dfp=_dfp,
+                        channel_reference=channel_reference,
+                        channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+                        channel_window=channel_window,
+                        channel_filter_percentiles=channel_filter_percentiles,
+                        t_index=t_index,
+                        channel_coords=_coords,
+                    )
+                )
 
         with ProgressBar():
             dask.compute(*delayed_results)
-
-        if blend != "none":
-            weights_sum[weights_sum == 0] = 1
-            target = target / weights_sum
-            target = np.round(target).astype(target_dtype)
-
-        sl = slice(channel_batch, channel_batch + channels_per_batch)
-
-        result_zarr_array[sl] = target
 
     # Fall back to the channel names read from the source tiles when the user
     # did not explicitly pass --channel-name.
@@ -474,13 +380,9 @@ def _register_across_channels(
                 img[c] = warp(img[c], st, preserve_range=True).astype(img_dtype)
 
 
-def _fuse_image(
+def _load_tile(
     image_paths: list[str] | zarr.Group,
-    image_attrs: dict[str, str | list[str]],
-    y: int,
-    x: int,
-    target_shape: tuple[int, int],
-    target: NDArray,
+    image_attrs: dict[str, str | list[str]] | None,
     target_dtype: np.dtype,
     radial_correction_k: float | None = None,
     output_channels: Sequence[int] | int | None = None,
@@ -488,11 +390,6 @@ def _fuse_image(
     dfp: NDArray | None = None,
     ffp: NDArray | None = None,
     z_index: int | Literal["max"] = "max",
-    locks: Sequence[threading.Lock] | None = None,
-    blend: Literal["none", "linear"] = "none",
-    intersecting_boxes: Sequence[tuple[int, int, int, int]] | None = None,
-    weights: NDArray | None = None,
-    weights_sum: NDArray | None = None,
     scene_id: int | None = None,
     channel_reference: int | None = None,
     channel_cross_correlation_upsample: int = 1,
@@ -500,7 +397,11 @@ def _fuse_image(
     channel_filter_percentiles: tuple[float, float] | None = None,
     t_index: int | None = None,
     channel_coords: Sequence[np.ndarray | None] | None = None,
-):
+) -> NDArray:
+    """Read a tile and apply radial, illumination, and channel corrections.
+
+    :return: Corrected and cropped float tile with dimensions (c, y, x) in [0, 1].
+    """
     local_image_paths = [_localize_path(path) for path in image_paths]
     image_paths = [
         local_image_paths[i] if local_image_paths[i] is not None else image_paths[i]
@@ -553,85 +454,74 @@ def _fuse_image(
             img = img[output_channels]
 
     img = _crop_image(img, crop_width)
+    return img
 
-    if weights is not None:
-        weights = _crop_image(weights, crop_width)
 
-    target_slice_y = (y, min(target_shape[-2], y + img.shape[-2]))
-    target_slice_x = (x, min(target_shape[-1], x + img.shape[-1]))
-    target_shape = (
-        target_slice_y[1] - target_slice_y[0],
-        target_slice_x[1] - target_slice_x[0],
-    )
-    img_shape = img.shape[-2:]
-    if target_shape != img_shape:
-        img = img[
-            ...,
-            0 : min(img_shape[0], target_shape[0]),
-            0 : min(img_shape[1], target_shape[1]),
-        ]
-        if weights is not None:
-            weights = weights[
-                0 : min(img_shape[0], target_shape[0]),
-                0 : min(img_shape[1], target_shape[1]),
-            ]
+def _fuse_chunk(
+    out: zarr.Array | NDArray,
+    channel_slice: slice,
+    box: tuple[int, int, int, int],
+    tiles: Sequence[dict[str, Any]],
+    target_dtype: np.dtype,
+    blend: Literal["none", "linear"] = "none",
+    weights: NDArray | None = None,
+    **tile_kwargs,
+):
+    """Fuse the tiles intersecting one output chunk and write the chunk.
 
-    target_include = None
+    Each call reads every tile it needs and writes only the chunk(s) in `box`, so calls
+    can run concurrently on any scheduler (including distributed) without locks.
 
-    if intersecting_boxes is not None:
-        # list of (y1, x2, y2, x2) in global coordinates where we don't write values for this tile
-        target_include = np.ones(
-            (
-                target_slice_y[1] - target_slice_y[0],
-                target_slice_x[1] - target_slice_x[0],
-            ),
-            dtype=bool,
-        )
-
-        for box in intersecting_boxes:
-            target_include[
-                box[0] - target_slice_y[0] : box[2] - target_slice_y[0] + 1,
-                box[1] - target_slice_x[0] : box[3] - target_slice_x[0] + 1,
-            ] = False
-
-    img = dtype_convert(img, target_dtype)
-
+    :param out: Output array with dimensions (c, y, x).
+    :param channel_slice: Channel slice in `out` to write.
+    :param box: Chunk bounds (y1, x1, y2, x2) in `out`, exclusive of y2 and x2.
+    :param tiles: Tiles intersecting `box`: dicts with keys image_paths, image_attrs,
+        y, x, z_index, and scene_id. When `blend` is "none", tiles are painted in order
+        so later tiles have priority.
+    :param target_dtype: Output dtype.
+    :param blend: Blending mode.
+    :param weights: Cropped tile blending weights, required when blending.
+    :param tile_kwargs: Additional arguments passed to `_load_tile`.
+    """
+    y0, x0, y1, x1 = box
+    shape = (channel_slice.stop - channel_slice.start, y1 - y0, x1 - x0)
+    weights_sum = None
     if blend == "none":
-        if target_include is not None:
-            target_y, target_x = np.where(target_include)
-            target_y += target_slice_y[0]
-            target_x += target_slice_x[0]
-            target[
-                ...,
-                target_y,
-                target_x,
-            ] = img[..., target_include]
-        else:
-            target[
-                ...,
-                target_slice_y[0] : target_slice_y[1],
-                target_slice_x[0] : target_slice_x[1],
-            ] = img
-
+        target = np.zeros(shape, dtype=target_dtype)
     else:
-        # locks and weights_sum are always provided when blending
-        assert locks is not None and weights_sum is not None
-        try:
-            for lock in locks:
-                lock.acquire()
-
-            weights_sum[
-                target_slice_y[0] : target_slice_y[1],
-                target_slice_x[0] : target_slice_x[1],
-            ] += weights
-            target[
-                ...,
-                target_slice_y[0] : target_slice_y[1],
-                target_slice_x[0] : target_slice_x[1],
-            ] += img * weights
-        finally:
-            for lock in locks:
-                lock.release()
+        if weights is None:
+            raise ValueError("weights are required when blending")
+        target = np.zeros(shape)
+        weights_sum = np.zeros(shape[1:])
+    for tile in tiles:
+        img = _load_tile(
+            image_paths=tile["image_paths"],
+            image_attrs=tile["image_attrs"],
+            target_dtype=target_dtype,
+            z_index=tile["z_index"],
+            scene_id=tile["scene_id"],
+            **tile_kwargs,
+        )
+        y, x = tile["y"], tile["x"]
+        # intersection of tile and chunk in output coordinates
+        iy0, iy1 = max(y0, y), min(y1, y + img.shape[-2])
+        ix0, ix1 = max(x0, x), min(x1, x + img.shape[-1])
+        if iy0 >= iy1 or ix0 >= ix1:
+            continue
+        tile_sl = (slice(iy0 - y, iy1 - y), slice(ix0 - x, ix1 - x))
+        target_sl = (slice(iy0 - y0, iy1 - y0), slice(ix0 - x0, ix1 - x0))
+        img = dtype_convert(img[(...,) + tile_sl], target_dtype)
+        if blend == "none":
+            target[(...,) + target_sl] = img
+        else:
+            assert weights is not None and weights_sum is not None
+            tile_weights = weights[tile_sl]
+            weights_sum[target_sl] += tile_weights
+            target[(...,) + target_sl] += img * tile_weights
+    if weights_sum is not None:
+        weights_sum[weights_sum == 0] = 1
+        target = np.round(target / weights_sum).astype(target_dtype)
+    out[channel_slice, y0:y1, x0:x1] = target
 
 
 def _dist_from_tile_edge(i: int, j: int, tile_width: int, tile_height: int) -> int:

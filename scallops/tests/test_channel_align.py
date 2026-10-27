@@ -434,7 +434,8 @@ def test_estimation_reads_the_z_plane_fusion_uses(tmp_path, monkeypatch):
     import tifffile
 
     import scallops.stitch._stitch as S
-    from scallops.stitch.fuse import _fuse_image
+    from scallops.stitch.fuse import _load_tile
+    from scallops.stitch.utils import dtype_convert
 
     # 3 z planes in one file, each plane a constant: the value read identifies the plane
     data = np.zeros((3, 2, 32, 32), np.uint16)
@@ -471,17 +472,11 @@ def test_estimation_reads_the_z_plane_fusion_uses(tmp_path, monkeypatch):
                 image_key="A1",
             )
         # fusion gets per-tile z values from the positions table (numpy integers)
-        target = np.zeros((1, 32, 32), np.uint16)
-        _fuse_image(
-            [str(path)],
-            None,
-            0,
-            0,
-            (32, 32),
-            target,
+        target = dtype_convert(
+            _load_tile(
+                [str(path)], None, np.uint16, output_channels=[0], z_index=fusion_z
+            ),
             np.uint16,
-            output_channels=[0],
-            z_index=fusion_z,
         )
         np.testing.assert_array_equal(captured["ref"], target[0])
 

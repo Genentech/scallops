@@ -325,7 +325,7 @@ def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> Argumen
     z_index_tile_arg(parser)
     t_index_arg(parser)
     force_arg(parser)
-    dask_client_arg(parser, value="none")
+    dask_client_arg(parser)
     dask_cluster_arg(parser)
     expected_images_arg(parser)
     no_version_arg(parser)
