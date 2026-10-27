@@ -547,24 +547,24 @@ def radial_distortion_estimation(
         clipboard.setText(command)
         print("Command copied to clipboard")
 
-    images_meta = {k: v.attrs["ome"]["images"][0]["pixels"] for k, v in images.items()}
+    images_meta = {k: v.attrs["processed"].images[0].pixels for k, v in images.items()}
     translations = [
         (0, 0),
         (
             0,
-            images_meta["top_left"]["size_x"]
-            - (images_meta["top_right"]["size_x"] * proportion_overlap),
+            images_meta["top_left"].size_x
+            - (images_meta["top_right"].size_x * proportion_overlap),
         ),
         (
-            images_meta["top_left"]["size_y"]
-            - (images_meta["bottom_left"]["size_y"] * proportion_overlap),
+            images_meta["top_left"].size_y
+            - (images_meta["bottom_left"].size_y * proportion_overlap),
             0,
         ),
         (
-            images_meta["top_left"]["size_y"]
-            - (images_meta["bottom_left"]["size_y"] * proportion_overlap),
-            images_meta["top_left"]["size_x"]
-            - (images_meta["top_right"]["size_x"] * proportion_overlap),
+            images_meta["top_left"].size_y
+            - (images_meta["bottom_left"].size_y * proportion_overlap),
+            images_meta["top_left"].size_x
+            - (images_meta["top_right"].size_x * proportion_overlap),
         ),
     ]
     viewer = napari.Viewer()
