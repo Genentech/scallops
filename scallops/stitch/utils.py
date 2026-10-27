@@ -38,6 +38,20 @@ ureg = UnitRegistry()
 logger = logging.getLogger("scallops")
 
 
+def _select_z_index(image: xr.DataArray, z_index) -> xr.DataArray:
+    """Select the z plane fusion uses: plane ``z_index`` if it is an ``int or np.integer``, else the maximum projection.
+
+    Shared by fusion and the channel alignment estimate, so the alignment is estimated on the image it corrects
+    """
+    if "z" not in image.dims:
+        return image
+    return (
+        image.max(dim="z")
+        if not isinstance(z_index, (int, np.integer))
+        else image.isel(z=z_index)
+    )
+
+
 def _select_t_index(image: xr.DataArray, t_index: int | None) -> xr.DataArray:
     """Select a single timepoint from an image with a time dimension.
 

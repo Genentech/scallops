@@ -38,6 +38,7 @@ from scallops.cli.util import (
 )
 from scallops.io import _add_suffix, _images2fov, _set_up_experiment
 from scallops.stitch._align import _get_read_images
+from scallops.stitch._channel_align import load_params, parse_correction_channels
 from scallops.stitch._stitch import _single_stitch
 from scallops.stitch.shift_utils import (
     convert_stage_positions,
@@ -360,6 +361,36 @@ def run_stitch(args: argparse.Namespace) -> None:
     if channel_filter_min <= 0 and channel_filter_max >= 100:
         channel_filter_percentiles = None
 
+    alignment_correction = None
+    correction_channels = parse_correction_channels(args.alignment_correction_channels)
+    if correction_channels is not None:
+        if channel_reference is not None:
+            raise ValueError(
+                "--alignment-correction-channels cannot be combined with --channel-reference: both align "
+                "channels to a reference; use one of them."
+            )
+        if not args.alignment_correction_channel_order:
+            raise ValueError(
+                "--alignment-correction-channel-order is required with --alignment-correction-channels: give "
+                "the parameter-file name of every input channel, in input order (use - for a channel with no "
+                "entry)."
+            )
+        alignment_correction = dict(
+            channels=correction_channels,
+            params=load_params(args.alignment_correction_params)
+            if args.alignment_correction_params is not None
+            else None,
+            channel_order=args.alignment_correction_channel_order,
+        )
+    elif (
+        args.alignment_correction_params is not None
+        or args.alignment_correction_channel_order
+    ):
+        logger.warning(
+            "--alignment-correction-params and --alignment-correction-channel-order are ignored without "
+            "--alignment-correction-channels."
+        )
+
     assert all(shift >= 0 for shift in max_shifts), "Max shift must be non-negative."
 
     assert 0 <= stitch_alpha <= 1, "stitch alpha must be between 0 and 1"
@@ -428,4 +459,5 @@ def run_stitch(args: argparse.Namespace) -> None:
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
             t_index=t_index,
+            alignment_correction=alignment_correction,
         ).compute()

@@ -301,6 +301,27 @@ def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> Argumen
         default=90,
         help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning across channels.",
     )
+    parser.add_argument(
+        "--alignment-correction-channels",
+        nargs="+",
+        help="Channel indices (0-based) to align to the reference channel (--align-channel) when fusing, or `all` "
+        "(also `*` or `true`) for every channel except the reference. When given, every output channel is "
+        "resampled once with a quintic B-spline (alignment composed with the radial correction) instead of the "
+        "bilinear radial correction. Requires --alignment-correction-channel-order. Channels without values in "
+        "--alignment-correction-params are estimated from the images of each well.",
+    )
+    parser.add_argument(
+        "--alignment-correction-params",
+        help="JSON file with each channel's alignment to the reference channel (magnification m about the tile "
+        "centre and translation ty, tx in pixels), keyed by channel name (case-insensitive). Without it, or for "
+        "channels it doesn't list, the alignment is estimated from each well's tiles.",
+    )
+    parser.add_argument(
+        "--alignment-correction-channel-order",
+        nargs="*",
+        help="The --alignment-correction-params name of each input channel, in input order (e.g. DAPI FITC "
+        "TRITC CY5 CY7); `-` for a channel with no entry. Required with --alignment-correction-channels.",
+    )
     z_index_tile_arg(parser)
     t_index_arg(parser)
     force_arg(parser)
