@@ -52,7 +52,6 @@ from scallops.stitch.utils import (
     get_pixel_size,
     read_stage_positions,
 )
-from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import open_ome_zarr
 
@@ -285,10 +284,7 @@ def run_stitch(args: argparse.Namespace) -> None:
         load_json(args.dask_cluster) if args.dask_cluster is not None else {}
     )
     if dask_server_url is None and args.dask_cluster is None:
-        threads_per_worker = _cpu_count()
-        dask_cluster_parameters = _dask_workers_threads(
-            threads_per_worker=threads_per_worker
-        )
+        dask_cluster_parameters = _dask_workers_threads()
 
     no_save_image = args.no_save_image
     channel_names = args.channel_name
