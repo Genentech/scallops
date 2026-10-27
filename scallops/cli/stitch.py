@@ -51,7 +51,6 @@ from scallops.stitch.utils import (
     get_pixel_size,
     read_stage_positions,
 )
-from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import open_ome_zarr
 
@@ -286,15 +285,6 @@ def run_stitch(args: argparse.Namespace) -> None:
     no_save_image = args.no_save_image
     channel_names = args.channel_name
 
-    if dask_server_url is None and args.dask_cluster is None:
-        dask_cluster_parameters = dict(n_workers=1, threads_per_worker=_cpu_count())
-
-    if (
-        not no_save_image
-        and dask_server_url is None
-        and dask_cluster_parameters.get("n_workers") != 1
-    ):
-        raise ValueError("Stitching can only be run with 1 worker.")
     blend = args.blend
     output_channels = args.output_channels
 
