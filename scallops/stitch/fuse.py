@@ -10,7 +10,6 @@ import pandas as pd
 import shapely
 import zarr
 from dask import delayed
-from dask.diagnostics import ProgressBar
 from numpy.typing import NDArray
 from skimage.transform import SimilarityTransform, warp
 from skimage.util import img_as_float
@@ -311,8 +310,7 @@ def _fuse(
                     )
                 )
 
-        with ProgressBar():
-            dask.compute(*delayed_results)
+        dask.compute(*delayed_results)
 
     # Fall back to the channel names read from the source tiles when the user
     # did not explicitly pass --channel-name.

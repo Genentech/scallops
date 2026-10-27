@@ -2,7 +2,6 @@ import itertools
 import logging
 import math
 from collections.abc import Callable, Sequence
-from contextlib import nullcontext
 from functools import partial
 
 import dask
@@ -10,7 +9,6 @@ import dask.array as da
 import igraph as ig
 import numpy as np
 from dask import delayed
-from dask.diagnostics import ProgressBar
 from numba import njit
 from numpy.typing import NDArray
 from scipy import ndimage as ndi
@@ -76,9 +74,7 @@ def evaluate_shifts(
         ref = tiles[pairs[i][0]]
         mov = tiles[pairs[i][1]]
         results.append(_eval_pair_delayed(ref=ref, mov=mov, shift=shifts[i]))
-    bar = ProgressBar if progress else nullcontext
-    with bar():
-        results = dask.compute(*results)
+    results = dask.compute(*results)
     results = np.array(results)
     mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels = results[:, 1:].sum(axis=0)
     zncc_val = _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels)
