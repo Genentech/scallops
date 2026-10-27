@@ -59,7 +59,9 @@ from scallops.reads import (
     barcode_to_prefix,
     channel_crosstalk_matrix,
     correct_mismatches,
+    dead_cell_labels,
     decode_max,
+    exclude_labels,
     merge_sbs_phenotype,
     peaks_to_bases,
     read_statistics,
@@ -912,6 +914,7 @@ def reads_pipeline(
     barcode_column: str = "barcode",
     read_filter: float | None = None,
     crosstalk_n_reads: int = 500000,
+    max_base_intensity: float | None = None,
 ):
     """Run the reads pipeline.
 
@@ -941,6 +944,11 @@ def reads_pipeline(
     :param no_version: Whether to skip version/CLI information in output.
     :param barcode_column: Column name of barcode
     :param read_filter: Filter reads by quality score before assigning reads to labels.
+    :param crosstalk_n_reads: Number of reads to sample to compute crosstalk correction.
+    :param max_base_intensity: If not `None`, cells whose median (over reads) maximum base
+        intensity exceeds this value are flagged in the boolean `is_dead_cell` column of
+        the reads and labels tables and excluded from crosstalk matrix estimation (the
+        matrix is still applied to all reads).
     """
 
     if not force:
@@ -998,6 +1006,11 @@ def reads_pipeline(
     bases_dataset = xr.Dataset()
     bases_dataset["intensity"] = bases_array_reads
     crosstalk_bases_array = bases_array_reads
+    dead_labels = None
+    if max_base_intensity is not None:
+        dead_labels = dead_cell_labels(bases_array_reads, max_base_intensity)
+        logger.info(f"{len(dead_labels):,} dead/hyper-bright cells.")
+        crosstalk_bases_array = exclude_labels(crosstalk_bases_array, dead_labels)
 
     iss_cycles = maxed.coords["t"].values
     custom_metadata: dict[str, Any] = dict(
@@ -1061,6 +1074,8 @@ def reads_pipeline(
         bases_array_reads = bases_array_reads.astype(int)
 
     df_reads = decode_max(bases_array_reads, barcodes=df_barcode)
+    if dead_labels is not None:
+        df_reads["is_dead_cell"] = df_reads["label"].isin(dead_labels)
 
     if n_mismatches is not None and n_mismatches > 0:
         df_reads = correct_mismatches(
@@ -1101,6 +1116,9 @@ def reads_pipeline(
     df_labels = assign_barcodes_to_labels(
         df_reads.query(" & ".join(reads_to_labels_query))
     )
+
+    if dead_labels is not None:
+        df_labels["is_dead_cell"] = df_labels["label"].isin(dead_labels)
 
     delayed_results: list[Any] = []
 
@@ -1249,6 +1267,7 @@ def reads_main(arguments: argparse.Namespace):
     labels_only = not arguments.all_labels
     n_mismatches = arguments.n_mismatches
     crosstalk_n_reads = arguments.crosstalk_nreads
+    max_base_intensity = arguments.max_base_intensity
 
     bases = list(arguments.bases)
     crosstalk_correction_method = arguments.crosstalk_correction_method
@@ -1307,4 +1326,5 @@ def reads_main(arguments: argparse.Namespace):
                 barcode_column=barcode_column,
                 read_filter=read_filter,
                 crosstalk_n_reads=crosstalk_n_reads,
+                max_base_intensity=max_base_intensity,
             )

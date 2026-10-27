@@ -11,7 +11,9 @@ from matplotlib import pyplot as plt
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
     channel_crosstalk_matrix,
+    dead_cell_labels,
     decode_max,
+    exclude_labels,
     li_and_speed_cc_number,
 )
 from scallops.visualize.crosstalk import pairwise_channel_scatter_plot
@@ -186,3 +188,50 @@ def test_correction_is_better():
         df_reads_li_speed.query("label > 0")["barcode"].isin(barcodes).sum()
     )
     assert li_speed_total > none_total
+
+
+def _real_bases():
+    df = pd.read_csv(data_path.joinpath("process_fig4", "10X_A1_Tile-102.bases.csv"))
+    df = df[df["cell"] > 0]
+    a = df.set_index(["read", "cycle", "channel"])["intensity"].to_xarray()
+    a = a.rename({"cycle": "t", "channel": "c"})
+    label = df.drop_duplicates("read").set_index("read")["cell"].loc[a.read.values]
+    return a.assign_coords(label=("read", label.values))
+
+
+def test_dead_cell_labels_default_and_flags():
+    bases = _real_bases()
+    # per-cell median read max spans 241-7250 on this tile, 99.9th percentile ~5600
+    assert list(dead_cell_labels(bases, 6000)) == [672, 872]
+    assert len(dead_cell_labels(bases, 1e9)) == 0
+
+
+def test_dead_cell_exclusion_from_crosstalk():
+    bases = _real_bases()
+    dead = dead_cell_labels(bases, 6000)
+    # default (no exclusion) is the legacy matrix
+    w_all = channel_crosstalk_matrix(bases, method="median")
+    np.testing.assert_array_equal(
+        w_all, channel_crosstalk_matrix(exclude_labels(bases, []), method="median")
+    )
+    kept = exclude_labels(bases, dead)
+    assert kept.sizes["read"] < bases.sizes["read"]
+    assert not np.isin(kept.coords["label"].values, dead).any()
+    w_kept = channel_crosstalk_matrix(kept, method="median")
+    assert not np.array_equal(w_all, w_kept)
+
+
+def test_dead_cell_flag_column_matches_threshold():
+    bases = _real_bases()
+    labels = pd.Series(np.unique(bases.coords["label"].values))
+    is_dead = labels.isin(dead_cell_labels(bases, 6000))
+    expected = (
+        pd.Series(bases.max(["t", "c"]).values)
+        .groupby(bases.coords["label"].values)
+        .median()
+        .loc[labels]
+        .gt(6000)
+    )
+    assert is_dead.dtype == bool
+    np.testing.assert_array_equal(is_dead.values, expected.values)
+    assert is_dead.sum() == 2

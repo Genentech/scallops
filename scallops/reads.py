@@ -231,6 +231,33 @@ def channel_crosstalk_matrix(
     return correct_crosstalk(a.data.reshape(-1, a.sizes["c"]), **kwargs)
 
 
+def dead_cell_labels(a: xr.DataArray, max_base_intensity: float) -> NDArray:
+    """Identify dead or hyper-bright cells.
+
+    A cell is flagged when the median, over its reads, of the maximum intensity across
+    cycles and channels exceeds `max_base_intensity`.
+
+    :param a: Base intensities (read, t, c) with a `label` coordinate on `read`
+    :param max_base_intensity: Upper intensity threshold
+    :return: Sorted array of flagged labels (labels <= 0 are never flagged)
+    """
+    read_max = np.asarray(a.max(dim=["t", "c"]).values)
+    cell_max = pd.Series(read_max).groupby(a.coords["label"].values).median()
+    cell_max = cell_max[cell_max.index > 0]
+    return cell_max.index[cell_max.values > max_base_intensity].values
+
+
+def exclude_labels(a: xr.DataArray, labels: NDArray) -> xr.DataArray:
+    """Drop reads belonging to `labels`, e.g. to keep dead cells out of crosstalk
+    estimation.
+
+    :param a: Data (read, t, c) with a `label` coordinate on `read`
+    :param labels: Labels to exclude
+    :return: `a` without reads in `labels`
+    """
+    return a.isel(read=~np.isin(a.coords["label"].values, labels))
+
+
 def _crosstalk_median_ratio_per_chunk(x: NDArray) -> NDArray:
     """Compute the crosstalk median ratio for a given chunk of data.
 

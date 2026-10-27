@@ -230,6 +230,16 @@ def _create_reads_parser(subparsers, default_help):
     )
 
     parser.add_argument(
+        "--max-base-intensity",
+        type=float,
+        help="Flag cells as dead/hyper-bright (`is_dead_cell` column in reads and "
+        "labels output) when the median, over their reads, of the maximum base "
+        "intensity exceeds this value. Flagged cells are excluded from crosstalk "
+        "correction estimation but still corrected and reported. Disabled by default. "
+        "For 16-bit intensities, ~6000 flags the top ~0.1%% of cells.",
+    )
+
+    parser.add_argument(
         "--crosstalk-correction-method",
         default="median",
         help="Method to correct channel crosstalk",

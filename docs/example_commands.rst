@@ -228,6 +228,14 @@ Example::
     --subset A-3 \
     --barcodes s3://xxx/barcodes/dialout-5.csv
 
+Use ``--max-base-intensity`` to flag dead/hyper-bright cells. A cell is flagged when the
+median, over its reads, of the maximum base intensity exceeds the value. Flagged cells are
+marked ``True`` in the boolean ``is_dead_cell`` column of the reads and labels outputs and
+are excluded from crosstalk correction estimation (the correction is still applied to all
+reads). The option is off by default and no column is added. On the 16-bit test tile
+(``scallops/tests/data/process_fig4``) the per-cell median spans 241-7250 (99.9th percentile
+~5600) with no clear gap; ~6000 flags the 2 brightest of 2434 cells.
+
 
 Find objects
 ==================
