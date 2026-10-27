@@ -58,14 +58,12 @@ def evaluate_shifts(
     pairs: NDArray,
     shifts: NDArray,
     tiles: Sequence[NDArray | da.Array],
-    progress: bool = True,
 ) -> tuple[float, NDArray]:
     """Compute overall ZNCC and ZNCCs for specified pairs
 
     :param pairs: Pair indices in tiles
     :param shifts: Array of pairwise shifts.
     :param tiles: Sequence of tiles corresponding to each pair
-    :param progress: Whether to show progress bar.
     :return: tuple of overall ZNCC and ZNCCs for specified pairs.
     """
     _eval_pair_delayed = delayed(_eval_pair)

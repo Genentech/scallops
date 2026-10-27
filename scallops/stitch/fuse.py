@@ -48,7 +48,6 @@ def _fuse(
     crop_width: tuple[int, int] | None = None,
     radial_correction_k: float | None = None,
     chunk_size: tuple[int, int] | None = None,
-    channels_per_batch: int | None = None,
     channel_reference: int | None = None,
     channel_window: int = 2,
     channel_cross_correlation_upsample: int = 2,
@@ -71,8 +70,6 @@ def _fuse(
     :param radial_correction_k: Image radial correction k
     :param chunk_size: Image y, x, chunk size. If `None`, auto determine by clustering
         tile positions into a grid to estimate number of rows and columns.
-    :param channels_per_batch: Number of channels to output per batch. If `None`,
-        auto determine from available memory
     :param channel_reference: Reference channel to use to register across channels within a tile. If `None`, no
         registration across channels is performed
     :param channel_window: Use a centered subset of data for registration across channels if greater than one
@@ -152,9 +149,7 @@ def _fuse(
 
     # each task fuses all output channels in a batch for one y, x chunk, so the batch size only bounds the memory
     # of a single task
-    if channels_per_batch is None or channels_per_batch < 0:
-        channels_per_batch = len(output_channels)
-    channels_per_batch = min(channels_per_batch, len(output_channels))
+    channels_per_batch = len(output_channels)
 
     if chunk_size is None:
         # AgglomerativeClustering requires at least 2 samples; a well with a single tile
@@ -235,12 +230,14 @@ def _fuse(
     # convert scenes to list to convert numpy int to int (read_image does not like numpy ints for scene ids)
     scene_ids = df["scene"].tolist() if has_scenes else None
     tile_z_indices = df["z_index"].values if has_z_index else None
+    tile_y = df["y"].values
+    tile_x = df["x"].values
     tiles = [
         dict(
             image_paths=source[i],
             image_attrs=source_attrs[i] if source_attrs is not None else None,
-            y=int(df["y"].values[i]),
-            x=int(df["x"].values[i]),
+            y=int(tile_y[i]),
+            x=int(tile_x[i]),
             z_index=tile_z_indices[i] if tile_z_indices is not None else z_index,
             scene_id=scene_ids[i] if scene_ids is not None else None,
         )

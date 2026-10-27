@@ -453,7 +453,6 @@ def test_stitch_cli(tmp_path):
     _fuse(
         test_positions_df.iloc[[3, 0, 1, 2]],
         blend="none",
-        channels_per_batch=1,
         z_index=0,
         group=fuse_result,
     )
@@ -495,7 +494,6 @@ def test_stitch_cli(tmp_path):
     _fuse(
         pd.read_parquet(tmp_path / "stitch-blend" / "test-positions.parquet"),
         blend="linear",
-        channels_per_batch=1,
         radial_correction_k=10e-9,
         crop_width=(9, 9),
         z_index=0,
