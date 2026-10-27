@@ -113,13 +113,19 @@ Other Features
      same ID, read from the "-nuclei" labels in "--labels", used only
      if it overlaps or touches the label); a label without such a
      nucleus uses its own centroid and gets FlagNoNuclearCentroid = 1.
-     If fewer than half of the labels sampled in an image overlap or
-     touch a nucleus with the same ID (e.g. cellpose cells, which are
-     numbered independently of the nuclei), the nuclei are not used
-     for that image, every label gets FlagNoNuclearCentroid = 1, and a
-     warning is logged. Parameters are encoded in the feature names
-     (e.g. "Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2").
-     Parameters:
+     Parameters are encoded in the feature names (e.g.
+     "Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2").
+
+     Nuclei labels: for each image, puncta expects the nuclei labels
+     ("<image>-nuclei") in the same labels zarr as the ROI labels
+     passed to "--labels", with IDs matching the cells, as produced by
+     propagation/watershed segmentation or by "scallops segment
+     overlap". If they are not found there, puncta still runs: it logs
+     a warning, measures the spatial features from each ROI's own
+     centroid, and sets FlagNoNuclearCentroid = 1 for every ROI. Note
+     that "scallops segment overlap" writes its renumbered cells to a
+     separate zarr without the nuclei, so cell and cytoplasm features
+     run on that zarr currently use this fallback. Parameters:
 
      1. c: Channel index.
 

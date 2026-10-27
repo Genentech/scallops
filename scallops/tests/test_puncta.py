@@ -1,8 +1,6 @@
 """Tests for scallops.features.puncta: synthetic edge cases, unit tests, and
 label_features integration with nuclei labels."""
 
-import logging
-
 import dask.array as da
 import dask.dataframe as dd
 import numpy as np
@@ -20,7 +18,6 @@ from scallops.features.generate import (
 )
 from scallops.features.puncta import (
     _FEATURE_KEYS,
-    NUCLEI_MATCH_MIN_FRACTION,
     _compute_radial_frac_map,
     _detect_puncta,
     _extract_cell_features,
@@ -32,7 +29,6 @@ from scallops.features.puncta import (
     _size_filter,
     _validate_params,
     _watershed_segment,
-    nuclei_label_match_fraction,
     puncta,
 )
 
@@ -1581,48 +1577,6 @@ class TestFindNucleus:
         assert _find_nucleus(nuclei, nuclei, (0, 0), (11, 11), roi, 3) is None
 
 
-class TestNucleiLabelMatchFraction:
-    def _scene(self):
-        cells = np.zeros((40, 40), dtype=np.int32)
-        nuclei = np.zeros_like(cells)
-        for i, (r, c) in enumerate([(2, 2), (2, 22), (22, 2), (22, 22)], start=1):
-            cells[r : r + 16, c : c + 16] = i
-            nuclei[r + 5 : r + 11, c + 5 : c + 11] = i
-        return cells, nuclei
-
-    def test_cells_grown_from_nuclei_match(self):
-        cells, nuclei = self._scene()
-        region = (slice(0, 40), slice(0, 40))
-        assert nuclei_label_match_fraction(cells, nuclei, region) == 1.0
-
-    def test_cytoplasm_touching_nuclei_matches(self):
-        cells, nuclei = self._scene()
-        cytoplasm = np.where(nuclei > 0, 0, cells)
-        region = (slice(0, 40), slice(0, 40))
-        assert nuclei_label_match_fraction(cytoplasm, nuclei, region) == 1.0
-
-    def test_independent_numbering_does_not_match(self):
-        cells, nuclei = self._scene()
-        scrambled = np.array([0, 3, 4, 1, 2])[cells]
-        region = (slice(0, 40), slice(0, 40))
-        frac = nuclei_label_match_fraction(scrambled, nuclei, region)
-        assert frac < NUCLEI_MATCH_MIN_FRACTION
-
-    def test_empty_region_is_zero(self):
-        cells, nuclei = self._scene()
-        assert (
-            nuclei_label_match_fraction(cells, nuclei, (slice(0, 2), slice(0, 2))) == 0
-        )
-
-    def test_labels_excludes_rois_cut_by_region_edge(self):
-        # Columns 0-25: cells 1 and 3 (cols 2-17) are whole; cells 2 and 4 (cols 22-37)
-        # are cut at col 26, before their nuclei (cols 27-32) start.
-        cells, nuclei = self._scene()
-        region = (slice(0, 40), slice(0, 26))
-        assert nuclei_label_match_fraction(cells, nuclei, region) == 0.5
-        assert nuclei_label_match_fraction(cells, nuclei, region, labels=[1, 3]) == 1.0
-
-
 # =====================================================================
 # label_features integration (nuclei_label_image)
 # =====================================================================
@@ -1763,14 +1717,24 @@ class TestLabelFeaturesNuclei:
         radial = _lf_col("MeanFgRadialPosPx")
         assert not np.allclose(with_nuclei[radial], without[radial])
 
-    def test_independently_numbered_cells_disable_nuclei(self, caplog):
+    def test_unmatched_ids_fall_back_per_cell(self):
+        # Labels not matched to the nuclei (e.g. cellpose cells without
+        # `scallops segment overlap`): cell IDs are permuted, so each cell's same-ID
+        # nucleus lies in another cell. The per-cell check rejects every such pair, so
+        # results equal the no-nuclei run and every cell is flagged.
         rois, nuclei, intensity = _lf_scene()
-        renumbered = np.where(rois > 0, rois + 10000, 0)  # cellpose-like IDs
-        with caplog.at_level(logging.WARNING, logger="scallops"):
-            result = _lf_run(renumbered, intensity, nuclei)
-        assert "puncta spatial features will use each ROI's centroid" in caplog.text
-        _assert_frames_equal(result, _lf_run(renumbered, intensity, None))
+        ids = np.array(sorted(_LF_NUCLEI))
+        lut = np.arange(rois.max() + 1)
+        lut[ids] = np.roll(ids, 1)
+        permuted = lut[rois]
+        result = _lf_run(permuted, intensity, nuclei)
+        _assert_frames_equal(result, _lf_run(permuted, intensity, None))
         assert (result[_lf_col("FlagNoNuclearCentroid")] == 1).all()
+
+    def test_nuclei_shape_mismatch_raises(self):
+        rois, nuclei, intensity = _lf_scene()
+        with pytest.raises(AssertionError, match=r"\(127, 128\) != \(128, 128\)"):
+            _lf_run(rois, intensity, nuclei[:-1])
 
     def test_nuclei_rois_find_themselves(self):
         _, nuclei, intensity = _lf_scene()
@@ -1824,12 +1788,7 @@ class TestLabelFeaturesNuclei:
         funcs, _ = _create_funcs(
             [_LF_FEATURE, "intensity_1", "sizeshape"], n_channels=2
         )
-        objects_df = find_objects(rois)
-        min_cols = ["AreaShape_BoundingBoxMinimum_Y", "AreaShape_BoundingBoxMinimum_X"]
-        max_cols = ["AreaShape_BoundingBoxMaximum_Y", "AreaShape_BoundingBoxMaximum_X"]
-        bound = _bind_nuclei_labels(
-            funcs, rois, nuclei, objects_df, min_cols, max_cols, ((64, 64), (64, 64))
-        )
+        bound = _bind_nuclei_labels(funcs, rois, nuclei)
         for f in bound:
             assert ("nuclei_label_image" in f.keywords) == (f.func is puncta)
         assert sum(f.func is puncta for f in bound) == 1
@@ -1870,65 +1829,12 @@ class TestLabelFeaturesNuclei:
         decoded = (df["Intensity_MeanIntensity_Channel0"] * 10000).round().astype(int)
         np.testing.assert_array_equal(decoded.to_numpy(), df.index.to_numpy())
 
-    def test_cells_cut_by_sampled_chunk_do_not_disable_nuclei(self, caplog):
-        # With 64-px chunks most cells cross a chunk edge, often with their nucleus
-        # outside the densest chunk; only the ROIs assigned to it, read whole, count.
+    def test_cells_crossing_chunk_edges_keep_their_nuclei(self):
+        # With 64-px chunks most of these 40-px cells cross a chunk edge, many with
+        # their nucleus in another chunk; every cell must still find its nucleus.
         cells, nuclei, image, _ = self._grid_scene()
-        with caplog.at_level(logging.WARNING, logger="scallops"):
-            df = _lf_run(cells, image, nuclei, chunks=64)
-        assert "sampled labels overlap" not in caplog.text
+        df = _lf_run(cells, image, nuclei, chunks=64)
         assert (df[_lf_col("FlagNoNuclearCentroid")] == 0).all()
-
-    @pytest.mark.parametrize("n_matched", [3, 2])
-    def test_match_fraction_threshold(self, n_matched, caplog):
-        # All 6 cells sampled (one chunk). 3 of 6 matched = 0.5 >= threshold: nuclei
-        # used, only cells without a nucleus flagged. 2 of 6 < 0.5: nuclei dropped for
-        # the whole image, every cell flagged, warning logged.
-        rois, nuclei, intensity = _lf_scene()
-        keep = list(_LF_NUCLEI)[:n_matched]
-        nuclei = np.where(np.isin(nuclei, keep), nuclei, 0)
-        with caplog.at_level(logging.WARNING, logger="scallops"):
-            flag = _lf_run(rois, intensity, nuclei, chunks=128)[
-                _lf_col("FlagNoNuclearCentroid")
-            ]
-        warned = "sampled labels overlap" in caplog.text
-        if n_matched / len(_LF_IDS) >= NUCLEI_MATCH_MIN_FRACTION:
-            assert not warned
-            expected = [0.0 if label in keep else 1.0 for label in _LF_IDS]
-        else:
-            assert warned
-            expected = [1.0] * len(_LF_IDS)
-        np.testing.assert_array_equal(flag.to_numpy(), expected)
-
-    def test_match_check_reads_about_one_chunk_despite_giant_object(self, monkeypatch):
-        # A thin L-shaped object starts in chunk (0, 0) but spans the whole image.
-        # The check must skip it, so the region read stays within ~2 chunks.
-        from scallops.features import generate
-
-        cells = np.zeros((256, 256), dtype=np.int32)
-        nuclei = np.zeros_like(cells)
-        for k, (r, c) in enumerate([(4, 4), (4, 26), (26, 4)], start=1):
-            cells[r : r + 18, c : c + 18] = k
-            nuclei[r + 6 : r + 12, c + 6 : c + 12] = k
-        cells[2, 30:250] = 99  # giant object: bbox from (2, 30) to (250, 250)
-        cells[2:250, 249] = 99
-        seen = {}
-
-        def spy(label_image, nuclei_label_image, region, labels=None):
-            seen["region"], seen["labels"] = region, labels
-            return nuclei_label_match_fraction(
-                label_image, nuclei_label_image, region, labels
-            )
-
-        monkeypatch.setattr(generate, "nuclei_label_match_fraction", spy)
-        intensity = np.full((256, 256, 2), 0.1, dtype=np.float32)
-        flag = _lf_run(cells, intensity, nuclei, chunks=64)[
-            _lf_col("FlagNoNuclearCentroid")
-        ]
-        rows, cols = seen["region"]
-        assert rows.stop - rows.start <= 128 and cols.stop - cols.start <= 128
-        assert 99 not in seen["labels"]
-        assert (flag.drop(99) == 0).all()
 
     def test_sigma_zero_from_feature_string(self):
         # "puncta_1_0_0.9_2_2": sigma 0 is parsed as 0.0, and alpha < 1 is accepted

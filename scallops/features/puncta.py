@@ -31,8 +31,9 @@ constants.py and returns a dict of feature name -> array with one value per cell
 
 ``label_features()`` additionally binds ``nuclei_label_image`` (the full-image nuclei
 labels) to ``puncta()`` only, when the scallops CLI supplies it (for every ROI type:
-nuclei, cell, cytoplasm) and a sample of the image shows the ROI labels share IDs
-with the nuclei. No other feature function receives it.
+nuclei, cell, cytoplasm). No other feature function receives it. The ROI labels are
+assumed to share IDs with their nuclei, as scallops produces them (propagation and
+watershed cells, cytoplasm, and cells renumbered by ``scallops segment overlap``).
 
 The feature string in the pipeline config (e.g. ``puncta_1,2,3_10.0_1.5_2_2``) is
 split on underscores by ``_get_params()`` and its tokens are bound POSITIONALLY to
@@ -110,11 +111,6 @@ _BG_MARGIN = 1.0 + 1e-6
 # range, not the maximum, so it scales with the cell's contrast; > 0 so a plateau
 # stays intact after flatfield correction makes its pixels slightly unequal.
 _SATURATION_TOL = 0.01
-
-# Minimum fraction of sampled ROI labels whose same-ID nucleus overlaps or touches them
-# for the nuclei labels to be used at all (see nuclei_label_match_fraction). ROI labels
-# derived from the nuclei score ~1; independently numbered labels (cellpose cells) ~0.
-NUCLEI_MATCH_MIN_FRACTION = 0.5
 
 
 # The 33 output features. FgObjectCount (connected blobs before watershed) and
@@ -348,42 +344,6 @@ def _find_nucleus(
         roi_frame = roi_in_window(y0, x0, nucleus.shape)
 
     return roi_frame, nucleus, (roi_origin[0] - y0, roi_origin[1] - x0)
-
-
-def nuclei_label_match_fraction(label_image, nuclei_label_image, region, labels=None):
-    """Fraction of ROI labels in ``region`` whose same-ID nucleus overlaps or touches them.
-
-    Cell labels from propagation or watershed segmentation (grown from the nuclei) and
-    cytoplasm labels (cells minus nuclei) share IDs with their nuclei and score ~1.
-    Cellpose cell labels are numbered independently of the nuclei and score ~0; for
-    such images the nuclei must not be used, or cells would be paired with unrelated
-    nuclei. Compare against NUCLEI_MATCH_MIN_FRACTION.
-
-    :param region: (row slice, col slice) to sample, in full-image coordinates.
-    :param labels: ROI IDs to evaluate (default: every ROI in ``region``). Pass ROIs
-        whose bounding box plus a 1-pixel margin lies inside ``region``: a ROI cut by
-        the region's edge can have its nucleus outside the region and would be
-        counted as unmatched.
-    """
-    (rows, cols) = region
-    rois = _read_label_region(label_image, rows.start, rows.stop, cols.start, cols.stop)
-    nuclei = _read_label_region(
-        nuclei_label_image, rows.start, rows.stop, cols.start, cols.stop
-    )
-    ids = np.unique(rois) if labels is None else np.unique(labels)
-    ids = ids[ids > 0]
-    if len(ids) == 0:
-        return 0.0
-    # Same pixel, or the 4 neighbours (ROI pixel next to a nucleus pixel of its ID).
-    pairs = [
-        (rois, nuclei),
-        (rois[1:], nuclei[:-1]),
-        (rois[:-1], nuclei[1:]),
-        (rois[:, 1:], nuclei[:, :-1]),
-        (rois[:, :-1], nuclei[:, 1:]),
-    ]
-    matched = np.unique(np.concatenate([a[(a == b) & (a > 0)] for a, b in pairs]))
-    return float(np.isin(ids, matched).mean())
 
 
 def _validate_params(sigma, alpha, min_size_fg_objects, peak_min_distance):
