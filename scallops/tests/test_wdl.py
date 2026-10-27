@@ -172,6 +172,7 @@ def test_ops_wdl(tmp_path):
         "groupby": ["well", "tile"],
         "reads_threshold_peaks": "0",
         "reads_threshold_peaks_crosstalk": "20",
+        "reads_max_base_intensity": 9000,
         "barcodes": os.path.abspath("scallops/tests/data/experimentC/barcodes.csv"),
         "mark_stitch_boundary_cells": False,
         "reads_labels": "cell",
@@ -229,6 +230,9 @@ def test_ops_wdl(tmp_path):
         "Cells_Intensity_MeanIntensity_Channel0",
     ]:
         assert col not in merge_sbs_metadata_df.columns
+    # dead cell filtering enabled
+    reads_labels_df = pd.read_parquet(output / "reads" / "labels")
+    assert reads_labels_df["is_dead_cell"].dtype == bool
     merge_features_df = pd.read_parquet(output / "merge-features" / "A1-102.parquet")
     for col in [
         "Nuclei_AreaShape_Area",

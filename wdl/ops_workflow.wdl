@@ -63,6 +63,7 @@ workflow ops_workflow {
         String? reads_bases
         String? reads_threshold_peaks
         String? reads_threshold_peaks_crosstalk
+        Float? reads_max_base_intensity # flag/exclude dead cells from crosstalk correction
         String? reads_extra_arguments
 
         String model_dir = ""
@@ -628,6 +629,7 @@ workflow ops_workflow {
                         label_name=reads_labels,
                         mismatches=reads_mismatches,
                         threshold_peaks_crosstalk=reads_threshold_peaks_crosstalk,
+                        max_base_intensity=reads_max_base_intensity,
                         subset = group,
                         extra_arguments=reads_extra_arguments,
                         force = force_reads,

@@ -716,6 +716,7 @@ task reads {
         Int? expand_labels_distance
         String? threshold_peaks
         String? threshold_peaks_crosstalk
+        Float? max_base_intensity
         String output_directory
         String barcodes
         String? barcode_column
@@ -741,6 +742,7 @@ task reads {
         ~{"--bases " + bases} \
         ~{"--threshold-peaks " + threshold_peaks} \
         ~{"--threshold-peaks-crosstalk " + threshold_peaks_crosstalk} \
+        ~{"--max-base-intensity " + max_base_intensity} \
         ~{"--mismatches " + mismatches} \
         ~{"--expand-labels-distance " + expand_labels_distance} \
         ~{"--barcode-col " + barcode_column} \
