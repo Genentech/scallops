@@ -20,12 +20,12 @@ from typing import Literal, cast
 
 import fsspec
 import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import skimage.transform
 import skimage.util
 from dask.bag import from_sequence
+from matplotlib.figure import Figure
 from skimage.util import img_as_uint
 
 from scallops.cli.util import (
@@ -161,7 +161,8 @@ def single_stitch_preview(
     stage_positions = stage_positions * resolution_scale
     stage_positions = np.round(stage_positions).astype(int)
 
-    fig, ax = plt.subplots()
+    fig = Figure()
+    ax = fig.subplots()
     ax.axis("off")
     tile_shape = np.round(np.array(tile_shape_no_crop) * resolution_scale).astype(int)
     z_tiles_removed = (
@@ -247,7 +248,7 @@ def single_stitch_preview(
     if not fs.exists(output_path):
         fs.mkdirs(output_path, exist_ok=True)
     with fs.open(f"{output_path}{fs.sep}{image_key}.png", "wb") as f:
-        plt.savefig(f)
+        fig.savefig(f)
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

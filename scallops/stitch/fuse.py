@@ -400,17 +400,9 @@ def _load_tile(
 
     :return: Corrected and cropped float tile with dimensions (c, y, x) in [0, 1].
     """
-    local_image_paths = [_localize_path(path) for path in image_paths]
-    image_paths = [
-        local_image_paths[i] if local_image_paths[i] is not None else image_paths[i]
-        for i in range(len(image_paths))
-    ]
 
     img = _images2fov(image_paths, image_attrs, scene_id=scene_id)
     img = _select_t_index(img, t_index)
-    for path in local_image_paths:
-        if path is not None:
-            os.remove(path)
     if "z" in img.dims:
         img = (
             img.isel(z=z_index)
@@ -456,7 +448,7 @@ def _load_tile(
 
 
 def _fuse_chunk(
-    out: zarr.Array | NDArray,
+    out: zarr.Array,
     channel_slice: slice,
     box: tuple[int, int, int, int],
     tiles: Sequence[dict[str, Any]],
@@ -504,6 +496,9 @@ def _fuse_chunk(
         # intersection of tile and chunk in output coordinates
         iy0, iy1 = max(y0, y), min(y1, y + img.shape[-2])
         ix0, ix1 = max(x0, x), min(x1, x + img.shape[-1])
+        # _fuse only passes intersecting tiles, but a tile smaller than expected (or a
+        # direct caller) can miss the chunk; skip it, as a tile above or left of the chunk
+        # would give negative slice stops that index from the end of the array
         if iy0 >= iy1 or ix0 >= ix1:
             continue
         tile_sl = (slice(iy0 - y, iy1 - y), slice(ix0 - x, ix1 - x))
