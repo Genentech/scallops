@@ -80,8 +80,8 @@ workflow stitch_workflow {
     String illumination_correction_memory_default = if(group_size<=500) then "16 GiB" else "32 GiB"
     Int illumination_correction_cpu_default = if(group_size<=500) then 8 else 16
 
-    String stitch_memory_default = if(group_size<=500) then "16 GiB" else "128 GiB"
-    Int stitch_cpu_default = if(group_size<=500) then 8 else 32
+    String stitch_memory_default = if(group_size<=500) then "16 GiB" else "96 GiB"
+    Int stitch_cpu_default = if(group_size<=500) then 8 else 48
 
     scatter (group in groups) {
         if(run_illumination_correction) {
