@@ -47,9 +47,7 @@ import zarr
 from anndata._io.specs import read_elem
 from anndata.experimental import read_dispatched
 from bioio_ome_tiff.writers import OmeTiffWriter
-from dask.bag import from_sequence
 from dask.delayed import Delayed, delayed
-from dask.diagnostics import ProgressBar
 from dask.graph_manipulation import bind
 from natsort import natsort_keygen, natsorted
 from numpy.typing import NDArray
@@ -2232,30 +2230,6 @@ class _LazyLoadImage(_LazyLoadData):
             self._scene_id,
             **self._kwargs,
         )
-
-
-def _load_experiment(experiment: Experiment) -> Experiment:
-    """Loads all images from an experiment into memory in parallel.
-
-    :param experiment: Experiment
-        The experiment object containing the images to be loaded.
-    :return: None
-
-    :example:
-    .. code-block:: python
-
-        # Example usage of _load_experiment
-        _load_experiment(my_experiment)
-    """
-    b = from_sequence(experiment.images.keys())
-
-    def _load_image(key):
-        experiment.images[key]
-
-    bag = b.starmap(_load_image)
-    with ProgressBar():
-        bag.compute()
-    return experiment
 
 
 def _single_contrast(data: NDArray, display_ranges: Any) -> tuple[float, float]:

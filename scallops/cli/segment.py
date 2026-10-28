@@ -25,7 +25,6 @@ import fsspec
 import numpy as np
 import xarray as xr
 import zarr
-from dask.bag import from_sequence
 from fsspec.implementations.local import LocalFileSystem
 from numpy.typing import NDArray
 from skimage.measure import regionprops
@@ -144,8 +143,8 @@ def _update_seg_args(method_args: dict, seg_args: dict | None) -> None:
 
 
 def segment_nuclei(
-    group: str,  # NOT USED
-    file_list: list[str],
+    group: tuple[str, ...],  # NOT USED
+    file_list: Sequence[str],
     metadata: dict,
     dapi_channel: int,
     method: Callable,
@@ -265,8 +264,8 @@ def segment_nuclei(
 
 
 def segment_cells(
-    group: str,
-    file_list: list[str],
+    group: tuple[str, ...],
+    file_list: Sequence[str],
     metadata: dict,
     dapi_channel: int,
     cyto_channel: Sequence[int] | NDArray | None,
@@ -721,27 +720,28 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",
     )
-    image_seq = from_sequence(
-        _set_up_experiment(data_path, image_pattern, group_by, subset=subset)
-    )
+    segment_fn = segment_nuclei if nuclei else segment_cells
     with (
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        image_seq.starmap(
-            segment_nuclei if nuclei else segment_cells,
-            dapi_channel=dapi_channel,
-            method=method,
-            root=output_root,
-            min_area=min_area,
-            max_area=max_area,
-            chunks=chunks,
-            chunk_overlap=chunk_overlap,
-            z_index=z_index,
-            force=force,
-            no_version=no_version,
-            **kwargs,
-        ).compute()
+        for image_tuple in _set_up_experiment(
+            data_path, image_pattern, group_by, subset=subset
+        ):
+            segment_fn(
+                *image_tuple,
+                dapi_channel=dapi_channel,
+                method=method,
+                root=output_root,
+                min_area=min_area,
+                max_area=max_area,
+                chunks=chunks,
+                chunk_overlap=chunk_overlap,
+                z_index=z_index,
+                force=force,
+                no_version=no_version,
+                **kwargs,
+            )
     _delete_lock_files()
 
 
