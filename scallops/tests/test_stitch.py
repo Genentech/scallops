@@ -509,6 +509,85 @@ def test_stitch_cli(tmp_path):
     )
 
 
+def _write_fuse_tiles(tmp_path, tile_shape=(64, 64)):
+    """Write 4 overlapping random 2-channel tiles and return their positions dataframe."""
+    rng = np.random.default_rng(0)
+    # 2x2 grid with uneven overlaps
+    positions = [(0, 0), (3, 50), (55, 2), (52, 53)]
+    tiles = []
+    for i, (y, x) in enumerate(positions):
+        img = rng.integers(0, 60000, size=(2,) + tile_shape, dtype=np.uint16)
+        path = tmp_path / f"tile-{i}.zarr"
+        _write_image_with_position(path, xr.DataArray(img, dims=["c", "y", "x"]), y, x)
+        tiles.append(img)
+    df = pd.DataFrame(
+        data=dict(
+            source=[[str(tmp_path / f"tile-{i}.zarr")] for i in range(len(positions))],
+            source_metadata=[dict(file_metadata=[dict()]) for _ in positions],
+            y=[float(p[0]) for p in positions],
+            x=[float(p[1]) for p in positions],
+            # distinct distances so tile priority is unambiguous
+            distance_to_center=[3.0, 1.0, 2.0, 0.0],
+        )
+    )
+    fused_shape = (
+        2,
+        max(p[0] for p in positions) + tile_shape[0],
+        max(p[1] for p in positions) + tile_shape[1],
+    )
+    return df, tiles, fused_shape
+
+
+@pytest.mark.io
+@pytest.mark.parametrize("chunk_size", [None, (17, 23), (63, 63), (500, 500)])
+def test_fuse_no_blend_chunk_size(tmp_path, chunk_size):
+    df, tiles, fused_shape = _write_fuse_tiles(tmp_path)
+    tile_shape = tiles[0].shape[1:]
+
+    # tiles closest to the center have priority, so paint in descending distance
+    expected = np.zeros(fused_shape, dtype=np.uint16)
+    for i in np.argsort(-df["distance_to_center"].values):
+        y, x = int(df["y"].iloc[i]), int(df["x"].iloc[i])
+        expected[:, y : y + tile_shape[0], x : x + tile_shape[1]] = tiles[i]
+
+    group = zarr.group()
+    _fuse(df, group=group, blend="none", z_index=0, chunk_size=chunk_size)
+    np.testing.assert_array_equal(group["s0"][...], expected)
+
+
+@pytest.mark.io
+@pytest.mark.parametrize("chunk_size", [None, (17, 23), (63, 63), (500, 500)])
+def test_fuse_linear_blend(tmp_path, chunk_size):
+    df, tiles, fused_shape = _write_fuse_tiles(tmp_path)
+    tile_shape = tiles[0].shape[1:]
+
+    # weights are the product of distance to the nearest horizontal and vertical edges
+    vert = np.minimum(np.arange(1, tile_shape[0] + 1), np.arange(tile_shape[0], 0, -1))
+    hor = np.minimum(np.arange(1, tile_shape[1] + 1), np.arange(tile_shape[1], 0, -1))
+    weights = np.outer(vert, hor).astype(float)
+    weights /= weights.max()
+
+    weighted_sum = np.zeros(fused_shape)
+    weights_sum = np.zeros(fused_shape[1:])
+    for i in range(len(df)):
+        y, x = int(df["y"].iloc[i]), int(df["x"].iloc[i])
+        sl = (slice(y, y + tile_shape[0]), slice(x, x + tile_shape[1]))
+        weighted_sum[(...,) + sl] += tiles[i] * weights
+        weights_sum[sl] += weights
+    weights_sum[weights_sum == 0] = 1
+    expected = np.round(weighted_sum / weights_sum).astype(np.uint16)
+
+    group = zarr.group()
+    _fuse(df, group=group, blend="linear", z_index=0, chunk_size=chunk_size)
+    result = group["s0"][...]
+    np.testing.assert_array_equal(result, expected)
+
+    # outside overlaps, blending must reproduce the single covering tile exactly
+    np.testing.assert_array_equal(result[:, :3, :50], tiles[0][:, :3, :50])
+    # pixels covered by no tile (above tile 1, right of tile 0) are 0
+    assert (result[:, :3, 64:] == 0).all()
+
+
 @pytest.mark.io
 def test_stitch_crop(tmp_path):
     input_path = tmp_path / "input"
