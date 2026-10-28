@@ -892,7 +892,7 @@ def spot_detect_main(arguments: argparse.Namespace):
 def reads_pipeline(
     image_key: str,
     spots_root: zarr.Group,
-    labels_root: zarr.Group,
+    label_groups: list[zarr.Group],
     barcodes_file: str,
     file_separator: str,
     threshold_peaks: float | str | None,
@@ -919,7 +919,7 @@ def reads_pipeline(
 
     :param image_key: Unique identifier for the image.
     :param spots_root: Root group containing spot detection results.
-    :param labels_root: Root group containing labels data.
+    :param label_groups: Root groups containing labels data.
     :param barcodes_file: Path to the barcodes file.
     :param file_separator: Separator used in file paths.
     :param threshold_peaks: Single threshold or list of thresholds for spot detection. Alternatively
@@ -970,9 +970,11 @@ def reads_pipeline(
     points_path = f"{points_path}/{image_key}-peaks.parquet"
     peaks = dd.read_parquet(points_path)
     maxed = read_ome_zarr_array(spots_root["images"][image_key + "-max"], dask=True)
-    labels = read_ome_zarr_array(
-        labels_root[image_key + "-" + label_name], dask=True
-    ).data.compute()
+    for label_group in reversed(label_groups):
+        v = label_group.get(image_key + "-" + label_name)
+        if v is not None:
+            labels = read_ome_zarr_array(v, dask=True).data.compute()
+            break
     if expand_labels_distance is not None and expand_labels_distance > 0:
         labels = expand_labels(labels, distance=expand_labels_distance)
     iss_cycles = maxed.coords["t"].values
@@ -1081,6 +1083,9 @@ def reads_pipeline(
                 "and mismatches"
             )
     if threshold_peaks == "auto":
+        if isinstance(df_reads, dd.DataFrame):
+            # decoded reads are used for the threshold and again for the outputs
+            df_reads = df_reads.persist()
         peak_thresholds_lower_df = peak_thresholds_from_reads(
             df_reads.query(" & ".join(reads_to_labels_query)).compute()
         )
@@ -1259,8 +1264,7 @@ def reads_main(arguments: argparse.Namespace):
     output_dir = output_dir.rstrip(output_fs.sep)
     for key in save_keys:
         output_fs.makedirs(output_dir + output_fs.sep + key, exist_ok=True)
-    labels_fs, _ = fsspec.core.url_to_fs(labels)
-    labels = labels.rstrip(labels_fs.sep)
+    label_groups = [zarr.open(path, mode="r")["labels"] for path in labels]
 
     spots_fs, _ = fsspec.core.url_to_fs(spots)
     spots = spots.rstrip(spots_fs.sep)
@@ -1287,7 +1291,7 @@ def reads_main(arguments: argparse.Namespace):
             reads_pipeline(
                 key,
                 spots_root=zarr.open(spots, mode="r"),
-                labels_root=zarr.open(labels + labels_fs.sep + "labels", mode="r"),
+                label_groups=label_groups,
                 barcodes_file=barcodes_file,
                 file_separator=output_fs.sep,
                 threshold_peaks=threshold_peaks,

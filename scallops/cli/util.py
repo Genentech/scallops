@@ -376,6 +376,16 @@ def t_index_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def labels_arg(parser: argparse.ArgumentParser, required: bool = True) -> None:
+    parser.add_argument(
+        "--labels",
+        required=required,
+        nargs="+" if required else "*",
+        help="One or more paths to zarr stores containing a 'labels' group. If the same "
+        "label name appears in more than one store, the store listed last is used.",
+    )
+
+
 def output_dir_arg(parser: argparse.ArgumentParser) -> None:
     """Add the output directory argument to a parser.
 

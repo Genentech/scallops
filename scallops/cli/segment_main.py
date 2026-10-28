@@ -16,6 +16,7 @@ from scallops.cli.util import (
     groupby_arg,
     image_pattern_arg,
     images_arg,
+    labels_arg,
     no_version_arg,
     subset_arg,
     z_index_arg,
@@ -331,12 +332,8 @@ def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
         ),
     )
     required = parser.add_argument_group("required arguments")
-    required.add_argument(
-        "--labels",
-        required=True,
-        nargs="+",
-        help="Path to zarr directory containing labels",
-    )
+    labels_arg(required)
+
     required.add_argument(
         "--meta-output",
         required=True,

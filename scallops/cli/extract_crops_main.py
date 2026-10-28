@@ -19,6 +19,7 @@ from scallops.cli.util import (
     groupby_arg,
     image_pattern_arg,
     images_arg,
+    labels_arg,
     load_json,
     no_version_arg,
     output_dir_arg,
@@ -77,16 +78,17 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
 
-    labels_path = arguments.labels
+    label_paths = arguments.labels
     no_version = arguments.no_version
-    labels_group = None
-    if not mask:
-        labels_path = None
-    if labels_path is None and mask:
+
+    if not mask and len(label_paths) > 0:
+        logger.warning("Ignoring provided labels")
+        label_paths = []
+    if len(label_paths) == 0 and mask:
         raise ValueError("Labels must be provided when `mask` is true.")
-    if labels_path is not None:
-        label_root = zarr.open(labels_path, mode="r")
-        labels_group = label_root["labels"]
+    label_groups = [
+        zarr.open(label_path, mode="r")["labels"] for label_path in label_paths
+    ]
 
     with (
         _create_default_dask_config(
@@ -106,7 +108,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
                 output_sep=output_fs.sep,
                 merge_dir=merge_dir,
                 merge_dir_sep=merge_dir_sep,
-                labels_group=labels_group,
+                label_groups=label_groups,
                 label_filter=label_filter,
                 label_name=label_name,
                 percentile_normalize=percentile_normalize,
@@ -143,11 +145,8 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         required=True,
         help="Path to directory containing output from `merge`",
     )
-    parser.add_argument(
-        "--labels",
-        dest="labels",
-        help="Path to zarr directory containing labels. Required when `mask` is true",
-    )
+    labels_arg(parser, False)
+
     parser.add_argument(
         "--mask",
         action="store_true",
