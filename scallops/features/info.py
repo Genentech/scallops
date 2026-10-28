@@ -116,6 +116,17 @@ Other Features
      Parameters are encoded in the feature names (e.g.
      "Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2").
 
+     When to use: puncta is intended for punctate and blobular
+     cellular structures in immunofluorescence phenotyping images
+     (e.g. vesicles, granules, Golgi fragments, receptor clusters),
+     which vary in size and are often elongated, and for when their
+     size, intensity, and position in the cell matter, not just their
+     number. It needs no model or GPU. For counting diffraction-
+     limited FISH spots, use "spots" (U-FISH), which is designed for
+     that case; puncta has not been validated on FISH data. In our
+     tests on immunofluorescence images, U-FISH did not detect these
+     structures well.
+
      Nuclei labels: for each image, puncta expects the nuclei labels
      ("<image>-nuclei") in the same labels zarr as the ROI labels
      passed to "--labels", with IDs matching the cells, as produced by
