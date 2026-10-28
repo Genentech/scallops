@@ -71,8 +71,6 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
 
-    if merge_dir is None:
-        raise ValueError("Please provide `merge` directory")
     merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
     merge_dir = merge_dir.rstrip(merge_dir_sep)
 
@@ -142,6 +140,7 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
 
     required.add_argument(
         "--merge",
+        required=True,
         help="Path to directory containing output from `merge`",
     )
     parser.add_argument(
