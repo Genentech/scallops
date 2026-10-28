@@ -63,7 +63,7 @@ def _distance_to_center(coords: np.ndarray) -> np.ndarray:
 
 
 def _single_stitch(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: tuple[tuple[str, ...], Sequence[str], dict],
     stage_positions_path: str | None,
     image_output_root: zarr.Group | None,
     ffp_path: str | None,

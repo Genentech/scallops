@@ -4,8 +4,9 @@ import fsspec
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib import pyplot as plt
+from matplotlib import colormaps
 from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from numpy.typing import NDArray
 
@@ -31,7 +32,8 @@ def _max_shift_vs_zncc_plot(
     valid_edges: NDArray[np.bool_],
     max_shift: float | None = None,
 ):
-    fig, ax = plt.subplots()
+    fig = Figure()
+    ax = fig.subplots()
 
     df = pd.DataFrame(
         data={
@@ -67,7 +69,8 @@ def _max_shift_vs_zncc_plot(
 
 
 def _shifts_quiver_plot(stage_positions, shifts):
-    fig, ax = plt.subplots()
+    fig = Figure()
+    ax = fig.subplots()
     ax.quiver(
         stage_positions[:, 1],
         stage_positions[:, 0],
@@ -94,7 +97,8 @@ def _title_plot(
     if radial_correction_k is not None:
         header.append(f"Radial Correction K: {radial_correction_k}")
     if len(header) > 0 or not no_version:
-        fig, ax = plt.subplots()
+        fig = Figure()
+        ax = fig.subplots()
         ax.axis("off")
         ax.set_ylim((0, 2))
         ax.invert_yaxis()
@@ -142,8 +146,9 @@ def _overlapping_regions_plot(
     :param vmax: Max value to anchor the colormap
     :return: Matplotlib Axes object
     """
-    fig, ax = plt.subplots()
-    cmap = plt.get_cmap("Reds_r")
+    fig = Figure()
+    ax = fig.subplots()
+    cmap = colormaps["Reds_r"]
 
     if vmin is None:
         vmin = zncc_values.min()
@@ -269,7 +274,6 @@ def _qc_report(
             )
             if fig is not None:
                 pdf.savefig(fig)
-                plt.close(fig)
             if zncc_values is not None:
                 fig = _overlapping_regions_plot(
                     zncc_values=zncc_values,
@@ -281,14 +285,12 @@ def _qc_report(
                     tile_shape=tile_shape,
                 )
                 pdf.savefig(fig)
-                plt.close(fig)
             if final_shifts is not None:
                 fig = _shifts_quiver_plot(
                     stage_positions=stage_positions,
                     shifts=final_shifts,
                 )
                 pdf.savefig(fig)
-                plt.close(fig)
             if nccs_before_stitching is not None:
                 fig = _max_shift_vs_zncc_plot(
                     nccs_before_stitching=nccs_before_stitching,
@@ -299,4 +301,3 @@ def _qc_report(
                     max_shift=max_shift,
                 )
                 pdf.savefig(fig)
-                plt.close(fig)
