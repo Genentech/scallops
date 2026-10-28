@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Literal
 
 import dask.array as da
@@ -34,8 +35,8 @@ def _norm_block(image: NDArray, percentiles) -> NDArray:
 
 
 def single_crop(
-    group: str,  # NOT USED
-    file_list: list[str],
+    group: tuple[str, ...],  # NOT USED
+    file_list: Sequence[str],
     metadata: dict,
     labels_group: Group | None,
     output_dir: str,

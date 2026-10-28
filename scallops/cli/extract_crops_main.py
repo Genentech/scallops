@@ -4,7 +4,6 @@ import argparse
 
 import fsspec
 import zarr
-from dask.bag import from_sequence
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.extract_crops import single_crop
@@ -72,10 +71,10 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
 
-    merge_dir_sep = None
-    if merge_dir is not None:
-        merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
-        merge_dir = merge_dir.rstrip(merge_dir_sep)
+    if merge_dir is None:
+        raise ValueError("Please provide `merge` directory")
+    merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
+    merge_dir = merge_dir.rstrip(merge_dir_sep)
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
@@ -91,40 +90,37 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         label_root = zarr.open(labels_path, mode="r")
         labels_group = label_root["labels"]
 
-    image_seq = from_sequence(
-        _set_up_experiment(
-            images_paths,
-            files_pattern=image_patterns,
-            subset=subset,
-            group_by=groupby,
-        )
-    )
-
     with (
         _create_default_dask_config(
             {"distributed.admin.large-graph-warning-threshold": "250MB"}
         ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        image_seq.starmap(
-            single_crop,
-            output_dir=output_dir,
-            output_sep=output_fs.sep,
-            merge_dir=merge_dir,
-            merge_dir_sep=merge_dir_sep,
-            labels_group=labels_group,
-            label_filter=label_filter,
-            label_name=label_name,
-            percentile_normalize=percentile_normalize,
-            local_normalize_overlap=local_normalize_overlap,
-            local_percentile_normalize=local_percentile_normalize,
-            crop_size=crop_size,
-            output_format=output_format,
-            gaussian_sigma=gaussian_sigma,
-            chunks=chunks,
-            force=force,
-            no_version=no_version,
-        ).compute()
+        for image_tuple in _set_up_experiment(
+            images_paths,
+            files_pattern=image_patterns,
+            subset=subset,
+            group_by=groupby,
+        ):
+            single_crop(
+                *image_tuple,
+                output_dir=output_dir,
+                output_sep=output_fs.sep,
+                merge_dir=merge_dir,
+                merge_dir_sep=merge_dir_sep,
+                labels_group=labels_group,
+                label_filter=label_filter,
+                label_name=label_name,
+                percentile_normalize=percentile_normalize,
+                local_normalize_overlap=local_normalize_overlap,
+                local_percentile_normalize=local_percentile_normalize,
+                crop_size=crop_size,
+                output_format=output_format,
+                gaussian_sigma=gaussian_sigma,
+                chunks=chunks,
+                force=force,
+                no_version=no_version,
+            )
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:

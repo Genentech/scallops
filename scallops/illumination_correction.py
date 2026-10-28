@@ -97,7 +97,7 @@ def _smooth_and_rescale(
 
 
 def illumination_correction(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: tuple[tuple[str, ...], Sequence[str], dict],
     smooth: int | None = None,
     rescale: bool = True,
     z_index: Literal["max", "focus"] | str | int = "max",
