@@ -3,6 +3,7 @@ from typing import Literal
 
 import dask.array as da
 import fsspec
+import numpy as np
 from array_api_compat import get_namespace
 from numpy.typing import NDArray
 from skimage.util import img_as_ubyte
@@ -133,7 +134,7 @@ def single_crop(
             )
             image = (image - percentiles[0]) / (percentiles[1] - percentiles[0])
             image = da.clip(image, 0, 1)
-    image = da.map_blocks(img_as_ubyte, image)
+    image = da.map_blocks(img_as_ubyte, image, dtype=np.uint8)
     label_col = "label" if "label" in merged_df.columns else None
     merged_df = to_label_crops(
         label_image=label_image,
