@@ -24,7 +24,6 @@ import numpy as np
 import pandas as pd
 import skimage.transform
 import skimage.util
-from dask.bag import from_sequence
 from matplotlib.figure import Figure
 from skimage.util import img_as_uint
 
@@ -258,23 +257,22 @@ def run_stitch_preview(args: argparse.Namespace) -> None:
 
     if not args.bounds and not args.numbers and args.no_tiles:
         raise ValueError("Please provide bounds or numbers or disable tiles.")
-    from_sequence(
-        _set_up_experiment(
-            args.images, args.image_pattern, args.groupby, subset=args.subset
+    for image_tuple in _set_up_experiment(
+        args.images, args.image_pattern, args.groupby, subset=args.subset
+    ):
+        single_stitch_preview(
+            image_tuple,
+            output_path=args.output,
+            channel=args.channel,
+            numbers=args.numbers,
+            bounds=args.bounds,
+            downsample=args.downsample,
+            log=args.log,
+            stage_positions_path=args.stage_positions,
+            show_image=not args.no_tiles,
+            z_index=args.z_index,
+            t_index=args.t_index,
         )
-    ).map(
-        single_stitch_preview,
-        output_path=args.output,
-        channel=args.channel,
-        numbers=args.numbers,
-        bounds=args.bounds,
-        downsample=args.downsample,
-        log=args.log,
-        stage_positions_path=args.stage_positions,
-        show_image=not args.no_tiles,
-        z_index=args.z_index,
-        t_index=args.t_index,
-    ).compute()
 
 
 def run_stitch(args: argparse.Namespace) -> None:
