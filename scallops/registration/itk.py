@@ -261,7 +261,7 @@ def _array_to_itk(
         len(spacing) == 3
     ):  # assume image had z-axis that was max-projected and z-axis is no longer present
         spacing = spacing[1], spacing[2]
-    itk_image.SetSpacing(spacing)
+    itk_image.SetSpacing(spacing[::-1])  # ITK spacing is (x, y)
     return itk_image
 
 
@@ -421,6 +421,7 @@ def itk_align_to_reference_time(
     output_dir: str | None = None,
     unroll_channels: bool = False,
     reference_timepoint: int = 0,
+    parameter_object_across_channels: itk.ParameterObject | None = None,
 ) -> xr.DataArray:
     """Align a time-series of moving images to the specified time point using ITK registration.
 
@@ -437,6 +438,8 @@ def itk_align_to_reference_time(
         timepoint. If None, outputs are not saved.
     :param unroll_channels: Whether to concatenate time along the channel dimension.
     :param reference_timepoint: Index of the timepoint to align to
+    :param parameter_object_across_channels: Optional ITK parameter object used to align each
+        channel to `moving_channel` before aligning across time.
     :return: The aligned DataArray.
     """
 
@@ -471,6 +474,7 @@ def itk_align_to_reference_time(
         init_callback=_init_callback,
         done_callback=done,
         reference_timepoint=reference_timepoint,
+        parameter_object_across_channels=parameter_object_across_channels,
     )
 
 
@@ -696,6 +700,11 @@ def _itk_align_reference_time(
     if attrs_keep is None:
         attrs_keep = []
     moving_image_reference_t_moving_c = moving_image_reference_t_moving_c.squeeze()
+    moving_channels = (
+        set(np.atleast_1d(moving_channel).tolist())
+        if parameter_object_across_channels is not None
+        else set()
+    )
     for i in range(len(times)):
         moving_image_ti_moving_c = (
             moving_image.isel(t=i, c=moving_channel)
@@ -708,18 +717,18 @@ def _itk_align_reference_time(
                 attr_name_to_values[attr_name].append(
                     moving_image_ti_moving_c.attrs[attr_name]
                 )
+        if (
+            "c" in moving_image_ti_moving_c.dims
+            and moving_image_ti_moving_c.sizes["c"] > 1
+        ):
+            moving_image_ti_moving_c = moving_image_ti_moving_c.median(
+                dim="c", keep_attrs=True
+            )
+        moving_image_ti_moving_c = moving_image_ti_moving_c.squeeze()
         transform_parameter_object = None
         if i != reference_timepoint:
             logger.info(f"Registering t={i} to t={reference_timepoint}.")
 
-            if (
-                "c" in moving_image_ti_moving_c.dims
-                and moving_image_ti_moving_c.sizes["c"] > 1
-            ):
-                moving_image_ti_moving_c = moving_image_ti_moving_c.median(
-                    dim="c", keep_attrs=True
-                )
-            moving_image_ti_moving_c = moving_image_ti_moving_c.squeeze()
             dest = None
             if output_dir is not None:
                 assert output_fs is not None
@@ -807,7 +816,10 @@ def _itk_align_reference_time(
                 if isinstance(moving_image, xr.DataArray)
                 else moving_image[i].isel(c=j)
             ).squeeze()
-            if parameter_object_across_channels is not None and j != moving_channel:
+            if (
+                parameter_object_across_channels is not None
+                and j not in moving_channels
+            ):
                 # first align and transform to reference channel
                 logger.info(f"Registering c={j} to c={moving_channel} at t={i}.")
                 dest_channel = None
@@ -1039,12 +1051,16 @@ def itk_align(
             moving_mask.values if isinstance(moving_mask, xr.DataArray) else moving_mask
         )
         elastix_object.SetMovingMask(
-            itk.image_view_from_array(mask.astype(np.uint8, copy=False))
+            _array_to_itk(
+                np.asarray(mask).astype(np.uint8, copy=False), moving_image_spacing
+            )
         )
     if fixed_mask is not None:
         mask = fixed_mask.values if isinstance(fixed_mask, xr.DataArray) else fixed_mask
         elastix_object.SetFixedMask(
-            itk.image_view_from_array(mask.astype(np.uint8, copy=False))
+            _array_to_itk(
+                np.asarray(mask).astype(np.uint8, copy=False), fixed_image_spacing
+            )
         )
 
     elastix_object.SetParameterObject(parameter_object)
