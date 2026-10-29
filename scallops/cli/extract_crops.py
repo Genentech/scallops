@@ -39,7 +39,7 @@ def single_crop(
     group: tuple[str, ...],  # NOT USED
     file_list: Sequence[str],
     metadata: dict,
-    labels_group: Group | None,
+    label_groups: list[Group] | None,
     output_dir: str,
     output_sep: str,
     merge_dir: str,
@@ -70,15 +70,12 @@ def single_crop(
     image = _images2fov_array(file_list, metadata, dask=True).squeeze().data
     logger.info(f"{image_key} image shape {image.shape}")
     label_image = None
-    if labels_group is not None:
+    if label_groups is not None and len(label_groups) > 0:
         zarr_labels = get_labels(
-            labels_group=labels_group,
+            label_groups=label_groups,
             name=image_key,
             suffix=label_name,  # e.g. nuclei
         )
-
-        if zarr_labels is None:
-            raise ValueError(f"Unable to read {label_name} labels for {image_key}.")
         label_image = da.from_zarr(zarr_labels)
     merged_df = _read_merged_or_objects(
         merge_dir=merge_dir,

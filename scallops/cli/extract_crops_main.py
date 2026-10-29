@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 
 import fsspec
-import zarr
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.extract_crops import single_crop
@@ -13,6 +12,7 @@ from scallops.cli.util import (
     _create_default_dask_config,
     _dask_workers_threads,
     _get_cli_logger,
+    _label_args_type,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -77,16 +77,14 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
 
-    labels_path = arguments.labels
+    label_groups = arguments.labels
     no_version = arguments.no_version
-    labels_group = None
-    if not mask:
-        labels_path = None
-    if labels_path is None and mask:
+
+    if not mask and label_groups is not None and len(label_groups) > 0:
+        logger.warning("Ignoring provided labels")
+        label_groups = []
+    if (label_groups is None or len(label_groups) == 0) and mask:
         raise ValueError("Labels must be provided when `mask` is true.")
-    if labels_path is not None:
-        label_root = zarr.open(labels_path, mode="r")
-        labels_group = label_root["labels"]
 
     with (
         _create_default_dask_config(
@@ -106,7 +104,7 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
                 output_sep=output_fs.sep,
                 merge_dir=merge_dir,
                 merge_dir_sep=merge_dir_sep,
-                labels_group=labels_group,
+                label_groups=label_groups,
                 label_filter=label_filter,
                 label_name=label_name,
                 percentile_normalize=percentile_normalize,
@@ -143,11 +141,15 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         required=True,
         help="Path to directory containing output from `merge`",
     )
+
     parser.add_argument(
         "--labels",
-        dest="labels",
-        help="Path to zarr directory containing labels. Required when `mask` is true",
+        help="One or more paths to zarr stores containing a 'labels' group. If the same "
+        "label name appears in more than one store, the store listed last is used. Required when `mask` is true",
+        nargs="+",
+        type=_label_args_type,
     )
+
     parser.add_argument(
         "--mask",
         action="store_true",
