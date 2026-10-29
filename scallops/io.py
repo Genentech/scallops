@@ -47,9 +47,7 @@ import zarr
 from anndata._io.specs import read_elem
 from anndata.experimental import read_dispatched
 from bioio_ome_tiff.writers import OmeTiffWriter
-from dask.bag import from_sequence
 from dask.delayed import Delayed, delayed
-from dask.diagnostics import ProgressBar
 from dask.graph_manipulation import bind
 from natsort import natsort_keygen, natsorted
 from numpy.typing import NDArray
@@ -62,7 +60,7 @@ from zarr.storage import StoreLike
 
 from scallops.experiment.elements import Experiment, _LazyLoadData
 from scallops.externals.tifffile2014 import imsave
-from scallops.utils import forceTCZYX, mlcs
+from scallops.utils import forceTCZYX
 from scallops.xr import _crop
 from scallops.zarr_io import _get_store_path, _read_zarr_experiment, read_ome_zarr_array
 
@@ -271,7 +269,7 @@ def _create_image(path: str, **kwargs) -> bioio.BioImage:
         # Example usage of _create_image
         image = _create_image("data/sample_image.tiff", reconstruct_mosaic=True)
     """
-    img_args = dict(reconstruct_mosaic=False)
+    img_args = dict(reconstruct_mosaic=False, use_plugin_cache=True)
     img_args.update(**kwargs)
     path_lc = path.lower()
     base_path_lc, ext = os.path.splitext(path_lc)
@@ -360,10 +358,6 @@ def _read_image(
     if scene_id is not None:
         img.set_scene(scene_id=scene_id)
     data = img.xarray_data if not dask else img.xarray_dask_data
-    try:
-        data.attrs["ome"] = img.ome_metadata.model_dump()
-    except NotImplementedError:
-        pass
     for c in ["Z", "Y", "X"]:
         if c in data.coords:
             del data.coords[c]
@@ -1746,6 +1740,10 @@ def _get_fs_protocol(fs: fsspec.AbstractFileSystem) -> str:
     return fs.protocol[0] if isinstance(fs.protocol, (tuple, list)) else fs.protocol
 
 
+# (path or Zarr node, fields parsed from the file pattern or CSV row)
+_FileMatch = tuple[str | zarr.Group | zarr.Array, dict[str, Any]]
+
+
 def _set_up_experiment(
     image_path: str | Path | zarr.Group | Sequence[str | Path | zarr.Group],
     files_pattern: str | re.Pattern | None = "*",
@@ -1754,6 +1752,7 @@ def _set_up_experiment(
     scenes: bool | list[str] = False,
     file_sort_order: dict[str, list[str]] | None = None,
     case_sensitive: bool = False,
+    filter_matches: Callable[[list[_FileMatch]], list[_FileMatch]] | None = None,
 ) -> Generator[tuple[tuple[str, ...], Sequence[str], dict], None, None]:
     """Find images matching `files_pattern` and yield them in groups defined by `group_by`.
 
@@ -1804,6 +1803,10 @@ def _set_up_experiment(
         ``t``, ``c``, ``z``, and file path.
     :param case_sensitive: Whether `files_pattern` and wildcard or regular expression
         `subset` entries are case-sensitive.
+    :param filter_matches: Function called with each group's list of
+        ``(path or Zarr node, fields)`` matches, in input order and before sorting,
+        that returns the matches to keep.
+
     :return: Generator of ``(group, file_list, metadata)`` tuples, one per group (and
         scene), where ``group`` is the tuple of `group_by` values, ``file_list`` is the
         list of matched image paths or Zarr groups, and ``metadata`` is a dict with the
@@ -1814,8 +1817,7 @@ def _set_up_experiment(
         - ``file_metadata``: list with the fields extracted from each file (or the
           other columns of each row, for CSV/Parquet input)
         - ``group_metadata``: dict with ``group`` (dict of `group_by` field to value),
-          ``src`` (``file_list``), and ``common_src`` (longest common subsequence of the
-          file names)
+          ``src`` (``file_list``)
 
     :raises ValueError: If no images are found.
 
@@ -2049,6 +2051,7 @@ def _set_up_experiment(
     keys = files_pattern_keys if unique_csv_columns is None else unique_csv_columns
     sort_dims = list(dict.fromkeys([*(file_sort_order or {}), "t", "c", "z"]))
     sort_order_index: dict[str, dict[str, int]] | None = None
+
     if file_sort_order is not None:
         for k in file_sort_order:
             if k not in keys:
@@ -2097,6 +2100,8 @@ def _set_up_experiment(
         # Need to handle directory input where the cycle or channel is only in the folder name
         # or in the file name.
         matches = group_to_matches[group]
+        if filter_matches is not None:
+            matches = filter_matches(matches)
         matches.sort(key=sort_key)
         file_list = []
         file_metadata = []
@@ -2135,14 +2140,6 @@ def _set_up_experiment(
             group_metadata = dict(
                 group=dict(zip(group_by, group)),
                 src=file_list,
-                common_src=mlcs(
-                    [
-                        Path(x).stem
-                        if not isinstance(x, zarr.Group)
-                        else _get_store_path(x)
-                        for x in file_list
-                    ]
-                ),
             )
             metadata = dict(
                 file_metadata=file_metadata,
@@ -2236,30 +2233,6 @@ class _LazyLoadImage(_LazyLoadData):
             self._scene_id,
             **self._kwargs,
         )
-
-
-def _load_experiment(experiment: Experiment) -> Experiment:
-    """Loads all images from an experiment into memory in parallel.
-
-    :param experiment: Experiment
-        The experiment object containing the images to be loaded.
-    :return: None
-
-    :example:
-    .. code-block:: python
-
-        # Example usage of _load_experiment
-        _load_experiment(my_experiment)
-    """
-    b = from_sequence(experiment.images.keys())
-
-    def _load_image(key):
-        experiment.images[key]
-
-    bag = b.starmap(_load_image)
-    with ProgressBar():
-        bag.compute()
-    return experiment
 
 
 def _single_contrast(data: NDArray, display_ranges: Any) -> tuple[float, float]:

@@ -1,7 +1,9 @@
+from collections.abc import Sequence
 from typing import Literal
 
 import dask.array as da
 import fsspec
+import numpy as np
 from array_api_compat import get_namespace
 from numpy.typing import NDArray
 from skimage.util import img_as_ubyte
@@ -34,10 +36,10 @@ def _norm_block(image: NDArray, percentiles) -> NDArray:
 
 
 def single_crop(
-    group: str,  # NOT USED
-    file_list: list[str],
+    group: tuple[str, ...],  # NOT USED
+    file_list: Sequence[str],
     metadata: dict,
-    labels_group: Group | None,
+    label_groups: list[Group] | None,
     output_dir: str,
     output_sep: str,
     merge_dir: str,
@@ -68,15 +70,12 @@ def single_crop(
     image = _images2fov_array(file_list, metadata, dask=True).squeeze().data
     logger.info(f"{image_key} image shape {image.shape}")
     label_image = None
-    if labels_group is not None:
+    if label_groups is not None and len(label_groups) > 0:
         zarr_labels = get_labels(
-            labels_group=labels_group,
+            label_groups=label_groups,
             name=image_key,
             suffix=label_name,  # e.g. nuclei
         )
-
-        if zarr_labels is None:
-            raise ValueError(f"Unable to read {label_name} labels for {image_key}.")
         label_image = da.from_zarr(zarr_labels)
     merged_df = _read_merged_or_objects(
         merge_dir=merge_dir,
@@ -132,7 +131,7 @@ def single_crop(
             )
             image = (image - percentiles[0]) / (percentiles[1] - percentiles[0])
             image = da.clip(image, 0, 1)
-    image = da.map_blocks(img_as_ubyte, image)
+    image = da.map_blocks(img_as_ubyte, image, dtype=np.uint8)
     label_col = "label" if "label" in merged_df.columns else None
     merged_df = to_label_crops(
         label_image=label_image,

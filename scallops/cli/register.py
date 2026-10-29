@@ -3,7 +3,7 @@ cross-correlation-based registration across different cycles."""
 
 import argparse
 import os
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from itertools import zip_longest
 from typing import Literal, cast
 
@@ -13,7 +13,6 @@ import numpy as np
 import xarray as xr
 import zarr
 from array_api_compat import get_namespace
-from dask.bag import from_sequence
 from zarr import Group
 
 from scallops.cli.util import (
@@ -786,19 +785,19 @@ def run_itk_transform(arguments: argparse.Namespace) -> None:
         transform_dirs = [transform_fs.info(transform_dir)]
     transform_fs_protocol = _get_fs_protocol(transform_fs)
     transform_dirs = [f"{transform_fs_protocol}://{x['name']}" for x in transform_dirs]
-    transform_dirs = from_sequence(transform_dirs)
     with (
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        transform_dirs.map(
-            single_transformix,
-            image_dir=images,
-            image_spacing=image_spacing,
-            transform_type=transform_type,
-            output_root=output_root,
-            force=force,
-        ).compute()
+        for transform_dir in transform_dirs:
+            single_transformix(
+                transform_dir,
+                image_dir=images,
+                image_spacing=image_spacing,
+                transform_type=transform_type,
+                output_root=output_root,
+                force=force,
+            )
 
 
 def run_itk_registration(arguments: argparse.Namespace) -> None:
@@ -922,6 +921,7 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
         file_sort_order=moving_sort_order,
     )
 
+    image_pairs: Iterable[tuple[ImageTuple | None, ImageTuple]]
     if fixed_image_path is not None:  # aligned moving image to self at specified time
         fixed_image_gen = _set_up_experiment(
             fixed_image_path,
@@ -929,44 +929,45 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
             group_by,
             subset=subset,
         )
-        image_bag = from_sequence(zip(fixed_image_gen, moving_image_gen))
+        image_pairs = zip(fixed_image_gen, moving_image_gen)
 
     else:
-        image_bag = from_sequence(zip_longest([None], moving_image_gen))
+        image_pairs = zip_longest([None], moving_image_gen)
     with (
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        bag = image_bag.starmap(
-            single_registration,
-            unroll_channels=unroll_channels,
-            z_index=z_index,
-            initial_transform=initial_transform,
-            transform_output_dir=transform_output_dir,
-            transform_fs=transform_fs,
-            moving_channel=moving_channel,
-            fixed_channel=fixed_channel,
-            itk_parameters=itk_parameters,
-            moving_labels=moving_labels,
-            label_output_root=label_output_root,
-            image_output_root=image_output_root,
-            moving_image_spacing=moving_image_spacing,
-            fixed_image_spacing=fixed_image_spacing,
-            reference_timepoint=reference_timepoint,
-            landmarks_initialize=landmarks_initialize,
-            landmark_slice_size=landmark_slice_size,
-            landmark_min_count=landmark_min_count,
-            landmark_template_padding=landmark_template_padding,
-            landmark_step_size=landmark_step_size,
-            landmark_min_score=landmark_min_score,
-            landmark_initializations=landmark_initializations,
-            landmark_com_max_quantile=landmark_com_max_quantile,
-            landmark_com_min_quantile=landmark_com_min_quantile,
-            output_aligned_channels_only=output_aligned_channels_only,
-            force=force,
-            no_version=no_version,
-            flip_moving_y=flip_moving_y,
-            flip_moving_x=flip_moving_x,
-            itk_channel_parameters=itk_channel_parameters,
-        )
-        bag.compute()
+        for fixed_image_tuple, moving_image_tuple in image_pairs:
+            single_registration(
+                fixed_image_tuple,
+                moving_image_tuple,
+                unroll_channels=unroll_channels,
+                z_index=z_index,
+                initial_transform=initial_transform,
+                transform_output_dir=transform_output_dir,
+                transform_fs=transform_fs,
+                moving_channel=moving_channel,
+                fixed_channel=fixed_channel,
+                itk_parameters=itk_parameters,
+                moving_labels=moving_labels,
+                label_output_root=label_output_root,
+                image_output_root=image_output_root,
+                moving_image_spacing=moving_image_spacing,
+                fixed_image_spacing=fixed_image_spacing,
+                reference_timepoint=reference_timepoint,
+                landmarks_initialize=landmarks_initialize,
+                landmark_slice_size=landmark_slice_size,
+                landmark_min_count=landmark_min_count,
+                landmark_template_padding=landmark_template_padding,
+                landmark_step_size=landmark_step_size,
+                landmark_min_score=landmark_min_score,
+                landmark_initializations=landmark_initializations,
+                landmark_com_max_quantile=landmark_com_max_quantile,
+                landmark_com_min_quantile=landmark_com_min_quantile,
+                output_aligned_channels_only=output_aligned_channels_only,
+                force=force,
+                no_version=no_version,
+                flip_moving_y=flip_moving_y,
+                flip_moving_x=flip_moving_x,
+                itk_channel_parameters=itk_channel_parameters,
+            )

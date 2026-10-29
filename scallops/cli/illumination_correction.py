@@ -24,12 +24,12 @@ Authors:
 """
 
 import argparse
+from collections.abc import Sequence
 from typing import Literal, Optional, Union, cast
 
 import fsspec
 import pandas as pd
 import zarr
-from dask.bag import from_sequence
 
 from scallops.cli.util import (
     _create_dask_client,
@@ -54,7 +54,7 @@ logger = _get_cli_logger()
 
 
 def single_agg_illumination_correction(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: tuple[tuple[str, ...], Sequence[str], dict],
     root: Union[zarr.Group, str],
     smooth: Optional[int] = None,
     rescale: bool = True,
@@ -169,11 +169,6 @@ def run_illumination_correction_agg(arguments: argparse.Namespace):
     z_index = arguments.z_index
     channel = arguments.channel
     t_index = arguments.t_index
-    if z_index not in ("max", "focus"):
-        try:
-            z_index = int(z_index)
-        except ValueError:
-            pass
     smooth = arguments.smooth
     force = arguments.force
     agg_method = arguments.agg_method
@@ -190,21 +185,21 @@ def run_illumination_correction_agg(arguments: argparse.Namespace):
         fs.makedirs(output, exist_ok=True)
 
     generator = _set_up_experiment(image_path, image_pattern, group_by, subset=subset)
-    image_bag = from_sequence(generator)
     with (
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        image_bag.map(
-            single_agg_illumination_correction,
-            root=output,
-            smooth=smooth,
-            rescale=rescale,
-            agg_method=agg_method,
-            z_index=z_index,
-            channel=channel,
-            output_image_format=output_image_format,
-            force=force,
-            expected_images=expected_images,
-            t_index=t_index,
-        ).compute()
+        for image_tuple in generator:
+            single_agg_illumination_correction(
+                image_tuple,
+                root=output,
+                smooth=smooth,
+                rescale=rescale,
+                agg_method=agg_method,
+                z_index=z_index,
+                channel=channel,
+                output_image_format=output_image_format,
+                force=force,
+                expected_images=expected_images,
+                t_index=t_index,
+            )

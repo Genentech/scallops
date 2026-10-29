@@ -97,7 +97,7 @@ def _smooth_and_rescale(
 
 
 def illumination_correction(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: tuple[tuple[str, ...], Sequence[str], dict],
     smooth: int | None = None,
     rescale: bool = True,
     z_index: Literal["max", "focus"] | str | int = "max",
@@ -151,7 +151,7 @@ def illumination_correction(
     images = []
     z_tiles_removed = (
         "z" in metadata_fields
-        and isinstance(z_index, (Sequence, np.ndarray, int))
+        and isinstance(z_index, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(z_index, str)
     )
     n = n_scenes if n_scenes is not None else len(filepaths)

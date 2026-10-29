@@ -74,11 +74,12 @@ Other Features
     #. c: Channel index.
 
 * spots
-    Counts the number of spots in a FISH image. Parameters:
+    Counts the number of spots in a FISH image using U-FISH_. Parameters:
 
     #. c: Channel index.
-    #. min peak_distance: Minimum number of pixels separating peaks (default 3).
-    #. radius: Radius of the disk footprint used for non-maximum suppression in peak_local_max (default 3).
+    #. intensity threshold: The intensity threshold (default 0.06).
+    #. connectivity: Connectivity for local maxima (default 2).
+
 
 * puncta
     Detects puncta with an adaptive threshold (pixel > alpha * local background) followed by a
@@ -132,3 +133,6 @@ Notes
 ^^^^^^
 Feature names are case insensitive (intensity == Intensity) and hyphens in feature names are
 ignored (intensitydistribution == intensity-distribution)
+
+
+.. _U-FISH:  https://u-fish.readthedocs.io/en/latest/index.html

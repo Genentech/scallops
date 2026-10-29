@@ -14,7 +14,7 @@ from skimage.registration import phase_cross_correlation
 
 from scallops.io import _create_image, read_image
 from scallops.stitch._radial import radial_correct
-from scallops.stitch.fuse import _fuse, _fuse_image
+from scallops.stitch.fuse import _fuse, _fuse_chunk
 from scallops.stitch.utils import (
     _pixel_size_from_image,
     get_pixel_size,
@@ -426,16 +426,25 @@ def test_stitch_cli(tmp_path):
         expected_value[
             ..., y[i] : y[i] + tile_shape[0], x[i] : x[i] + tile_shape[1]
         ] = image_values[i]
-        _fuse_image(
-            image_paths=source[i],
-            image_attrs=image_attrs[i],
-            y=y[i],
-            x=x[i],
-            blend="none",
-            target_shape=test_fused_sequential.shape,
-            target_dtype=test_fused_sequential.dtype,
-            target=test_fused_sequential,
-        )
+    # one chunk covering the whole image; tiles are in ascending priority order
+    _fuse_chunk(
+        out=test_fused_sequential,
+        channel_slice=slice(0, fused_image_shape[0]),
+        box=(0, 0) + fused_image_shape[1:],
+        tiles=[
+            dict(
+                image_paths=source[i],
+                image_attrs=image_attrs[i],
+                y=y[i],
+                x=x[i],
+                z_index="max",
+                scene_id=None,
+            )
+            for i in range(len(y))
+        ],
+        target_dtype=test_fused_sequential.dtype,
+        blend="none",
+    )
     np.testing.assert_array_equal(
         test_fused_sequential, expected_value, err_msg="Fused image differs"
     )
@@ -444,7 +453,6 @@ def test_stitch_cli(tmp_path):
     _fuse(
         test_positions_df.iloc[[3, 0, 1, 2]],
         blend="none",
-        channels_per_batch=1,
         z_index=0,
         group=fuse_result,
     )
@@ -486,7 +494,6 @@ def test_stitch_cli(tmp_path):
     _fuse(
         pd.read_parquet(tmp_path / "stitch-blend" / "test-positions.parquet"),
         blend="linear",
-        channels_per_batch=1,
         radial_correction_k=10e-9,
         crop_width=(9, 9),
         z_index=0,
@@ -500,6 +507,85 @@ def test_stitch_cli(tmp_path):
         blend_fuse_result["s0"][...].squeeze(),
         err_msg="Blending images differ",
     )
+
+
+def _write_fuse_tiles(tmp_path, tile_shape=(64, 64)):
+    """Write 4 overlapping random 2-channel tiles and return their positions dataframe."""
+    rng = np.random.default_rng(0)
+    # 2x2 grid with uneven overlaps
+    positions = [(0, 0), (3, 50), (55, 2), (52, 53)]
+    tiles = []
+    for i, (y, x) in enumerate(positions):
+        img = rng.integers(0, 60000, size=(2,) + tile_shape, dtype=np.uint16)
+        path = tmp_path / f"tile-{i}.zarr"
+        _write_image_with_position(path, xr.DataArray(img, dims=["c", "y", "x"]), y, x)
+        tiles.append(img)
+    df = pd.DataFrame(
+        data=dict(
+            source=[[str(tmp_path / f"tile-{i}.zarr")] for i in range(len(positions))],
+            source_metadata=[dict(file_metadata=[dict()]) for _ in positions],
+            y=[float(p[0]) for p in positions],
+            x=[float(p[1]) for p in positions],
+            # distinct distances so tile priority is unambiguous
+            distance_to_center=[3.0, 1.0, 2.0, 0.0],
+        )
+    )
+    fused_shape = (
+        2,
+        max(p[0] for p in positions) + tile_shape[0],
+        max(p[1] for p in positions) + tile_shape[1],
+    )
+    return df, tiles, fused_shape
+
+
+@pytest.mark.io
+@pytest.mark.parametrize("chunk_size", [None, (17, 23), (63, 63), (500, 500)])
+def test_fuse_no_blend_chunk_size(tmp_path, chunk_size):
+    df, tiles, fused_shape = _write_fuse_tiles(tmp_path)
+    tile_shape = tiles[0].shape[1:]
+
+    # tiles closest to the center have priority, so paint in descending distance
+    expected = np.zeros(fused_shape, dtype=np.uint16)
+    for i in np.argsort(-df["distance_to_center"].values):
+        y, x = int(df["y"].iloc[i]), int(df["x"].iloc[i])
+        expected[:, y : y + tile_shape[0], x : x + tile_shape[1]] = tiles[i]
+
+    group = zarr.group()
+    _fuse(df, group=group, blend="none", z_index=0, chunk_size=chunk_size)
+    np.testing.assert_array_equal(group["s0"][...], expected)
+
+
+@pytest.mark.io
+@pytest.mark.parametrize("chunk_size", [None, (17, 23), (63, 63), (500, 500)])
+def test_fuse_linear_blend(tmp_path, chunk_size):
+    df, tiles, fused_shape = _write_fuse_tiles(tmp_path)
+    tile_shape = tiles[0].shape[1:]
+
+    # weights are the product of distance to the nearest horizontal and vertical edges
+    vert = np.minimum(np.arange(1, tile_shape[0] + 1), np.arange(tile_shape[0], 0, -1))
+    hor = np.minimum(np.arange(1, tile_shape[1] + 1), np.arange(tile_shape[1], 0, -1))
+    weights = np.outer(vert, hor).astype(float)
+    weights /= weights.max()
+
+    weighted_sum = np.zeros(fused_shape)
+    weights_sum = np.zeros(fused_shape[1:])
+    for i in range(len(df)):
+        y, x = int(df["y"].iloc[i]), int(df["x"].iloc[i])
+        sl = (slice(y, y + tile_shape[0]), slice(x, x + tile_shape[1]))
+        weighted_sum[(...,) + sl] += tiles[i] * weights
+        weights_sum[sl] += weights
+    weights_sum[weights_sum == 0] = 1
+    expected = np.round(weighted_sum / weights_sum).astype(np.uint16)
+
+    group = zarr.group()
+    _fuse(df, group=group, blend="linear", z_index=0, chunk_size=chunk_size)
+    result = group["s0"][...]
+    np.testing.assert_array_equal(result, expected)
+
+    # outside overlaps, blending must reproduce the single covering tile exactly
+    np.testing.assert_array_equal(result[:, :3, :50], tiles[0][:, :3, :50])
+    # pixels covered by no tile (above tile 1, right of tile 0) are 0
+    assert (result[:, :3, 64:] == 0).all()
 
 
 @pytest.mark.io
@@ -681,6 +767,36 @@ def test_stitch_z_stack(tmp_path):
     assert np.all(max_img == constant_img_val)
     focus_img = read_image(str(tmp_path / "focus.zarr")).squeeze().data
     assert np.all(focus_img < constant_img_val)
+
+    cmd = [
+        "scallops",
+        "stitch",
+        "--images",
+        str(input_path),
+        "--image-pattern",
+        "{well}-tile{tile}-z{z}.zarr",
+        "--groupby",
+        "well",
+        "--image-output",
+        str(tmp_path / "z1.zarr"),
+        "--report-output",
+        str(tmp_path / "z1"),
+        "--radial-correction-k",
+        "none",
+        "--z-index",
+        "1",
+        "--no-save-labels",
+    ]
+
+    subprocess.check_call(cmd)
+
+    df_positions_z1 = pd.read_parquet(str(tmp_path / "z1" / "test-positions.parquet"))
+    for s in df_positions_z1["source"].values:  # should only have selected z
+        assert s[0].endswith("-z1.zarr")
+        assert len(s) == 1, s
+    assert all(df_positions_z1["separate_z"])
+    z1_img = read_image(str(tmp_path / "z1.zarr")).squeeze().data
+    np.testing.assert_array_equal(z1_img, focus_img)
 
 
 @pytest.mark.io

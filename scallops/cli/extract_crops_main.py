@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 
 import fsspec
-import zarr
-from dask.bag import from_sequence
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.extract_crops import single_crop
@@ -14,6 +12,7 @@ from scallops.cli.util import (
     _create_default_dask_config,
     _dask_workers_threads,
     _get_cli_logger,
+    _label_args_type,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -72,33 +71,20 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
     label_name = arguments.label_name  # cell, cytosol, nuclei
     chunks = arguments.chunks
 
-    merge_dir_sep = None
-    if merge_dir is not None:
-        merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
-        merge_dir = merge_dir.rstrip(merge_dir_sep)
+    merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
+    merge_dir = merge_dir.rstrip(merge_dir_sep)
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
 
-    labels_path = arguments.labels
+    label_groups = arguments.labels
     no_version = arguments.no_version
-    labels_group = None
-    if not mask:
-        labels_path = None
-    if labels_path is None and mask:
-        raise ValueError("Labels must be provided when `mask` is true.")
-    if labels_path is not None:
-        label_root = zarr.open(labels_path, mode="r")
-        labels_group = label_root["labels"]
 
-    image_seq = from_sequence(
-        _set_up_experiment(
-            images_paths,
-            files_pattern=image_patterns,
-            subset=subset,
-            group_by=groupby,
-        )
-    )
+    if not mask and label_groups is not None and len(label_groups) > 0:
+        logger.warning("Ignoring provided labels")
+        label_groups = []
+    if (label_groups is None or len(label_groups) == 0) and mask:
+        raise ValueError("Labels must be provided when `mask` is true.")
 
     with (
         _create_default_dask_config(
@@ -106,25 +92,31 @@ def run_pipeline_extract_crops(arguments: argparse.Namespace):
         ),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        image_seq.starmap(
-            single_crop,
-            output_dir=output_dir,
-            output_sep=output_fs.sep,
-            merge_dir=merge_dir,
-            merge_dir_sep=merge_dir_sep,
-            labels_group=labels_group,
-            label_filter=label_filter,
-            label_name=label_name,
-            percentile_normalize=percentile_normalize,
-            local_normalize_overlap=local_normalize_overlap,
-            local_percentile_normalize=local_percentile_normalize,
-            crop_size=crop_size,
-            output_format=output_format,
-            gaussian_sigma=gaussian_sigma,
-            chunks=chunks,
-            force=force,
-            no_version=no_version,
-        ).compute()
+        for image_tuple in _set_up_experiment(
+            images_paths,
+            files_pattern=image_patterns,
+            subset=subset,
+            group_by=groupby,
+        ):
+            single_crop(
+                *image_tuple,
+                output_dir=output_dir,
+                output_sep=output_fs.sep,
+                merge_dir=merge_dir,
+                merge_dir_sep=merge_dir_sep,
+                label_groups=label_groups,
+                label_filter=label_filter,
+                label_name=label_name,
+                percentile_normalize=percentile_normalize,
+                local_normalize_overlap=local_normalize_overlap,
+                local_percentile_normalize=local_percentile_normalize,
+                crop_size=crop_size,
+                output_format=output_format,
+                gaussian_sigma=gaussian_sigma,
+                chunks=chunks,
+                force=force,
+                no_version=no_version,
+            )
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
@@ -146,13 +138,18 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
 
     required.add_argument(
         "--merge",
+        required=True,
         help="Path to directory containing output from `merge`",
     )
+
     parser.add_argument(
         "--labels",
-        dest="labels",
-        help="Path to zarr directory containing labels. Required when `mask` is true",
+        help="One or more paths to zarr stores containing a 'labels' group. If the same "
+        "label name appears in more than one store, the store listed last is used. Required when `mask` is true",
+        nargs="+",
+        type=_label_args_type,
     )
+
     parser.add_argument(
         "--mask",
         action="store_true",

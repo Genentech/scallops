@@ -1,3 +1,4 @@
+import argparse
 import glob
 import os
 import shutil
@@ -17,7 +18,12 @@ from zarr.core.group import AsyncGroup
 from zarr.errors import ContainsGroupError
 
 from scallops import zarr_io
-from scallops.cli.util import _group_src_attrs
+from scallops.cli.util import (
+    _group_src_attrs,
+    _label_args_type,
+    find_label_group,
+    last_label_match,
+)
 from scallops.experiment.elements import Experiment
 from scallops.features.util import _slice_anndata
 from scallops.io import (
@@ -486,9 +492,7 @@ def test_read_write_experiment(experiment_c, tmp_path):
         experiment_c.images["A1-103"].values,
         err_msg="103 not equal",
     )
-    assert exp.images["A1-102"].attrs["common_src"] == "10X_c-SBS_*_A1_Tile-102.sbs", (
-        "common_src not equal"
-    )
+
     assert exp.images["A1-102"].attrs["group"] == dict(tile="102", well="A1"), (
         "group not equal"
     )
@@ -946,3 +950,81 @@ def test_slice_anndata():
     data1 = d[d.obs.index.isin(["2"]), d.var.index.isin(["1"])]
     data2 = _slice_anndata(d, d.obs.index.isin(["2"]), d.var.index.isin(["1"]))
     _assert_anndata_equal(data1, data2)
+
+
+def _save_labels(path: str, labels: dict[str, np.ndarray]) -> zarr.Group:
+    exp = Experiment()
+    for name, value in labels.items():
+        exp.labels[name] = xr.DataArray(value, dims=["y", "x"])
+    exp.save(path)
+    return zarr.open(path, mode="r")["labels"]
+
+
+@pytest.mark.io
+def test_label_args_type(tmp_path):
+    path = str(tmp_path / "test.zarr")
+    _save_labels(path, {"A1-cell": np.ones((4, 4), dtype=np.uint32)})
+    assert "A1-cell" in _label_args_type(path)
+
+    with pytest.raises(argparse.ArgumentTypeError, match="Unable to open"):
+        _label_args_type(str(tmp_path / "missing.zarr"))
+
+    no_labels_path = str(tmp_path / "no-labels.zarr")
+    zarr.open_group(no_labels_path, mode="w").create_group("images")
+    with pytest.raises(argparse.ArgumentTypeError, match="Labels group not found"):
+        _label_args_type(no_labels_path)
+
+
+@pytest.mark.io
+def test_find_label_group_last_wins(tmp_path):
+    group1 = _save_labels(
+        str(tmp_path / "1.zarr"),
+        {
+            "A1-cell": np.full((4, 4), 1, dtype=np.uint32),
+            "A1-nuclei": np.full((4, 4), 3, dtype=np.uint32),
+        },
+    )
+    group2 = _save_labels(
+        str(tmp_path / "2.zarr"), {"A1-cell": np.full((4, 4), 2, dtype=np.uint32)}
+    )
+
+    def _value(label_groups, key):
+        return np.unique(read_ome_zarr_array(find_label_group(label_groups, key)))
+
+    assert _value([group1, group2], "A1-cell") == [2]
+    assert _value([group2, group1], "A1-cell") == [1]
+    # only in the first store
+    assert _value([group1, group2], "A1-nuclei") == [3]
+    with pytest.raises(ValueError, match="A1-cytosol"):
+        find_label_group([group1, group2], "A1-cytosol")
+
+
+@pytest.mark.io
+def test_last_label_match():
+    assert last_label_match([("a", {}), ("b", {})]) == [("b", {})]
+    assert last_label_match([("a", {})]) == [("a", {})]
+
+
+@pytest.mark.io
+def test_set_up_experiment_filter_matches(tmp_path):
+    group1 = _save_labels(
+        str(tmp_path / "1.zarr"), {"A1-cell": np.full((4, 4), 1, dtype=np.uint32)}
+    )
+    group2 = _save_labels(
+        str(tmp_path / "2.zarr"), {"A1-cell": np.full((4, 4), 2, dtype=np.uint32)}
+    )
+    kwargs = dict(
+        image_path=[group1, group2],
+        files_pattern="{well}-{label_suffix}",
+        group_by=["well", "label_suffix"],
+    )
+    gen = list(_set_up_experiment(**kwargs))
+    assert len(gen) == 1
+    assert len(gen[0][1]) == 2  # duplicates from both stores without a filter
+
+    gen = list(_set_up_experiment(**kwargs, filter_matches=last_label_match))
+    assert len(gen) == 1
+    group, file_list, _ = gen[0]
+    assert group == ("A1", "cell")
+    assert len(file_list) == 1
+    assert np.unique(read_ome_zarr_array(file_list[0])) == [2]

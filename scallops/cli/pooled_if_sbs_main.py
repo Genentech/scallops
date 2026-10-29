@@ -9,6 +9,7 @@ from scallops.cli.util import (
     groupby_arg,
     image_pattern_arg,
     images_arg,
+    labels_arg,
     no_version_arg,
     output_dir_arg,
     subset_arg,
@@ -169,12 +170,8 @@ def _create_reads_parser(subparsers, default_help):
         dest="spots",
         help="Zarr output from `scallops pooled-sbs spot-detect`",
     )
-    required.add_argument(
-        "--labels",
-        required=True,
-        dest="labels",
-        help="Zarr output from `scallops segment` containing labels",
-    )
+    labels_arg(required)
+
     required.add_argument(
         "--label-name",
         help="Name of labels to use. For example `nuclei` or `cell`",

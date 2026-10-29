@@ -29,6 +29,7 @@ from scallops.cli.util import (
     _dask_workers_threads,
     _get_cli_logger,
     cli_metadata,
+    find_label_group,
     load_json,
 )
 from scallops.features._plot import _plot_features
@@ -99,20 +100,18 @@ def _read_merged_or_objects(
     return merged_df
 
 
-def get_labels(labels_group: Group, name: str, suffix: str) -> zarr.Array | None:
+def get_labels(label_groups: list[Group], name: str, suffix: str) -> zarr.Array:
     """Retrieve labels from a zarr group.
 
-    :param labels_group: The zarr group containing labels.
+    :param label_groups: The zarr groups containing labels.
     :param name: The identifier associated with the labels.
     :param suffix: The suffix used to identify the specific set of labels (e.g., 'nuclei').
-    :return: The retrieved labels as a DataArray or None if the labels are not found.
+    :return: The retrieved labels as a DataArray
+    :raises: ValueError if labels are not found
     """
-    try:
-        g = labels_group[f"{name}-{suffix}"]
-        return g[list(g.keys())[0]]
-    except KeyError as e:
-        logger.warning(f'"{name}-{suffix}" not found in {labels_group}.')
-        raise e
+
+    g = find_label_group(label_groups, f"{name}-{suffix}")
+    return g[list(g.keys())[0]]
 
 
 def _read_image(file_list: Sequence[str | Group], metadata: dict) -> xr.DataArray:
@@ -147,7 +146,7 @@ def _read_image(file_list: Sequence[str | Group], metadata: dict) -> xr.DataArra
 def single_feature(
     stacked_image_tuple: ImageTuple | None,
     image_tuple: ImageTuple,
-    labels_group: Group,
+    label_groups: list[Group],
     output_dir: str,
     output_sep: str,
     objects_dir: str | None,
@@ -179,7 +178,7 @@ def single_feature(
                         - A tuple of metadata strings.
                         - A list of file paths or Zarr groups containing the primary image data.
                         - A dictionary with additional metadata.
-    :param labels_group: Zarr group containing labels used to identify regions of interest in the image
+    :param label_groups: List of Zarr group containing labels used to identify regions of interest in the image
                          for feature computation.
     :param output_dir: Directory path where the computed feature files will be saved.
     :param output_sep: Separator string used to construct the output file names. This helps in organizing
@@ -234,14 +233,10 @@ def single_feature(
             logger.info(f"Skipping features for {image_key} {label_name}")
             continue
         zarr_labels = get_labels(
-            labels_group=labels_group,
+            label_groups=label_groups,
             name=image_key,
             suffix=label_name,  # e.g. nuclei
         )
-
-        if zarr_labels is None:
-            logger.info(f"Unable to read {label_name} labels for {image_key}.")
-            continue
         label_image = da.from_zarr(zarr_labels)
         label_prefix = _label_name_to_prefix[label_name]
         merged_df = None
@@ -490,11 +485,9 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
     output_dir = output_dir.rstrip(output_fs.sep)
     for label in label_name_to_features:
         output_fs.makedirs(output_dir + output_fs.sep + label, exist_ok=True)
-    labels_path = arguments.labels
+    label_groups = arguments.labels
     no_version = arguments.no_version
-    assert labels_path is not None, "No labels provided"
-    label_root = zarr.open(labels_path, mode="r")
-    labels_group = label_root["labels"]
+
     if channel_names is not None:
         # keys are strings in json
         try:
@@ -535,7 +528,7 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
                 output_sep=output_fs.sep,
                 objects_dir=objects_dir,
                 objects_dir_sep=objects_dir_sep,
-                labels_group=labels_group,
+                label_groups=label_groups,
                 label_filter=label_filter,
                 label_name_to_min_max_area=label_name_to_min_max_area,
                 label_name_to_features=label_name_to_features,

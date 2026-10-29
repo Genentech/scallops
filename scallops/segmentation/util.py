@@ -488,7 +488,7 @@ def assign_labels_by_overlap(
     )
     if isinstance(df, dd.DataFrame):
         # sorting partitions on label_1, so all rows for a label_1 are in one partition
-        df = df.map_partitions(_drop_lower_priority_overlaps)
+        df = df.map_partitions(_drop_lower_priority_overlaps, meta=df._meta)
         concat = dd.concat
     else:
         df = _drop_lower_priority_overlaps(df)
@@ -631,4 +631,4 @@ def relabel_sequential(a: NDArray, unique_labels: NDArray | None = None) -> NDAr
 
 def dask_relabel_sequential(a: da.Array) -> da.Array:
     unique_labels = da.unique(a)
-    return da.map_blocks(_relabel_block, a, unique_labels)
+    return da.map_blocks(_relabel_block, a, unique_labels, dtype=np.uint32)

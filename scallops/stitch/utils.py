@@ -18,7 +18,7 @@ import xarray as xr
 import zarr
 from dask import delayed
 from numpy.typing import NDArray
-from ome_types import from_xml
+from ome_types import OME, from_xml
 from pint import UndefinedUnitError, UnitRegistry
 from skimage.util import img_as_float, img_as_ubyte, img_as_uint
 
@@ -36,6 +36,20 @@ from scallops.stitch.shift_utils import _zncc
 
 ureg = UnitRegistry()
 logger = logging.getLogger("scallops")
+
+
+def _select_z_index(image: xr.DataArray, z_index) -> xr.DataArray:
+    """Select the z plane fusion uses: plane ``z_index`` if it is an ``int or np.integer``, else the maximum projection.
+
+    Shared by fusion and the channel alignment estimate, so the alignment is estimated on the image it corrects
+    """
+    if "z" not in image.dims:
+        return image
+    return (
+        image.max(dim="z")
+        if not isinstance(z_index, (int, np.integer))
+        else image.isel(z=z_index)
+    )
 
 
 def _select_t_index(image: xr.DataArray, t_index: int | None) -> xr.DataArray:
@@ -68,7 +82,11 @@ def _read_tile(
     img = _images2fov(file_list, attrs, dask=False, scene_id=scene_id)
     img = _select_t_index(img, t_index).isel(c=channel, missing_dims="ignore")
     if img.ndim > 2:
-        img = img.max(dim="z") if not isinstance(z_index, int) else img.isel(z=z_index)
+        img = (
+            img.max(dim="z")
+            if not isinstance(z_index, (int, np.integer))
+            else img.isel(z=z_index)
+        )
     img = img.values
 
     if radial_correction_k is not None:
@@ -318,7 +336,7 @@ def _stage_positions_from_araceli_json(filepaths: Sequence[str], json_path: str)
 
 def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | None:
     # get from image metadata
-    if len(filepaths) == 1:
+    if len(filepaths) == 1:  # single nd2 file with all tiles
         img = _create_image(filepaths[0])
         ome_metadata = _get_ome(img)
         if ome_metadata is None:
@@ -326,7 +344,7 @@ def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | 
         n_images = len(ome_metadata.images)
         stage_positions = np.zeros((n_images, 2))
         for i in range(n_images):
-            pos = get_tile_position(img, i)
+            pos = get_tile_position(img, i, ome_metadata=ome_metadata)
             if pos is None:
                 return None
             y, x = pos
@@ -345,7 +363,7 @@ def _stage_positions_from_image_metadata(filepaths: Sequence[str]) -> NDArray | 
     return stage_positions
 
 
-def _get_ome(image: bioio.BioImage):
+def _get_ome(image: bioio.BioImage) -> OME | None:
     try:
         metadata = image.ome_metadata
         if metadata is not None:
@@ -361,8 +379,11 @@ def _get_ome(image: bioio.BioImage):
     return None
 
 
-def get_tile_position(image: bioio.BioImage, image_index: int = 0) -> NDArray | None:
-    ome_metadata = _get_ome(image)
+def get_tile_position(
+    image: bioio.BioImage, image_index: int = 0, ome_metadata: OME | None = None
+) -> NDArray | None:
+    if ome_metadata is None:
+        ome_metadata = _get_ome(image)
     physical_size_y_unit = None
     physical_size_x_unit = None
     values = None
@@ -766,7 +787,7 @@ def _init_tiles(
 ):
     # z selection: "max", "focus", an int, a per-tile data frame/array, or computed per-tile indices
     z_selection: int | str | pd.DataFrame | NDArray | tuple = z_index
-    if not isinstance(z_index, int) and z_index not in ("max", "focus"):
+    if not isinstance(z_index, (int, np.integer)) and z_index not in ("max", "focus"):
         z_index_df = pd.read_parquet(
             z_index.format(**image_metadata["file_metadata"][0])
         )
@@ -778,6 +799,8 @@ def _init_tiles(
     if len(image_filepaths) == 1:
         img = _create_image(image_filepaths[0])
         ome_metadata = _get_ome(img)
+        if ome_metadata is None:
+            raise ValueError("Unable to read ome_metadata")
         n_scenes = len(ome_metadata.images)
 
     fileattrs = None
@@ -836,7 +859,7 @@ def _init_tiles(
         logger.info("Determined best focus z-index for all tiles.")
     if (
         "z" in metadata_fields
-        and isinstance(z_selection, (Sequence, np.ndarray, int))
+        and isinstance(z_selection, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(z_selection, str)
     ):  # only keep needed files with computed z
         filepaths, fileattrs = _filter_filepaths(

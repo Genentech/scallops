@@ -2,18 +2,17 @@ import itertools
 import logging
 import math
 from collections.abc import Callable, Sequence
-from contextlib import nullcontext
+from functools import partial
 
 import dask
 import dask.array as da
 import igraph as ig
 import numpy as np
 from dask import delayed
-from dask.diagnostics import ProgressBar
 from numba import njit
 from numpy.typing import NDArray
 from scipy import ndimage as ndi
-from scipy.fft import fftfreq, fftn, ifftn
+from scipy.fft import fftfreq, fftn, ifftn, irfftn, rfftn
 from scipy.optimize import minimize
 from scipy.stats import norm
 from sklearn.linear_model import LinearRegression
@@ -25,7 +24,7 @@ logger = logging.getLogger("scallops")
 # Functions to calculate zero-normalized cross correlation and normalized cross correlation
 
 
-@njit
+@njit(nogil=True)
 def _collect_stats(ref, mov):
     mean_x = mean_y = sum_xy = sum_x2 = sum_y2 = 0.0
     for i in range(ref.shape[0]):
@@ -59,14 +58,12 @@ def evaluate_shifts(
     pairs: NDArray,
     shifts: NDArray,
     tiles: Sequence[NDArray | da.Array],
-    progress: bool = True,
 ) -> tuple[float, NDArray]:
     """Compute overall ZNCC and ZNCCs for specified pairs
 
     :param pairs: Pair indices in tiles
     :param shifts: Array of pairwise shifts.
     :param tiles: Sequence of tiles corresponding to each pair
-    :param progress: Whether to show progress bar.
     :return: tuple of overall ZNCC and ZNCCs for specified pairs.
     """
     _eval_pair_delayed = delayed(_eval_pair)
@@ -75,16 +72,14 @@ def evaluate_shifts(
         ref = tiles[pairs[i][0]]
         mov = tiles[pairs[i][1]]
         results.append(_eval_pair_delayed(ref=ref, mov=mov, shift=shifts[i]))
-    bar = ProgressBar if progress else nullcontext
-    with bar():
-        results = dask.compute(*results)
+    results = dask.compute(*results)
     results = np.array(results)
     mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels = results[:, 1:].sum(axis=0)
     zncc_val = _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels)
     return zncc_val, results[:, 0].copy()
 
 
-@njit
+@njit(nogil=True)
 def _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels) -> float:
     if s_pixels < 2.0:
         return 0.0
@@ -97,13 +92,13 @@ def _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, s_pixels) -> float:
     return zncc_value
 
 
-@njit
+@njit(nogil=True)
 def _zncc(ref: NDArray, mov: NDArray) -> float:
     mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref, mov)
     return _calc_zncc(mean_x, mean_y, sum_xy, sum_x2, sum_y2, float(ref.size))
 
 
-@njit
+@njit(nogil=True)
 def _ncc(ref: NDArray, mov: NDArray) -> float:
     mean_x, mean_y, sum_xy, sum_x2, sum_y2 = _collect_stats(ref, mov)
     denom = (sum_x2**0.5) * (sum_y2**0.5)
@@ -127,7 +122,7 @@ def ncc_after_shift(
 # Find shift trys to find the best shift to consider both phase and non-phase correlations
 
 
-@njit
+@njit(nogil=True)
 def _disam_shift(ref, mov, pos_shift, ncc_func=_zncc, frac_min=0.01):
     ## 4 cases, assume pos_shift is a np.array; note that ref does not need to be a square
     ## frac_min = 0.01, at least 1% of the area
@@ -167,10 +162,11 @@ def _disam_shift(ref, mov, pos_shift, ncc_func=_zncc, frac_min=0.01):
         max_corr = corr
     # D
     area_frac = (float(dy) / sy) * (float(sx - dx) / sx)
+    corr = 0.0
     if area_frac >= frac_min:
         ref_crop = ref[:dy, dx:]
         mov_crop = mov[sy - dy :, : sx - dx]
-    corr = ncc_func(ref_crop, mov_crop)
+        corr = ncc_func(ref_crop, mov_crop)
     if corr > max_corr:
         shift[0] = dy - sy
         shift[1] = dx
@@ -256,12 +252,20 @@ def _upsampled_dft(data, upsampled_region_size, upsample_factor=1, axis_offsets=
     return data
 
 
-def _find_shift_no_upsample(ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=False):
+def _find_shift_no_upsample(
+    ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=False, full_spectrum=True
+):
+    # full_spectrum: return the full complex spectrum, needed for upsampling. Otherwise
+    # use real FFTs (about half the work) and return None for the spectrum, since the
+    # half spectrum from rfftn can't be upsampled.
+    fft, ifft = (
+        (fftn, ifftn) if full_spectrum else (rfftn, partial(irfftn, s=ref.shape))
+    )
     # normalization == None
-    src_freq = fftn(ref if not center_img else ref - ref.mean())
-    target_freq = fftn(mov if not center_img else mov - mov.mean())
+    src_freq = fft(ref if not center_img else ref - ref.mean())
+    target_freq = fft(mov if not center_img else mov - mov.mean())
     image_product = src_freq * target_freq.conj()
-    cc = ifftn(image_product)
+    cc = ifft(image_product)
     pos_shift = np.array(np.unravel_index(np.argmax(np.abs(cc)), cc.shape))
     shift, ncc_value = _disam_shift(
         ref, mov, pos_shift, ncc_func=ncc_func, frac_min=frac_min
@@ -270,7 +274,7 @@ def _find_shift_no_upsample(ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=
     # normalization == 'phase'
     eps = np.finfo(image_product.real.dtype).eps
     image_product2 = image_product / np.maximum(np.abs(image_product), 100 * eps)
-    cc = ifftn(image_product2)
+    cc = ifft(image_product2)
     pos_shift = np.array(np.unravel_index(np.argmax(np.abs(cc)), cc.shape))
     shift2, ncc2 = _disam_shift(
         ref, mov, pos_shift, ncc_func=ncc_func, frac_min=frac_min
@@ -282,10 +286,12 @@ def _find_shift_no_upsample(ref, mov, ncc_func=_zncc, frac_min=0.01, center_img=
         ncc_value = ncc2
         image_product = image_product2
 
-    return shift, ncc_value, image_product
+    return shift, ncc_value, image_product if full_spectrum else None
 
 
 def _upsample(image_product, shift, upsample_factor):
+    if image_product is None:
+        raise ValueError("Upsampling requires the full spectrum (full_spectrum=True).")
     # Initial shift estimate in upsampled grid
     upsample_factor = float(upsample_factor)
     shift = np.round(shift * upsample_factor) / upsample_factor
@@ -320,7 +326,12 @@ def find_shift(
     # frac_min is the minimal area fraction used for disambigute
 
     shift, ncc_value, image_product = _find_shift_no_upsample(
-        ref, mov, ncc_func=ncc_func, frac_min=frac_min, center_img=center_img
+        ref,
+        mov,
+        ncc_func=ncc_func,
+        frac_min=frac_min,
+        center_img=center_img,
+        full_spectrum=upsample_factor > 1,
     )
 
     # Upsampling
@@ -334,7 +345,7 @@ def find_shift(
 # Calculate best shift between two square tiles
 
 
-@njit
+@njit(nogil=True)
 def _get_crops(ref, mov, dy, dx, sy, sx):
     # Assume shift = (dy, dx) is integer here
     if dy >= 0:
@@ -355,7 +366,7 @@ def _get_crops(ref, mov, dy, dx, sy, sx):
     return ref_crop, mov_crop
 
 
-@njit
+@njit(nogil=True)
 def _get_overlap_frac(dy, dx, sy, sx):
     return ((sy - dy if dy >= 0.0 else sy + dy) / float(sy)) * (
         (sx - dx if dx >= 0.0 else sx + dx) / float(sx)
@@ -394,7 +405,12 @@ def calc_best_shift(
         overlap_min / overlap_frac
     )  # consider relative area of the crop with respect to the tile
     shift, ncc1, image_product = _find_shift_no_upsample(
-        ref_crop, mov_crop, ncc_func=ncc_func, frac_min=frac_min, center_img=center_img
+        ref_crop,
+        mov_crop,
+        ncc_func=ncc_func,
+        frac_min=frac_min,
+        center_img=center_img,
+        full_spectrum=upsample_factor > 1,
     )
     crop_frac = (
         _get_overlap_frac(shift[0], shift[1], ref_crop.shape[0], ref_crop.shape[1])
@@ -419,6 +435,7 @@ def calc_best_shift(
             ncc_func=ncc_func,
             frac_min=frac_min2,
             center_img=center_img,
+            full_spectrum=upsample_factor > 1,
         )
         crop_frac2 = (
             _get_overlap_frac(
@@ -594,15 +611,16 @@ def _detect_flip(imgs, coords, min_ncc, max_shift):
     return flip_y, flip_x, area_frac
 
 
-def _swap(imgs, coords, mshift):
+def _swap(imgs, coords):
+    # Reorder the quintet and swap the y & x coordinates. The images themselves are not
+    # transposed, so pixel spacings and max shifts stay on the image axes.
     imgs_new = []
     coords_new = coords.copy()
     for i, j in enumerate([0, 3, 4, 1, 2]):
         imgs_new.append(imgs[j])
         coords_new[i, 0] = coords[j, 1]
         coords_new[i, 1] = coords[j, 0]
-    mshift_new = np.array([mshift[1], mshift[0]])
-    return imgs_new, coords_new, mshift_new
+    return imgs_new, coords_new
 
 
 def determine_layout(
@@ -622,7 +640,8 @@ def determine_layout(
                 imgs.append(read_images[quintet[i]])
             imgs = dask.compute(*imgs)
             tile_shape = imgs[0].shape
-            coords = stage_positions[quintet] / image_spacing
+            stage = stage_positions[quintet]
+            coords = stage / image_spacing
             flip_y, flip_x, area_frac = _detect_flip(imgs, coords, min_ncc, mshift)
             if flip_y * flip_x != 0.0:
                 return (
@@ -634,7 +653,10 @@ def determine_layout(
                     quintet[0],
                     max_shift,
                 )  # in addition return one center tile
-            imgs, coords, mshift = _swap(imgs, coords, mshift)  # swap y & x
+            # swap stage y & x, then convert to pixels on the image axes, as in
+            # convert_stage_positions
+            imgs, stage = _swap(imgs, stage)
+            coords = stage / image_spacing
             flip_y, flip_x, area_frac = _detect_flip(imgs, coords, min_ncc, mshift)
             if flip_y * flip_x != 0.0:
                 return (
@@ -664,7 +686,7 @@ def convert_stage_positions(staged, swap, flip_y, flip_x, pixel_size):
     return converted
 
 
-@njit
+@njit(nogil=True)
 def _overlap_two_tiles(fov1, fov2, coord1, coord2, tile_shape):
     if coord1[0] > coord2[0]:
         fov1, fov2 = fov2, fov1
@@ -694,7 +716,7 @@ def _overlap_two_tiles(fov1, fov2, coord1, coord2, tile_shape):
         )
 
 
-@njit
+@njit(nogil=True)
 def _find_all_overlap(coords, tile_shape, frac_thre=0.0):
     """Find all overlaps between tiles"""
     # Only return overlaps with area > frac_thre
@@ -828,10 +850,11 @@ def _find_spanning_trees(g):
 
         if n_v > 1:
             center = _get_center(gc)
-            errors = -np.log(
-                gc.es["ncc"]
-            )  # negative log as errors, assume ncc <=0 are all filtered already
-            paths = gc.get_all_shortest_paths(
+            # negative log as errors, assume ncc <=0 are all filtered already. Clip
+            # ncc to 1 so rounding (ncc slightly > 1) can't give a negative weight.
+            errors = -np.log(np.minimum(gc.es["ncc"], 1.0))
+            # one shortest path per vertex (ties are broken arbitrarily)
+            paths = gc.get_shortest_paths(
                 center, weights=errors, mode="all"
             )  # ignore edge direction
 
@@ -1032,8 +1055,10 @@ def _estimate_crop_width(
     tile_shape: tuple[int, int],
     crop_width: tuple[int, int] | None,
 ) -> tuple[int, int]:
-    pct = max(
-        np.median(fracs[fracs > min_frac]) / 2.0 - 0.015, 0.0
+    fracs = fracs[fracs > min_frac]
+    # no overlaps above min_frac, so no additional crop
+    pct = (
+        max(np.median(fracs) / 2.0 - 0.015, 0.0) if len(fracs) > 0 else 0.0
     )  # 0.015 can be adjusted
     y = (0 if crop_width is None else crop_width[0]) + int(tile_shape[0] * pct)
     x = (0 if crop_width is None else crop_width[1]) + int(tile_shape[1] * pct)

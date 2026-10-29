@@ -313,6 +313,53 @@ def _z_index_type(s: str) -> int | Literal["max"]:
     return value
 
 
+def _label_args_type(s: str) -> zarr.Group:
+    # argparse only reports ArgumentTypeError/ValueError/TypeError as usage errors
+    try:
+        label_root = zarr.open(s, mode="r")
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"Unable to open {s}: {e}") from e
+    labels_group = label_root.get("labels")
+    if labels_group is None:
+        raise argparse.ArgumentTypeError(f"Labels group not found for {s}")
+    return labels_group
+
+
+def find_label_group(label_groups: Sequence[zarr.Group], key: str) -> zarr.Group:
+    """Find the label image `key` in one or more 'labels' groups.
+
+    If `key` is present in more than one group, the group listed last wins. Entries
+    that are not OME-Zarr images (e.g. left behind by an interrupted run) are not skipped.
+
+    :param label_groups: The 'labels' groups to search, e.g. from :func:`labels_arg`.
+    :param key: The label image name, e.g. `A1-102-nuclei`.
+    :return: The OME-Zarr group for `key`.
+    :raises ValueError: If `key` is not found in any group.
+    """
+
+    for group in reversed(label_groups):
+        g = group.get(key)
+        if g is not None:
+            return g
+
+    raise ValueError(f'Labels "{key}" not found.')
+
+
+def last_label_match(matches: list) -> list:
+    """Keep the last of a group's label matches, for `filter_matches` of
+    :func:`scallops.io._set_up_experiment`.
+
+    Matches are in `label_groups` order, so the store listed last wins.
+
+    :param matches: The ``(Zarr node, fields)`` matches for one group.
+    :return: The last match.
+    """
+    if len(matches) > 1:
+        skipped = ", ".join(str(m[0]) for m in matches[:-1])
+        logging.getLogger("scallops").info(f"Skipping duplicate labels at {skipped}.")
+    return matches[-1:]
+
+
 def z_index_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--z-index",
@@ -322,14 +369,46 @@ def z_index_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _z_index_tile_type(s: str) -> int | str:
+    """Parse and validate the per-tile z-index argument.
+
+    :param s: The input string: 'max', 'focus', a z-index, or a Parquet path.
+    :return: 'max', 'focus', the z-index as an integer, or the Parquet path.
+    :raises argparse.ArgumentTypeError: If the input is a negative integer or an
+        unrecognized keyword that does not look like a path.
+
+    .. example::
+
+       >>> _z_index_tile_type("Focus")
+       'focus'
+       >>> _z_index_tile_type("3")
+       3
+       >>> _z_index_tile_type("z.parquet")
+       'z.parquet'
+    """
+
+    s = s.strip()
+    if s.lower() in ("max", "focus"):
+        return s.lower()
+
+    try:
+        value = int(s)
+    except ValueError:
+        # parquet path
+        return s
+    if value < 0:
+        raise argparse.ArgumentTypeError("z-index must be >=0")
+    return value
+
+
 def z_index_tile_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--z-index",
         help="Either `max`, `focus`, z-index (0-based), or a path to a Parquet file "
-        "containing columns `key` and `z_index`. `Focus` selects the best "
+        "containing columns `key` and `z_index`. `focus` selects the best "
         "z-index using the slope of the image log-log power spectrum.",
         default="max",
-        type=str,
+        type=_z_index_tile_type,
     )
 
 
@@ -341,6 +420,17 @@ def t_index_arg(parser: argparse.ArgumentParser) -> None:
         type=int,
         help="Time index (0-based) to select from images with a time dimension. "
         "Required when images have more than one timepoint (e.g. live imaging data).",
+    )
+
+
+def labels_arg(parser: argparse.ArgumentParser, required: bool = True) -> None:
+    parser.add_argument(
+        "--labels",
+        required=required,
+        type=_label_args_type,
+        nargs="+",
+        help="One or more paths to zarr stores containing a 'labels' group. If the same "
+        "label name appears in more than one store, the store listed last is used.",
     )
 
 

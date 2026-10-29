@@ -10,7 +10,6 @@ Authors:
 from collections.abc import Callable, Collection, Sequence
 from typing import Literal
 
-import dask.bag as db
 import xarray as xr
 
 from scallops.experiment.elements import Experiment
@@ -45,8 +44,7 @@ def map_images(
                 experiment_keys = experiment[i].images.keys()
                 keys = [key for key in keys if key in experiment_keys]
 
-    images = [tuple([exp.images[key] for exp in experiment]) for key in keys]
-    results = db.from_sequence(images).starmap(func, **kwargs).compute()
+    results = [func(*[exp.images[key] for exp in experiment], **kwargs) for key in keys]
 
     if output_type == "images":
         return Experiment(dict(zip(keys, results)))

@@ -13,7 +13,6 @@ Authors:
 import argparse
 import importlib
 import math
-import os
 from collections import defaultdict
 from collections.abc import Sequence
 from functools import partial
@@ -25,8 +24,6 @@ import fsspec
 import numpy as np
 import xarray as xr
 import zarr
-from dask.bag import from_sequence
-from fsspec.implementations.local import LocalFileSystem
 from numpy.typing import NDArray
 from skimage.measure import regionprops
 from zarr import Group
@@ -38,6 +35,8 @@ from scallops.cli.util import (
     _dask_workers_threads,
     _get_cli_logger,
     cli_metadata,
+    find_label_group,
+    last_label_match,
     load_json,
 )
 from scallops.io import (
@@ -144,8 +143,8 @@ def _update_seg_args(method_args: dict, seg_args: dict | None) -> None:
 
 
 def segment_nuclei(
-    group: str,  # NOT USED
-    file_list: list[str],
+    group: tuple[str, ...],  # NOT USED
+    file_list: Sequence[str],
     metadata: dict,
     dapi_channel: int,
     method: Callable,
@@ -265,8 +264,8 @@ def segment_nuclei(
 
 
 def segment_cells(
-    group: str,
-    file_list: list[str],
+    group: tuple[str, ...],
+    file_list: Sequence[str],
     metadata: dict,
     dapi_channel: int,
     cyto_channel: Sequence[int] | NDArray | None,
@@ -275,7 +274,7 @@ def segment_cells(
     z_index: int | Literal["max"],
     chunks: None | tuple[int, int] = None,
     chunk_overlap: None | int = None,
-    nuclei_image_root: Group = None,
+    nuclei_image_roots: list[Group] | None = None,
     cell_segmentation_threshold: str | float = "Li",
     threshold_correction_factor: float = 1,
     cell_segmentation_rolling_ball: bool = False,
@@ -312,7 +311,7 @@ def segment_cells(
     :param max_area: Maximum area threshold for filtering labels.
     :param chunks: Tuple specifying chunking size for Dask arrays.
     :param chunk_overlap: Overlap size for chunking.
-    :param nuclei_image_root: Zarr hierarchy root for nuclei images (if applicable).
+    :param nuclei_image_roots: List of Zarr groups for nuclei images (if applicable).
     :param cell_segmentation_threshold: Threshold for cell segmentation.
     :param threshold_correction_factor: Factor to adjust threshold by.
     :param cell_segmentation_rolling_ball: Use rolling ball mask for cell segmentation.
@@ -339,8 +338,10 @@ def segment_cells(
     cell_seg_args: dict[str, Any] = {"nuclei_channel": dapi_channel}
     nuclei = None
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
+        if nuclei_image_roots is None:
+            raise ValueError(f"No nuclei image root provided for {image_key}")
         nuclei = read_ome_zarr_array(
-            nuclei_image_root["labels"][image_key + "-nuclei"]
+            find_label_group(nuclei_image_roots, f"{image_key}-nuclei")
         ).values
         assert nuclei.shape == (
             image.sizes["y"],
@@ -521,66 +522,49 @@ def _overlap(
         )
 
 
-def _normalize_url(url: str) -> str:
-    """Normalize a path or URL so that equivalent locations compare equal."""
-    fs, path = fsspec.core.url_to_fs(url)
-    if isinstance(fs, LocalFileSystem):
-        path = os.path.realpath(path)
-    return fs.unstrip_protocol(path)
-
-
 def _run_overlap_pipeline(arguments: argparse.Namespace):
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
 
-    labels_paths = arguments.labels
+    label_groups = arguments.labels
 
     label_pattern = arguments.label_pattern
     label_suffix_1 = arguments.label_suffix_1
     label_suffix_2 = arguments.label_suffix_2
     additional_suffixes = arguments.additional_suffix
-
     subset = arguments.subset
     no_version = arguments.no_version
     force = arguments.force
     output_parquet_path = arguments.meta_output
     output_zarr_path = arguments.label_output
     output_zarr_path = _add_suffix(output_zarr_path, ".zarr")
-    normalized_output_path = _normalize_url(output_zarr_path)
-    for labels_path in labels_paths:
-        if _normalize_url(labels_path) == normalized_output_path:
-            raise ValueError("Input label path should not be the same as output path")
+
     output_root = open_ome_zarr(output_zarr_path, mode="a")
     _require_group(output_root, "labels")
 
     output_parquet_fs, output_parquet_path = fsspec.core.url_to_fs(output_parquet_path)
     output_parquet_fs.makedirs(output_parquet_path, exist_ok=True)
     output_parquet_path = output_parquet_fs.unstrip_protocol(output_parquet_path)
-    paths = []
-    for path in labels_paths:
-        label_root = zarr.open(path, mode="r")
-        labels_group = label_root.get("labels")
-        if labels_group is None:
-            raise ValueError(f"Labels group not found for {path}")
-        paths.append(labels_group)
-    full_label_pattern = label_pattern + "-{label_suffix}"
+
+    label_pattern_with_suffix = label_pattern + "-{label_suffix}"
 
     if subset is not None:
         subset = [s + "-*" for s in subset]
     gen = _set_up_experiment(
-        image_path=paths,
-        files_pattern=full_label_pattern,
-        group_by=list(_create_file_regex(full_label_pattern)[2]),
+        image_path=label_groups,
+        files_pattern=label_pattern_with_suffix,
+        group_by=list(_create_file_regex(label_pattern_with_suffix)[2]),
         subset=subset,
+        filter_matches=last_label_match,
     )
     label_1_base_id_to_tuple = dict()
     label_2_base_id_to_tuple = dict()
     additional_base_id_to_tuples = defaultdict(list)
     for g in gen:
         group_id, file_list, metadata = g
-        # ('test', 'cell')
+
         suffix = group_id[-1].replace("/", "_")
         base_id = group_id[:-1]
         if suffix == label_suffix_1:
@@ -686,8 +670,8 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
 
         kwargs["cell_segmentation_t"] = arguments.cell_segmentation_t
         if method in ["watershed", "watershed-intensity", "propagation"]:
-            nuclei_label = arguments.nuclei_label
-            if nuclei_label is None:
+            nuclei_labels = arguments.nuclei_label
+            if nuclei_labels is None or len(nuclei_labels) == 0:
                 raise ValueError(
                     f"Please provide nuclei labels for {method} segmentation"
                 )
@@ -697,7 +681,7 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 method = "watershed"
                 kwargs["watershed_method"] = "intensity"
             kwargs["closing_radius"] = arguments.closing_radius
-            kwargs["nuclei_image_root"] = zarr.open(nuclei_label, mode="r")
+            kwargs["nuclei_image_roots"] = nuclei_labels
             kwargs["cell_segmentation_threshold"] = threshold
             kwargs["threshold_correction_factor"] = (
                 arguments.threshold_correction_factor
@@ -721,27 +705,28 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
         importlib.import_module("scallops.segmentation." + method),
         f"{'segment_nuclei_' if nuclei else 'segment_cells_'}{method}",
     )
-    image_seq = from_sequence(
-        _set_up_experiment(data_path, image_pattern, group_by, subset=subset)
-    )
+    segment_fn = segment_nuclei if nuclei else segment_cells
     with (
         _create_default_dask_config(),
         _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        image_seq.starmap(
-            segment_nuclei if nuclei else segment_cells,
-            dapi_channel=dapi_channel,
-            method=method,
-            root=output_root,
-            min_area=min_area,
-            max_area=max_area,
-            chunks=chunks,
-            chunk_overlap=chunk_overlap,
-            z_index=z_index,
-            force=force,
-            no_version=no_version,
-            **kwargs,
-        ).compute()
+        for image_tuple in _set_up_experiment(
+            data_path, image_pattern, group_by, subset=subset
+        ):
+            segment_fn(
+                *image_tuple,
+                dapi_channel=dapi_channel,
+                method=method,
+                root=output_root,
+                min_area=min_area,
+                max_area=max_area,
+                chunks=chunks,
+                chunk_overlap=chunk_overlap,
+                z_index=z_index,
+                force=force,
+                no_version=no_version,
+                **kwargs,
+            )
     _delete_lock_files()
 
 

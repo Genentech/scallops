@@ -20,24 +20,24 @@ from typing import Literal, cast
 
 import fsspec
 import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import skimage.transform
 import skimage.util
-from dask.bag import from_sequence
-from distributed import Client
+from matplotlib.figure import Figure
 from skimage.util import img_as_uint
 
 from scallops.cli.util import (
     ImageTuple,
     _create_dask_client,
     _create_default_dask_config,
+    _dask_workers_threads,
     _get_cli_logger,
     load_json,
 )
 from scallops.io import _add_suffix, _images2fov, _set_up_experiment
 from scallops.stitch._align import _get_read_images
+from scallops.stitch._channel_align import load_params, parse_correction_channels
 from scallops.stitch._stitch import _single_stitch
 from scallops.stitch.shift_utils import (
     convert_stage_positions,
@@ -51,7 +51,6 @@ from scallops.stitch.utils import (
     get_pixel_size,
     read_stage_positions,
 )
-from scallops.utils import _cpu_count
 from scallops.xr import _z_projection
 from scallops.zarr_io import open_ome_zarr
 
@@ -161,12 +160,13 @@ def single_stitch_preview(
     stage_positions = stage_positions * resolution_scale
     stage_positions = np.round(stage_positions).astype(int)
 
-    fig, ax = plt.subplots()
+    fig = Figure()
+    ax = fig.subplots()
     ax.axis("off")
     tile_shape = np.round(np.array(tile_shape_no_crop) * resolution_scale).astype(int)
     z_tiles_removed = (
         "z" in metadata_fields
-        and isinstance(z_index, (Sequence, np.ndarray, int))
+        and isinstance(z_index, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(z_index, str)
     )
     if z_tiles_removed:
@@ -219,7 +219,11 @@ def single_stitch_preview(
             if bounds:
                 ax.add_patch(
                     mpatches.Rectangle(
-                        (x, y), *tile_shape, edgecolor="black", fill=False
+                        (x, y),
+                        tile_shape[1],  # width
+                        tile_shape[0],  # height
+                        edgecolor="black",
+                        fill=False,
                     )
                 )
             if numbers:
@@ -243,32 +247,32 @@ def single_stitch_preview(
     if not fs.exists(output_path):
         fs.mkdirs(output_path, exist_ok=True)
     with fs.open(f"{output_path}{fs.sep}{image_key}.png", "wb") as f:
-        plt.savefig(f)
+        fig.savefig(f)
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def run_stitch_preview(args: argparse.Namespace) -> None:
     """Run the stitch preview pipeline."""
+
     if not args.bounds and not args.numbers and args.no_tiles:
         raise ValueError("Please provide bounds or numbers or disable tiles.")
-    from_sequence(
-        _set_up_experiment(
-            args.images, args.image_pattern, args.groupby, subset=args.subset
+    for image_tuple in _set_up_experiment(
+        args.images, args.image_pattern, args.groupby, subset=args.subset
+    ):
+        single_stitch_preview(
+            image_tuple,
+            output_path=args.output,
+            channel=args.channel,
+            numbers=args.numbers,
+            bounds=args.bounds,
+            downsample=args.downsample,
+            log=args.log,
+            stage_positions_path=args.stage_positions,
+            show_image=not args.no_tiles,
+            z_index=args.z_index,
+            t_index=args.t_index,
         )
-    ).map(
-        single_stitch_preview,
-        output_path=args.output,
-        channel=args.channel,
-        numbers=args.numbers,
-        bounds=args.bounds,
-        downsample=args.downsample,
-        log=args.log,
-        stage_positions_path=args.stage_positions,
-        show_image=not args.no_tiles,
-        z_index=args.z_index,
-        t_index=args.t_index,
-    ).compute()
 
 
 def run_stitch(args: argparse.Namespace) -> None:
@@ -277,18 +281,13 @@ def run_stitch(args: argparse.Namespace) -> None:
     dask_cluster_parameters = (
         load_json(args.dask_cluster) if args.dask_cluster is not None else {}
     )
+    # each worker needs to hold ~10 tiles in memory
+    if dask_server_url is None and args.dask_cluster is None:
+        dask_cluster_parameters = _dask_workers_threads()
+
     no_save_image = args.no_save_image
     channel_names = args.channel_name
 
-    if dask_server_url is None and args.dask_cluster is None:
-        dask_cluster_parameters = dict(n_workers=1, threads_per_worker=_cpu_count())
-
-    if (
-        not no_save_image
-        and dask_server_url is None
-        and dask_cluster_parameters.get("n_workers") != 1
-    ):
-        raise ValueError("Stitching can only be run with 1 worker.")
     blend = args.blend
     output_channels = args.output_channels
 
@@ -326,11 +325,6 @@ def run_stitch(args: argparse.Namespace) -> None:
     channel = args.align_channel
     upsample_factor = args.cross_correlation_upsample
     z_index = args.z_index
-    if z_index not in ("max", "focus"):
-        try:
-            z_index = int(z_index)
-        except ValueError:
-            pass
     t_index = args.t_index
 
     expected_images = args.expected_images
@@ -364,6 +358,36 @@ def run_stitch(args: argparse.Namespace) -> None:
     if channel_filter_min <= 0 and channel_filter_max >= 100:
         channel_filter_percentiles = None
 
+    alignment_correction = None
+    correction_channels = parse_correction_channels(args.alignment_correction_channels)
+    if correction_channels is not None:
+        if channel_reference is not None:
+            raise ValueError(
+                "--alignment-correction-channels cannot be combined with --channel-reference: both align "
+                "channels to a reference; use one of them."
+            )
+        if not args.alignment_correction_channel_order:
+            raise ValueError(
+                "--alignment-correction-channel-order is required with --alignment-correction-channels: give "
+                "the parameter-file name of every input channel, in input order (use - for a channel with no "
+                "entry)."
+            )
+        alignment_correction = dict(
+            channels=correction_channels,
+            params=load_params(args.alignment_correction_params)
+            if args.alignment_correction_params is not None
+            else None,
+            channel_order=args.alignment_correction_channel_order,
+        )
+    elif (
+        args.alignment_correction_params is not None
+        or args.alignment_correction_channel_order
+    ):
+        logger.warning(
+            "--alignment-correction-params and --alignment-correction-channel-order are ignored without "
+            "--alignment-correction-channels."
+        )
+
     assert all(shift >= 0 for shift in max_shifts), "Max shift must be non-negative."
 
     assert 0 <= stitch_alpha <= 1, "stitch alpha must be between 0 and 1"
@@ -385,51 +409,45 @@ def run_stitch(args: argparse.Namespace) -> None:
         image_output_root = open_ome_zarr(image_output, mode="a")
     with (
         _create_default_dask_config(),
-        _create_dask_client(dask_server_url, **dask_cluster_parameters) as client,
+        _create_dask_client(dask_server_url, **dask_cluster_parameters),
     ):
-        if (
-            no_save_image
-            and isinstance(client, Client)
-            and len(client.cluster.workers) != 1
+        for image_tuple in _set_up_experiment(
+            args.images, args.image_pattern, args.groupby, subset=args.subset
         ):
-            raise ValueError("Stitching can only be run with 1 worker.")
-        from_sequence(
-            _set_up_experiment(
-                args.images, args.image_pattern, args.groupby, subset=args.subset
+            _single_stitch(
+                image_tuple,
+                image_output_root=image_output_root,
+                other_output_path=other_output_path,
+                radial_correction_k=radial_correction_k,
+                dfp_path=dfp,
+                ffp_path=ffp,
+                stitch_alpha=stitch_alpha,
+                z_index=z_index,
+                force=force,
+                image_spacing=image_spacing,
+                upsample_factor=upsample_factor,
+                expected_images=expected_images,
+                output_channels=output_channels,
+                channel_names=channel_names,
+                channel=channel,
+                rename=rename,
+                crop_width=crop_width,
+                no_save_image=no_save_image,
+                no_save_labels=no_save_labels,
+                no_version=no_version,
+                stage_positions_path=stage_positions_path,
+                blend=blend,
+                evaluate=evaluate,
+                min_overlap_fraction=min_overlap_fraction,
+                random_seed=random_seed,
+                max_shifts=max_shifts,
+                flip_y_axis=flip_y_axis,
+                flip_x_axis=flip_x_axis,
+                swap_axes=swap_axes,
+                channel_reference=channel_reference,
+                channel_cross_correlation_upsample=channel_cross_correlation_upsample,
+                channel_window=channel_window,
+                channel_filter_percentiles=channel_filter_percentiles,
+                t_index=t_index,
+                alignment_correction=alignment_correction,
             )
-        ).map(
-            _single_stitch,
-            image_output_root=image_output_root,
-            other_output_path=other_output_path,
-            radial_correction_k=radial_correction_k,
-            dfp_path=dfp,
-            ffp_path=ffp,
-            stitch_alpha=stitch_alpha,
-            z_index=z_index,
-            force=force,
-            image_spacing=image_spacing,
-            upsample_factor=upsample_factor,
-            expected_images=expected_images,
-            output_channels=output_channels,
-            channel_names=channel_names,
-            channel=channel,
-            rename=rename,
-            crop_width=crop_width,
-            no_save_image=no_save_image,
-            no_save_labels=no_save_labels,
-            no_version=no_version,
-            stage_positions_path=stage_positions_path,
-            blend=blend,
-            evaluate=evaluate,
-            min_overlap_fraction=min_overlap_fraction,
-            random_seed=random_seed,
-            max_shifts=max_shifts,
-            flip_y_axis=flip_y_axis,
-            flip_x_axis=flip_x_axis,
-            swap_axes=swap_axes,
-            channel_reference=channel_reference,
-            channel_cross_correlation_upsample=channel_cross_correlation_upsample,
-            channel_window=channel_window,
-            channel_filter_percentiles=channel_filter_percentiles,
-            t_index=t_index,
-        ).compute()
