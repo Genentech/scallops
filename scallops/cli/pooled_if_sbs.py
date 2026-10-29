@@ -37,6 +37,7 @@ from scallops.cli.util import (
     _create_default_dask_config,
     _dask_workers_threads,
     cli_metadata,
+    find_label_group,
     load_json,
 )
 from scallops.envir import SCALLOPS_BASE_ORDER
@@ -970,11 +971,9 @@ def reads_pipeline(
     points_path = f"{points_path}/{image_key}-peaks.parquet"
     peaks = dd.read_parquet(points_path)
     maxed = read_ome_zarr_array(spots_root["images"][image_key + "-max"], dask=True)
-    for label_group in reversed(label_groups):
-        v = label_group.get(image_key + "-" + label_name)
-        if v is not None:
-            labels = read_ome_zarr_array(v, dask=True).data.compute()
-            break
+    labels = read_ome_zarr_array(
+        find_label_group(label_groups, f"{image_key}-{label_name}"), dask=True
+    ).data.compute()
     if expand_labels_distance is not None and expand_labels_distance > 0:
         labels = expand_labels(labels, distance=expand_labels_distance)
     iss_cycles = maxed.coords["t"].values
@@ -1083,9 +1082,6 @@ def reads_pipeline(
                 "and mismatches"
             )
     if threshold_peaks == "auto":
-        if isinstance(df_reads, dd.DataFrame):
-            # decoded reads are used for the threshold and again for the outputs
-            df_reads = df_reads.persist()
         peak_thresholds_lower_df = peak_thresholds_from_reads(
             df_reads.query(" & ".join(reads_to_labels_query)).compute()
         )
@@ -1237,7 +1233,7 @@ def reads_main(arguments: argparse.Namespace):
     )
     if dask_server_url is None and arguments.dask_cluster is None:
         dask_cluster_parameters = _dask_workers_threads()
-    labels = arguments.labels
+    label_groups = arguments.labels
     read_filter = arguments.read_quality_filter
     barcode_column = arguments.barcode_col
     barcodes_file = arguments.barcodes
@@ -1264,7 +1260,6 @@ def reads_main(arguments: argparse.Namespace):
     output_dir = output_dir.rstrip(output_fs.sep)
     for key in save_keys:
         output_fs.makedirs(output_dir + output_fs.sep + key, exist_ok=True)
-    label_groups = [zarr.open(path, mode="r")["labels"] for path in labels]
 
     spots_fs, _ = fsspec.core.url_to_fs(spots)
     spots = spots.rstrip(spots_fs.sep)

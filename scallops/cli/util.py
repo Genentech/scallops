@@ -313,6 +313,55 @@ def _z_index_type(s: str) -> int | Literal["max"]:
     return value
 
 
+def _label_args_type(s: str) -> zarr.Group:
+    # argparse only reports ArgumentTypeError/ValueError/TypeError as usage errors
+    try:
+        label_root = zarr.open(s, mode="r")
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"Unable to open {s}: {e}") from e
+    labels_group = label_root.get("labels")
+    if labels_group is None:
+        raise argparse.ArgumentTypeError(f"Labels group not found for {s}")
+    return labels_group
+
+
+def find_label_group(label_groups: Sequence[zarr.Group], key: str) -> zarr.Group:
+    """Find the label image `key` in one or more 'labels' groups.
+
+    If `key` is present in more than one group, the group listed last wins. Entries
+    that are not OME-Zarr images (e.g. left behind by an interrupted run) are skipped.
+
+    :param label_groups: The 'labels' groups to search, e.g. from :func:`labels_arg`.
+    :param key: The label image name, e.g. `A1-102-nuclei`.
+    :return: The OME-Zarr group for `key`.
+    :raises ValueError: If `key` is not found in any group.
+    """
+    from scallops.zarr_io import is_ome_zarr_array
+
+    for group in reversed(label_groups):
+        g = group.get(key)
+        if is_ome_zarr_array(g):
+            return g
+        if g is not None:
+            _get_cli_logger().info(f"Skipping invalid labels at {g}.")
+    raise ValueError(f'Labels "{key}" not found.')
+
+
+def last_label_match(matches: list) -> list:
+    """Keep the last of a group's label matches, for `filter_matches` of
+    :func:`scallops.io._set_up_experiment`.
+
+    Matches are in `label_groups` order, so the store listed last wins.
+
+    :param matches: The ``(Zarr node, fields)`` matches for one group.
+    :return: The last match.
+    """
+    if len(matches) > 1:
+        skipped = ", ".join(str(m[0]) for m in matches[:-1])
+        _get_cli_logger().info(f"Skipping duplicate labels at {skipped}.")
+    return matches[-1:]
+
+
 def z_index_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--z-index",
@@ -380,7 +429,8 @@ def labels_arg(parser: argparse.ArgumentParser, required: bool = True) -> None:
     parser.add_argument(
         "--labels",
         required=required,
-        nargs="+" if required else "*",
+        type=_label_args_type,
+        nargs="+",
         help="One or more paths to zarr stores containing a 'labels' group. If the same "
         "label name appears in more than one store, the store listed last is used.",
     )

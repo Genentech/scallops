@@ -13,7 +13,6 @@ Authors:
 import argparse
 import importlib
 import math
-import os
 from collections import defaultdict
 from collections.abc import Sequence
 from functools import partial
@@ -25,7 +24,6 @@ import fsspec
 import numpy as np
 import xarray as xr
 import zarr
-from fsspec.implementations.local import LocalFileSystem
 from numpy.typing import NDArray
 from skimage.measure import regionprops
 from zarr import Group
@@ -37,6 +35,8 @@ from scallops.cli.util import (
     _dask_workers_threads,
     _get_cli_logger,
     cli_metadata,
+    find_label_group,
+    last_label_match,
     load_json,
 )
 from scallops.io import (
@@ -311,7 +311,7 @@ def segment_cells(
     :param max_area: Maximum area threshold for filtering labels.
     :param chunks: Tuple specifying chunking size for Dask arrays.
     :param chunk_overlap: Overlap size for chunking.
-    :param nuclei_image_roots: Zarr hierarchy root for nuclei images (if applicable).
+    :param nuclei_image_roots: List of Zarr groups for nuclei images (if applicable).
     :param cell_segmentation_threshold: Threshold for cell segmentation.
     :param threshold_correction_factor: Factor to adjust threshold by.
     :param cell_segmentation_rolling_ball: Use rolling ball mask for cell segmentation.
@@ -338,16 +338,11 @@ def segment_cells(
     cell_seg_args: dict[str, Any] = {"nuclei_channel": dapi_channel}
     nuclei = None
     if method.__name__ in ["segment_cells_watershed", "segment_cells_propagation"]:
-        nuclei_key = image_key + "-nuclei"
-        assert nuclei_image_roots is not None
-        nuclei = None
-        for nuclei_image_root in reversed(nuclei_image_roots):
-            v = nuclei_image_root["labels"].get(nuclei_key)
-            if v is not None:
-                nuclei = read_ome_zarr_array(v).values
-                break
-        if nuclei is None:
-            raise ValueError("No nuclei found")
+        if nuclei_image_roots is None:
+            raise ValueError(f"No nuclei image root provided for {image_key}")
+        nuclei = read_ome_zarr_array(
+            find_label_group(nuclei_image_roots, f"{image_key}-nuclei")
+        ).values
         assert nuclei.shape == (
             image.sizes["y"],
             image.sizes["x"],
@@ -527,37 +522,25 @@ def _overlap(
         )
 
 
-def _normalize_url(url: str) -> str:
-    """Normalize a path or URL so that equivalent locations compare equal."""
-    fs, path = fsspec.core.url_to_fs(url)
-    if isinstance(fs, LocalFileSystem):
-        path = os.path.realpath(path)
-    return fs.unstrip_protocol(path)
-
-
 def _run_overlap_pipeline(arguments: argparse.Namespace):
     dask_server_url = arguments.client
     dask_cluster_parameters = (
         load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
     )
 
-    labels_paths = arguments.labels
+    label_groups = arguments.labels
 
     label_pattern = arguments.label_pattern
     label_suffix_1 = arguments.label_suffix_1
     label_suffix_2 = arguments.label_suffix_2
     additional_suffixes = arguments.additional_suffix
-
     subset = arguments.subset
     no_version = arguments.no_version
     force = arguments.force
     output_parquet_path = arguments.meta_output
     output_zarr_path = arguments.label_output
     output_zarr_path = _add_suffix(output_zarr_path, ".zarr")
-    normalized_output_path = _normalize_url(output_zarr_path)
-    for labels_path in labels_paths:
-        if _normalize_url(labels_path) == normalized_output_path:
-            raise ValueError("Input label path should not be the same as output path")
+
     output_root = open_ome_zarr(output_zarr_path, mode="a")
     _require_group(output_root, "labels")
 
@@ -565,7 +548,6 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
     output_parquet_fs.makedirs(output_parquet_path, exist_ok=True)
     output_parquet_path = output_parquet_fs.unstrip_protocol(output_parquet_path)
 
-    label_groups = [zarr.open(path, mode="r")["labels"] for path in labels_paths]
     label_pattern_with_suffix = label_pattern + "-{label_suffix}"
 
     if subset is not None:
@@ -575,15 +557,14 @@ def _run_overlap_pipeline(arguments: argparse.Namespace):
         files_pattern=label_pattern_with_suffix,
         group_by=list(_create_file_regex(label_pattern_with_suffix)[2]),
         subset=subset,
+        filter_matches=last_label_match,
     )
     label_1_base_id_to_tuple = dict()
     label_2_base_id_to_tuple = dict()
     additional_base_id_to_tuples = defaultdict(list)
     for g in gen:
         group_id, file_list, metadata = g
-        if len(file_list) > 1:
-            file_list = file_list[-1:]
-        g = (group_id, file_list, metadata)
+
         suffix = group_id[-1].replace("/", "_")
         base_id = group_id[:-1]
         if suffix == label_suffix_1:
@@ -700,9 +681,7 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 method = "watershed"
                 kwargs["watershed_method"] = "intensity"
             kwargs["closing_radius"] = arguments.closing_radius
-            kwargs["nuclei_image_root"] = [
-                zarr.open(nuclei_label, mode="r") for nuclei_label in nuclei_labels
-            ]
+            kwargs["nuclei_image_roots"] = nuclei_labels
             kwargs["cell_segmentation_threshold"] = threshold
             kwargs["threshold_correction_factor"] = (
                 arguments.threshold_correction_factor

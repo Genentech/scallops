@@ -29,6 +29,7 @@ from scallops.cli.util import (
     _dask_workers_threads,
     _get_cli_logger,
     cli_metadata,
+    find_label_group,
     load_json,
 )
 from scallops.features._plot import _plot_features
@@ -109,12 +110,8 @@ def get_labels(label_groups: list[Group], name: str, suffix: str) -> zarr.Array:
     :raises: ValueError if labels are not found
     """
 
-    key = f"{name}-{suffix}"
-    for group in reversed(label_groups):
-        g = group.get(key)
-        if g is not None:
-            return g[list(g.keys())[0]]
-    raise ValueError(f'"{name}-{suffix}" not found.')
+    g = find_label_group(label_groups, f"{name}-{suffix}")
+    return g[list(g.keys())[0]]
 
 
 def _read_image(file_list: Sequence[str | Group], metadata: dict) -> xr.DataArray:
@@ -475,10 +472,9 @@ def run_pipeline_compute_features(arguments: argparse.Namespace) -> None:
     output_dir = output_dir.rstrip(output_fs.sep)
     for label in label_name_to_features:
         output_fs.makedirs(output_dir + output_fs.sep + label, exist_ok=True)
-    labels_paths = arguments.labels
+    label_groups = arguments.labels
     no_version = arguments.no_version
 
-    label_groups = [zarr.open(path, mode="r")["labels"] for path in labels_paths]
     if channel_names is not None:
         # keys are strings in json
         try:

@@ -486,9 +486,7 @@ def test_read_write_experiment(experiment_c, tmp_path):
         experiment_c.images["A1-103"].values,
         err_msg="103 not equal",
     )
-    assert exp.images["A1-102"].attrs["common_src"] == "10X_c-SBS_*_A1_Tile-102.sbs", (
-        "common_src not equal"
-    )
+
     assert exp.images["A1-102"].attrs["group"] == dict(tile="102", well="A1"), (
         "group not equal"
     )

@@ -20,6 +20,7 @@ from scallops.cli.util import (
     _dask_workers_threads,
     _get_cli_logger,
     cli_metadata,
+    last_label_match,
     load_json,
 )
 from scallops.features.constants import _label_name_to_prefix
@@ -39,8 +40,6 @@ def _execute(
     group, file_list, metadata = label_tuple
     label_name = group[len(group) - 1]
     image_key = "-".join(group[:-1])  # exclude suffix from key
-    if len(file_list) > 1:
-        file_list = file_list[-1:]
 
     path = (
         f"{output_dir}{output_sep}{label_name}{output_sep}{image_key}-objects.parquet"
@@ -73,7 +72,7 @@ def _execute(
 
 
 def run_pipeline_find_objects(arguments: argparse.Namespace) -> None:
-    labels_paths = arguments.labels
+    label_groups = arguments.labels
     label_pattern = arguments.label_pattern
     label_suffix = arguments.label_suffix
     label_suffix = set(label_suffix) if label_suffix is not None else None
@@ -96,19 +95,15 @@ def run_pipeline_find_objects(arguments: argparse.Namespace) -> None:
 
     output_fs, _ = fsspec.core.url_to_fs(output_dir)
     output_dir = output_dir.rstrip(output_fs.sep)
-    paths = []
-    for path in labels_paths:
-        label_root = zarr.open(path, mode="r")
-        labels_group = label_root.get("labels")
-        if labels_group is None:
-            raise ValueError(f"Labels group not found for {path}")
-        paths.append(labels_group)
+
     _, _, keys = _create_file_regex(label_pattern)
+
     gen = _set_up_experiment(
-        image_path=paths,
+        image_path=label_groups,
         files_pattern=label_pattern,
         group_by=list(keys),
         subset=subset,
+        filter_matches=last_label_match,
     )
 
     with (
