@@ -329,21 +329,19 @@ def find_label_group(label_groups: Sequence[zarr.Group], key: str) -> zarr.Group
     """Find the label image `key` in one or more 'labels' groups.
 
     If `key` is present in more than one group, the group listed last wins. Entries
-    that are not OME-Zarr images (e.g. left behind by an interrupted run) are skipped.
+    that are not OME-Zarr images (e.g. left behind by an interrupted run) are not skipped.
 
     :param label_groups: The 'labels' groups to search, e.g. from :func:`labels_arg`.
     :param key: The label image name, e.g. `A1-102-nuclei`.
     :return: The OME-Zarr group for `key`.
     :raises ValueError: If `key` is not found in any group.
     """
-    from scallops.zarr_io import is_ome_zarr_array
 
     for group in reversed(label_groups):
         g = group.get(key)
-        if is_ome_zarr_array(g):
-            return g
         if g is not None:
-            logging.getLogger("scallops").info(f"Skipping invalid labels at {g}.")
+            return g
+
     raise ValueError(f'Labels "{key}" not found.')
 
 
