@@ -700,6 +700,9 @@ def _itk_align_reference_time(
     if attrs_keep is None:
         attrs_keep = []
     moving_image_reference_t_moving_c = moving_image_reference_t_moving_c.squeeze()
+    moving_image_reference_t_moving_c = (
+        moving_image_reference_t_moving_c.compute()
+    )  # all steps need this so load into memory
     moving_channels = (
         set(np.atleast_1d(moving_channel).tolist())
         if parameter_object_across_channels is not None
@@ -725,6 +728,7 @@ def _itk_align_reference_time(
                 dim="c", keep_attrs=True
             )
         moving_image_ti_moving_c = moving_image_ti_moving_c.squeeze()
+        moving_image_ti_moving_c = moving_image_ti_moving_c.compute()
         transform_parameter_object = None
         if i != reference_timepoint:
             logger.info(f"Registering t={i} to t={reference_timepoint}.")
