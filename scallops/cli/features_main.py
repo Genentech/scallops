@@ -61,9 +61,9 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         :param x: The parser object.
         """
         print(x.old_help())
-        from scallops.features.info import HELP
+        from scallops.features.info import help_text
 
-        print(HELP)
+        print(help_text())
 
     # Override the default help formatter
     parser.format_help = MethodType(new_format_help, parser)

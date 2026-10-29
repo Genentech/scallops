@@ -82,7 +82,7 @@ Key Features:
    :prog: scallops
    :path: features
 
-.. include:: features.rst
+.. include:: ../scallops/features/features.rst
 
 
 scallops illum-corr
