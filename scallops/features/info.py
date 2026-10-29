@@ -1,126 +1,71 @@
-# sphinx-build -E -q -b text docs text-out docs/features.rst
-HELP = """
-Available Features
-******************
+"""Plain-text feature descriptions for ``scallops features --help``.
 
-
-CellProfiler Features
-=====================
-
-* intensity
-     Measures several intensity features for identified objects.
-     Parameters:
-
-     1. c: Channel index.
-
-* granularity
-     Outputs spectra of size measurements of the textures in the
-     image. Parameters:
-
-     1. c:  Channel index.
-
-* intensity-distribution
-     Measures radial intensity distribution features for identified objects.
-     Parameters:
-
-     1. c: Channel index.
-
-     2. bins: Number of bins to measure the distribution (default 4).
-
-
-* intensity-distribution-zernike
-     Measures zernike intensity distribution features for identified objects.
-     Parameters:
-
-     1. c: Channel index.
-
-     2. moment: Maximum zernike moment (default 9)
-
-
-
-* haralick
-     Measures the degree and nature of textures within objects to
-     quantify their roughness and smoothness. Parameters:
-
-     1. c: Channel index.
-
-     2. scale: Number of pixels included in gray-level co-occurence
-        matrix (Default 3).
-
-* sizeshape
-     Measures several area and shape features of identified objects.
-
-* neighbors
-     Calculates how many neighbors each object has and records various
-     properties about the neighbors’ relationships, including the
-     percentage of an object’s edge pixels that touch a neighbor.
-
-* colocalization
-     Measures the colocalization and correlation between intensities
-     in different channels on a pixel-by-pixel basis within identified
-     objects. Parameters:
-
-     1. c1: First channel index.
-
-     2. c2: Second channel index.
-
-
-Other Features
-==============
-
-* pftas
-     Parameter-free threshold adjacency statistics. Outputs 54
-     features. Reference: Fast automated cell phenotype image
-     classification Parameters:
-
-     1. c: Channel index.
-
-* correlation-pearson-box
-     Pearson correlation coefficient between two channels in the label
-     bounding box. Typically used to measure nuclei alignment quality
-     of ISS and phenotype images. Parameters:
-
-     1. c1: First channel index.
-
-     2. c2: Second channel index.
-
-* intersects-boundary
-     Determines whether a label intersects a stitch boundary.
-     Parameters:
-
-     1. c: Channel index.
-
-* spots
-     Counts the number of spots in a FISH image. Parameters:
-
-     1. c: Channel index.
-
-     2. min peak_distance: Minimum number of pixels separating peaks
-        (default 3).
-
-     3. radius: Radius of the disk footprint used for non-maximum
-        suppression in peak_local_max (default 3).
-
-
-Shortcuts
-=========
-
-Use *** for all channels. Example: *intensity_**,
-*colocalization_*_**.
-
-Include a comma separated list of channel indices (0-based) to
-include. Example: *intensity_0,1,2,6*.
-
-Specify a range of channel indices using start:stop:step.
-Example: *colocalization_0_1:10:2*.
-
-Notes
-=====
-
-Feature names are case insensitive (intensity == Intensity) and
-hyphens in feature names are ignored (intensitydistribution ==
-intensity-distribution)
-
-
-
+The descriptions live in ``features.rst`` (also included in the Sphinx docs); the
+reStructuredText markup is stripped before printing.
 """
+
+import re
+from importlib.resources import files
+
+
+def _rst_to_text(rst: str) -> str:
+    """Strip the reStructuredText markup used in features.rst.
+
+    Links keep only their text, inline literals and emphasis lose their markers,
+    auto-numbered lists (``#.``) are numbered, reference targets are removed, and
+    heading underlines are resized to their titles.
+
+    >>> print(
+    ...     _rst_to_text(
+    ...         "Title\\n^^^^^^^^^^\\n.. _target:\\n\\n"
+    ...         "* `intensity <https://example.org>`_\\n"
+    ...         "    #. c: ``Channel`` index.\\n"
+    ...         "    #. bins: *Number* of bins.\\n"
+    ...         "* spots\\n"
+    ...         "    Counts spots using U-FISH_.\\n"
+    ...         "    #. c: Use `*` for all channels, e.g. `intensity_*`.\\n"
+    ...         ".. _U-FISH: https://example.org"
+    ...     )
+    ... )
+    Title
+    ^^^^^
+    <BLANKLINE>
+    * intensity
+        1. c: Channel index.
+        2. bins: Number of bins.
+    * spots
+        Counts spots using U-FISH.
+        1. c: Use * for all channels, e.g. intensity_*.
+    """
+    lines: list[str] = []
+    item = 0
+    for line in rst.splitlines():
+        if line.startswith(".. _"):
+            continue
+        if re.fullmatch(r"([-=^~*])\1+", line) and lines and lines[-1].strip():
+            line = line[0] * len(lines[-1])
+        elif m := re.match(r"(\s*)#\. ", line):
+            item += 1
+            line = f"{m.group(1)}{item}. {line[m.end() :]}"
+        elif line.strip() and not line[0].isspace():
+            # a new bullet, heading, or paragraph ends the current numbered list
+            item = 0
+        line = re.sub(r"(?<![\w`*])\*([^\s*][^*]*?)\*(?![\w*])", r"\1", line)
+        line = re.sub(r"`([^`<]+?)\s*<[^>]+>`_", r"\1", line)
+        line = re.sub(r"``(.+?)``", r"\1", line)
+        line = re.sub(r"`([^`]+)`_{0,2}", r"\1", line)
+        # named references (U-FISH_); trailing "_" before whitespace or punctuation
+        line = re.sub(
+            r"(?<![\w`])([A-Za-z][\w.-]*?)_{1,2}(?=[\s.,;:!?)'\"]|$)", r"\1", line
+        )
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def help_text() -> str:
+    """Return the available feature descriptions as plain text.
+
+    :return: Contents of features.rst with the markup stripped.
+    """
+    rst = files("scallops.features").joinpath("features.rst").read_text("utf-8")
+    return _rst_to_text(rst)

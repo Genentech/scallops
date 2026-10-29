@@ -123,6 +123,9 @@ Repository = "https://github.com/Genentech/scallops.git"
 include-package-data = true
 zip-safe = false
 
+[tool.setuptools.package-data]
+"scallops.features" = ["features.rst"]
+
 [tool.setuptools.packages.find]
 include = ["scallops*"]
 exclude = ["docs*", "scallops/tests*"]
