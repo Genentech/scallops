@@ -343,7 +343,7 @@ def find_label_group(label_groups: Sequence[zarr.Group], key: str) -> zarr.Group
         if is_ome_zarr_array(g):
             return g
         if g is not None:
-            _get_cli_logger().info(f"Skipping invalid labels at {g}.")
+            logging.getLogger("scallops").info(f"Skipping invalid labels at {g}.")
     raise ValueError(f'Labels "{key}" not found.')
 
 
@@ -358,7 +358,7 @@ def last_label_match(matches: list) -> list:
     """
     if len(matches) > 1:
         skipped = ", ".join(str(m[0]) for m in matches[:-1])
-        _get_cli_logger().info(f"Skipping duplicate labels at {skipped}.")
+        logging.getLogger("scallops").info(f"Skipping duplicate labels at {skipped}.")
     return matches[-1:]
 
 
