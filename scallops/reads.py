@@ -647,15 +647,20 @@ def peaks_to_bases(
     if isinstance(labels, xr.DataArray):
         labels = labels.values
 
-    if labels_only and labels is not None:
-        peaks = peaks[labels[peaks["y"], peaks["x"]] > 0]
+    peak_labels = None
+    if labels is not None:
+        peak_labels = labels[peaks["y"], peaks["x"]]
+        if labels_only:
+            in_labels = peak_labels > 0
+            peaks = peaks[in_labels]
+            peak_labels = peak_labels[in_labels]
     sigma_indices = None
     if "sigma" in maxed.dims:
-        sigma = maxed.coords["sigma"].values
-        sigma_to_index = {}
-        for i in range(len(sigma)):
-            sigma_to_index[sigma[i]] = i
-        sigma_indices = peaks["sigma"].replace(sigma_to_index).values.astype(int)
+        sigma_indices = pd.Index(maxed.coords["sigma"].values).get_indexer(
+            peaks["sigma"]
+        )
+        if (sigma_indices < 0).any():
+            raise ValueError("Peaks contain sigma values not found in `maxed`")
     maxed_spots = (
         (
             maxed.isel(
@@ -673,8 +678,8 @@ def peaks_to_bases(
     for c in peaks.columns:
         # add columns in peaks
         maxed_spots.coords[c] = ("read", peaks[c])
-    if labels is not None:
-        maxed_spots.coords["label"] = ("read", labels[peaks["y"], peaks["x"]])
+    if peak_labels is not None:
+        maxed_spots.coords["label"] = ("read", peak_labels)
     if bases is not None:
         maxed_spots = maxed_spots.assign_coords(c=list(bases))
     return maxed_spots

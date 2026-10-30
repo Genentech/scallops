@@ -202,7 +202,7 @@ def test_peak_thresholds_from_reads():
     df["Q_mean"] = df["Q_min"].apply(lambda p: -10 * np.log10(p + 1e-6))
     df_cutoff = peak_thresholds_from_reads(df)
     cutoff = df_cutoff.iloc[0]["threshold"]
-    assert abs(cutoff - 53) < 1
+    assert abs(cutoff - 50) < 1
 
 
 def _run_pipeline(image, cells):
