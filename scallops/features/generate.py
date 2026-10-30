@@ -209,7 +209,8 @@ def label_features(
     :param overlap: Chunk overlap.
     :param nuclei_label_image: Optional nuclei labels with the same shape as
         `label_image`. Used only by `puncta`, to anchor its spatial features on
-        each ROI's nucleus.
+        each ROI's nucleus. A zarr or numpy array is recommended: a dask array
+        works, but its chunks are recomputed by every block that reads them.
     :return: DataFrame with extracted features.
     """
     is_numpy = False

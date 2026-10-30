@@ -389,6 +389,15 @@ def _validate_params(sigma, alpha, min_size_fg_objects, peak_min_distance):
         raise ValueError(f"peak_min_distance must be >= 1, got {peak_min_distance}")
 
 
+def _blurred_roi_mask(roi, sigma):
+    """Gaussian blur of the ROI mask (the highpass normalization), clipped above 0."""
+    blurred = gaussian_filter(
+        roi.astype(np.float32), sigma=sigma, mode="constant", cval=0
+    )
+    np.clip(blurred, 1e-10, None, out=blurred)
+    return blurred
+
+
 def _highpass_filter(image, roi, sigma, blurred_mask=None):
     """Remove slowly varying background by normalized Gaussian convolution.
 
@@ -409,8 +418,7 @@ def _highpass_filter(image, roi, sigma, blurred_mask=None):
     img_masked = img * mask
     blurred_img = gaussian_filter(img_masked, sigma=sigma, mode="constant", cval=0)
     if blurred_mask is None:
-        blurred_mask = gaussian_filter(mask, sigma=sigma, mode="constant", cval=0)
-        np.clip(blurred_mask, 1e-10, None, out=blurred_mask)
+        blurred_mask = _blurred_roi_mask(roi, sigma)
     local_bg = blurred_img / blurred_mask
     filtered = img_masked - local_bg
     np.maximum(filtered, 0, out=filtered)
@@ -453,6 +461,16 @@ def _size_filter(fg_mask, min_size, roi):
         filtered_labeled = np.zeros_like(fg_mask, dtype=int)
         n_objects = 0
     return filtered, filtered_labeled, n_objects
+
+
+def _compact_labels(seg_labels):
+    """Renumber the labels present in seg_labels to 1..N, keeping their order."""
+    live = np.unique(seg_labels[seg_labels > 0])
+    if len(live) == int(seg_labels.max()):
+        return seg_labels  # already 1..N
+    lut = np.zeros(int(seg_labels.max()) + 1, dtype=seg_labels.dtype)
+    lut[live] = np.arange(1, len(live) + 1)
+    return lut[seg_labels]
 
 
 def _merge_small_puncta(seg_labels, working_img, min_size):
@@ -575,14 +593,7 @@ def _merge_small_puncta(seg_labels, working_img, min_size):
         return seg_labels
 
     # Reindex: close gaps left by merged-away labels
-    live = np.where(sizes[1:] > 0)[0] + 1
-    if len(live) < int(seg_labels.max()):
-        mapping = np.zeros(int(seg_labels.max()) + 1, dtype=int)
-        for new_id, old_id in enumerate(live, start=1):
-            mapping[old_id] = new_id
-        seg_labels = mapping[seg_labels]
-
-    return seg_labels
+    return _compact_labels(seg_labels)
 
 
 def _watershed_segment(
@@ -634,9 +645,6 @@ def _watershed_segment(
             flat_idx = np.argmax(fg_labeled == comp_id)
             peaks_mask.flat[flat_idx] = True
 
-    if not peaks_mask.any():
-        return fg_labeled
-
     markers = label(peaks_mask, connectivity=1)
     # Invert so the brightest pixel is the lowest "elevation" in each basin.
     seg_labels = watershed(
@@ -678,10 +686,7 @@ def _merge_saturated_plateaus(seg_labels, raw, roi):
             merged = True
     if not merged:
         return seg_labels
-    live = np.unique(seg_labels[seg_labels > 0])
-    lut = np.zeros(int(seg_labels.max()) + 1, dtype=seg_labels.dtype)
-    lut[live] = np.arange(1, len(live) + 1)
-    return lut[seg_labels]
+    return _compact_labels(seg_labels)
 
 
 def _detect_puncta(
@@ -760,12 +765,10 @@ def _extract_cell_features(
     seg_labels,
     roi,
     anchor_centroid,
-    cell_centroid,
     expected_radial,
     mean_boundary_dist,
     radial_frac_map,
     n_fg_objects,
-    roi_coords,
     cell_area,
     expected_extent,
 ):
@@ -778,7 +781,7 @@ def _extract_cell_features(
     Spatial reference points:
       - anchor_centroid: nuclear centroid (or ROI centroid fallback); used for radial
         position, polarization, and ring density.
-      - cell_centroid: ROI mask centroid; only used for expected_extent, the null
+      - expected_extent (computed in puncta() from the ROI mask centroid): the null
         expectation for the spread of foreground that is uniformly distributed over
         the ROI. This is a property of cell shape, so it is channel-independent.
     """
@@ -986,6 +989,8 @@ def puncta(
         of each ROI's same-ID nucleus; if None, or for a ROI whose nucleus is missing
         or does not overlap or touch it, the ROI's own centroid is used and that ROI's
         FlagNoNuclearCentroid is 1. Pass it for nuclei ROIs too, so their flag is 0.
+        A zarr or numpy array is recommended: a dask array works, but its chunks are
+        recomputed by every block that reads them.
     :param kwargs: Absorbs other framework arguments.
     :return: Dictionary mapping feature names to arrays of length len(unique_labels).
     """
@@ -1032,8 +1037,8 @@ def puncta(
             block_offset_x + label_image.shape[1],
         )
 
-    # Pre-allocate one output array per feature per channel (every row is written
-    # below; the zeros are only kept by the defensive empty-ROI guard).
+    # Pre-allocate one output array per feature per channel; every row is written
+    # below.
     all_feat_arrays = {}
     for j in c:
         all_feat_arrays[j] = {
@@ -1051,15 +1056,6 @@ def puncta(
 
         cell_label = object_index + 1
         roi = label_image[sl] == cell_label  # boolean mask inside the cell's bbox
-
-        # Defensive guard; unreachable via find_objects, which returns a slice only for
-        # labels with pixels. If reached: features stay zero and, as no anchor was
-        # used, the flag is 1.
-        if not roi.any():
-            for j in c:
-                all_feat_arrays[j]["FlagNoNuclearCentroid"][index] = 1.0
-            index += 1
-            continue
 
         ry, rx = np.where(roi)
         cell_centroid = np.array([ry.mean(), rx.mean()])
@@ -1122,12 +1118,7 @@ def puncta(
 
         # Blurred ROI mask for the highpass normalization. It depends only on the cell,
         # so one gaussian_filter per cell replaces one per channel.
-        mask_f = roi.astype(np.float32)
-        if sigma > 0:
-            blurred_mask = gaussian_filter(mask_f, sigma=sigma, mode="constant", cval=0)
-            np.clip(blurred_mask, 1e-10, None, out=blurred_mask)
-        else:
-            blurred_mask = None
+        blurred_mask = _blurred_roi_mask(roi, sigma) if sigma > 0 else None
 
         for j in c:
             raw = intensity_image[sl][..., j].astype(np.float32)
@@ -1147,12 +1138,10 @@ def puncta(
                 seg_labels,
                 roi,
                 anchor_centroid,
-                cell_centroid,
                 expected_radial,
                 mean_boundary_dist,
                 radial_frac_map,
                 n_fg_objects,
-                roi_coords,
                 cell_area,
                 expected_extent,
             )

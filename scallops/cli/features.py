@@ -346,12 +346,12 @@ def single_feature(
         if any(f.split("_")[0] == "puncta" for f in features):
             try:
                 nuclei_labels = get_labels(
-                    labels_group, name=image_key, suffix="nuclei"
+                    label_groups=label_groups, name=image_key, suffix="nuclei"
                 )
-            except KeyError:
+            except ValueError:
                 logger.warning(
-                    f"No nuclei labels for {image_key}; puncta spatial features for "
-                    f"{label_name} will use each ROI's centroid "
+                    f"No nuclei labels for {image_key} in --labels; puncta spatial "
+                    f"features for {label_name} will use each ROI's centroid "
                     "(FlagNoNuclearCentroid = 1)."
                 )
         df = label_features(

@@ -91,15 +91,14 @@ Other Features
      1. c: Channel index.
 
 * spots
-     Counts the number of spots in a FISH image. Parameters:
+     Counts the number of spots in a FISH image using U-FISH.
+     Parameters:
 
      1. c: Channel index.
 
-     2. min peak_distance: Minimum number of pixels separating peaks
-        (default 3).
+     2. intensity threshold: The intensity threshold (default 0.06).
 
-     3. radius: Radius of the disk footprint used for non-maximum
-        suppression in peak_local_max (default 3).
+     3. connectivity: Connectivity for local maxima (default 2).
 
 * puncta
      Detects puncta with an adaptive threshold (pixel > alpha * local
@@ -127,16 +126,17 @@ Other Features
      tests on immunofluorescence images, U-FISH did not detect these
      structures well.
 
-     Nuclei labels: for each image, puncta expects the nuclei labels
-     ("<image>-nuclei") in the same labels zarr as the ROI labels
-     passed to "--labels", with IDs matching the cells, as produced by
-     propagation/watershed segmentation or by "scallops segment
-     overlap". If they are not found there, puncta still runs: it logs
-     a warning, measures the spatial features from each ROI's own
-     centroid, and sets FlagNoNuclearCentroid = 1 for every ROI. Note
-     that "scallops segment overlap" writes its renumbered cells to a
-     separate zarr without the nuclei, so cell and cytoplasm features
-     run on that zarr currently use this fallback. Parameters:
+     Nuclei labels: for each image, puncta looks for the nuclei labels
+     ("<image>-nuclei") in the "--labels" stores, with IDs matching
+     the cells, as produced by propagation/watershed segmentation or
+     by "scallops segment overlap". "scallops segment overlap" writes
+     its renumbered cells to a separate store without the nuclei, so
+     for those cells pass both stores, e.g. "--labels segment.zarr
+     segment-overlap.zarr" (for labels present in both, the store
+     listed last is used). If the nuclei labels are not found, puncta
+     still runs: it logs a warning, measures the spatial features from
+     each ROI's own centroid, and sets FlagNoNuclearCentroid = 1 for
+     every ROI. Parameters:
 
      1. c: Channel index.
 

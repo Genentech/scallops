@@ -1,12 +1,15 @@
 """Tests for scallops.features.puncta: synthetic edge cases, unit tests, and
 label_features integration with nuclei labels."""
 
+import logging
+
 import dask.array as da
 import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import pytest
 import skimage.util
+import xarray as xr
 import zarr
 from scipy.ndimage import minimum_filter
 
@@ -85,11 +88,9 @@ def _make_extract_inputs(shape=(20, 20)):
     return dict(
         roi=roi,
         anchor_centroid=anchor,
-        cell_centroid=cell_centroid,
         expected_radial=expected_radial,
         mean_boundary_dist=mean_boundary_dist,
         radial_frac_map=radial_frac_map,
-        roi_coords=roi_coords,
         cell_area=cell_area,
         expected_extent=expected_extent,
     )
@@ -102,12 +103,10 @@ def _call_extract(raw, seg_labels, n_fg_objects, inputs):
         seg_labels,
         inputs["roi"],
         inputs["anchor_centroid"],
-        inputs["cell_centroid"],
         inputs["expected_radial"],
         inputs["mean_boundary_dist"],
         inputs["radial_frac_map"],
         n_fg_objects,
-        inputs["roi_coords"],
         inputs["cell_area"],
         inputs["expected_extent"],
     )
@@ -1906,3 +1905,80 @@ class TestLabelFeaturesNuclei:
                 return (type(e).__name__, str(e))
 
         assert outcome(nuclei) == outcome(None)
+
+
+def _features_cli(args):
+    """Run `scallops features` in-process (uses the scallops package under test)."""
+    from scallops.__main__ import create_parsers
+
+    parsed = create_parsers(True).parse_args(["features"] + args)
+    parsed.func(parsed)
+
+
+class TestFeaturesCliNuclei:
+    """`scallops features` finds the nuclei in any of the --labels stores."""
+
+    @staticmethod
+    def _stores(tmp_path):
+        from scallops.experiment.elements import Experiment
+
+        rois, nuclei, intensity = _lf_scene()
+        image = xr.DataArray(
+            (np.moveaxis(intensity, -1, 0) * 1000).astype(np.uint16),
+            dims=["c", "y", "x"],
+        )
+        cells_store = str(tmp_path / "cells.zarr")
+        exp = Experiment()
+        exp.images["test"] = image
+        exp.labels["test-cell"] = xr.DataArray(rois, dims=["y", "x"])
+        exp.save(cells_store)
+        nuclei_store = str(tmp_path / "nuclei.zarr")
+        exp = Experiment()
+        exp.labels["test-nuclei"] = xr.DataArray(nuclei, dims=["y", "x"])
+        exp.save(nuclei_store)
+        return cells_store, nuclei_store
+
+    @staticmethod
+    def _flags(output):
+        # cell/test-objects.parquet (also written by the CLI) holds the objects table
+        df = pd.read_parquet(f"{output}/cell/test.parquet").sort_index()
+        return df[f"Cells_{_lf_col('FlagNoNuclearCentroid')}"]
+
+    def test_nuclei_in_a_separate_store(self, tmp_path, caplog):
+        cells_store, nuclei_store = self._stores(tmp_path)
+        output = str(tmp_path / "out")
+        with caplog.at_level(logging.WARNING, logger="scallops"):
+            _features_cli(
+                ["--images", cells_store, "--labels", cells_store, nuclei_store]
+                + [
+                    "--output",
+                    output,
+                    "--features-cell",
+                    _LF_FEATURE,
+                    "--client",
+                    "none",
+                ]
+            )
+        assert "No nuclei labels" not in caplog.text
+        flags = self._flags(output)
+        expected = [0.0 if label in _LF_NUCLEI else 1.0 for label in flags.index]
+        np.testing.assert_array_equal(flags.to_numpy(), expected)
+        assert (flags == 0).sum() == len(_LF_NUCLEI)
+
+    def test_missing_nuclei_warns_and_flags_every_roi(self, tmp_path, caplog):
+        cells_store, _ = self._stores(tmp_path)
+        output = str(tmp_path / "out")
+        with caplog.at_level(logging.WARNING, logger="scallops"):
+            _features_cli(
+                ["--images", cells_store, "--labels", cells_store]
+                + [
+                    "--output",
+                    output,
+                    "--features-cell",
+                    _LF_FEATURE,
+                    "--client",
+                    "none",
+                ]
+            )
+        assert "No nuclei labels for test" in caplog.text
+        assert (self._flags(output) == 1).all()
