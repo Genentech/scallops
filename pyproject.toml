@@ -43,6 +43,7 @@ dependencies = [
     "dask-image",
     "dask",
     "decorator",
+    "distributed",
     "filelock",
     "flox",
     "fsspec",
