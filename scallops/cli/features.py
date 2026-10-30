@@ -342,6 +342,18 @@ def single_feature(
         ]
         for c in bounding_box_columns:
             merged_df[c] = merged_df[c].astype(int)
+        nuclei_labels = None
+        if any(f.split("_")[0] == "puncta" for f in features):
+            try:
+                nuclei_labels = get_labels(
+                    label_groups=label_groups, name=image_key, suffix="nuclei"
+                )
+            except ValueError:
+                logger.warning(
+                    f"No nuclei labels for {image_key} in --labels; puncta spatial "
+                    f"features for {label_name} will use each ROI's centroid "
+                    "(FlagNoNuclearCentroid = 1)."
+                )
         df = label_features(
             objects_df=merged_df,
             label_image=label_image,
@@ -355,6 +367,7 @@ def single_feature(
                 f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
             ],
             channel_names=channel_names,
+            nuclei_label_image=nuclei_labels,
         )
         # df will be None if only area and coordinates requested
 
