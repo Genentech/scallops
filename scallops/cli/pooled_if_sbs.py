@@ -27,7 +27,6 @@ import pyarrow.parquet as pq
 import xarray as xr
 import zarr
 from dask.delayed import Delayed, delayed
-from distributed import get_client
 from matplotlib import pyplot as plt
 from numpy.typing import NDArray
 from skimage.segmentation import expand_labels
@@ -150,24 +149,11 @@ def _read_qc_stats(df_reads: pd.DataFrame, df_labels: pd.DataFrame) -> dict:
 
 def _peaks_to_bases(
     maxed: xr.DataArray,
-    peaks: pd.DataFrame,
-    labels: NDArray,
+    peaks: dd.DataFrame,
+    labels: NDArray | da.Array,
     labels_only: bool,
     bases: list[str],
 ) -> xr.DataArray:
-    """Convert detected peaks into base calls and assign them to labels.
-
-    This function converts peaks identified from spot detection into corresponding bases (e.g., 'A',
-    'T', 'C', 'G'), using the provided labels. Optionally, it can return only the labeled regions if
-    specified.
-
-    :param maxed: Max-filtered image as an xarray DataArray.
-    :param peaks: Dask DataFrame containing the detected peaks.
-    :param labels: Numpy array containing segmentation labels for the image.
-    :param labels_only: If True, only the labeled regions will be processed.
-    :param bases: List of base names (e.g., ["A", "T", "C", "G"]) used in sequencing.
-    :return: DataArray containing the maxed values.
-    """
     bases_array = peaks_to_bases(
         maxed=maxed, peaks=peaks, labels=labels, labels_only=labels_only, bases=bases
     )
@@ -377,16 +363,6 @@ def spot_detection_pipeline(
     if not compute and len(dask_delayed) > 0:
         dask.compute(*dask_delayed)
     return []
-
-
-def _peaks_in_labels(peaks: pd.DataFrame, labels: NDArray) -> pd.DataFrame:
-    """Keep peaks that fall inside a label.
-
-    :param peaks: Peaks with `y` and `x` columns.
-    :param labels: Segmentation array (y,x).
-    :return: Peaks where the label is > 0.
-    """
-    return peaks[labels[peaks["y"].values, peaks["x"].values] > 0]
 
 
 def _fix_cycles(sbs_cycles):
@@ -989,8 +965,9 @@ def reads_pipeline(
     maxed = read_ome_zarr_array(spots_root["images"][image_key + "-max"], dask=True)
     labels = read_ome_zarr_array(
         find_label_group(label_groups, f"{image_key}-{label_name}"), dask=True
-    ).data.compute()
+    ).data
     if expand_labels_distance is not None and expand_labels_distance > 0:
+        labels = labels.compute()
         labels = expand_labels(labels, distance=expand_labels_distance)
     iss_cycles = maxed.coords["t"].values
     iss_cycles = _fix_cycles(iss_cycles)
@@ -1001,19 +978,12 @@ def reads_pipeline(
     crosstalk_method = cast(
         Literal["median", "li_and_speed", "none"], crosstalk_correction_method.lower()
     )
-    if labels_only:
-        # drop peaks outside labels before loading them into memory
-        try:
-            labels_arg = get_client().scatter(labels, hash=False)
-        except ValueError:  # no distributed client
-            labels_arg = labels
-        peaks = peaks.map_partitions(_peaks_in_labels, labels_arg, meta=peaks._meta)
-    bases_peaks = peaks.compute()
+
     bases_array_reads = _peaks_to_bases(
         maxed=maxed,
-        peaks=bases_peaks,
+        peaks=peaks,
         labels=labels,
-        labels_only=False,  # peaks already filtered
+        labels_only=labels_only,
         bases=bases,
     )
     # gathering spot intensities reads the whole `max` image; persist so the threshold,
