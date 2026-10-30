@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 from matplotlib import pyplot as plt
+from matplotlib.collections import QuadMesh
 
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
@@ -141,7 +142,12 @@ def test_li_and_speed_correct():
 
     assert li_and_speed_cc_number(bases) >= 0.3
     assert li_and_speed_cc_number(corrected_intensity) <= 0.11
-    fig, axes = pairwise_channel_scatter_plot(corrected_intensity, q=[0.6, 0.999])
+    fig, axes = pairwise_channel_scatter_plot(corrected_intensity)
+    plt.close(fig)
+    fig, axes = pairwise_channel_scatter_plot(corrected_intensity, kind="hist", bins=64)
+    used_axes = [ax for ax in axes.ravel() if ax.has_data()]
+    assert len(used_axes) == 6
+    assert all(any(isinstance(c, QuadMesh) for c in ax.collections) for ax in used_axes)
     plt.close(fig)
 
 

@@ -21,6 +21,7 @@ import pandas as pd
 import xarray as xr
 from dask import delayed
 from dask.utils import cached_cumsum
+from distributed import get_client
 from numpy import ndarray
 from numpy.typing import NDArray
 from scipy.special import softmax
@@ -609,25 +610,66 @@ def decode_max(
     return df
 
 
+def _peaks_in_labels(peaks: pd.DataFrame, labels: NDArray) -> pd.DataFrame:
+    """Keep peaks that fall inside a label.
+
+    :param peaks: Peaks with `y` and `x` columns.
+    :param labels: Segmentation array (y,x).
+    :return: Peaks where the label is > 0.
+    """
+    return peaks[labels[peaks["y"].values, peaks["x"].values] > 0]
+
+
 def peaks_to_bases(
     maxed: xr.DataArray,
     peaks: pd.DataFrame | dd.DataFrame,
-    labels: NDArray | xr.DataArray | None = None,
+    labels: NDArray | da.Array | xr.DataArray | None = None,
     labels_only: bool = True,
     bases: Sequence[str] | None = ("G", "T", "A", "C"),
 ) -> xr.DataArray:
     """Convert peaks to bases.
 
+    Memory usage:
+
+    - ``peaks`` is loaded into memory. If it is a dask data frame and ``labels_only``
+      is true, peaks outside labels are dropped per partition before loading, so only
+      peaks inside labels are held in memory.
+    - ``labels`` is loaded into memory as a numpy array if dask-backed. When a
+      distributed client is active and ``peaks`` is a dask data frame, ``labels`` is
+      scattered to the workers for filtering.
+    - ``maxed`` is not loaded. The returned array is lazy if ``maxed`` is dask-backed;
+      computing it reads the ``maxed`` chunks that contain peaks, which is typically
+      the whole image.
+
     :param maxed: Maxed array (sigma,t,c,y,x) or (t,c,y,x)
-    :param peaks: Peaks data frame which has been filtered to retain only peaks of interest. Note
-        that if peaks is a dask data frame, it is loaded into memory using dask.compute.
+    :param peaks: Peaks data frame which has been filtered to retain only peaks of
+        interest.
     :param labels: Segmentation array (y,x)
     :param labels_only: If true, only return peaks where labels are present.
     :param bases: List of bases.
     :return: DataArray with dimensions (read,t,c) where read is spot with coordinates y, x, peak,
         and label
     """
-
+    if isinstance(labels, xr.DataArray):
+        labels = labels.data
+    if isinstance(labels, da.Array):
+        labels = labels.compute()
+    if isinstance(peaks, dd.DataFrame):
+        if labels_only and labels is not None:
+            # drop peaks outside labels before loading them into memory
+            try:
+                labels_arg = get_client().scatter(labels, hash=False)
+            except ValueError:  # no distributed client
+                labels_arg = labels
+            peaks = peaks.map_partitions(_peaks_in_labels, labels_arg, meta=peaks._meta)
+        peaks = peaks.compute()
+    peak_labels = None
+    if labels is not None:
+        peak_labels = labels[peaks["y"].values, peaks["x"].values]
+        if labels_only:
+            in_labels = peak_labels > 0
+            peaks = peaks[in_labels]
+            peak_labels = peak_labels[in_labels]
     if "t" not in maxed.dims:
         maxed = maxed.expand_dims("t")
 
@@ -638,24 +680,16 @@ def peaks_to_bases(
         "x",
     ), f"Found dimensions: {maxed.dims}"
 
-    if isinstance(peaks, dd.DataFrame):
-        peaks = peaks.compute()
-
     if "sigma" in maxed.dims and maxed.sizes["sigma"] == 1:
         maxed = maxed.squeeze("sigma", drop=True)
 
-    if isinstance(labels, xr.DataArray):
-        labels = labels.values
-
-    if labels_only and labels is not None:
-        peaks = peaks[labels[peaks["y"], peaks["x"]] > 0]
     sigma_indices = None
     if "sigma" in maxed.dims:
-        sigma = maxed.coords["sigma"].values
-        sigma_to_index = {}
-        for i in range(len(sigma)):
-            sigma_to_index[sigma[i]] = i
-        sigma_indices = peaks["sigma"].replace(sigma_to_index).values.astype(int)
+        sigma_indices = pd.Index(maxed.coords["sigma"].values).get_indexer(
+            peaks["sigma"]
+        )
+        if (sigma_indices < 0).any():
+            raise ValueError("Peaks contain sigma values not found in `maxed`")
     maxed_spots = (
         (
             maxed.isel(
@@ -673,8 +707,8 @@ def peaks_to_bases(
     for c in peaks.columns:
         # add columns in peaks
         maxed_spots.coords[c] = ("read", peaks[c])
-    if labels is not None:
-        maxed_spots.coords["label"] = ("read", labels[peaks["y"], peaks["x"]])
+    if peak_labels is not None:
+        maxed_spots.coords["label"] = ("read", peak_labels)
     if bases is not None:
         maxed_spots = maxed_spots.assign_coords(c=list(bases))
     return maxed_spots

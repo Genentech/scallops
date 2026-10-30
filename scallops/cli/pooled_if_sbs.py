@@ -149,24 +149,11 @@ def _read_qc_stats(df_reads: pd.DataFrame, df_labels: pd.DataFrame) -> dict:
 
 def _peaks_to_bases(
     maxed: xr.DataArray,
-    peaks: pd.DataFrame,
-    labels: NDArray,
+    peaks: dd.DataFrame,
+    labels: NDArray | da.Array,
     labels_only: bool,
     bases: list[str],
 ) -> xr.DataArray:
-    """Convert detected peaks into base calls and assign them to labels.
-
-    This function converts peaks identified from spot detection into corresponding bases (e.g., 'A',
-    'T', 'C', 'G'), using the provided labels. Optionally, it can return only the labeled regions if
-    specified.
-
-    :param maxed: Max-filtered image as an xarray DataArray.
-    :param peaks: Dask DataFrame containing the detected peaks.
-    :param labels: Numpy array containing segmentation labels for the image.
-    :param labels_only: If True, only the labeled regions will be processed.
-    :param bases: List of base names (e.g., ["A", "T", "C", "G"]) used in sequencing.
-    :return: DataArray containing the maxed values.
-    """
     bases_array = peaks_to_bases(
         maxed=maxed, peaks=peaks, labels=labels, labels_only=labels_only, bases=bases
     )
@@ -942,13 +929,18 @@ def reads_pipeline(
     :param no_version: Whether to skip version/CLI information in output.
     :param barcode_column: Column name of barcode
     :param read_filter: Filter reads by quality score before assigning reads to labels.
+    :param crosstalk_n_reads: Number of reads to sample for `auto` crosstalk correction. Use -1
+        to include all reads.
     """
 
     if not force:
-        labels_file = (
-            f"{output_dir}{file_separator}labels{file_separator}{image_key}.parquet"
-        )
-        if is_parquet_file(labels_file):
+        # outputs are written together, so skip only if all of them are complete
+        output_files = [
+            f"{output_dir}{file_separator}{key}{file_separator}{image_key}.parquet"
+            for key in ("reads", "labels", "bases")
+            if key in save_keys
+        ]
+        if all(is_parquet_file(f) for f in output_files):
             logger.info(f"Skipping reads for {image_key}")
             return
 
@@ -973,8 +965,9 @@ def reads_pipeline(
     maxed = read_ome_zarr_array(spots_root["images"][image_key + "-max"], dask=True)
     labels = read_ome_zarr_array(
         find_label_group(label_groups, f"{image_key}-{label_name}"), dask=True
-    ).data.compute()
+    ).data
     if expand_labels_distance is not None and expand_labels_distance > 0:
+        labels = labels.compute()
         labels = expand_labels(labels, distance=expand_labels_distance)
     iss_cycles = maxed.coords["t"].values
     iss_cycles = _fix_cycles(iss_cycles)
@@ -985,14 +978,17 @@ def reads_pipeline(
     crosstalk_method = cast(
         Literal["median", "li_and_speed", "none"], crosstalk_correction_method.lower()
     )
-    bases_peaks = peaks.compute()  # load all peaks
+
     bases_array_reads = _peaks_to_bases(
         maxed=maxed,
-        peaks=bases_peaks,
+        peaks=peaks,
         labels=labels,
         labels_only=labels_only,
         bases=bases,
     )
+    # gathering spot intensities reads the whole `max` image; persist so the threshold,
+    # crosstalk, and output steps below don't each read it again
+    bases_array_reads = bases_array_reads.persist()
     logger.info(
         f"{bases_array_reads.sizes['read']:,} spots{' in labels' if labels_only else ''}."
     )

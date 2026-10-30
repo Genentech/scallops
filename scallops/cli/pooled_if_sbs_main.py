@@ -239,8 +239,8 @@ def _create_reads_parser(subparsers, default_help):
     )
     parser.add_argument(
         "--crosstalk-nreads",
-        help="Number of reads to sample to compute crosstalk correction. Use -1"
-        "to include all reads.",
+        help="Number of reads to sample to compute crosstalk correction using"
+        " `auto` crosstalk threshold. Use -1 to include all reads.",
         default=500000,
         type=int,
     )
