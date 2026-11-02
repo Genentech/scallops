@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -70,7 +71,7 @@ def test_merge_sbs_phenotype_df(tmp_path, df_known_good):
 
 
 @pytest.mark.utils
-def test_merge_sbs_phenotype_matrix(tmp_path, df_known_good):
+def test_merge_sbs_phenotype_matrix(tmp_path):
     df_cells = (
         pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.cells.csv")
         .rename(
@@ -128,11 +129,29 @@ def test_merge_sbs_phenotype_matrix(tmp_path, df_known_good):
         sbs_cycles=[1, 2, 3, 4, 5, 7, 8, 9, 10],
     )
     data_df = data_df.loc[merged_df.index]
-    merged_df["duplicate_prefix"] = merged_df["duplicate_prefix"].astype(str)
-    merged_df["duplicate_prefix_1"] = merged_df["duplicate_prefix_1"].astype(str)
+
     pd.testing.assert_frame_equal(
-        merged_df, data_df[merged_df.columns], check_dtype=False
+        _missing_as_nan(merged_df),
+        _missing_as_nan(data_df[merged_df.columns]),
+        check_dtype=False,
     )
+
+
+def _missing_as_nan(df: pd.DataFrame) -> pd.DataFrame:
+    """Non-numeric columns as object with NaN for missing values.
+
+    Missing values in string, boolean, and categorical columns are NaN or pd.NA
+    depending on the dtype, which differs between pandas versions and between a
+    data frame and anndata obs.
+    """
+    df = df.copy()
+    for c in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(
+            df[c]
+        ):
+            values = df[c].astype(object)
+            df[c] = values.where(values.notna(), np.nan)
+    return df
 
 
 _IMAGE_KEY = "A1-102"

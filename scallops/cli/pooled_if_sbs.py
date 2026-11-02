@@ -453,7 +453,12 @@ def _merged_to_matrix(
         obs.index = obs.index.astype(str)
         for c in obs.columns:
             if pd.api.types.is_object_dtype(obs[c]):
-                obs[c] = obs[c].astype(str)  # to save with anndata
+                # to save with anndata; keep missing values missing (with pandas < 3,
+                # astype(str) turns NaN into the string "nan")
+                if pd.api.types.infer_dtype(obs[c], skipna=True) == "boolean":
+                    obs[c] = obs[c].astype("boolean")  # e.g. bools with NaN
+                else:
+                    obs[c] = obs[c].astype(str).where(obs[c].notna())
         return anndata.AnnData(obs=obs, var=pd.DataFrame(index=feature_names), X=data)
 
 

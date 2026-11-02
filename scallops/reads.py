@@ -66,16 +66,15 @@ def _fit_whitelist(whitelist_barcodes: NDArray) -> tuple[NDArray, NearestNeighbo
 
 
 def _hamming_distance(
-    whitelist_barcodes: NDArray,
+    whitelist_index: tuple[NDArray, NearestNeighbors],
     read_barcodes: NDArray,
-    whitelist_index: tuple[NDArray, NearestNeighbors] | None = None,
 ) -> pd.DataFrame:
     """Computes the Hamming distance between read barcodes and a whitelist of barcodes.
 
-    :param whitelist_barcodes: A numpy array of whitelist barcodes.
+    :param whitelist_index: The whitelist barcodes and nearest neighbors index fitted
+        on them, from :func:`_fit_whitelist`. Fit once and reuse it when calling
+        repeatedly with the same whitelist.
     :param read_barcodes: A numpy array of read barcodes to compare against the whitelist.
-    :param whitelist_index: Result of :func:`_fit_whitelist` for `whitelist_barcodes`,
-        to avoid refitting when called repeatedly with the same whitelist.
     :return: A DataFrame containing the mismatches and closest matching barcodes from
     the whitelist.
     """
@@ -90,8 +89,7 @@ def _hamming_distance(
             }
         )
 
-    if whitelist_index is None:
-        whitelist_index = _fit_whitelist(whitelist_barcodes)
+    # the barcodes the index was fitted on, so neighbor positions index into them
     whitelist_barcodes, nbrs = whitelist_index
     assert len(whitelist_barcodes[0]) == len(read_barcodes[0]), (
         f"Length of whitelist barcode ({len(whitelist_barcodes[0])}) != length of read ({len(read_barcodes[0])})."
@@ -134,7 +132,7 @@ def summarize_base_call_mismatches(
         return pd.DataFrame()
     read_value_counts = reads_df.value_counts("barcode")
     df = _hamming_distance(
-        whitelist_barcodes=barcodes_df["barcode"].values,
+        whitelist_index=_fit_whitelist(barcodes_df["barcode"].values),
         read_barcodes=read_value_counts.index.values,
     )
     df = df[
@@ -707,9 +705,8 @@ def correct_mismatches(
     def _single_partition(reads_df, whitelist_index):
         reads_df = reads_df.join(
             _hamming_distance(
-                whitelist_barcodes=whitelist_index[0],
-                read_barcodes=reads_df.query("~barcode_match")["barcode"].unique(),
                 whitelist_index=whitelist_index,
+                read_barcodes=reads_df.query("~barcode_match")["barcode"].unique(),
             ),
             on="barcode",
         )
