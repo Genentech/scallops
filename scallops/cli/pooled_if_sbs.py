@@ -10,6 +10,7 @@ reads calling, and merging of single-cell sequencing (SCS) and phenotype data.
 import argparse
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import Sequence
@@ -57,10 +58,12 @@ from scallops.io import (
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
     assign_barcodes_to_labels,
+    barcode_n_unique_bases,
     barcode_to_prefix,
     channel_crosstalk_matrix,
     correct_mismatches,
     decode_max,
+    filter_low_complexity_reads,
     merge_sbs_phenotype,
     peaks_to_bases,
     read_statistics,
@@ -75,7 +78,7 @@ from scallops.spots import (
     std,
     transform_log,
 )
-from scallops.utils import _fix_json
+from scallops.utils import _cpu_count, _fix_json
 from scallops.visualize.crosstalk import pairwise_channel_scatter_plot
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
@@ -877,6 +880,50 @@ def spot_detect_main(arguments: argparse.Namespace):
             dask.compute(*delayed_results)
 
 
+def _dask_total_threads() -> int:
+    """Total number of threads available to dask: the threads of all workers when a
+    distributed client is active, otherwise the local CPU count (which honors
+    `SCALLOPS_CPU_COUNT`).
+    """
+    try:
+        from distributed import get_client
+
+        return max(1, sum(get_client().nthreads().values()))
+    except ValueError:  # no distributed client
+        return _cpu_count()
+
+
+def _auto_read_chunk_size(
+    n_reads: int,
+    n_threads: int,
+    chunks_per_thread: int = 3,
+    min_chunk_size: int = 50_000,
+    max_chunk_size: int = 500_000,
+) -> int:
+    """Number of reads per chunk giving about `chunks_per_thread` chunks for each thread.
+
+    The size is clamped to [`min_chunk_size`, `max_chunk_size`]: small chunks
+    duplicate per-chunk work (e.g. mismatch correction of the same barcodes) and
+    create many small output files; large chunks limit parallelism.
+
+    :param n_reads: Total number of reads.
+    :param n_threads: Number of threads available for processing.
+    :param chunks_per_thread: Target number of chunks per thread.
+    :param min_chunk_size: Minimum number of reads per chunk.
+    :param max_chunk_size: Maximum number of reads per chunk.
+    :return: Number of reads per chunk.
+
+    >>> _auto_read_chunk_size(10_000_000, 32)
+    104167
+    >>> _auto_read_chunk_size(20_000, 32)
+    50000
+    >>> _auto_read_chunk_size(100_000_000, 8)
+    500000
+    """
+    chunk_size = math.ceil(n_reads / (max(1, n_threads) * max(1, chunks_per_thread)))
+    return int(min(max(chunk_size, min_chunk_size), max_chunk_size))
+
+
 def reads_pipeline(
     image_key: str,
     spots_root: zarr.Group,
@@ -900,6 +947,8 @@ def reads_pipeline(
     barcode_column: str = "barcode",
     read_filter: float | None = None,
     crosstalk_n_reads: int = 500000,
+    read_chunk_size: int | Literal["auto"] | None = "auto",
+    crosstalk_min_unique_bases: int = 1,
 ):
     """Run the reads pipeline.
 
@@ -931,6 +980,11 @@ def reads_pipeline(
     :param read_filter: Filter reads by quality score before assigning reads to labels.
     :param crosstalk_n_reads: Number of reads to sample for `auto` crosstalk correction. Use -1
         to include all reads.
+    :param read_chunk_size: Number of reads per chunk for parallel processing, or
+        "auto" to choose from the number of reads and dask worker threads. Use None or
+        <= 0 for a single chunk.
+    :param crosstalk_min_unique_bases: Exclude reads from crosstalk estimation whose
+        called bases take fewer than this many distinct values across cycles.
     """
 
     if not force:
@@ -978,6 +1032,17 @@ def reads_pipeline(
     crosstalk_method = cast(
         Literal["median", "li_and_speed", "none"], crosstalk_correction_method.lower()
     )
+    max_unique_bases = min(len(iss_cycles), maxed.sizes["c"])
+    if (
+        crosstalk_method != "none"
+        and threshold_peaks_crosstalk_correction is not None
+        and crosstalk_min_unique_bases > max_unique_bases
+    ):
+        raise ValueError(
+            f"`crosstalk_min_unique_bases` ({crosstalk_min_unique_bases}) is greater "
+            f"than the maximum possible number of unique bases ({max_unique_bases}) for "
+            f"{len(iss_cycles)} cycles and {maxed.sizes['c']} channels."
+        )
 
     bases_array_reads = _peaks_to_bases(
         maxed=maxed,
@@ -985,6 +1050,27 @@ def reads_pipeline(
         labels=labels,
         labels_only=labels_only,
         bases=bases,
+    )
+    # Split the gathered spots along `read` so decoding, crosstalk application, mismatch
+    # correction, and writing run in parallel.
+    n_reads = bases_array_reads.sizes["read"]
+    if read_chunk_size == "auto":
+        read_chunk_size = _auto_read_chunk_size(n_reads, _dask_total_threads())
+    if isinstance(read_chunk_size, str):
+        raise ValueError(f"Invalid read chunk size: {read_chunk_size}")
+    if read_chunk_size is None or read_chunk_size <= 0:
+        read_chunk_size = -1  # single chunk
+    elif read_chunk_size < n_reads:
+        logger.info(
+            f"Processing reads in chunks of {read_chunk_size:,} "
+            f"({math.ceil(n_reads / read_chunk_size)} chunks)."
+        )
+    # rechunk the data only; `.chunk` would also make the read coords lazy. No-op when
+    # the chunks already match.
+    bases_array_reads = bases_array_reads.copy(
+        data=bases_array_reads.data.rechunk(
+            {bases_array_reads.get_axis_num("read"): read_chunk_size}
+        )
     )
     # gathering spot intensities reads the whole `max` image; persist so the threshold,
     # crosstalk, and output steps below don't each read it again
@@ -1003,7 +1089,42 @@ def reads_pipeline(
     w = None
     if not labels_only:
         crosstalk_bases_array = crosstalk_bases_array.query(dict(read="label>0"))
-    if crosstalk_method != "none" and threshold_peaks_crosstalk_correction is not None:
+    correct_crosstalk = (
+        crosstalk_method != "none" and threshold_peaks_crosstalk_correction is not None
+    )
+    if correct_crosstalk and crosstalk_min_unique_bases > 1:
+        whitelist_low_complexity = (
+            barcode_n_unique_bases(df_barcode["barcode"]) < crosstalk_min_unique_bases
+        ).mean()
+        if whitelist_low_complexity > 0:
+            logger.warning(
+                f"{whitelist_low_complexity:.1%} of barcodes have fewer than "
+                f"{crosstalk_min_unique_bases} unique bases in the "
+                f"{len(iss_cycles)} sequenced cycles; their reads are also excluded "
+                f"from crosstalk correction."
+            )
+        n_reads_before = crosstalk_bases_array.sizes["read"]
+        crosstalk_bases_array = filter_low_complexity_reads(
+            crosstalk_bases_array, min_unique_bases=crosstalk_min_unique_bases
+        )
+        logger.info(
+            f"Removed {n_reads_before - crosstalk_bases_array.sizes['read']:,} of "
+            f"{n_reads_before:,} spots with fewer than {crosstalk_min_unique_bases} "
+            f"unique bases from crosstalk correction."
+        )
+        if crosstalk_bases_array.sizes["read"] == 0:
+            logger.warning(
+                f"No spots with at least {crosstalk_min_unique_bases} unique bases; "
+                f"skipping crosstalk correction."
+            )
+            correct_crosstalk = False
+        else:
+            custom_metadata["scallops"]["crosstalk_min_unique_bases"] = (
+                crosstalk_min_unique_bases
+            )
+    if correct_crosstalk:
+        assert crosstalk_method != "none"
+        assert threshold_peaks_crosstalk_correction is not None
         if isinstance(threshold_peaks_crosstalk_correction, float):
             crosstalk_bases_array = crosstalk_bases_array.query(
                 dict(read=f"peak>{threshold_peaks_crosstalk_correction}")
@@ -1011,17 +1132,26 @@ def reads_pipeline(
         elif isinstance(threshold_peaks_crosstalk_correction, str):
             if threshold_peaks_crosstalk_correction == "auto":
                 threshold_peaks_crosstalk_correction_df = peak_thresholds_from_bases(
-                    bases_array=crosstalk_bases_array, n_reads=crosstalk_n_reads
+                    bases_array=crosstalk_bases_array,
+                    n_reads=crosstalk_n_reads,
+                    # always remove zero entropy reads when choosing the threshold
+                    min_unique_bases=max(2, crosstalk_min_unique_bases),
                 )
                 threshold_peaks_crosstalk_correction = (
                     threshold_peaks_crosstalk_correction_df.iloc[0]["threshold"]
                 )
-                logger.info(
-                    f"Threshold peaks crosstalk correction: {threshold_peaks_crosstalk_correction:.2f}."
-                )
-                crosstalk_bases_array = crosstalk_bases_array.query(
-                    dict(read=f"peak>{threshold_peaks_crosstalk_correction}")
-                )
+                if np.isnan(threshold_peaks_crosstalk_correction):
+                    logger.warning(
+                        "No spots to compute threshold peaks for crosstalk correction."
+                    )
+                    crosstalk_bases_array = crosstalk_bases_array.isel(read=slice(0, 0))
+                else:
+                    logger.info(
+                        f"Threshold peaks crosstalk correction: {threshold_peaks_crosstalk_correction:.2f}."
+                    )
+                    crosstalk_bases_array = crosstalk_bases_array.query(
+                        dict(read=f"peak>{threshold_peaks_crosstalk_correction}")
+                    )
 
                 threshold_peaks_crosstalk_correction_df.to_parquet(
                     f"{output_dir}spots{file_separator}{image_key}-peak-crosstalk.parquet",
@@ -1036,24 +1166,27 @@ def reads_pipeline(
             f"{crosstalk_bases_array.sizes['read']:,} spots in labels for crosstalk"
             f" correction."
         )
-        if threshold_peaks_crosstalk_correction is not None:
+        if crosstalk_bases_array.sizes["read"] == 0:
+            logger.warning("No spots for crosstalk correction; skipping.")
+            custom_metadata["scallops"].pop("crosstalk_min_unique_bases", None)
+        else:
             custom_metadata["scallops"]["threshold_peaks_crosstalk_correction"] = (
                 threshold_peaks_crosstalk_correction
             )
-        w = channel_crosstalk_matrix(
-            crosstalk_bases_array,
-            method=crosstalk_method,
-            by_t=crosstalk_correction_by_t,
-            **crosstalk_correction_method_args,
-        )
-        if isinstance(w, da.Array):
-            w = w.compute()
-            logger.info("Computed crosstalk matrix.")
+            w = channel_crosstalk_matrix(
+                crosstalk_bases_array,
+                method=crosstalk_method,
+                by_t=crosstalk_correction_by_t,
+                **crosstalk_correction_method_args,
+            )
+            if isinstance(w, da.Array):
+                w = w.compute()
+                logger.info("Computed crosstalk matrix.")
 
-        bases_array_reads = apply_channel_crosstalk_matrix(bases_array_reads, w)
+            bases_array_reads = apply_channel_crosstalk_matrix(bases_array_reads, w)
 
-        if "bases" in save_keys:
-            bases_dataset["corrected_intensity"] = bases_array_reads
+            if "bases" in save_keys:
+                bases_dataset["corrected_intensity"] = bases_array_reads
     if os.environ.get("SCALLOPS_IMAGE_SCALE") == "1":
         bases_array_reads = bases_array_reads.astype(int)
 
@@ -1086,10 +1219,16 @@ def reads_pipeline(
             index=False,
         )
         threshold_peaks = peak_thresholds_lower_df.iloc[0]["threshold"]
-        logger.info(
-            f"Threshold peaks for assigning reads to labels: {threshold_peaks:.2f}."
-        )
-        custom_metadata["scallops"]["threshold_peaks"] = threshold_peaks
+        if np.isnan(threshold_peaks):
+            logger.warning(
+                "No reads to compute threshold peaks for assigning reads to labels."
+            )
+            threshold_peaks = None
+        else:
+            logger.info(
+                f"Threshold peaks for assigning reads to labels: {threshold_peaks:.2f}."
+            )
+            custom_metadata["scallops"]["threshold_peaks"] = threshold_peaks
     if isinstance(threshold_peaks, float):
         reads_to_labels_query.append(f"peak>{threshold_peaks}")
     elif isinstance(threshold_peaks, str) and threshold_peaks != "none":
@@ -1302,4 +1441,6 @@ def reads_main(arguments: argparse.Namespace):
                 barcode_column=barcode_column,
                 read_filter=read_filter,
                 crosstalk_n_reads=crosstalk_n_reads,
+                read_chunk_size=arguments.read_chunk_size,
+                crosstalk_min_unique_bases=arguments.crosstalk_min_unique_bases,
             )

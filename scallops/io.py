@@ -126,8 +126,112 @@ def _pd_to_parquet(
     )
 
 
+_NONE_INDEX_LABEL = "__null_dask_index__"  # dask's name for an unnamed index
+_PANDAS_3 = int(pd.__version__.split(".")[0]) >= 3
+
+
+def _reset_index_like_dask(
+    sample: pd.DataFrame, write_index: bool
+) -> tuple[pd.DataFrame, list]:
+    """Reset the index as dask does before writing parquet.
+
+    :return: The frame and the names of the written index columns.
+    """
+    columns = list(sample.columns)
+    if not write_index:
+        return sample.reset_index(drop=True), []
+    # same as dask: reset the index, naming an unnamed index _NONE_INDEX_LABEL
+    reserved_names = [c for c in ("index", "level_0") if c not in columns]
+    none_index = list(sample.index.names) == [None]
+    sample = sample.reset_index()
+    if none_index:
+        sample = sample.rename(columns={c: _NONE_INDEX_LABEL for c in reserved_names})
+    return sample, [c for c in sample.columns if c not in set(columns)]
+
+
+def _parquet_schema(
+    df: dd.DataFrame, overrides: Mapping | None = None, write_index: bool = True
+) -> pa.Schema:
+    """Full Arrow schema for writing `df` to parquet with dask.
+
+    Follows dask's schema inference: non-object columns are typed from fake data
+    (``_meta_nonempty``) and object columns (including a written object index) are
+    typed from the first non-empty partition. Object columns whose values are all
+    missing are typed as strings. With pandas >= 3, dask fills object columns in
+    ``_meta_nonempty`` with ``object()``, which Arrow can't infer a type for, so
+    dask's own inference fails.
+
+    :param df: Data frame to write.
+    :param overrides: Arrow types for specific columns.
+    :param write_index: Whether the index is written, as in
+        :meth:`dask.dataframe.DataFrame.to_parquet`.
+    :return: The schema.
+    """
+    columns = list(df.columns)
+    sample, index_columns = _reset_index_like_dask(df._meta_nonempty, write_index)
+    overrides = dict(overrides) if overrides is not None else {}
+    object_columns = [
+        c
+        for c in sample.columns
+        if pd.api.types.is_object_dtype(sample[c].dtype) and c not in overrides
+    ]
+    inferred = pa.Schema.from_pandas(
+        sample.drop(
+            columns=object_columns + [c for c in sample.columns if c in overrides]
+        ),
+        preserve_index=False,
+    )
+    object_types = {}
+    if object_columns:
+        # as dask: infer object column types from the first non-empty partition
+        data = None
+        for i in range(df.npartitions):
+            part = df.get_partition(i).compute()
+            if len(part) > 0:
+                data = _reset_index_like_dask(part, write_index)[0]
+                break
+        for c in object_columns:
+            t = (
+                pa.Schema.from_pandas(data[[c]], preserve_index=False).field(c).type
+                if data is not None
+                else pa.null()
+            )
+            object_types[c] = pa.string() if pa.types.is_null(t) else t
+    fields = []
+    for c in columns + index_columns:  # index columns last, as pyarrow and dask
+        if c in overrides:
+            fields.append(pa.field(c, overrides[c]))
+        elif c in object_types:
+            fields.append(pa.field(c, object_types[c]))
+        else:
+            fields.append(inferred.field(c))
+    return pa.schema(fields)
+
+
+def _has_object_dtype(df: dd.DataFrame) -> bool:
+    meta = df._meta
+    return any(pd.api.types.is_object_dtype(dtype) for dtype in meta.dtypes) or any(
+        pd.api.types.is_object_dtype(meta.index.get_level_values(i).dtype)
+        for i in range(meta.index.nlevels)
+    )
+
+
 def _dd_to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
     compute = kwargs.pop("compute", True)
+    schema = kwargs.get("schema", "infer")
+    if (
+        _PANDAS_3
+        and (
+            (isinstance(schema, str) and schema == "infer") or isinstance(schema, dict)
+        )
+        and _has_object_dtype(df)
+    ):
+        # dask's own schema inference fails for object columns with pandas >= 3
+        kwargs["schema"] = _parquet_schema(
+            df,
+            overrides=schema if isinstance(schema, dict) else None,
+            write_index=kwargs.get("write_index", True),
+        )
     fs, fs_path = fsspec.url_to_fs(path)
 
     if fs.exists(fs_path):

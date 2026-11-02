@@ -34,36 +34,69 @@ from scallops.io import CYAN, GRAY, GREEN, MAGENTA, RED, save_stack_imagej
 
 logger = logging.getLogger("scallops")
 
+# dtype pandas infers for a column of strings (object, or str with pandas >= 3)
+_STR_DTYPE = pd.Series([""]).dtype
+
+
+def _encode_barcodes(barcodes: Sequence[str]) -> NDArray:
+    """Encode equal-length barcodes as a 2-D array of character codes.
+
+    :param barcodes: Barcodes, all of the same length (not checked).
+    :return: Array of shape (n_barcodes, barcode_length).
+    """
+    barcodes = list(barcodes)
+    length = len(barcodes[0]) if barcodes else 0
+    codes = np.frombuffer("".join(barcodes).encode("utf-32-le"), dtype=np.uint32)
+    return codes.reshape(len(barcodes), length)
+
+
+def _fit_whitelist(whitelist_barcodes: NDArray) -> tuple[NDArray, NearestNeighbors]:
+    """Encode the whitelist and fit the nearest neighbors index used by
+    :func:`_hamming_distance`.
+
+    :param whitelist_barcodes: Whitelist barcodes.
+    :return: The whitelist as a numpy object array and the fitted index.
+    """
+    # numpy object array (pandas >= 3 returns a string extension array from .values)
+    whitelist_barcodes = np.asarray(whitelist_barcodes, dtype=object)
+    nbrs = NearestNeighbors(n_neighbors=2, algorithm="brute", metric="hamming").fit(
+        _encode_barcodes(whitelist_barcodes)
+    )
+    return whitelist_barcodes, nbrs
+
 
 def _hamming_distance(
-    whitelist_barcodes: NDArray, read_barcodes: NDArray
+    whitelist_barcodes: NDArray,
+    read_barcodes: NDArray,
+    whitelist_index: tuple[NDArray, NearestNeighbors] | None = None,
 ) -> pd.DataFrame:
     """Computes the Hamming distance between read barcodes and a whitelist of barcodes.
 
     :param whitelist_barcodes: A numpy array of whitelist barcodes.
     :param read_barcodes: A numpy array of read barcodes to compare against the whitelist.
+    :param whitelist_index: Result of :func:`_fit_whitelist` for `whitelist_barcodes`,
+        to avoid refitting when called repeatedly with the same whitelist.
     :return: A DataFrame containing the mismatches and closest matching barcodes from
     the whitelist.
     """
     if len(read_barcodes) == 0:
+        # object dtype, as returned by _fit_whitelist
         return pd.DataFrame(
             {
                 "mismatches": np.ndarray((0,), dtype=int),
-                "closest_match": np.ndarray((0,), dtype=whitelist_barcodes.dtype),
+                "closest_match": np.ndarray((0,), dtype=object),
                 "mismatches2": np.ndarray((0,), dtype=int),
-                "closest_match2": np.ndarray((0,), dtype=whitelist_barcodes.dtype),
+                "closest_match2": np.ndarray((0,), dtype=object),
             }
         )
 
+    if whitelist_index is None:
+        whitelist_index = _fit_whitelist(whitelist_barcodes)
+    whitelist_barcodes, nbrs = whitelist_index
     assert len(whitelist_barcodes[0]) == len(read_barcodes[0]), (
         f"Length of whitelist barcode ({len(whitelist_barcodes[0])}) != length of read ({len(read_barcodes[0])})."
     )
-    nbrs = NearestNeighbors(n_neighbors=2, algorithm="brute", metric="hamming").fit(
-        np.array([[ord(b) for b in read] for read in whitelist_barcodes])
-    )
-    distances, argmin = nbrs.kneighbors(
-        np.array([[ord(b) for b in read] for read in read_barcodes])
-    )
+    distances, argmin = nbrs.kneighbors(_encode_barcodes(read_barcodes))
     distances = (distances * len(whitelist_barcodes[0])).astype(int)
     return pd.DataFrame(
         index=read_barcodes,
@@ -170,48 +203,8 @@ def channel_crosstalk_matrix(
     method_name = str(method).lower()
     assert method_name in ["median", "li_and_speed"]
 
-    nchannels = a.sizes["c"]
     if isinstance(a.data, da.Array) and method_name == "median":
-        dims = a.dims
-        a = a.data
-        chunksize_list = list(a.chunksize)
-        dims_no_chunk = ["c"]
-        if not by_t:
-            dims_no_chunk.append("t")
-        else:
-            # timepoints separate
-            chunksize_list[dims.index("t")] = 1
-        # no chunking in t or c dimensions
-        for i in range(len(dims)):
-            if dims[i] in dims_no_chunk and a.chunksize[i] != a.shape[i]:
-                chunksize_list[i] = -1
-
-        chunksize = tuple(chunksize_list)
-        if chunksize != a.chunksize:
-            a = a.rechunk(chunksize)
-        chunks = list(a.chunks)
-        reads_per_chunk = np.array(chunks[0])
-        chunks[dims.index("read")] = (1,) * len(chunks[dims.index("read")])
-        if not by_t:
-            chunks[dims.index("t")] = (1,) * len(chunks[dims.index("t")])
-        # drop c dimension
-        chunks[dims.index("c")] = (nchannels * nchannels,)
-        # w is now (chunk, t, 16)
-        w = da.map_blocks(
-            _crosstalk_median_ratio_per_chunk, a, chunks=tuple(chunks), dtype=float
-        )
-        # weighted by number of reads in each chunk
-        w = da.average(w, weights=reads_per_chunk, axis=0)
-        # w is now (t, 16)
-        w = w.reshape(-1, nchannels, nchannels).squeeze()
-        if w.ndim == 2:
-            return da.linalg.inv(w)
-        else:
-            w_inv = []
-            for t in range(len(w)):
-                w_inv.append(da.linalg.inv(w[t]))
-            w_inv = da.stack(w_inv, axis=0)
-            return w_inv
+        return _channel_crosstalk_matrix_median_dask(a, by_t=by_t)
 
     correct_crosstalk = (
         _correct_channel_crosstalk_li_and_speed
@@ -232,15 +225,90 @@ def channel_crosstalk_matrix(
     return correct_crosstalk(a.data.reshape(-1, a.sizes["c"]), **kwargs)
 
 
-def _crosstalk_median_ratio_per_chunk(x: NDArray) -> NDArray:
-    """Compute the crosstalk median ratio for a given chunk of data.
+def _channel_crosstalk_matrix_median_dask(a: xr.DataArray, by_t: bool) -> da.Array:
+    """Exact median crosstalk matrix for a dask-backed array without loading all reads
+    into one chunk.
 
-    :param x: Input 2 or 3d array representing the chunk data.
-    :return: The median ratio array.
+    Each block is split by the channel with the maximum intensity; the parts for each
+    channel are then concatenated and reduced with :func:`numpy.median` in a separate
+    task. A median depends only on the values, not their order, so the result is the
+    same as :func:`_crosstalk_median_ratio` on the whole array for any chunking.
+
+    :param a: Data (read, t, c).
+    :param by_t: Compute separate matrices per cycle.
+    :return: The inverse matrix (c, c), or (t, c, c) if `by_t` and there is more than
+        one cycle.
     """
-    nchannels = x.shape[-1]
+    nchannels = a.sizes["c"]
+    data = a.transpose("read", "t", "c").data
+    # t and c unchunked, or one cycle per chunk if `by_t`
+    data = data.rechunk({1: 1 if by_t else -1, 2: -1})
+    blocks = data.to_delayed()[:, :, 0]  # (read blocks, t blocks)
+    split = delayed(_split_by_max_channel, nout=nchannels, pure=True)
+    concat_median = delayed(_concat_median, pure=True)
+    inv_median_ratio = delayed(_inv_median_ratio, pure=True)
+
+    w_inv = []
+    for t in range(blocks.shape[1]):
+        parts = [split(block, nchannels) for block in blocks[:, t]]
+        medians = [concat_median(*[p[i] for p in parts]) for i in range(nchannels)]
+        w_inv.append(
+            da.from_delayed(
+                inv_median_ratio(*medians),
+                shape=(nchannels, nchannels),
+                dtype=np.float64,
+            )
+        )
+    # a single cycle returns (c, c), as the previous dask implementation
+    return da.stack(w_inv, axis=0) if len(w_inv) > 1 else w_inv[0]
+
+
+def _split_by_max_channel(x: NDArray, nchannels: int) -> tuple[NDArray, ...]:
+    """Split rows by the channel with the maximum intensity.
+
+    :param x: Array (..., c).
+    :param nchannels: Number of channels.
+    :return: Tuple of `nchannels` arrays (rows, c).
+    """
     x = x.reshape(-1, nchannels)
-    return _crosstalk_median_ratio(x).reshape(1, 1, nchannels * nchannels)
+    max_indices = x.argmax(axis=1)
+    return tuple(x[max_indices == i] for i in range(nchannels))
+
+
+def _concat_median(*parts: NDArray) -> NDArray:
+    """Median over the rows of the concatenated parts.
+
+    :param parts: Arrays (rows, c).
+    :return: Median for each channel.
+    """
+    return np.median(np.concatenate(parts), axis=0)
+
+
+def _normalize_median_array(median_array: NDArray) -> NDArray:
+    """Normalize the columns of the median array to sum to one.
+
+    :param median_array: Array (c, c) where column i holds the channel medians of rows
+        where channel i is the maximum.
+    :return: Normalized array with NaNs replaced by 1.
+    """
+    totals = median_array.sum(axis=0)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        median_array = median_array / totals
+
+    median_array[np.isnan(median_array)] = 1  # Replace NaNs with 1
+    return median_array
+
+
+def _inv_median_ratio(*medians: NDArray) -> NDArray:
+    """Inverse crosstalk matrix from per-channel medians.
+
+    :param medians: For each channel i, the channel medians of rows where channel i is
+        the maximum.
+    :return: The inverse matrix (c, c).
+    """
+    median_ratio = _normalize_median_array(np.array(medians).T)
+    return np.linalg.inv(median_ratio.astype(np.float64, copy=False))
 
 
 def _correct_channel_crosstalk_median(a: NDArray) -> NDArray:
@@ -255,6 +323,76 @@ def _correct_channel_crosstalk_median(a: NDArray) -> NDArray:
     """
 
     return np.linalg.inv(_crosstalk_median_ratio(a))
+
+
+def n_unique_bases(bases_array: xr.DataArray) -> NDArray:
+    """Number of distinct bases called (channel with the maximum intensity) across cycles
+    for each read.
+
+    :param bases_array: Intensities with dimensions (read, t, c).
+    :return: Array with the number of distinct bases for each read.
+    """
+    data = bases_array.transpose("read", "t", "c").data
+    if isinstance(data, da.Array):
+        data = data.rechunk({1: -1, 2: -1})
+        n_unique = data.map_blocks(
+            _n_unique_bases_chunk, drop_axis=[1, 2], dtype=np.int64
+        ).compute()
+    else:
+        n_unique = _n_unique_bases_chunk(data)
+    return n_unique
+
+
+def _n_unique_bases_chunk(x: NDArray) -> NDArray:
+    return _n_unique_per_row(x.argmax(axis=2))  # calls (read, t)
+
+
+def _n_unique_per_row(codes: NDArray) -> NDArray:
+    """Number of distinct values in each row of a 2D array.
+
+    :param codes: Array (rows, values).
+    :return: Number of distinct values for each row.
+    """
+    if codes.shape[1] == 0:
+        return np.zeros(codes.shape[0], dtype=np.int64)
+    codes = np.sort(codes, axis=1)
+    return 1 + (np.diff(codes, axis=1) != 0).sum(axis=1)
+
+
+def barcode_n_unique_bases(barcodes: Sequence[str]) -> NDArray:
+    """Number of distinct bases in each barcode.
+
+    Counterpart of :func:`n_unique_bases` for barcode strings, e.g. whitelist barcodes
+    or barcodes called by :func:`decode_max`.
+
+    :param barcodes: Barcodes, all of the same length.
+    :return: Number of distinct bases for each barcode.
+
+    >>> barcode_n_unique_bases(["AAAA", "ACGT", "AACC"]).tolist()
+    [1, 4, 2]
+    """
+    return _n_unique_per_row(_encode_barcodes(barcodes))
+
+
+def filter_low_complexity_reads(
+    bases_array: xr.DataArray, min_unique_bases: int = 2
+) -> xr.DataArray:
+    """Remove reads whose called bases take fewer than `min_unique_bases` distinct values
+    across cycles.
+
+    Reads with the same brightest channel in every cycle are typically
+    autofluorescence, debris, or other false positive spots rather than sequencing
+    reads.
+
+    :param bases_array: Intensities with dimensions (read, t, c).
+    :param min_unique_bases: Minimum number of distinct bases. Use 2 to remove reads
+        with the same base in every cycle.
+    :return: The filtered array.
+    """
+    if min_unique_bases <= 1:
+        return bases_array
+    keep = n_unique_bases(bases_array) >= min_unique_bases
+    return bases_array.isel(read=keep)
 
 
 def apply_channel_crosstalk_matrix(
@@ -324,64 +462,143 @@ def _crosstalk_median_ratio(a: NDArray) -> NDArray:
     median_array = np.array(
         [np.median(a[max_indices == i], axis=0) for i in range(a.shape[1])]
     ).T
-    totals = median_array.sum(axis=0)
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        median_array = median_array / totals
-
-    median_array[np.isnan(median_array)] = 1  # Replace NaNs with 1
-    return median_array
+    return _normalize_median_array(median_array)
 
 
-def _agg_barcodes(
+def _assign_barcodes_to_labels_df(
     df: pd.DataFrame,
-    sort_by: str | list[str],
+    sort_by: list[str],
     agg_columns: list[str],
     top2_columns: list[str],
 ) -> pd.DataFrame:
-    """Aggregate barcode counts/intensities from a dataframe.
+    """Call the top two barcodes for each label in an in-memory data frame.
 
-    :param df: Dataframe containing `label`, `barcode`, and `peak` columns.
-    :param sort_by: Column(s) to sort by
-    :return: Aggregated dataframe with top 2 barcodes for each label.
+    Labels with at least one perfect match (``mismatches`` is NA) use only perfect
+    matches; other labels use their corrected/mismatched reads and are flagged with
+    ``mismatch``. Reads are summed per (label, barcode) and barcodes are ranked by the
+    summed ``sort_by`` columns in descending order, ties broken by the order in which
+    the barcode first appears for the label. Labels are returned in order of first
+    appearance in `df`.
+
+    :param df: Reads with `label` and `barcode` columns plus `sort_by`, `agg_columns`,
+        and `top2_columns`.
+    :param sort_by: Columns to rank barcodes by.
+    :param agg_columns: Scalar columns to sum and report for the top two barcodes.
+    :param top2_columns: Array-valued columns (e.g. per-cycle `Q`) to sum element-wise
+        and report for the top two barcodes.
+    :return: One row per label.
     """
-    df_perfect_match = df[df["mismatches"].isna()] if "mismatches" in df.columns else df
-    mismatch = False
-    if len(df_perfect_match) > 0:
-        df = df_perfect_match
+    # labels are returned in order of first appearance before filtering
+    _, label_order = pd.factorize(df["label"], use_na_sentinel=False)
+    if "mismatches" in df.columns:
+        perfect = df["mismatches"].isna()
+        has_perfect = perfect.groupby(df["label"], sort=False, dropna=False).transform(
+            "any"
+        )
+        keep = (perfect | ~has_perfect).to_numpy()
+        df = df[keep]
+        label_mismatch = ~has_perfect[keep].to_numpy()
     else:
-        df = df[~df["mismatches"].isna()]
-        mismatch = True
-    if len(df) == 0:
-        return pd.DataFrame()
-    barcode_groupby = df.groupby(
-        "barcode", as_index=True, group_keys=True, sort=False, dropna=False
+        label_mismatch = np.zeros(len(df), dtype=bool)
+
+    barcode_dtype = df["barcode"].dtype
+    sum_columns = list(dict.fromkeys(agg_columns + sort_by))
+    groupby_keys = [df["label"], df["barcode"]]
+    groupby = df.groupby(groupby_keys, sort=False, dropna=False)
+    # groups are numbered in order of first appearance
+    group_ids = groupby.ngroup().to_numpy()
+    # sum in float64 (e.g. Q_mean is float32 when computed from float32 intensities)
+    sum_df = df[sum_columns].astype(
+        {c: np.float64 for c in sum_columns if df[c].dtype.kind == "f"}
     )
-    barcode_sizes = barcode_groupby.size()
-    top2 = barcode_groupby.agg("sum").nlargest(n=2, columns=sort_by)
-    barcode_0 = top2.iloc[0].name
-    barcode_1 = top2.iloc[1].name if len(top2) > 1 else ""
-    d = {
-        "label": [df.iloc[0]["label"]],
-        "barcode_0": [barcode_0],
-        "barcode_1": [barcode_1],
-        "mismatch": [mismatch],
-        "barcode_count": [len(df)],
-        "barcode_count_0": [barcode_sizes.loc[barcode_0]],
+    sums = sum_df.groupby(groupby_keys, sort=False, dropna=False).sum()
+    n_groups = len(sums)
+    group_labels = sums.index.get_level_values("label")
+    group_barcodes = sums.index.get_level_values("barcode").to_numpy()
+    group_sizes = np.bincount(group_ids, minlength=n_groups)
+
+    # labels numbered in order of first appearance
+    label_codes, labels = pd.factorize(group_labels, use_na_sentinel=False)
+    n_labels = len(labels)
+    label_counts = np.bincount(label_codes, weights=group_sizes, minlength=n_labels)
+    # label_mismatch is constant within a label
+    mismatch = np.zeros(n_labels, dtype=bool)
+    mismatch[label_codes[group_ids]] = label_mismatch
+
+    # rank barcodes within each label (stable, so ties keep first appearance order)
+    sort_keys = [np.arange(n_groups)]
+    for c in reversed(sort_by):
+        # float64 so negation doesn't wrap around for unsigned integer sums
+        sort_keys.append(-sums[c].to_numpy(dtype=np.float64))
+    sort_keys.append(label_codes)
+    order = np.lexsort(sort_keys)
+    sorted_label_codes = label_codes[order]
+    is_first = np.ones(n_groups, dtype=bool)
+    is_first[1:] = sorted_label_codes[1:] != sorted_label_codes[:-1]
+    top0 = order[is_first]  # one per label, in label code order
+    is_second = np.zeros(n_groups, dtype=bool)
+    is_second[1:] = (~is_first[1:]) & is_first[:-1]
+    has_second = np.zeros(n_labels, dtype=bool)
+    has_second[sorted_label_codes[is_second]] = True
+    top1 = np.zeros(n_labels, dtype=np.int64)
+    top1[sorted_label_codes[is_second]] = order[is_second]
+
+    top2_sums = {}
+    for c in top2_columns:
+        values = df[c].to_numpy()
+        if len(values) > 0:
+            # sum in float64 so results don't depend on the input dtype, which can
+            # change from float32 to float64 when dask shuffles the reads
+            values = np.stack(values).astype(np.float64, copy=False)
+            c_sums = np.zeros((n_groups,) + values.shape[1:], dtype=np.float64)
+            np.add.at(c_sums, group_ids, values)
+        else:
+            c_sums = np.zeros((0,), dtype=np.float64)
+        top2_sums[c] = c_sums
+
+    def _to_object_array(values: NDArray, mask: NDArray | None = None) -> NDArray:
+        # 1-D object array of the rows of `values` (None where `mask` is False);
+        # object dtype even when empty so partitions match the dask meta
+        out = np.empty(len(values), dtype=object)
+        # slice assignment keeps each row as an array (masked assignment doesn't)
+        out[:] = list(values)
+        if mask is not None:
+            out[~mask] = None
+        return out
+
+    result = {
+        "label": labels,
+        # same dtype as the input (object, or str with pandas >= 3)
+        "barcode_0": pd.array(group_barcodes[top0], dtype=barcode_dtype),
+        "barcode_1": pd.array(
+            np.where(has_second, group_barcodes[top1], ""), dtype=barcode_dtype
+        ),
+        "mismatch": mismatch,
+        "barcode_count": label_counts.astype(np.int64),
+        "barcode_count_0": group_sizes[top0].astype(np.int64),
     }
-    # barcode 0
-    for c in agg_columns + top2_columns:
-        d[f"barcode_{c}_0"] = [top2.iloc[0][c]]
+    for c in agg_columns:
+        result[f"barcode_{c}_0"] = sums[c].to_numpy(dtype=np.float64)[top0]
+    for c in top2_columns:
+        result[f"barcode_{c}_0"] = _to_object_array(top2_sums[c][top0])
 
-    # barcode 1
-    d["barcode_count_1"] = [barcode_sizes.loc[barcode_1] if len(top2) > 1 else 0]
+    result["barcode_count_1"] = np.where(has_second, group_sizes[top1], 0).astype(
+        np.int64
+    )
     default_values = {"Q_min": 0, "Q_mean": 0, "peak": np.nan}
-    for c in agg_columns + top2_columns:
-        d[f"barcode_{c}_1"] = [
-            top2.iloc[1][c] if len(top2) > 1 else default_values.get(c)
-        ]
-
-    return pd.DataFrame.from_dict(d)
+    for c in agg_columns:
+        result[f"barcode_{c}_1"] = np.where(
+            has_second,
+            sums[c].to_numpy()[top1],
+            default_values.get(c, np.nan),
+        ).astype(np.float64)
+    for c in top2_columns:
+        result[f"barcode_{c}_1"] = _to_object_array(
+            top2_sums[c][top1] if n_labels > 0 else top2_sums[c], mask=has_second
+        )
+    result_df = pd.DataFrame(result)
+    order = np.argsort(pd.Index(label_order).get_indexer(labels), kind="stable")
+    return result_df.take(order).reset_index(drop=True)
 
 
 def assign_barcodes_to_labels(
@@ -394,52 +611,71 @@ def assign_barcodes_to_labels(
     :param sort_by: Which column(s) to sort aggregated barcodes by.
     :return: Table of all labels containing sequencing reads.
     """
-    apply_args = dict()
+    sort_by = [sort_by] if isinstance(sort_by, str) else list(sort_by)
     top2_columns = ["Q"]
     agg_columns = ["Q_mean", "Q_min", "peak"]
     agg_columns = [c for c in agg_columns if c in df_reads.columns]
     top2_columns = [c for c in top2_columns if c in df_reads.columns]
-    if isinstance(df_reads, dd.DataFrame):
-        columns = []
-        columns.append(("label", df_reads["label"].dtype))
-        columns.append(("barcode_0", str))
-        columns.append(("barcode_1", str))
-        columns.append(("mismatch", bool))
-        columns.append(("barcode_count", np.int64))
-        columns.append(("barcode_count_0", np.int64))
-
-        # barcode 0
-        for c in agg_columns:
-            columns.append((f"barcode_{c}_0", np.float64))
-        for c in top2_columns:
-            columns.append((f"barcode_{c}_0", str))
-
-        # barcode 1
-        columns.append(("barcode_count_1", np.int64))
-        for c in agg_columns:
-            columns.append((f"barcode_{c}_1", np.float64))
-        for c in top2_columns:
-            columns.append((f"barcode_{c}_1", str))
-        apply_args["meta"] = dd.utils.make_meta(columns)
-
-    apply_args["sort_by"] = sort_by
 
     columns_needed = list(
-        set(
-            ["label", "barcode"]
-            + agg_columns
-            + top2_columns
-            + ([sort_by] if isinstance(sort_by, str) else sort_by)
-        )
+        dict.fromkeys(["label", "barcode"] + agg_columns + top2_columns + sort_by)
     )
-
     if "mismatches" in df_reads.columns:
         columns_needed.append("mismatches")
-    return df_reads.groupby("label", group_keys=False, sort=False, dropna=False)[
-        columns_needed
-    ].apply(
-        _agg_barcodes, agg_columns=agg_columns, top2_columns=top2_columns, **apply_args
+    df_reads = df_reads[columns_needed]
+    kwargs = dict(sort_by=sort_by, agg_columns=agg_columns, top2_columns=top2_columns)
+    if not isinstance(df_reads, dd.DataFrame):
+        return _assign_barcodes_to_labels_df(df_reads, **kwargs)
+
+    columns = []
+    columns.append(("label", df_reads["label"].dtype))
+    columns.append(("barcode_0", df_reads["barcode"].dtype))
+    columns.append(("barcode_1", df_reads["barcode"].dtype))
+    columns.append(("mismatch", bool))
+    columns.append(("barcode_count", np.int64))
+    columns.append(("barcode_count_0", np.int64))
+    # barcode 0
+    for c in agg_columns:
+        columns.append((f"barcode_{c}_0", np.float64))
+    for c in top2_columns:
+        columns.append((f"barcode_{c}_0", object))
+    # barcode 1
+    columns.append(("barcode_count_1", np.int64))
+    for c in agg_columns:
+        columns.append((f"barcode_{c}_1", np.float64))
+    for c in top2_columns:
+        columns.append((f"barcode_{c}_1", object))
+    meta = dd.utils.make_meta(columns)
+    if df_reads.npartitions == 1:
+        return df_reads.map_partitions(
+            _assign_barcodes_to_labels_df, meta=meta, **kwargs
+        )
+    # Put all reads for a label in the same partition. Shuffling does not preserve row
+    # order, so record each row's position and restore it to keep results identical
+    # to the in-memory version (row order breaks ties and sets summation order).
+    position_meta = df_reads._meta.assign(
+        _partition=np.int64(0), _row=np.int64(0)
+    ).iloc[:0]
+    df_reads = df_reads.map_partitions(_add_row_position, meta=position_meta).shuffle(
+        "label"
     )
+    return df_reads.map_partitions(
+        _assign_barcodes_to_labels_sorted_df, meta=meta, **kwargs
+    )
+
+
+def _add_row_position(df: pd.DataFrame, partition_info=None) -> pd.DataFrame:
+    partition = partition_info["number"] if partition_info is not None else 0
+    return df.assign(
+        _partition=np.int64(partition), _row=np.arange(len(df), dtype=np.int64)
+    )
+
+
+def _assign_barcodes_to_labels_sorted_df(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    df = df.sort_values(["_partition", "_row"], kind="stable").drop(
+        columns=["_partition", "_row"]
+    )
+    return _assign_barcodes_to_labels_df(df, **kwargs)
 
 
 def correct_mismatches(
@@ -468,11 +704,12 @@ def correct_mismatches(
     if "barcode_match" not in reads.columns:
         reads["barcode_match"] = reads["barcode"].isin(barcodes["barcode"])
 
-    def _single_partition(reads_df, whitelist_barcodes):
+    def _single_partition(reads_df, whitelist_index):
         reads_df = reads_df.join(
             _hamming_distance(
-                whitelist_barcodes=whitelist_barcodes,
+                whitelist_barcodes=whitelist_index[0],
                 read_barcodes=reads_df.query("~barcode_match")["barcode"].unique(),
+                whitelist_index=whitelist_index,
             ),
             on="barcode",
         )
@@ -485,21 +722,27 @@ def correct_mismatches(
         reads_df.loc[correct, "barcode_uncorrected"] = reads_df.loc[correct]["barcode"]
         reads_df.loc[correct, "barcode"] = reads_df.loc[correct]["closest_match"]
         reads_df.loc[correct, "barcode_match"] = True  # update after correction
-        return reads_df
+        return reads_df.astype(output_dtypes)
 
+    # mismatches are NaN for reads that exactly match a whitelist barcode
+    output_dtypes = {
+        "mismatches": np.float64,
+        "closest_match": _STR_DTYPE,
+        "mismatches2": np.float64,
+        "closest_match2": _STR_DTYPE,
+        "barcode_uncorrected": _STR_DTYPE,
+    }
+    # encode the whitelist and fit the index once rather than in every partition
+    whitelist_index = _fit_whitelist(barcodes["barcode"].values)
     if is_dask:
         meta = dd.utils.make_meta(reads)
-        meta["mismatches"] = pd.Series(dtype=int)
-        meta["closest_match"] = pd.Series(dtype=object)
-        meta["mismatches2"] = pd.Series(dtype=int)
-        meta["closest_match2"] = pd.Series(dtype=object)
-        meta["barcode_uncorrected"] = pd.Series(dtype=object)
-        reads = dd.map_partitions(
-            _single_partition, reads, barcodes["barcode"].values, meta=meta
+        for c, dtype in output_dtypes.items():
+            meta[c] = pd.Series(dtype=dtype)
+        return dd.map_partitions(
+            _single_partition, reads, delayed(whitelist_index), meta=meta
         )
-        return reads
     else:
-        return _single_partition(reads, barcodes["barcode"].values)
+        return _single_partition(reads, whitelist_index)
 
 
 def _decode_max_chunk(
@@ -575,7 +818,7 @@ def decode_max(
         columns = []
         for col in meta_df.columns:
             columns.append((col, meta_df[col].dtype))
-        columns.append(("barcode", object))
+        columns.append(("barcode", _STR_DTYPE))
         columns.append(("Q", object))
         columns.append(("Q_mean", np.float64))
         columns.append(("Q_min", np.float64))

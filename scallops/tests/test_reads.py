@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 
 import dask.array as da
@@ -205,6 +206,15 @@ def test_peak_thresholds_from_reads():
     assert abs(cutoff - 50) < 1
 
 
+@pytest.mark.basecalls
+def test_peak_thresholds_from_reads_empty():
+    df = pd.DataFrame({"peak": np.zeros(0), "Q_mean": np.zeros(0)})
+    df_cutoff = peak_thresholds_from_reads(df)
+    assert len(df_cutoff) > 0
+    assert np.isnan(df_cutoff["threshold"]).all()
+    assert (df_cutoff[["tp", "fp", "tn", "fn"]] == 0).all().all()
+
+
 def _run_pipeline(image, cells):
     with dask.config.set({"dataframe.convert-string": False}):
         image = image.isel(c=np.delete(np.arange(image.sizes["c"]), 0))
@@ -222,7 +232,7 @@ def _run_pipeline(image, cells):
             labels=cells,
         )
         df_cutoff = peak_thresholds_from_bases(
-            bases_array=bases_array, remove_zero_entropy_barcodes=False
+            bases_array=bases_array, min_unique_bases=0
         )
         cutoff = df_cutoff.iloc[0]["threshold"]
         assert np.abs(cutoff - 85) < 1, f"cutoff is {cutoff}"
@@ -315,3 +325,359 @@ def test_annotated(experiment_c_A1_102_cells):
         )
         expected = outputs[f"width_{width}"]
         np.testing.assert_array_equal(expected, annotated)
+
+
+def _assign_barcodes_to_labels_reference(
+    df_reads: pd.DataFrame, sort_by=("Q_mean", "peak")
+) -> pd.DataFrame:
+    """Original per-label groupby/apply implementation of assign_barcodes_to_labels."""
+    sort_by = list(sort_by)
+    agg_columns = [c for c in ["Q_mean", "Q_min", "peak"] if c in df_reads.columns]
+    top2_columns = [c for c in ["Q"] if c in df_reads.columns]
+
+    def _agg(df):
+        df_perfect_match = (
+            df[df["mismatches"].isna()] if "mismatches" in df.columns else df
+        )
+        mismatch = False
+        if len(df_perfect_match) > 0:
+            df = df_perfect_match
+        else:
+            df = df[~df["mismatches"].isna()]
+            mismatch = True
+        barcode_groupby = df.groupby("barcode", sort=False, dropna=False)
+        barcode_sizes = barcode_groupby.size()
+        top2 = barcode_groupby.agg("sum").nlargest(n=2, columns=sort_by)
+        barcode_0 = top2.iloc[0].name
+        barcode_1 = top2.iloc[1].name if len(top2) > 1 else ""
+        d = {
+            "label": [df.iloc[0]["label"]],
+            "barcode_0": [barcode_0],
+            "barcode_1": [barcode_1],
+            "mismatch": [mismatch],
+            "barcode_count": [len(df)],
+            "barcode_count_0": [barcode_sizes.loc[barcode_0]],
+        }
+        for c in agg_columns + top2_columns:
+            d[f"barcode_{c}_0"] = [top2.iloc[0][c]]
+        d["barcode_count_1"] = [barcode_sizes.loc[barcode_1] if len(top2) > 1 else 0]
+        default_values = {"Q_min": 0.0, "Q_mean": 0.0, "peak": np.nan}
+        for c in agg_columns + top2_columns:
+            d[f"barcode_{c}_1"] = [
+                top2.iloc[1][c] if len(top2) > 1 else default_values.get(c)
+            ]
+        return pd.DataFrame.from_dict(d)
+
+    return df_reads.groupby("label", group_keys=False, sort=False, dropna=False)[
+        list(df_reads.columns)
+    ].apply(_agg)
+
+
+def _synthetic_reads(n_reads=20_000, n_labels=2_000, seed=0) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame(
+        {
+            "label": rng.integers(1, n_labels, n_reads),
+            "barcode": rng.choice(["AAAA", "CCCC", "GGGG", "TTTT", "ACGT"], n_reads),
+            # coarse values to create many exact ties between barcodes
+            "Q_mean": rng.choice([10.0, 20.0, 30.0], n_reads),
+            "Q_min": rng.random(n_reads),
+            "peak": rng.choice([1.0, 2.0], n_reads),
+        }
+    )
+    df["Q"] = list(rng.random((n_reads, 4)))
+    df["mismatches"] = np.where(rng.random(n_reads) < 0.5, np.nan, 1.0)
+    df.loc[df["label"] % 7 == 0, "mismatches"] = 1.0  # labels with only mismatches
+    return df
+
+
+def _assert_labels_equal(expected: pd.DataFrame, actual: pd.DataFrame):
+    expected = expected.reset_index(drop=True)
+    actual = actual.reset_index(drop=True)
+    assert list(expected.columns) == list(actual.columns)
+    for c in ["barcode_Q_0", "barcode_Q_1"]:
+        for x, y in zip(expected[c], actual[c]):
+            assert (x is None) == (y is None)
+            if x is not None:
+                np.testing.assert_allclose(x, y, rtol=1e-14, atol=0)
+    q_columns = ["barcode_Q_0", "barcode_Q_1"]
+    # sums can differ in the last bit depending on how pandas groups the summation
+    pd.testing.assert_frame_equal(
+        expected.drop(columns=q_columns),
+        actual.drop(columns=q_columns),
+        check_exact=False,
+        rtol=1e-14,
+        atol=0,
+        check_dtype=False,
+    )
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("mismatches", [True, False])
+def test_assign_barcodes_to_labels_matches_reference(mismatches):
+    df = _synthetic_reads()
+    if not mismatches:
+        df = df.drop(columns="mismatches")
+    _assert_labels_equal(
+        _assign_barcodes_to_labels_reference(df), assign_barcodes_to_labels(df)
+    )
+
+
+@pytest.mark.basecalls
+def test_assign_barcodes_to_labels_dask():
+    df = _synthetic_reads()
+    expected = assign_barcodes_to_labels(df).sort_values("label")
+    with dask.config.set(
+        {"dataframe.convert-string": False, "dataframe.shuffle.method": "tasks"}
+    ):
+        actual = (
+            assign_barcodes_to_labels(dd.from_pandas(df, npartitions=8))
+            .compute()
+            .sort_values("label")
+        )
+    _assert_labels_equal(expected, actual)
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("by_t", [False, True])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_channel_crosstalk_matrix_median_dask_exact(by_t, dtype):
+    import xarray as xr
+
+    from scallops.reads import _crosstalk_median_ratio
+
+    rng = np.random.default_rng(0)
+    x = rng.gamma(2.0, 100.0, (5_001, 3, 4)).astype(dtype)
+    x[::3, :, 2] *= 3  # uneven number of rows per max channel
+    if by_t:
+        expected = np.stack(
+            [
+                np.linalg.inv(_crosstalk_median_ratio(x[:, t]).astype(np.float64))
+                for t in range(x.shape[1])
+            ]
+        )
+    else:
+        expected = np.linalg.inv(
+            _crosstalk_median_ratio(x.reshape(-1, 4)).astype(np.float64)
+        )
+    for read_chunks in [-1, 997, 2000]:
+        a = xr.DataArray(
+            da.from_array(x, chunks=(read_chunks, -1, -1)), dims=("read", "t", "c")
+        )
+        w = channel_crosstalk_matrix(a, by_t=by_t)
+        assert isinstance(w, da.Array)
+        # exact global median regardless of chunking
+        np.testing.assert_array_equal(w.compute(), expected)
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("use_dask", [False, True])
+def test_filter_low_complexity_reads(use_dask):
+    import xarray as xr
+
+    from scallops.reads import filter_low_complexity_reads, n_unique_bases
+
+    # brightest channel per cycle for each read
+    calls = np.array(
+        [
+            [0, 0, 0],  # 1 unique base
+            [1, 1, 2],  # 2
+            [3, 2, 1],  # 3
+            [2, 2, 2],  # 1
+            [0, 3, 0],  # 2
+        ]
+    )
+    x = np.ones(calls.shape + (4,), dtype=np.float32)
+    np.put_along_axis(x, calls[..., np.newaxis], 10.0, axis=2)
+    data = da.from_array(x, chunks=(2, 1, -1)) if use_dask else x
+    a = xr.DataArray(
+        data,
+        dims=("read", "t", "c"),
+        coords={"read": np.arange(len(x)), "peak": ("read", np.arange(len(x)) * 1.0)},
+    )
+    np.testing.assert_array_equal(n_unique_bases(a), [1, 2, 3, 1, 2])
+    np.testing.assert_array_equal(
+        filter_low_complexity_reads(a, 2)["read"].values, [1, 2, 4]
+    )
+    np.testing.assert_array_equal(
+        filter_low_complexity_reads(a, 3)["peak"].values, [2.0]
+    )
+    assert filter_low_complexity_reads(a, 1) is a
+
+
+def _label_columns_meta() -> dict[str, str]:
+    # barcode columns keep the input string dtype (object, or str with pandas >= 3)
+    barcode_dtype = str(pd.Series(["A"]).dtype)
+    return {
+        "label": "int32",
+        "barcode_0": barcode_dtype,
+        "barcode_1": barcode_dtype,
+        "mismatch": "bool",
+        "barcode_count": "int64",
+        "barcode_count_0": "int64",
+        "barcode_Q_mean_0": "float64",
+        "barcode_Q_min_0": "float64",
+        "barcode_peak_0": "float64",
+        "barcode_Q_0": "object",
+        "barcode_count_1": "int64",
+        "barcode_Q_mean_1": "float64",
+        "barcode_Q_min_1": "float64",
+        "barcode_peak_1": "float64",
+        "barcode_Q_1": "object",
+    }
+
+
+def _to_float32(df: pd.DataFrame) -> pd.DataFrame:
+    """Use float32 Q columns, as produced by decode_max from float32 intensities."""
+    df = df.copy()
+    df["label"] = df["label"].astype(np.int32)
+    df["Q_mean"] = df["Q_mean"].astype(np.float32)
+    df["Q_min"] = df["Q_min"].astype(np.float32)
+    df["Q"] = [np.asarray(q, dtype=np.float32) for q in df["Q"]]
+    return df
+
+
+@pytest.mark.basecalls
+def test_assign_barcodes_to_labels_float32():
+    df32 = _to_float32(_synthetic_reads())
+    # same values in float64 (float32 -> float64 is exact)
+    df64 = df32.astype({"Q_mean": np.float64, "Q_min": np.float64})
+    df64["Q"] = [q.astype(np.float64) for q in df64["Q"]]
+
+    result32 = assign_barcodes_to_labels(df32)
+    # sums are computed in float64, so the result doesn't depend on the input dtype,
+    # which can change from float32 to float64 when dask shuffles reads
+    _assert_labels_equal(assign_barcodes_to_labels(df64), result32)
+    _assert_labels_equal(_assign_barcodes_to_labels_reference(df64), result32)
+    assert result32.dtypes.astype(str).to_dict() == _label_columns_meta()
+    assert all(q.dtype == np.float64 for q in result32["barcode_Q_0"])
+
+
+@pytest.mark.basecalls
+def test_assign_barcodes_to_labels_empty():
+    df = _to_float32(_synthetic_reads()).iloc[:0]
+    result = assign_barcodes_to_labels(df)
+    assert len(result) == 0
+    assert result.dtypes.astype(str).to_dict() == _label_columns_meta()
+
+
+@pytest.mark.basecalls
+def test_assign_barcodes_to_labels_single_barcode_per_label():
+    # labels 3 and 1 each have one barcode; label order is first appearance
+    df = pd.DataFrame(
+        {
+            "label": np.array([3, 1, 3], dtype=np.int32),
+            "barcode": ["ACGT", "TTTT", "ACGT"],
+            "Q_mean": np.array([30.0, 20.0, 40.0], dtype=np.float32),
+            "Q_min": np.array([10.0, 5.0, 15.0], dtype=np.float32),
+            "peak": [100.0, 50.0, 200.0],
+            "Q": [
+                np.float32([30, 30]),
+                np.float32([20, 20]),
+                np.float32([40, 40]),
+            ],
+        }
+    )
+    result = assign_barcodes_to_labels(df)
+    assert result.dtypes.astype(str).to_dict() == _label_columns_meta()
+    assert result["label"].tolist() == [3, 1]
+    assert result["barcode_0"].tolist() == ["ACGT", "TTTT"]
+    assert result["barcode_count"].tolist() == [2, 1]
+    assert result["barcode_count_0"].tolist() == [2, 1]
+    assert result["barcode_Q_mean_0"].tolist() == [70.0, 20.0]
+    assert result["barcode_peak_0"].tolist() == [300.0, 50.0]
+    np.testing.assert_array_equal(result["barcode_Q_0"].iloc[0], [70.0, 70.0])
+    # no second barcode
+    assert result["barcode_1"].tolist() == ["", ""]
+    assert result["barcode_count_1"].tolist() == [0, 0]
+    assert result["barcode_Q_mean_1"].tolist() == [0.0, 0.0]
+    assert result["barcode_Q_min_1"].tolist() == [0.0, 0.0]
+    assert result["barcode_peak_1"].isna().all()
+    assert result["barcode_Q_1"].tolist() == [None, None]
+    assert not result["mismatch"].any()
+
+
+@pytest.mark.basecalls
+def test_assign_barcodes_to_labels_distributed(client):
+    # the distributed (p2p) shuffle converts partitions to Arrow and back, which can
+    # change dtypes and leave some partitions empty
+    df = _to_float32(_synthetic_reads(n_reads=5_000, n_labels=20))
+    expected = assign_barcodes_to_labels(df).sort_values("label")
+    with dask.config.set(
+        {"dataframe.convert-string": False, "dataframe.shuffle.method": "p2p"}
+    ):
+        result = assign_barcodes_to_labels(dd.from_pandas(df, npartitions=8))
+        partitions = client.compute(result.to_delayed(), sync=True)
+    assert any(len(p) == 0 for p in partitions)  # only 20 labels in 8 partitions
+    for p in partitions:
+        assert p.dtypes.astype(str).to_dict() == _label_columns_meta()
+    actual = pd.concat(partitions).sort_values("label")
+    _assert_labels_equal(expected, actual)
+
+
+@pytest.mark.basecalls
+def test_auto_read_chunk_size():
+    from scallops.cli.pooled_if_sbs import _auto_read_chunk_size
+    from scallops.cli.pooled_if_sbs_main import _read_chunk_size
+
+    # ~3 chunks per thread
+    assert _auto_read_chunk_size(9_000_000, 30) == 100_000
+    # clamped to the minimum: small wells stay in one chunk
+    assert _auto_read_chunk_size(5_000, 8) == 50_000
+    # clamped to the maximum
+    assert _auto_read_chunk_size(100_000_000, 4) == 500_000
+    assert _auto_read_chunk_size(1_000_000, 0) == 333_334  # at least one thread
+    assert _read_chunk_size("auto") == "auto"
+    assert _read_chunk_size("-1") == -1
+    with pytest.raises(argparse.ArgumentTypeError):
+        _read_chunk_size("big")
+
+
+@pytest.mark.basecalls
+def test_channel_crosstalk_matrix_by_t_single_cycle():
+    import xarray as xr
+
+    x = np.random.default_rng(0).gamma(2.0, 100.0, (1_000, 1, 4))
+    a = xr.DataArray(da.from_array(x, chunks=(300, -1, -1)), dims=("read", "t", "c"))
+    w_by_t = channel_crosstalk_matrix(a, by_t=True).compute()
+    assert w_by_t.shape == (4, 4)
+    np.testing.assert_array_equal(w_by_t, channel_crosstalk_matrix(a).compute())
+
+
+@pytest.mark.basecalls
+def test_barcode_n_unique_bases():
+    from scallops.reads import barcode_n_unique_bases, n_unique_bases
+
+    barcodes = ["AAA", "ACA", "GTC", "TTG"]
+    np.testing.assert_array_equal(barcode_n_unique_bases(barcodes), [1, 2, 3, 2])
+    np.testing.assert_array_equal(
+        barcode_n_unique_bases(pd.Series(["AC", "GG", "TA"])), [2, 1, 2]
+    )
+    assert len(barcode_n_unique_bases([])) == 0
+    # same counts as n_unique_bases on intensities whose maximum gives the barcodes
+    import xarray as xr
+
+    bases = "GTAC"
+    x = np.zeros((len(barcodes), 3, 4))
+    for i, barcode in enumerate(barcodes):
+        for t, base in enumerate(barcode):
+            x[i, t, bases.index(base)] = 1
+    np.testing.assert_array_equal(
+        n_unique_bases(xr.DataArray(x, dims=("read", "t", "c"))),
+        barcode_n_unique_bases(barcodes),
+    )
+
+
+@pytest.mark.basecalls
+def test_dask_total_threads_cpu_count(monkeypatch):
+    from scallops.cli.pooled_if_sbs import _dask_total_threads
+
+    monkeypatch.setenv("SCALLOPS_CPU_COUNT", "3")
+    try:
+        from distributed import get_client
+
+        get_client()
+        pytest.skip("distributed client active")
+    except ValueError:
+        pass
+    assert _dask_total_threads() == 3

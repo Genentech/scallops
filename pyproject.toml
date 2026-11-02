@@ -58,7 +58,7 @@ dependencies = [
     "numcodecs",
     "numpy",
     "ome-zarr",
-    "pandas<3",
+    "pandas",
     "pint",
     "psutil",
     "pyarrow",

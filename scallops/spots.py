@@ -32,7 +32,7 @@ from scipy.spatial import KDTree
 
 from scallops.envir import SCALLOPS_IMAGE_SCALE
 from scallops.features.spots import _download_ufish_model, _load_ufish_model
-from scallops.reads import decode_max
+from scallops.reads import decode_max, filter_low_complexity_reads
 
 logger = logging.getLogger("scallops")
 
@@ -88,16 +88,12 @@ def std(
         raise ValueError("Unexpected input data.")
 
 
-def _nunique_bases(x):
-    return len(set(x))
-
-
 def peak_thresholds_from_bases(
     bases_array: xr.DataArray,
     n_reads: int | None = 500_000,
     seed: int = 239753,
     Q_cutoff: float = 60,
-    remove_zero_entropy_barcodes: bool = True,
+    min_unique_bases: int | None = 2,
 ) -> pd.DataFrame:
     """Calculate recall, precision, f1, and accuracy for different cutoff value of peaks.
 
@@ -105,8 +101,12 @@ def peak_thresholds_from_bases(
     :param n_reads: Number of reads to consider.
     :param seed: Seed for random number generator.
     :param Q_cutoff: Threshold for binarization of reads.
-    :param remove_zero_entropy_barcodes: Whether to remove zero entropy barcodes.
-    :return: Result data frame.
+    :param min_unique_bases: Remove sampled reads with fewer than this many distinct
+        bases across cycles (see
+        :func:`~scallops.reads.filter_low_complexity_reads`). The default of 2 removes
+        reads with the same base in every cycle.
+    :return: Result data frame. All thresholds and metrics are NaN if there are no
+        reads.
     """
 
     if n_reads is not None and 0 < n_reads < bases_array.sizes["read"]:
@@ -114,15 +114,11 @@ def peak_thresholds_from_bases(
         random_reads = rng.sample(range(0, bases_array.sizes["read"]), n_reads)
         random_reads = np.sort(random_reads)
         bases_array = bases_array.isel(read=random_reads)
-    df_reads = decode_max(bases_array)
-    apply_kw_args = dict()
-    if remove_zero_entropy_barcodes:
-        if isinstance(df_reads, dd.DataFrame):
-            apply_kw_args["meta"] = int
-        df_reads["nunique_bases"] = df_reads["barcode"].apply(
-            _nunique_bases, **apply_kw_args
+    if min_unique_bases is not None and min_unique_bases > 1:
+        bases_array = filter_low_complexity_reads(
+            bases_array, min_unique_bases=min_unique_bases
         )
-        df_reads = df_reads.query("nunique_bases>1")
+    df_reads = decode_max(bases_array)
     if isinstance(df_reads, dd.DataFrame):
         df_reads = df_reads.compute()
 
@@ -168,6 +164,25 @@ def _peak_thresholds_from_reads(
     n_good = cum_good[-1]
 
     q = np.linspace(0, 0.99, 199)  # 0.5% steps
+    if n == 0:
+        # no reads: NaN thresholds and metrics (np.quantile fails on empty input)
+        nan = np.full(len(q), np.nan)
+        zeros = np.zeros(len(q), dtype=np.int64)
+        return pd.DataFrame(
+            {
+                "threshold": nan,
+                "quantile": q,
+                "precision": nan,
+                "recall": nan,
+                "f1": nan,
+                "accuracy": nan,
+                "tp": zeros,
+                "fp": zeros,
+                "tn": zeros,
+                "fn": zeros,
+                "f0.5": nan,
+            }
+        )
     thresholds = np.quantile(peak_sorted, q)
     n_under = np.searchsorted(
         peak_sorted, thresholds, side="right"
