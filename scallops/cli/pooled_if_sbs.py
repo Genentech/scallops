@@ -1134,8 +1134,9 @@ def reads_pipeline(
                 threshold_peaks_crosstalk_correction_df = peak_thresholds_from_bases(
                     bases_array=crosstalk_bases_array,
                     n_reads=crosstalk_n_reads,
-                    # always remove zero entropy reads when choosing the threshold
-                    min_unique_bases=max(2, crosstalk_min_unique_bases),
+                    # always remove zero entropy reads when choosing the threshold;
+                    # skip if crosstalk_bases_array was already filtered above
+                    min_unique_bases=(None if crosstalk_min_unique_bases >= 2 else 2),
                 )
                 threshold_peaks_crosstalk_correction = (
                     threshold_peaks_crosstalk_correction_df.iloc[0]["threshold"]
