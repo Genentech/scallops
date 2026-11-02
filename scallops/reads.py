@@ -1075,7 +1075,7 @@ def merge_sbs_phenotype(
         if n_barcodes_duplicated != n_barcodes:
             from scallops.io import pluralize
 
-            n_removed = n_barcodes_duplicated != n_barcodes
+            n_removed = n_barcodes - n_barcodes_duplicated
             logger.info(
                 f"Removed {n_removed:,} duplicate {pluralize('barcode', n_removed)}"
             )
