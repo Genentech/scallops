@@ -6,6 +6,7 @@ Authors:
     - The SCALLOPS development team
 """
 
+import copy
 from collections.abc import Callable
 from math import comb
 from typing import Literal
@@ -16,7 +17,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from matplotlib import pyplot as plt
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm, Normalize
 from xarray import DataArray
 
 from scallops.visualize.utils import _figsize
@@ -66,6 +67,22 @@ def _pairwise_histograms(
     return histograms
 
 
+def _panel_norm(norm) -> Normalize | str:
+    """New norm for one histogram panel, so each panel autoscales independently.
+
+    :param norm: None (log scale), a scale name (e.g. "log"), a Normalize
+        instance (copied), or a Normalize class or factory (called).
+    :return: The norm to pass to pcolormesh.
+    """
+    if norm is None:
+        return LogNorm()
+    if isinstance(norm, str):
+        return norm  # matplotlib creates a new norm per artist
+    if isinstance(norm, Normalize):
+        return copy.deepcopy(norm)
+    return norm()
+
+
 def pairwise_channel_scatter_plot(
     bases: DataArray | pd.DataFrame,
     plot_func: Callable[..., None] | None = None,
@@ -85,7 +102,9 @@ def pairwise_channel_scatter_plot(
     :param intensity_column: The name of the column in `bases` containing the intensity when bases is data frame.
     :param kind: Plot every point (`scatter`) or a 2-d histogram with log-scaled counts
         (`hist`). Additional `plot_args` for `hist` are `bins` (default 256), `cmap`,
-        `norm` (default :class:`~matplotlib.colors.LogNorm`), and arguments to
+        `norm` (default :class:`~matplotlib.colors.LogNorm`; a
+        :class:`~matplotlib.colors.Normalize` instance, class, or scale name such as
+        ``"log"``; instances are copied per panel), and arguments to
         :meth:`matplotlib.axes.Axes.pcolormesh`. Each channel uses the same
         range in every panel. For dask-backed input, `hist` makes two passes over the
         data (channel ranges, then all histograms) without loading it into memory.
@@ -208,7 +227,7 @@ def pairwise_channel_scatter_plot(
                         counts.T,
                         # log scale so sparse single-channel arms show next to the
                         # dense core; new instance per panel so each autoscales
-                        norm=hist_norm if hist_norm is not None else LogNorm(),
+                        norm=_panel_norm(hist_norm),
                         rasterized=True,
                         **plot_args,
                     )

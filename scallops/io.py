@@ -154,12 +154,13 @@ def _parquet_schema(
 ) -> pa.Schema:
     """Full Arrow schema for writing `df` to parquet with dask.
 
-    Follows dask's schema inference: non-object columns are typed from fake data
-    (``_meta_nonempty``) and object columns (including a written object index) are
-    typed from the first non-empty partition. Object columns whose values are all
-    missing are typed as strings. With pandas >= 3, dask fills object columns in
-    ``_meta_nonempty`` with ``object()``, which Arrow can't infer a type for, so
-    dask's own inference fails.
+    Non-object columns are typed from dask's fake data (``_meta_nonempty``), as
+    dask does. Object columns (including a written object index) without an
+    override are typed as strings. Unlike dask, which types object columns from the
+    first non-empty partition, no data is computed, so object columns that don't
+    hold strings (e.g. lists or arrays) need a type in `overrides`, otherwise the
+    write fails. This is needed with pandas >= 3, where dask fills object columns of
+    ``_meta_nonempty`` with ``object()``, which Arrow can't infer a type for.
 
     :param df: Data frame to write.
     :param overrides: Arrow types for specific columns.
@@ -170,39 +171,21 @@ def _parquet_schema(
     columns = list(df.columns)
     sample, index_columns = _reset_index_like_dask(df._meta_nonempty, write_index)
     overrides = dict(overrides) if overrides is not None else {}
-    object_columns = [
-        c
-        for c in sample.columns
-        if pd.api.types.is_object_dtype(sample[c].dtype) and c not in overrides
-    ]
+    object_columns = {
+        c for c in sample.columns if pd.api.types.is_object_dtype(sample[c].dtype)
+    }
     inferred = pa.Schema.from_pandas(
         sample.drop(
-            columns=object_columns + [c for c in sample.columns if c in overrides]
+            columns=[c for c in sample.columns if c in object_columns or c in overrides]
         ),
         preserve_index=False,
     )
-    object_types = {}
-    if object_columns:
-        # as dask: infer object column types from the first non-empty partition
-        data = None
-        for i in range(df.npartitions):
-            part = df.get_partition(i).compute()
-            if len(part) > 0:
-                data = _reset_index_like_dask(part, write_index)[0]
-                break
-        for c in object_columns:
-            t = (
-                pa.Schema.from_pandas(data[[c]], preserve_index=False).field(c).type
-                if data is not None
-                else pa.null()
-            )
-            object_types[c] = pa.string() if pa.types.is_null(t) else t
     fields = []
     for c in columns + index_columns:  # index columns last, as pyarrow and dask
         if c in overrides:
             fields.append(pa.field(c, overrides[c]))
-        elif c in object_types:
-            fields.append(pa.field(c, object_types[c]))
+        elif c in object_columns:
+            fields.append(pa.field(c, pa.string()))  # as dask with pandas < 3
         else:
             fields.append(inferred.field(c))
     return pa.schema(fields)

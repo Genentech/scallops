@@ -152,6 +152,33 @@ def test_li_and_speed_correct():
 
 
 @pytest.mark.basecalls
+@pytest.mark.parametrize("norm", ["instance", "log", "class"])
+def test_pairwise_hist_norm(norm):
+    from matplotlib.colors import LogNorm
+
+    rng = np.random.default_rng(0)
+    data = xr.DataArray(
+        rng.gamma(2, size=(500, 3, 4)),
+        dims=("read", "t", "c"),
+        coords={"c": list("GTAC")},
+    )
+    user_norm = {"instance": LogNorm(vmin=1), "log": "log", "class": LogNorm}[norm]
+    fig, axes = pairwise_channel_scatter_plot(
+        data, kind="hist", bins=16, norm=user_norm
+    )
+    norms = [
+        c.norm for ax in axes.ravel() for c in ax.collections if isinstance(c, QuadMesh)
+    ]
+    assert len(norms) == 6
+    # a separate norm per panel so each autoscales; the user's instance is not mutated
+    assert len({id(n) for n in norms}) == 6
+    if norm == "instance":
+        assert all(n is not user_norm for n in norms)
+        assert user_norm.vmin == 1 and user_norm.vmax is None
+    plt.close(fig)
+
+
+@pytest.mark.basecalls
 def test_correction_is_better():
     # no data at t=6 for this exp
     # test that we get more cells by performing crosstalk correction
