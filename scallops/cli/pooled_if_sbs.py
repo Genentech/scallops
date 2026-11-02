@@ -27,7 +27,6 @@ import pyarrow.parquet as pq
 import xarray as xr
 import zarr
 from dask.delayed import Delayed, delayed
-from matplotlib import pyplot as plt
 from numpy.typing import NDArray
 from skimage.segmentation import expand_labels
 
@@ -65,7 +64,6 @@ from scallops.reads import (
     filter_low_complexity_reads,
     merge_sbs_phenotype,
     peaks_to_bases,
-    read_statistics,
 )
 from scallops.spots import (
     _find_peaks_deep,
@@ -78,7 +76,6 @@ from scallops.spots import (
     transform_log,
 )
 from scallops.utils import _fix_json
-from scallops.visualize.crosstalk import pairwise_channel_scatter_plot
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
     _get_fs,
@@ -90,63 +87,6 @@ from scallops.zarr_io import (
 )
 
 logger = logging.getLogger("scallops")
-
-
-@dask.delayed
-def _crosstalk_plots(bases_dataset, dest):
-    """Generate and save pairwise channel scatter plots for uncorrected and corrected intensities.
-
-    :param bases_dataset: Dataset with intensity information.
-    :param dest: Destination path to save the plots.
-    """
-    f, _ = pairwise_channel_scatter_plot(bases_dataset["uncorrected_intensity"])
-    f.savefig(f"{dest}-uncorrected.png")
-    plt.close(f)
-
-    if "corrected_intensity" in bases_dataset:
-        f, _ = pairwise_channel_scatter_plot(bases_dataset["corrected_intensity"])
-        f.savefig(f"{dest}-corrected.png")
-        plt.close(f)
-
-
-def _read_qc_stats(df_reads: pd.DataFrame, df_labels: pd.DataFrame) -> dict:
-    """Calculate and return quality control (QC) statistics for read and label recovery.
-
-    This function computes QC metrics to assess the recovery of labeled regions based on
-    the barcode counts or intensities. It helps evaluate the effectiveness of the sequencing
-    and label assignment process.
-
-    :param df_reads: DataFrame containing read data with barcode assignments.
-                     The DataFrame should include a 'label' column.
-    :param df_labels: DataFrame containing label data with barcode statistics.
-                      This DataFrame should contain either `barcode_count` or
-                      `barcode_intensity` columns for evaluation.
-
-    :return: A dictionary with the following QC statistics:
-        - `labels_recovered`: Total number of labels with significant barcode counts/intensities.
-        - `fraction_labels_recovered`: Fraction of total labels that are recovered.
-        - `fraction_total_labels_recovered`: Fraction of recovered labels out of all unique labels.
-    """
-    # Compute general read statistics
-    qc_stats = read_statistics(df_reads)
-
-    # Determine the number of recovered labels based on barcode data
-    n_recovered = (
-        df_labels.query("barcode_count_0 / barcode_count > 0.5").shape[0]
-        if "barcode_count_0" in df_labels.columns
-        else df_labels.query("barcode_intensity_0 / barcode_intensity > 0.5").shape[0]
-    )
-
-    # Populate QC statistics dictionary with recovery metrics
-    qc_stats["labels_recovered"] = n_recovered
-    qc_stats["fraction_labels_recovered"] = n_recovered / df_labels.shape[0]
-
-    # Calculate fraction of total labels recovered from the reads data
-    qc_stats["fraction_total_labels_recovered"] = (
-        n_recovered / df_reads.query("label > 0")["label"].nunique()
-    )
-
-    return qc_stats
 
 
 def _peaks_to_bases(
@@ -382,10 +322,12 @@ def _fix_cycles(sbs_cycles):
     if isinstance(sbs_cycles[0], str):
         sbs_cycles = np.arange(1, len(sbs_cycles) + 1)
     else:
+        # copy so callers' arrays (possibly read-only, e.g. xarray index values)
+        # are never mutated
+        sbs_cycles = np.asarray(sbs_cycles)
         if sbs_cycles[0] == 0:
             # assume cycle numbering starts at 0 instead of 1
-            for i in range(len(sbs_cycles)):
-                sbs_cycles[i] = sbs_cycles[i] + 1
+            sbs_cycles = sbs_cycles + 1
     logger.info(
         f"Timepoint indices (0-based): {', '.join([str(t - 1) for t in sbs_cycles])}"
     )
@@ -539,6 +481,7 @@ def merge_sbs_phenotype_pipeline(
     sbs_cycles = None
     unique_columns = set()
     sbs_columns = []
+    df_labels = None
     if df_barcode is not None:
         unique_columns.update(df_barcode.columns.tolist())
     if sbs_path is not None:
