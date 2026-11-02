@@ -69,7 +69,8 @@ def hamming_distance(
     argmin, distances = pairwise_distances_argmin_min(
         unmapped_reads, whitelist, metric="hamming"
     )
-    return argmin, (distances * len(whitelist[0])).astype(int)
+
+    return argmin, np.rint(distances * len(whitelist[0])).astype(int)
 
 
 def bwa(fastq: str, output_dir: str, fasta: str, bwa_threads: int):
