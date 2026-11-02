@@ -97,7 +97,9 @@ def _hamming_distance(
         f"Length of whitelist barcode ({len(whitelist_barcodes[0])}) != length of read ({len(read_barcodes[0])})."
     )
     distances, argmin = nbrs.kneighbors(_encode_barcodes(read_barcodes))
-    distances = (distances * len(whitelist_barcodes[0])).astype(int)
+    # hamming distances are fractions of the length; round, since e.g.
+    # 15 / 22 * 22 == 14.999... would truncate to 14
+    distances = np.rint(distances * len(whitelist_barcodes[0])).astype(int)
     return pd.DataFrame(
         index=read_barcodes,
         data=dict(
