@@ -1,7 +1,5 @@
-import numpy as np
 import pandas as pd
 import pytest
-from pandas.core.dtypes.common import is_object_dtype
 
 from scallops.cli.pooled_if_sbs import _merged_to_matrix, merge_sbs_phenotype_pipeline
 from scallops.reads import merge_sbs_phenotype
@@ -132,12 +130,9 @@ def test_merge_sbs_phenotype_matrix(tmp_path, df_known_good):
     data_df = data_df.loc[merged_df.index]
     merged_df["duplicate_prefix"] = merged_df["duplicate_prefix"].astype(str)
     merged_df["duplicate_prefix_1"] = merged_df["duplicate_prefix_1"].astype(str)
-    for c in merged_df.columns:
-        if is_object_dtype(merged_df[c]):
-            merged_df[c] = merged_df[c].replace({np.nan: ""}).replace({"nan": ""})
-            data_df[c] = data_df[c].replace({"nan": ""}).replace({"None": ""})
-
-        np.testing.assert_array_equal(data_df[c].values, merged_df[c].values, err_msg=c)
+    pd.testing.assert_frame_equal(
+        merged_df, data_df[merged_df.columns], check_dtype=False
+    )
 
 
 _IMAGE_KEY = "A1-102"
