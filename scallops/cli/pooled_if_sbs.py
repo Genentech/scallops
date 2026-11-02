@@ -10,7 +10,6 @@ reads calling, and merging of single-cell sequencing (SCS) and phenotype data.
 import argparse
 import json
 import logging
-import math
 import os
 import re
 from collections.abc import Sequence
@@ -78,7 +77,7 @@ from scallops.spots import (
     std,
     transform_log,
 )
-from scallops.utils import _cpu_count, _fix_json
+from scallops.utils import _fix_json
 from scallops.visualize.crosstalk import pairwise_channel_scatter_plot
 from scallops.xr import _z_projection
 from scallops.zarr_io import (
@@ -156,9 +155,15 @@ def _peaks_to_bases(
     labels: NDArray | da.Array,
     labels_only: bool,
     bases: list[str],
+    read_chunk_size: int | Literal["auto"] | None,
 ) -> xr.DataArray:
     bases_array = peaks_to_bases(
-        maxed=maxed, peaks=peaks, labels=labels, labels_only=labels_only, bases=bases
+        maxed=maxed,
+        peaks=peaks,
+        labels=labels,
+        labels_only=labels_only,
+        bases=bases,
+        read_chunk_size=read_chunk_size,
     )
 
     reorder_bases = os.environ.get(SCALLOPS_BASE_ORDER)
@@ -453,12 +458,13 @@ def _merged_to_matrix(
         obs.index = obs.index.astype(str)
         for c in obs.columns:
             if pd.api.types.is_object_dtype(obs[c]):
-                # to save with anndata; keep missing values missing (with pandas < 3,
-                # astype(str) turns NaN into the string "nan")
+                # to save with anndata. Missing values stay missing with pandas >= 3;
+                # with pandas < 3, astype(str) turns them into the strings "nan" (NaN)
+                # or "None" (None)
                 if pd.api.types.infer_dtype(obs[c], skipna=True) == "boolean":
                     obs[c] = obs[c].astype("boolean")  # e.g. bools with NaN
                 else:
-                    obs[c] = obs[c].astype(str).where(obs[c].notna())
+                    obs[c] = obs[c].astype(str)
         return anndata.AnnData(obs=obs, var=pd.DataFrame(index=feature_names), X=data)
 
 
@@ -885,50 +891,6 @@ def spot_detect_main(arguments: argparse.Namespace):
             dask.compute(*delayed_results)
 
 
-def _dask_total_threads() -> int:
-    """Total number of threads available to dask: the threads of all workers when a
-    distributed client is active, otherwise the local CPU count (which honors
-    `SCALLOPS_CPU_COUNT`).
-    """
-    try:
-        from distributed import get_client
-
-        return max(1, sum(get_client().nthreads().values()))
-    except ValueError:  # no distributed client
-        return _cpu_count()
-
-
-def _auto_read_chunk_size(
-    n_reads: int,
-    n_threads: int,
-    chunks_per_thread: int = 3,
-    min_chunk_size: int = 50_000,
-    max_chunk_size: int = 500_000,
-) -> int:
-    """Number of reads per chunk giving about `chunks_per_thread` chunks for each thread.
-
-    The size is clamped to [`min_chunk_size`, `max_chunk_size`]: small chunks
-    duplicate per-chunk work (e.g. mismatch correction of the same barcodes) and
-    create many small output files; large chunks limit parallelism.
-
-    :param n_reads: Total number of reads.
-    :param n_threads: Number of threads available for processing.
-    :param chunks_per_thread: Target number of chunks per thread.
-    :param min_chunk_size: Minimum number of reads per chunk.
-    :param max_chunk_size: Maximum number of reads per chunk.
-    :return: Number of reads per chunk.
-
-    >>> _auto_read_chunk_size(10_000_000, 32)
-    104167
-    >>> _auto_read_chunk_size(20_000, 32)
-    50000
-    >>> _auto_read_chunk_size(100_000_000, 8)
-    500000
-    """
-    chunk_size = math.ceil(n_reads / (max(1, n_threads) * max(1, chunks_per_thread)))
-    return int(min(max(chunk_size, min_chunk_size), max_chunk_size))
-
-
 def reads_pipeline(
     image_key: str,
     spots_root: zarr.Group,
@@ -1055,28 +1017,9 @@ def reads_pipeline(
         labels=labels,
         labels_only=labels_only,
         bases=bases,
+        read_chunk_size=read_chunk_size,
     )
-    # Split the gathered spots along `read` so decoding, crosstalk application, mismatch
-    # correction, and writing run in parallel.
-    n_reads = bases_array_reads.sizes["read"]
-    if read_chunk_size == "auto":
-        read_chunk_size = _auto_read_chunk_size(n_reads, _dask_total_threads())
-    if isinstance(read_chunk_size, str):
-        raise ValueError(f"Invalid read chunk size: {read_chunk_size}")
-    if read_chunk_size is None or read_chunk_size <= 0:
-        read_chunk_size = -1  # single chunk
-    elif read_chunk_size < n_reads:
-        logger.info(
-            f"Processing reads in chunks of {read_chunk_size:,} "
-            f"({math.ceil(n_reads / read_chunk_size)} chunks)."
-        )
-    # rechunk the data only; `.chunk` would also make the read coords lazy. No-op when
-    # the chunks already match.
-    bases_array_reads = bases_array_reads.copy(
-        data=bases_array_reads.data.rechunk(
-            {bases_array_reads.get_axis_num("read"): read_chunk_size}
-        )
-    )
+
     # gathering spot intensities reads the whole `max` image; persist so the threshold,
     # crosstalk, and output steps below don't each read it again
     bases_array_reads = bases_array_reads.persist()

@@ -617,8 +617,8 @@ def test_assign_barcodes_to_labels_distributed(client):
 
 @pytest.mark.basecalls
 def test_auto_read_chunk_size():
-    from scallops.cli.pooled_if_sbs import _auto_read_chunk_size
     from scallops.cli.pooled_if_sbs_main import _read_chunk_size
+    from scallops.reads import _auto_read_chunk_size
 
     # ~3 chunks per thread
     assert _auto_read_chunk_size(9_000_000, 30) == 100_000
@@ -670,7 +670,7 @@ def test_barcode_n_unique_bases():
 
 @pytest.mark.basecalls
 def test_dask_total_threads_cpu_count(monkeypatch):
-    from scallops.cli.pooled_if_sbs import _dask_total_threads
+    from scallops.utils import _dask_total_threads
 
     monkeypatch.setenv("SCALLOPS_CPU_COUNT", "3")
     try:

@@ -345,6 +345,19 @@ def _fix_json(d):
     return d
 
 
+def _dask_total_threads() -> int:
+    """Total number of threads available to dask: the threads of all workers when a
+    distributed client is active, otherwise the local CPU count (which honors
+    `SCALLOPS_CPU_COUNT`).
+    """
+    try:
+        from distributed import get_client
+
+        return max(1, sum(get_client().nthreads().values()))
+    except ValueError:  # no distributed client
+        return _cpu_count()
+
+
 def is_dask_distributed():
     return "distributed" in dask.config.config
 

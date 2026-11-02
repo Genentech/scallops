@@ -10,6 +10,7 @@ Authors:
 
 import itertools
 import logging
+import math
 from collections.abc import Sequence
 from itertools import product
 from typing import Literal, Tuple
@@ -31,6 +32,7 @@ from sklearn.linear_model import QuantileRegressor
 from sklearn.neighbors import NearestNeighbors
 
 from scallops.io import CYAN, GRAY, GREEN, MAGENTA, RED, save_stack_imagej
+from scallops.utils import _dask_total_threads
 
 logger = logging.getLogger("scallops")
 
@@ -860,12 +862,44 @@ def _peaks_in_labels(peaks: pd.DataFrame, labels: NDArray) -> pd.DataFrame:
     return peaks[labels[peaks["y"].values, peaks["x"].values] > 0]
 
 
+def _auto_read_chunk_size(
+    n_reads: int,
+    n_threads: int,
+    chunks_per_thread: int = 3,
+    min_chunk_size: int = 50_000,
+    max_chunk_size: int = 500_000,
+) -> int:
+    """Number of reads per chunk giving about `chunks_per_thread` chunks for each thread.
+
+    The size is clamped to [`min_chunk_size`, `max_chunk_size`]: small chunks
+    duplicate per-chunk work (e.g. mismatch correction of the same barcodes) and
+    create many small output files; large chunks limit parallelism.
+
+    :param n_reads: Total number of reads.
+    :param n_threads: Number of threads available for processing.
+    :param chunks_per_thread: Target number of chunks per thread.
+    :param min_chunk_size: Minimum number of reads per chunk.
+    :param max_chunk_size: Maximum number of reads per chunk.
+    :return: Number of reads per chunk.
+
+    >>> _auto_read_chunk_size(10_000_000, 32)
+    104167
+    >>> _auto_read_chunk_size(20_000, 32)
+    50000
+    >>> _auto_read_chunk_size(100_000_000, 8)
+    500000
+    """
+    chunk_size = math.ceil(n_reads / (max(1, n_threads) * max(1, chunks_per_thread)))
+    return int(min(max(chunk_size, min_chunk_size), max_chunk_size))
+
+
 def peaks_to_bases(
     maxed: xr.DataArray,
     peaks: pd.DataFrame | dd.DataFrame,
     labels: NDArray | da.Array | xr.DataArray | None = None,
     labels_only: bool = True,
     bases: Sequence[str] | None = ("G", "T", "A", "C"),
+    read_chunk_size: Literal["auto"] | int | None = "auto",
 ) -> xr.DataArray:
     """Convert peaks to bases.
 
@@ -887,6 +921,9 @@ def peaks_to_bases(
     :param labels: Segmentation array (y,x)
     :param labels_only: If true, only return peaks where labels are present.
     :param bases: List of bases.
+    :param read_chunk_size: Number of reads per chunk for parallel processing, or
+        "auto" to choose from the number of reads and dask worker threads. Use None or
+        <= 0 for a single chunk. Ignored when `maxed` is not dask-backed.
     :return: DataArray with dimensions (read,t,c) where read is spot with coordinates y, x, peak,
         and label
     """
@@ -930,7 +967,7 @@ def peaks_to_bases(
         )
         if (sigma_indices < 0).any():
             raise ValueError("Peaks contain sigma values not found in `maxed`")
-    maxed_spots = (
+    bases_array_reads = (
         (
             maxed.isel(
                 y=xr.DataArray(peaks["y"]),
@@ -941,17 +978,42 @@ def peaks_to_bases(
         if sigma_indices is not None
         else maxed.isel(y=xr.DataArray(peaks["y"]), x=xr.DataArray(peaks["x"]))
     )
-    maxed_spots = maxed_spots.rename({"dim_0": "read"}).transpose("read", ...)
-    maxed_spots.name = "maxed"
+    bases_array_reads = bases_array_reads.rename({"dim_0": "read"}).transpose(
+        "read", ...
+    )
+    bases_array_reads.name = "maxed"
 
     for c in peaks.columns:
         # add columns in peaks
-        maxed_spots.coords[c] = ("read", peaks[c])
+        bases_array_reads.coords[c] = ("read", peaks[c])
     if peak_labels is not None:
-        maxed_spots.coords["label"] = ("read", peak_labels)
+        bases_array_reads.coords["label"] = ("read", peak_labels)
     if bases is not None:
-        maxed_spots = maxed_spots.assign_coords(c=list(bases))
-    return maxed_spots
+        bases_array_reads = bases_array_reads.assign_coords(c=list(bases))
+    if not isinstance(bases_array_reads.data, da.Array):
+        return bases_array_reads  # in memory: nothing to split
+    # Split the gathered spots along `read` so decoding, crosstalk application, mismatch
+    # correction, and writing run in parallel.
+    n_reads = bases_array_reads.sizes["read"]
+    if read_chunk_size == "auto":
+        read_chunk_size = _auto_read_chunk_size(n_reads, _dask_total_threads())
+    if isinstance(read_chunk_size, str):
+        raise ValueError(f"Invalid read chunk size: {read_chunk_size}")
+    if read_chunk_size is None or read_chunk_size <= 0:
+        read_chunk_size = -1  # single chunk
+    elif read_chunk_size < n_reads:
+        logger.info(
+            f"Processing reads in chunks of {read_chunk_size:,} "
+            f"({math.ceil(n_reads / read_chunk_size)} chunks)."
+        )
+    # rechunk the data only; `.chunk` would also make the read coords lazy. No-op when
+    # the chunks already match.
+    bases_array_reads = bases_array_reads.copy(
+        data=bases_array_reads.data.rechunk(
+            {bases_array_reads.get_axis_num("read"): read_chunk_size}
+        )
+    )
+    return bases_array_reads
 
 
 def merge_sbs_phenotype(
