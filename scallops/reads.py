@@ -22,7 +22,6 @@ import pandas as pd
 import xarray as xr
 from dask import delayed
 from dask.utils import cached_cumsum
-from distributed import get_client
 from numpy import ndarray
 from numpy.typing import NDArray
 from scipy.special import softmax
@@ -736,7 +735,7 @@ def correct_mismatches(
     # encode the whitelist and fit the index once rather than in every partition
     whitelist_index = _fit_whitelist(barcodes["barcode"].values)
     if is_dask:
-        meta = dd.utils.make_meta(reads)
+        meta = reads._meta.copy()
         for c, dtype in output_dtypes.items():
             meta[c] = pd.Series(dtype=dtype)
         return dd.map_partitions(
@@ -854,14 +853,22 @@ def decode_max(
     return df
 
 
+_PEAK_LABEL_COL = "__peak_label__"
+
+
 def _peaks_in_labels(peaks: pd.DataFrame, labels: NDArray) -> pd.DataFrame:
     """Keep peaks that fall inside a label.
 
     :param peaks: Peaks with `y` and `x` columns.
     :param labels: Segmentation array (y,x).
-    :return: Peaks where the label is > 0.
+    :return: Peaks where the label is > 0, with the label in column
+        `_PEAK_LABEL_COL`.
     """
-    return peaks[labels[peaks["y"].values, peaks["x"].values] > 0]
+    peak_labels = labels[peaks["y"].values, peaks["x"].values]
+    in_labels = peak_labels > 0
+    peaks = peaks[in_labels].copy()
+    peaks[_PEAK_LABEL_COL] = peak_labels[in_labels]
+    return peaks
 
 
 def _auto_read_chunk_size(
@@ -933,17 +940,24 @@ def peaks_to_bases(
         labels = labels.data
     if isinstance(labels, da.Array):
         labels = labels.compute()
+    peak_labels = None
     if isinstance(peaks, dd.DataFrame):
         if labels_only and labels is not None:
+            from distributed import get_client
+
             # drop peaks outside labels before loading them into memory
             try:
                 labels_arg = get_client().scatter(labels, hash=False)
             except ValueError:  # no distributed client
                 labels_arg = labels
-            peaks = peaks.map_partitions(_peaks_in_labels, labels_arg, meta=peaks._meta)
-        peaks = peaks.compute()
-    peak_labels = None
-    if labels is not None:
+            meta = peaks._meta.copy()
+            meta[_PEAK_LABEL_COL] = pd.Series(dtype=labels.dtype)
+            peaks = peaks.map_partitions(_peaks_in_labels, labels_arg, meta=meta)
+            peaks = peaks.compute()
+            peak_labels = peaks.pop(_PEAK_LABEL_COL).values
+        else:
+            peaks = peaks.compute()
+    if labels is not None and peak_labels is None:
         peak_labels = labels[peaks["y"].values, peaks["x"].values]
         if labels_only:
             in_labels = peak_labels > 0
