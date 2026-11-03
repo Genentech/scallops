@@ -416,7 +416,7 @@ class TestWatershedSegment:
         img = np.zeros((10, 10), dtype=np.float32)
         fg = np.zeros((10, 10), dtype=bool)
         fg_labeled = np.zeros((10, 10), dtype=int)
-        result = _watershed_segment(img, fg, fg_labeled, 0, min_distance=2, min_size=1)
+        result = _watershed_segment(img, fg, fg_labeled, min_distance=2, min_size=1)
         assert result.max() == 0
         assert result.shape == img.shape
 
@@ -428,8 +428,7 @@ class TestWatershedSegment:
         from skimage.measure import label as sk_label
 
         fg_lab = sk_label(fg, connectivity=1)
-        n = int(fg_lab.max())
-        result = _watershed_segment(img, fg, fg_lab, n, min_distance=2, min_size=1)
+        result = _watershed_segment(img, fg, fg_lab, min_distance=2, min_size=1)
         assert result.max() >= 1
         assert (result > 0).sum() == fg.sum()
 
@@ -446,12 +445,11 @@ class TestWatershedSegment:
         from skimage.measure import label as sk_label
 
         fg_lab = sk_label(fg, connectivity=1)
-        n = int(fg_lab.max())
-        result = _watershed_segment(img, fg, fg_lab, n, min_distance=1, min_size=1)
+        result = _watershed_segment(img, fg, fg_lab, min_distance=1, min_size=1)
         # Both fg components must be represented; result may have > 2 labels due to
         # multiple local maxima within uniform-intensity regions.
         assert result.max() >= 2
-        for comp_id in range(1, n + 1):
+        for comp_id in range(1, int(fg_lab.max()) + 1):
             assert result[fg_lab == comp_id].max() > 0, (
                 f"Component {comp_id} has no watershed label"
             )
@@ -464,8 +462,7 @@ class TestWatershedSegment:
         from skimage.measure import label as sk_label
 
         fg_lab = sk_label(fg, connectivity=1)
-        n = int(fg_lab.max())
-        result = _watershed_segment(img, fg, fg_lab, n, min_distance=2, min_size=1)
+        result = _watershed_segment(img, fg, fg_lab, min_distance=2, min_size=1)
         # Without the guard every pixel would pass threshold_abs = 0 and seed; with it
         # no peak qualifies and the fallback seeds the single component exactly once.
         assert result.max() == 1
@@ -482,10 +479,9 @@ class TestWatershedSegment:
         from skimage.measure import label as sk_label
 
         fg_lab = sk_label(fg, connectivity=1)
-        n = int(fg_lab.max())
-        result = _watershed_segment(img, fg, fg_lab, n, min_distance=5, min_size=1)
+        result = _watershed_segment(img, fg, fg_lab, min_distance=5, min_size=1)
         # Both components must receive a label
-        for comp_id in range(1, n + 1):
+        for comp_id in range(1, int(fg_lab.max()) + 1):
             comp_pixels = result[fg_lab == comp_id]
             assert comp_pixels.max() > 0, (
                 f"Component {comp_id} has no label (fallback failed)"
@@ -499,8 +495,7 @@ class TestWatershedSegment:
         from skimage.measure import label as sk_label
 
         fg_lab = sk_label(fg, connectivity=1)
-        n = int(fg_lab.max())
-        result = _watershed_segment(img, fg, fg_lab, n, min_distance=2, min_size=1)
+        result = _watershed_segment(img, fg, fg_lab, min_distance=2, min_size=1)
         assert np.all((result > 0) == fg)
 
     def test_smaller_min_distance_gives_more_or_equal_labels(self):
@@ -519,9 +514,8 @@ class TestWatershedSegment:
         from skimage.measure import label as sk_label
 
         fg_lab = sk_label(fg, connectivity=1)
-        n = int(fg_lab.max())
-        result_d2 = _watershed_segment(img, fg, fg_lab, n, min_distance=2, min_size=1)
-        result_d10 = _watershed_segment(img, fg, fg_lab, n, min_distance=10, min_size=1)
+        result_d2 = _watershed_segment(img, fg, fg_lab, min_distance=2, min_size=1)
+        result_d10 = _watershed_segment(img, fg, fg_lab, min_distance=10, min_size=1)
         assert result_d2.max() >= result_d10.max()
 
 

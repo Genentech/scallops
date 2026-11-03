@@ -164,12 +164,8 @@ _FEATURE_KEYS = [
     "FlagNoNuclearCentroid",
 ]
 
-# Precomputed at module load — used in the no-puncta early return path.
-_ZEROS_SPATIAL = {
-    k: 0.0
-    for k in _FEATURE_KEYS
-    if "Radial" in k or "Extent" in k or "Polarization" in k or "Density" in k
-}
+# Features measured by _extract_cell_features; the flag is set in puncta() itself.
+_MEASURED_KEYS = [k for k in _FEATURE_KEYS if k != "FlagNoNuclearCentroid"]
 
 
 def _padded_edt(mask):
@@ -415,8 +411,8 @@ def _highpass_filter(image, roi, sigma, blurred_mask=None):
     ``blurred_mask`` (the clipped gaussian of the ROI) depends only on the cell, so
     puncta() computes it once and reuses it for every channel.
     """
-    img = image.astype(np.float32)
-    mask = roi.astype(np.float32)
+    img = image.astype(np.float32, copy=False)
+    mask = roi.astype(np.float32, copy=False)
     img_masked = img * mask
     blurred_img = gaussian_filter(img_masked, sigma=sigma, mode="constant", cval=0)
     if blurred_mask is None:
@@ -598,9 +594,7 @@ def _merge_small_puncta(seg_labels, working_img, min_size):
     return _compact_labels(seg_labels)
 
 
-def _watershed_segment(
-    working_img, fg_mask, fg_labeled, n_components, min_distance, min_size
-):
+def _watershed_segment(working_img, fg_mask, fg_labeled, min_distance, min_size):
     """Split touching foreground blobs into individual puncta, then merge tiny pieces.
 
     1. Seeds: local maxima of the highpass image inside the foreground, at least
@@ -613,7 +607,7 @@ def _watershed_segment(
        fg_mask so puncta never grow into background.
     4. _merge_small_puncta absorbs regions smaller than min_size.
 
-    fg_labeled / n_components come from _size_filter to avoid relabeling here.
+    fg_labeled comes from _size_filter to avoid relabeling here.
     """
     if not fg_mask.any():
         return np.zeros_like(fg_mask, dtype=int)
@@ -638,14 +632,12 @@ def _watershed_segment(
     if len(coords) > 0:
         peaks_mask[coords[:, 0], coords[:, 1]] = True
 
-    # Only iterate over components that have no seed yet (a set lookup is cheaper
-    # than testing every component's pixels against peaks_mask).
-    seeded = set(fg_labeled[peaks_mask].tolist()) if peaks_mask.any() else set()
-    for comp_id in range(1, n_components + 1):
-        if comp_id not in seeded:
-            # argmax of a boolean array = flat index of the first True pixel
-            flat_idx = np.argmax(fg_labeled == comp_id)
-            peaks_mask.flat[flat_idx] = True
+    # Seed each component that has no peak at its first pixel (in flat order). One
+    # np.unique pass finds every component's first pixel, instead of scanning the
+    # crop once per unseeded component.
+    comp_ids, first_idx = np.unique(fg_labeled.ravel(), return_index=True)
+    unseeded = ~np.isin(comp_ids, fg_labeled[peaks_mask]) & (comp_ids > 0)
+    peaks_mask.flat[first_idx[unseeded]] = True
 
     markers = label(peaks_mask, connectivity=1)
     # Invert so the brightest pixel is the lowest "elevation" in each basin.
@@ -754,7 +746,6 @@ def _detect_puncta(
         working_img,
         fg_mask,
         fg_labeled,
-        n_fg_objects,
         int(peak_min_distance),
         min_size_fg_objects,
     )
@@ -797,34 +788,14 @@ def _extract_cell_features(
     # No puncta: detection features are zero, but background stats are still valid
     # (computed from the whole ROI) and the spatial features are zero.
     if n_puncta == 0 or total_area == 0:
-        return {
-            "FgObjectCount": n_fg_objects,
-            "PunctaCount": 0,
-            "TotalFgArea": 0,
-            "TotalFgAreaFraction": 0.0,
-            "MeanPunctaSize": 0.0,
-            "StdPunctaSize": 0.0,
-            "MedianPunctaSize": 0.0,
-            "TotalFgIntensity": 0.0,
-            "MeanFgIntensity": 0.0,
-            "StdFgIntensity": 0.0,
-            "Pct25FgIntensity": 0.0,
-            "Pct50FgIntensity": 0.0,
-            "Pct75FgIntensity": 0.0,
-            "MeanBgIntensity": float(roi_pixels.mean()) if len(roi_pixels) > 0 else 0.0,
-            "StdBgIntensity": float(roi_pixels.std()) if len(roi_pixels) > 1 else 0.0,
-            "MedianBgIntensity": float(np.median(roi_pixels))
-            if len(roi_pixels) > 0
-            else 0.0,
-            "RatioFgBgMeanIntensities": 0.0,
-            "MeanPunctaMeans": 0.0,
-            "StdPunctaMeans": 0.0,
-            "MedianPunctaMeans": 0.0,
-            "MeanPunctaMaxes": 0.0,
-            "StdPunctaMaxes": 0.0,
-            "MedianPunctaMaxes": 0.0,
-            **_ZEROS_SPATIAL,
-        }
+        feats = dict.fromkeys(_MEASURED_KEYS, 0.0)
+        feats["FgObjectCount"] = n_fg_objects
+        if len(roi_pixels) > 0:
+            feats["MeanBgIntensity"] = float(roi_pixels.mean())
+            feats["MedianBgIntensity"] = float(np.median(roi_pixels))
+        if len(roi_pixels) > 1:
+            feats["StdBgIntensity"] = float(roi_pixels.std())
+        return feats
 
     # --- Per-punctum statistics ---
     # bincount / maximum.at aggregate every punctum in one pass, which is much faster
