@@ -86,12 +86,13 @@ Other Features
     watershed split on a highpass gaussian filtered image, and measures puncta counts, areas, intensities, and spatial distribution.
     Watershed pieces that share one saturated (flat-topped) plateau are rejoined into a single
     punctum.
-    Outputs 33 features per channel, including the quality flag FlagNoNuclearCentroid. Spatial
-    features are measured from the centroid of each label's nucleus (the nuclei label with the
-    same ID, read from the ``-nuclei`` labels in ``--labels``, used only if it overlaps or
-    touches the label); a label without such a nucleus uses its own centroid and gets
-    FlagNoNuclearCentroid = 1. Parameters are encoded in the feature names
-    (e.g. ``Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2``).
+    Outputs 33 features per channel, including the quality flag FlagNoNuclearCentroid. With the
+    default anchor ``nc``, spatial features are measured from the centroid of each label's
+    nucleus (the nuclei label with the same ID, read from the ``-nuclei`` labels in
+    ``--labels``, used only if it overlaps or touches the label); a label without such a
+    nucleus uses its own centroid and gets FlagNoNuclearCentroid = 1. With anchor ``rc``, every
+    label uses its own centroid (FlagNoNuclearCentroid = 1). Parameters are encoded in the
+    feature names (e.g. ``Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2_nc``).
 
     When to use: puncta is intended for punctate and blobular cellular structures in
     immunofluorescence phenotyping images (e.g. vesicles, granules, Golgi fragments, receptor
@@ -106,9 +107,8 @@ Other Features
     segmentation or by ``scallops segment overlap``. ``scallops segment overlap`` writes its
     renumbered cells to a separate store without the nuclei, so for those cells pass both
     stores, e.g. ``--labels segment.zarr segment-overlap.zarr`` (for labels present in both, the
-    store listed last is used). If the nuclei labels are not found, puncta still runs: it logs a
-    warning, measures the spatial features from each ROI's own centroid, and sets
-    FlagNoNuclearCentroid = 1 for every ROI.
+    store listed last is used). With anchor ``nc``, ``scallops features`` stops with an error if
+    the nuclei labels are not found; use anchor ``rc`` when no nuclei segmentation exists.
     Parameters:
 
     #. c: Channel index.
@@ -117,6 +117,8 @@ Other Features
     #. min_size_fg_objects: Minimum puncta area in pixels; smaller foreground objects are discarded; smaller puncta after watershed are merged (default 2).
     #. peak_min_distance: Minimum distance in pixels between watershed peaks; larger values merge
        nearby peaks into one punctum (default 2).
+    #. anchor: Reference point of the spatial features: ``nc`` (nucleus centroid) or ``rc``
+       (ROI centroid) (default ``nc``).
 
 
 .. _shortcuts:

@@ -1,8 +1,6 @@
 """Tests for scallops.features.puncta: synthetic edge cases, unit tests, and
 label_features integration with nuclei labels."""
 
-import logging
-
 import dask.array as da
 import dask.dataframe as dd
 import numpy as np
@@ -1087,7 +1085,7 @@ class TestPunctaFunction:
         result = _run_puncta(n_channels=1, sigma=5.0, alpha=1.5, min_size=2, pmd=2)
         for key in result:
             assert key.startswith("Puncta_"), f"Key missing Puncta_ prefix: {key}"
-            assert "_s5.0_a1.5_m2_d2" in key, f"Suffix wrong in: {key}"
+            assert key.endswith("_s5.0_a1.5_m2_d2_nc"), f"Suffix wrong in: {key}"
             # Format: Puncta_FeatureName_ChannelName_suffix
             parts = key.split("_")
             assert parts[1] in _FEATURE_KEYS and parts[2] == "Channel0"
@@ -1115,7 +1113,7 @@ class TestPunctaFunction:
             intensity_image=intensity,
             offset=(0, 0),
         )
-        return result["Puncta_PunctaCount_Channel1_s5.0_a1.5_m2_d2"]
+        return result["Puncta_PunctaCount_Channel1_s5.0_a1.5_m2_d2_nc"]
 
     def test_each_row_holds_its_own_cells_values(self):
         # Cells drawn in label order 1..6 have 0..5 puncta; row i must report i.
@@ -1168,14 +1166,14 @@ class TestPunctaFunction:
     def test_sigma_zero_detects_puncta_and_names_columns(self):
         # sigma = 0 skips the high-pass filter and thresholds against the ROI mean.
         result = self._sigma_zero(alpha=1.5)
-        assert all(k.endswith("_Channel1_s0.0_a1.5_m2_d2") for k in result)
-        assert result["Puncta_PunctaCount_Channel1_s0.0_a1.5_m2_d2"][0] == 2
+        assert all(k.endswith("_Channel1_s0.0_a1.5_m2_d2_nc") for k in result)
+        assert result["Puncta_PunctaCount_Channel1_s0.0_a1.5_m2_d2_nc"][0] == 2
 
     def test_sigma_zero_allows_alpha_below_one(self):
         # alpha < 1 is rejected only when sigma > 0. Here every ROI pixel exceeds
         # 0.9 x the ROI mean, so the whole-ROI guard reports no puncta.
         result = self._sigma_zero(alpha=0.9)
-        assert result["Puncta_PunctaCount_Channel1_s0.0_a0.9_m2_d2"][0] == 0
+        assert result["Puncta_PunctaCount_Channel1_s0.0_a0.9_m2_d2_nc"][0] == 0
 
     def test_all_arrays_length_equals_n_cells(self):
         n_cells = 3
@@ -1204,9 +1202,9 @@ class TestPunctaFunction:
 
     def test_peak_min_distance_float_integer_accepted(self):
         # 2.0 is a valid integer-valued float; it is stored as the integer 2, so the
-        # feature names end in "_d2", not "_d2.0".
+        # feature names contain "_d2", not "_d2.0".
         result = _run_puncta(pmd=2.0)
-        assert all(k.endswith("_d2") for k in result)
+        assert all(k.endswith("_d2_nc") for k in result)
 
     def test_unknown_kwargs_absorbed(self):
         # puncta() must accept arbitrary **kwargs (scallops passes extra ones)
@@ -1298,7 +1296,7 @@ class TestPunctaFunction:
 # =====================================================================
 
 _LABEL = 7  # non-sequential original ID, as in scallops blocks
-_SUFFIX = "Channel1_s5.0_a1.5_m2_d2"
+_SUFFIX = "Channel1_s5.0_a1.5_m2_d2_nc"
 _CELL_BOX = (10, 40, 10, 40)  # rows 10-39, cols 10-39
 
 
@@ -1525,6 +1523,67 @@ class TestNucleusAnchor:
         assert _feat(r_with, "FlagNoNuclearCentroid") == 0
         assert _feat(r_without, "FlagNoNuclearCentroid") == 1
         _assert_same_features(r_with, r_without, ignore=("FlagNoNuclearCentroid",))
+
+
+class TestAnchorParameter:
+    """anchor="nc" (nucleus centroid, default) vs anchor="rc" (ROI centroid)."""
+
+    @staticmethod
+    def _run(rois, nuclei, intensity, anchor):
+        return puncta(
+            c=[1],
+            sigma=5.0,
+            alpha=1.5,
+            min_size_fg_objects=2,
+            peak_min_distance=2,
+            anchor=anchor,
+            channel_names=["Channel0", "Channel1"],
+            unique_labels=np.array([1]),
+            unique_labels_original=np.array([_LABEL]),
+            label_image=(rois == _LABEL).astype(np.int32),
+            label_image_original=rois,
+            intensity_image=intensity,
+            offset=(0, 0),
+            nuclei_label_image=nuclei,
+        )
+
+    def test_rc_ignores_nuclei(self):
+        # rc with nuclei equals rc without nuclei, and equals the nc fallback without
+        # nuclei; every ROI is flagged (spatial features from the ROI's own centroid).
+        rois, nuclei, intensity = _nucleus_scene((18, 26, 24, 32), cytoplasm=True)
+        rc = self._run(rois, nuclei, intensity, "rc")
+        rc_without = self._run(rois, None, intensity, "rc")
+        nc_without = self._run(rois, None, intensity, "nc")
+        _assert_same_features(rc, rc_without)
+        as_rc = {k.replace("_nc", "_rc"): v for k, v in nc_without.items()}
+        _assert_same_features(rc, as_rc)
+        assert all(
+            np.all(v == 1) for k, v in rc.items() if "FlagNoNuclearCentroid" in k
+        )
+
+    def test_nc_uses_the_nucleus(self):
+        rois, nuclei, intensity = _nucleus_scene((18, 26, 24, 32), cytoplasm=True)
+        nc = self._run(rois, nuclei, intensity, "nc")
+        rc = self._run(rois, nuclei, intensity, "rc")
+        flag = next(v for k, v in nc.items() if "FlagNoNuclearCentroid" in k)
+        assert flag[0] == 0
+        radial_nc = next(v for k, v in nc.items() if "MeanFgRadialPosPx" in k)
+        radial_rc = next(v for k, v in rc.items() if "MeanFgRadialPosPx" in k)
+        assert not np.allclose(radial_nc, radial_rc)
+
+    def test_anchor_in_feature_names(self):
+        rois, nuclei, intensity = _nucleus_scene((18, 26, 24, 32))
+        assert all(
+            k.endswith("_d2_nc") for k in self._run(rois, nuclei, intensity, "nc")
+        )
+        assert all(
+            k.endswith("_d2_rc") for k in self._run(rois, nuclei, intensity, "rc")
+        )
+
+    def test_invalid_anchor_raises(self):
+        rois, nuclei, intensity = _nucleus_scene((18, 26, 24, 32))
+        with pytest.raises(ValueError, match="anchor must be"):
+            self._run(rois, nuclei, intensity, "xy")
 
 
 class TestGeometryMask:
@@ -1780,7 +1839,28 @@ class TestLabelFeaturesNuclei:
         )
         assert len(result.columns) == 2 * len(_FEATURE_KEYS)
         suffixes = {c.split("_", 2)[2] for c in result.columns}
-        assert suffixes == {"Channel1_s5.0_a1.5_m2_d2", "Channel1_s10.0_a2.0_m2_d2"}
+        assert suffixes == {
+            "Channel1_s5.0_a1.5_m2_d2_nc",
+            "Channel1_s10.0_a2.0_m2_d2_nc",
+        }
+
+    def test_nc_and_rc_in_one_run(self):
+        # Same parameters, both anchors: distinct columns; nc anchored on the nuclei
+        # (flag 0 for cells with a nucleus), rc on each cell's centroid (all flagged).
+        rois, nuclei, intensity = _lf_scene(cytoplasm=True)
+        rc_feature = _LF_FEATURE + "_rc"
+        df = _lf_run(rois, intensity, nuclei, features=[_LF_FEATURE, rc_feature])
+        assert len(df.columns) == 2 * len(_FEATURE_KEYS)
+        nc_flag = df[_lf_col("FlagNoNuclearCentroid")]
+        rc_flag = df[_lf_col("FlagNoNuclearCentroid").replace("_nc", "_rc")]
+        expected = [0.0 if label in _LF_NUCLEI else 1.0 for label in df.index]
+        np.testing.assert_array_equal(nc_flag.to_numpy(), expected)
+        assert (rc_flag == 1).all()
+        # rc equals the nc fallback without nuclei (all ROI centroids)
+        without = _lf_run(rois, intensity, None)
+        rc_cols = [c for c in df.columns if c.endswith("_rc")]
+        renamed = df[rc_cols].rename(columns=lambda c: c[: -len("_rc")] + "_nc")
+        _assert_frames_equal(renamed, without)
 
     def test_only_puncta_receives_nuclei(self):
         rois, nuclei, _ = _lf_scene()
@@ -1791,6 +1871,12 @@ class TestLabelFeaturesNuclei:
         for f in bound:
             assert ("nuclei_label_image" in f.keywords) == (f.func is puncta)
         assert sum(f.func is puncta for f in bound) == 1
+
+    def test_rc_puncta_does_not_receive_nuclei(self):
+        rois, nuclei, _ = _lf_scene()
+        funcs, _ = _create_funcs([_LF_FEATURE + "_rc"], n_channels=2)
+        bound = _bind_nuclei_labels(funcs, rois, nuclei)
+        assert not any("nuclei_label_image" in f.keywords for f in bound)
 
     @staticmethod
     def _grid_scene():
@@ -1840,7 +1926,7 @@ class TestLabelFeaturesNuclei:
         # because it is only rejected when sigma > 0.
         rois, nuclei, intensity = _lf_scene()
         df = _lf_run(rois, intensity, nuclei, features=["puncta_1_0_0.9_2_2"])
-        assert all(c.endswith("_Channel1_s0.0_a0.9_m2_d2") for c in df.columns)
+        assert all(c.endswith("_Channel1_s0.0_a0.9_m2_d2_nc") for c in df.columns)
         with pytest.raises(ValueError, match="alpha must be >= 1 when sigma > 0"):
             _lf_run(rois, intensity, nuclei, features=["puncta_1_10_0.9_2_2"])
 
@@ -1939,46 +2025,38 @@ class TestFeaturesCliNuclei:
         return cells_store, nuclei_store
 
     @staticmethod
-    def _flags(output):
+    def _flags(output, anchor="nc"):
         # cell/test-objects.parquet (also written by the CLI) holds the objects table
         df = pd.read_parquet(f"{output}/cell/test.parquet").sort_index()
-        return df[f"Cells_{_lf_col('FlagNoNuclearCentroid')}"]
+        column = f"Cells_{_lf_col('FlagNoNuclearCentroid')}"
+        return df[column.replace("_nc", f"_{anchor}")]
 
-    def test_nuclei_in_a_separate_store(self, tmp_path, caplog):
+    @staticmethod
+    def _run(images, labels, output, feature):
+        _features_cli(
+            ["--images", images, "--labels", *labels, "--output", output]
+            + ["--features-cell", feature, "--client", "none"]
+        )
+
+    def test_nuclei_in_a_separate_store(self, tmp_path):
         cells_store, nuclei_store = self._stores(tmp_path)
         output = str(tmp_path / "out")
-        with caplog.at_level(logging.WARNING, logger="scallops"):
-            _features_cli(
-                ["--images", cells_store, "--labels", cells_store, nuclei_store]
-                + [
-                    "--output",
-                    output,
-                    "--features-cell",
-                    _LF_FEATURE,
-                    "--client",
-                    "none",
-                ]
-            )
-        assert "No nuclei labels" not in caplog.text
+        self._run(cells_store, [cells_store, nuclei_store], output, _LF_FEATURE)
         flags = self._flags(output)
         expected = [0.0 if label in _LF_NUCLEI else 1.0 for label in flags.index]
         np.testing.assert_array_equal(flags.to_numpy(), expected)
         assert (flags == 0).sum() == len(_LF_NUCLEI)
 
-    def test_missing_nuclei_warns_and_flags_every_roi(self, tmp_path, caplog):
+    def test_nc_without_nuclei_is_an_error(self, tmp_path):
         cells_store, _ = self._stores(tmp_path)
         output = str(tmp_path / "out")
-        with caplog.at_level(logging.WARNING, logger="scallops"):
-            _features_cli(
-                ["--images", cells_store, "--labels", cells_store]
-                + [
-                    "--output",
-                    output,
-                    "--features-cell",
-                    _LF_FEATURE,
-                    "--client",
-                    "none",
-                ]
-            )
-        assert "No nuclei labels for test" in caplog.text
-        assert (self._flags(output) == 1).all()
+        with pytest.raises(
+            ValueError, match="test-nuclei is not in any --labels store"
+        ):
+            self._run(cells_store, [cells_store], output, _LF_FEATURE)
+
+    def test_rc_runs_without_nuclei(self, tmp_path):
+        cells_store, _ = self._stores(tmp_path)
+        output = str(tmp_path / "out")
+        self._run(cells_store, [cells_store], output, _LF_FEATURE + "_rc")
+        assert (self._flags(output, anchor="rc") == 1).all()

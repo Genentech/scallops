@@ -18,7 +18,7 @@ Detection pipeline:
 
 Features computed per cell per channel (33 total: 32 measurements plus the
 FlagNoNuclearCentroid quality flag). Pipeline parameters are
-encoded in the feature name suffix (e.g. ``Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2``).
+encoded in the feature name suffix (e.g. ``Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2_nc``).
 
 How this module fits into scallops
 ----------------------------------
@@ -35,9 +35,10 @@ nuclei, cell, cytoplasm). No other feature function receives it. The ROI labels 
 assumed to share IDs with their nuclei, as scallops produces them (propagation and
 watershed cells, cytoplasm, and cells renumbered by ``scallops segment overlap``).
 
-The feature string in the pipeline config (e.g. ``puncta_1,2,3_10.0_1.5_2_2``) is
+The feature string in the pipeline config (e.g. ``puncta_1,2,3_10.0_1.5_2_2_nc``) is
 split on underscores by ``_get_params()`` and its tokens are bound POSITIONALLY to
-``puncta()``'s parameters: c, sigma, alpha, min_size_fg_objects, peak_min_distance.
+``puncta()``'s parameters: c, sigma, alpha, min_size_fg_objects, peak_min_distance,
+anchor.
 The framework arguments (channel_names, label_image, ...) default to None so that
 ``_get_params()`` skips them; ``_feature_block()`` supplies them at call time.
 Do not reorder the user-tunable parameters: their order is the config-string format.
@@ -74,6 +75,7 @@ Dots in the suffix are safe because ``_get_params()`` splits on "_" only.
 """
 
 from collections.abc import Sequence
+from typing import Literal
 
 import numpy as np
 from scipy.ndimage import (
@@ -945,6 +947,7 @@ def puncta(
     alpha: float = 1.5,
     min_size_fg_objects: int = 2,
     peak_min_distance: int = 2,
+    anchor: Literal["nc", "rc"] = "nc",
     channel_names: Sequence[str] | None = None,
     unique_labels: np.ndarray = None,
     unique_labels_original: np.ndarray = None,
@@ -965,7 +968,7 @@ def puncta(
     Pipeline: highpass -> adaptive threshold -> size filter -> watershed.
     Computes 33 features per cell per channel (incl. FlagNoNuclearCentroid).
     Pipeline parameters are encoded
-    in the feature name suffix (e.g. ``Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2``).
+    in the feature name suffix (e.g. ``Puncta_PunctaCount_Channel3_s10.0_a1.5_m2_d2_nc``).
 
     :param c: Channel indices to process.
     :param sigma: Gaussian sigma for highpass filter; 0 skips highpass (default 10.0).
@@ -977,6 +980,13 @@ def puncta(
     :param peak_min_distance: Minimum pixel distance between watershed seed peaks.
         Controls puncta splitting — larger values merge nearby peaks into one punctum
         (default 2).
+    :param anchor: Reference point of the spatial features: "nc" (nucleus centroid,
+        default) uses each ROI's same-ID nucleus from ``nuclei_label_image``; "rc" (ROI
+        centroid) uses each ROI's own centroid and ignores ``nuclei_label_image``, so
+        FlagNoNuclearCentroid is 1 for every ROI. Encoded in the feature names
+        (``_nc`` / ``_rc``). The ``scallops features`` CLI stops with an error if "nc"
+        is requested and no nuclei labels are found; called directly, ``puncta()``
+        falls back to the ROI centroid (flag 1) when ``nuclei_label_image`` is None.
     :param channel_names: Names for all channels in intensity_image.
     :param unique_labels: Unique non-zero labels present in label_image (sequential).
     :param unique_labels_original: Original cell IDs before sequential relabeling.
@@ -995,6 +1005,8 @@ def puncta(
     :return: Dictionary mapping feature names to arrays of length len(unique_labels).
     """
     _validate_params(sigma, alpha, min_size_fg_objects, peak_min_distance)
+    if anchor not in ("nc", "rc"):
+        raise ValueError(f'anchor must be "nc" or "rc", got {anchor!r}')
     # Scallops always passes channel_names; the column names need them.
     assert channel_names is not None, "channel_names is required"
     peak_min_distance = int(peak_min_distance)  # accept integer-valued floats like 2.0
@@ -1027,6 +1039,9 @@ def puncta(
 
     # Nuclei labels of this block, read once; ROIs whose nucleus extends beyond the
     # block read the rest from the full image (see _find_nucleus).
+    # With anchor "rc" the nuclei are not used at all.
+    if anchor == "rc":
+        nuclei_label_image = None
     nuclei_block = None
     if nuclei_label_image is not None:
         nuclei_block = _read_label_region(
@@ -1154,7 +1169,9 @@ def puncta(
     # Encode the parameters in each feature name so runs with different parameters
     # produce distinct columns. The scallops CLI later prepends the ROI prefix
     # (Cells_, Nuclei_, Cytoplasm_) to every column from every feature module.
-    params_suffix = f"s{sigma}_a{alpha}_m{min_size_fg_objects}_d{peak_min_distance}"
+    params_suffix = (
+        f"s{sigma}_a{alpha}_m{min_size_fg_objects}_d{peak_min_distance}_{anchor}"
+    )
 
     for j in c:
         ch_name = channel_names[j]

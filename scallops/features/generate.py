@@ -169,7 +169,7 @@ def _bind_nuclei_labels(
     label_image: da.Array | zarr.Array,
     nuclei_label_image: da.Array | zarr.Array | NDArray,
 ) -> list[partial]:
-    """Bind the nuclei labels to the puncta feature function only.
+    """Bind the nuclei labels to the puncta feature functions with anchor "nc" only.
 
     The ROI labels are assumed to share IDs with their nuclei, as scallops produces
     them (propagation and watershed cells, cytoplasm, and cells renumbered by
@@ -179,7 +179,9 @@ def _bind_nuclei_labels(
         f"{nuclei_label_image.shape} != {label_image.shape}"
     )
     return [
-        partial(f, nuclei_label_image=nuclei_label_image) if f.func is puncta else f
+        partial(f, nuclei_label_image=nuclei_label_image)
+        if f.func is puncta and f.keywords.get("anchor", "nc") == "nc"
+        else f
         for f in funcs
     ]
 
