@@ -309,9 +309,9 @@ def _fix_json(d):
     """Attempts to serialize and deserialize a dictionary to ensure it can be safely converted to
     JSON.
 
-    This function first tries to use the faster `ujson` library from `pandas` if available.
-    If `ujson` is not available, it defaults to the standard `json` library. If serialization
-    fails due to an `OverflowError`, a warning is logged, and an empty dictionary is returned.
+    Serialization uses the `ujson` encoder bundled with pandas, which also handles numpy
+    scalars and arrays. If serialization fails due to an `OverflowError`, a warning is
+    logged, and an empty dictionary is returned.
 
     :param d: The dictionary to be serialized and deserialized.
     :return: A deserialized version of the input dictionary or an empty dictionary
@@ -328,14 +328,11 @@ def _fix_json(d):
         print(fixed_data)
         # Output: {}
     """
-    import pandas._libs.json as ujson
-
     try:
-        # Try to use ujson for faster performance
-        dumps = ujson.ujson_dumps
-    except AttributeError:
-        # Fallback to standard JSON library's dumps if ujson is not available
-        dumps = ujson.dumps
+        # public since pandas 2.0; pandas._libs.json was renamed in pandas 3
+        from pandas.io.json import ujson_dumps as dumps
+    except ImportError:
+        from pandas.io.json import dumps  # pandas < 2
 
     try:
         # Serialize and deserialize the dictionary to ensure JSON compatibility
@@ -346,6 +343,19 @@ def _fix_json(d):
         d = {}
 
     return d
+
+
+def _dask_total_threads() -> int:
+    """Total number of threads available to dask: the threads of all workers when a
+    distributed client is active, otherwise the local CPU count (which honors
+    `SCALLOPS_CPU_COUNT`).
+    """
+    try:
+        from distributed import get_client
+
+        return max(1, sum(get_client().nthreads().values()))
+    except ValueError:  # no distributed client
+        return _cpu_count()
 
 
 def is_dask_distributed():

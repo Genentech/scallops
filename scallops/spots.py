@@ -16,7 +16,6 @@ from collections.abc import Callable
 from numbers import Number
 from typing import Any, Literal
 
-import dask
 import dask.array as da
 import dask.dataframe as dd
 import numpy as np
@@ -25,7 +24,6 @@ import skimage
 import xarray as xr
 from array_api_compat import get_namespace
 from dask import delayed
-from dask.array.core import slices_from_chunks
 from dask_image import ndfilters as dask_ndi
 from dask_image.ndfilters._gaussian import _get_border, _get_sigmas
 from numpy.typing import NDArray
@@ -34,7 +32,7 @@ from scipy.spatial import KDTree
 
 from scallops.envir import SCALLOPS_IMAGE_SCALE
 from scallops.features.spots import _download_ufish_model, _load_ufish_model
-from scallops.reads import decode_max
+from scallops.reads import decode_max, filter_low_complexity_reads
 
 logger = logging.getLogger("scallops")
 
@@ -90,16 +88,12 @@ def std(
         raise ValueError("Unexpected input data.")
 
 
-def _nunique_bases(x):
-    return len(set(x))
-
-
 def peak_thresholds_from_bases(
     bases_array: xr.DataArray,
-    n_reads: int | None = 500000,
+    n_reads: int | None = 500_000,
     seed: int = 239753,
     Q_cutoff: float = 60,
-    remove_zero_entropy_barcodes: bool = True,
+    min_unique_bases: int | None = 2,
 ) -> pd.DataFrame:
     """Calculate recall, precision, f1, and accuracy for different cutoff value of peaks.
 
@@ -107,8 +101,12 @@ def peak_thresholds_from_bases(
     :param n_reads: Number of reads to consider.
     :param seed: Seed for random number generator.
     :param Q_cutoff: Threshold for binarization of reads.
-    :param remove_zero_entropy_barcodes: Whether to remove zero entropy barcodes.
-    :return: Result data frame.
+    :param min_unique_bases: Remove sampled reads with fewer than this many distinct
+        bases across cycles (see
+        :func:`~scallops.reads.filter_low_complexity_reads`). The default of 2 removes
+        reads with the same base in every cycle.
+    :return: Result data frame. All thresholds and metrics are NaN if there are no
+        reads.
     """
 
     if n_reads is not None and 0 < n_reads < bases_array.sizes["read"]:
@@ -116,21 +114,15 @@ def peak_thresholds_from_bases(
         random_reads = rng.sample(range(0, bases_array.sizes["read"]), n_reads)
         random_reads = np.sort(random_reads)
         bases_array = bases_array.isel(read=random_reads)
-    df_reads = decode_max(bases_array)
-    apply_kw_args = dict()
-    if remove_zero_entropy_barcodes:
-        if isinstance(df_reads, dd.DataFrame):
-            apply_kw_args["meta"] = int
-        df_reads["nunique_bases"] = df_reads["barcode"].apply(
-            _nunique_bases, **apply_kw_args
+    if min_unique_bases is not None and min_unique_bases > 1:
+        bases_array = filter_low_complexity_reads(
+            bases_array, min_unique_bases=min_unique_bases
         )
-        df_reads = df_reads.query("nunique_bases>1")
+    df_reads = decode_max(bases_array)
     if isinstance(df_reads, dd.DataFrame):
         df_reads = df_reads.compute()
-    else:
-        df_reads = df_reads.copy()
 
-    return _peak_thresholds_from_reads(df_reads, Q_cutoff, False).sort_values(
+    return _peak_thresholds_from_reads(df_reads, Q_cutoff).sort_values(
         ["f0.5", "accuracy", "threshold"], ascending=False
     )
 
@@ -145,128 +137,82 @@ def peak_thresholds_from_reads(
     :param Q_cutoff: Threshold for binarization of reads.
     :return: Result data frame.
     """
-    return _peak_thresholds_from_reads(df_reads, Q_cutoff, True).sort_values(
+    return _peak_thresholds_from_reads(df_reads, Q_cutoff).sort_values(
         ["f1", "accuracy", "threshold"], ascending=False
     )
 
 
 def _peak_thresholds_from_reads(
-    df_reads: pd.DataFrame, Q_cutoff: float = 60, copy=True
+    df_reads: pd.DataFrame, Q_cutoff: float = 60
 ) -> pd.DataFrame:
     """Calculate recall, precision, f1, and accuracy for different cutoff value of peaks.
 
+    Reads with `Q_mean >= Q_cutoff` are treated as positives. Peaks are sorted once and
+    the confusion matrix at each threshold is computed from cumulative counts.
+
     :param df_reads: Data frame containing reads.
     :param Q_cutoff: Threshold for binarization of reads.
-    :param copy: Copy the dataframe
     :return: Result data frame.
     """
-    if copy:
-        df_reads = df_reads.copy()
-    df_reads["read_type"] = (df_reads["Q_mean"] >= Q_cutoff).astype(int)
-    q = np.arange(0.02, 1, 0.01)
-    results = []
-    quantiles = df_reads["peak"].quantile(q).values
-    for i in range(len(quantiles)):
-        threshold = quantiles[i]
-        counts_over = df_reads.query(f"peak>{threshold}")["read_type"].value_counts()
-        counts_under = df_reads.query(f"peak<={threshold}")["read_type"].value_counts()
-        tp = counts_over.loc[1] if 1 in counts_over else 0
-        fp = counts_over.loc[0] if 0 in counts_over else 0
-        tn = counts_under.loc[0] if 0 in counts_under else 0
-        fn = counts_under.loc[1] if 1 in counts_under else 0
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        accuracy = (tp + tn) / (tp + fp + tn + fn)
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    peak = df_reads["peak"].to_numpy(dtype=float)
+    good = df_reads["Q_mean"].to_numpy() >= Q_cutoff
 
-        f1 = (2 * precision * recall) / (precision + recall)
+    order = np.argsort(peak, kind="stable")
+    peak_sorted = peak[order]
+    cum_good = np.concatenate([[0], np.cumsum(good[order])])
+    n = len(peak_sorted)
+    n_good = cum_good[-1]
 
-        results.append(
-            [threshold, q[i], precision, recall, f1, accuracy, tp, fp, tn, fn]
-        )
-    df = pd.DataFrame(
-        results,
-        columns=[
-            "threshold",
-            "quantile",
-            "precision",
-            "recall",
-            "f1",
-            "accuracy",
-            "tp",
-            "fp",
-            "tn",
-            "fn",
-        ],
-    )
-    b2 = 0.5 * 0.5
-    df["f0.5"] = ((1 + b2) * (df["precision"] * df["recall"])) / (
-        b2 * df["precision"] + df["recall"]
-    )
-    return df
-
-
-def _peaks_to_df(
-    peaks: NDArray | da.Array, sigma_list: NDArray
-) -> pd.DataFrame | dd.DataFrame:
-    """Converts peak data into a pandas or dask DataFrame.
-
-    :param peaks: Array containing the peak intensity values.
-    :param sigma_list:Array containing sigma values corresponding to the peaks.
-    :return: A DataFrame containing the peaks, sigma values, and their corresponding coordinates.
-
-    :example:
-    .. code-block:: python
-
-        # Example usage of _peaks_to_df
-        peaks_df = _peaks_to_df(peaks_array, sigma_array)
-    """
-
-    @dask.delayed
-    def process_chunk(x, offset, sigma_list):
-        indices = np.where(x > 0)
-        y_index = 0 if len(indices) == 2 else 1
-        x_index = 1 if len(indices) == 2 else 2
+    q = np.linspace(0, 0.99, 199)  # 0.5% steps
+    if n == 0:
+        # no reads: NaN thresholds and metrics (np.quantile fails on empty input)
+        nan = np.full(len(q), np.nan)
+        zeros = np.zeros(len(q), dtype=np.int64)
         return pd.DataFrame(
             {
-                "peak": x[indices],
-                "sigma": (
-                    sigma_list[indices[0]]
-                    if len(indices) > 2
-                    else np.repeat(sigma_list, len(indices[0]))
-                ),
-                "y": indices[y_index] + offset[0],
-                "x": indices[x_index] + offset[1],
+                "threshold": nan,
+                "quantile": q,
+                "precision": nan,
+                "recall": nan,
+                "f1": nan,
+                "accuracy": nan,
+                "tp": zeros,
+                "fp": zeros,
+                "tn": zeros,
+                "fn": zeros,
+                "f0.5": nan,
             }
         )
+    thresholds = np.quantile(peak_sorted, q)
+    n_under = np.searchsorted(
+        peak_sorted, thresholds, side="right"
+    )  # peak <= threshold
+    fn = cum_good[n_under]
+    tn = n_under - fn
+    tp = n_good - fn
+    fp = (n - n_under) - tp
 
-    if isinstance(peaks, da.Array):
-        output = [
-            process_chunk(peaks[s], (s[0].start, s[1].start), sigma_list)
-            for s in slices_from_chunks(peaks.chunks)
-        ]
-        meta = dd.utils.make_meta(
-            [
-                ("peak", peaks.dtype),
-                ("sigma", sigma_list.dtype),
-                ("y", np.int64),
-                ("x", np.int64),
-            ]
-        )
-        return dd.from_delayed(output, meta=meta).reset_index(drop=True)
-    indices = np.where(peaks > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        precision = np.where(tp + fp > 0, tp / (tp + fp), 0.0)
+        recall = np.where(tp + fn > 0, tp / (tp + fn), 0.0)
+        f1 = (2 * precision * recall) / (precision + recall)
+        b2 = 0.5 * 0.5
+        f05 = ((1 + b2) * (precision * recall)) / (b2 * precision + recall)
+    accuracy = (tp + tn) / n
 
-    y_index = 0 if len(indices) == 2 else 1
-    x_index = 1 if len(indices) == 2 else 2
     return pd.DataFrame(
         {
-            "peak": peaks[indices],
-            "sigma": (
-                sigma_list[indices[0]]
-                if len(indices) > 2
-                else np.repeat(sigma_list, len(indices[0]))
-            ),
-            "y": indices[y_index],
-            "x": indices[x_index],
+            "threshold": thresholds,
+            "quantile": q,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "accuracy": accuracy,
+            "tp": tp,
+            "fp": fp,
+            "tn": tn,
+            "fn": fn,
+            "f0.5": f05,
         }
     )
 

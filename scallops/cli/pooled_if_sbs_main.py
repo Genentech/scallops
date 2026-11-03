@@ -146,6 +146,17 @@ def _create_merge_parser(subparsers, default_help):
     parser.set_defaults(func=_merge_main)
 
 
+def _read_chunk_size(value: str) -> int | str:
+    if value == "auto":
+        return value
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"must be an integer or `auto`, got {value!r}"
+        ) from None
+
+
 def _create_reads_parser(subparsers, default_help):
     """Creates the parser for the reads command.
 
@@ -239,12 +250,32 @@ def _create_reads_parser(subparsers, default_help):
     )
     parser.add_argument(
         "--crosstalk-nreads",
-        help="Number of reads to sample to compute crosstalk correction. Use -1"
-        "to include all reads.",
+        help="Number of reads to sample to compute crosstalk correction using"
+        " `auto` crosstalk threshold. Use -1 to include all reads.",
         default=500000,
         type=int,
     )
 
+    parser.add_argument(
+        "--crosstalk-min-unique-bases",
+        help="Minimum number of different bases (A, C, G, T) a read must contain across "
+        "all cycles to be used when estimating crosstalk correction. For example, a "
+        "read called AAAAAA has 1 unique base and ACAACA has 2. Use 2 to ignore reads "
+        "with the same base in every cycle, which are often autofluorescence, debris, "
+        "or other false-positive spots. Use 1 to include all reads. Only affects "
+        "crosstalk estimation; all reads are still base called and assigned to labels.",
+        default=1,
+        type=int,
+    )
+    parser.add_argument(
+        "--read-chunk-size",
+        help="Number of reads per chunk. Reads in different chunks are processed in "
+        "parallel. Use `auto` to choose from the number of reads and dask worker "
+        "threads (about 3 chunks per thread, 50,000 to 500,000 reads per chunk), or "
+        "a value <= 0 (e.g. -1) for a single chunk.",
+        default="auto",
+        type=_read_chunk_size,
+    )
     parser.add_argument(
         "--all-labels",
         action="store_true",

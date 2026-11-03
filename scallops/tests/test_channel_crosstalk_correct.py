@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 from matplotlib import pyplot as plt
+from matplotlib.collections import QuadMesh
 
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
@@ -141,7 +142,39 @@ def test_li_and_speed_correct():
 
     assert li_and_speed_cc_number(bases) >= 0.3
     assert li_and_speed_cc_number(corrected_intensity) <= 0.11
-    fig, axes = pairwise_channel_scatter_plot(corrected_intensity, q=[0.6, 0.999])
+    fig, axes = pairwise_channel_scatter_plot(corrected_intensity)
+    plt.close(fig)
+    fig, axes = pairwise_channel_scatter_plot(corrected_intensity, kind="hist", bins=64)
+    used_axes = [ax for ax in axes.ravel() if ax.has_data()]
+    assert len(used_axes) == 6
+    assert all(any(isinstance(c, QuadMesh) for c in ax.collections) for ax in used_axes)
+    plt.close(fig)
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("norm", ["instance", "log", "class"])
+def test_pairwise_hist_norm(norm):
+    from matplotlib.colors import LogNorm
+
+    rng = np.random.default_rng(0)
+    data = xr.DataArray(
+        rng.gamma(2, size=(500, 3, 4)),
+        dims=("read", "t", "c"),
+        coords={"c": list("GTAC")},
+    )
+    user_norm = {"instance": LogNorm(vmin=1), "log": "log", "class": LogNorm}[norm]
+    fig, axes = pairwise_channel_scatter_plot(
+        data, kind="hist", bins=16, norm=user_norm
+    )
+    norms = [
+        c.norm for ax in axes.ravel() for c in ax.collections if isinstance(c, QuadMesh)
+    ]
+    assert len(norms) == 6
+    # a separate norm per panel so each autoscales; the user's instance is not mutated
+    assert len({id(n) for n in norms}) == 6
+    if norm == "instance":
+        assert all(n is not user_norm for n in norms)
+        assert user_norm.vmin == 1 and user_norm.vmax is None
     plt.close(fig)
 
 
