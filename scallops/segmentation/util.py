@@ -63,7 +63,7 @@ def threshold_quantile(
 
 
 def _summarize(
-    image: xr.DataArray, rolling_ball: bool = False, depth: int = 30
+    image: xr.DataArray, rolling_ball: bool = False, depth: int = 150
 ) -> NDArray | da.Array:
     """Summarize channels/cycles, then optionally apply rolling ball subtraction.
 
@@ -193,7 +193,7 @@ def image2mask(
     threshold_correction_factor: float = 1,
     rolling_ball: bool = False,
     sigma: float | None = None,
-    depth: int = 30,
+    depth: int = 150,
 ) -> tuple[NDArray | da.Array, NDArray | da.Array, float | None]:
     """Convert an image to a mask.
 
