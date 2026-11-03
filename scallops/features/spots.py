@@ -48,13 +48,13 @@ def _load_ufish_model():
 def spot_count(
     c: Sequence[int],
     intensity_threshold: float = 0.06,
+    connectivity: int = 2,
+    laplace_process: bool = True,
     channel_names: Sequence[str] | None = None,
     unique_labels: NDArray = None,
     label_image: NDArray = None,
     intensity_image: NDArray = None,
     model: Optional["ufish.api.UFish"] = None,
-    connectivity: int = 2,
-    laplace_process: bool = True,
     axes="yx",
     return_spots_coords=False,
     **kwargs,
@@ -70,6 +70,8 @@ def spot_count(
     if a spot falls into a region with label `L`, its count contributes to `counts[L - 1]`.
 
     :param c: Sequence of 0-based channel indices for which to count spots.
+    :param intensity_threshold: The intensity threshold.
+    :param connectivity: Connectivity for local maxima.
     :param channel_names: Sequence of strings, where each string is the name of a channel,
         corresponding to the channel indices in `intensity_image`.
     :param unique_labels: A 1D numpy array containing the unique integer labels present in `label_image`.

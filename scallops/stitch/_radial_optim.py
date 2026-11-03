@@ -19,7 +19,7 @@ def _sample_random_pairs(pairs, size=21, seed=239753):
 
 def parallel_find_radial_K(pair_vec, read_images, pairs, shifts, upsample_factor=1.0):
     results = []
-    _find_radial_K_delayed = delayed(radial_best_K, nout=3)
+    _find_radial_K_delayed = delayed(radial_best_K, nout=4)
     for pos in pair_vec:
         ref = read_images[pairs[pos][0]]
         mov = read_images[pairs[pos][1]]

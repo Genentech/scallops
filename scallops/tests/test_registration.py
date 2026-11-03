@@ -141,3 +141,56 @@ def test_align_image_align_between_time(experiment_c):
     known_good = read_image("scallops/tests/data/align/align_between_time_channel.tif")
     np.testing.assert_array_equal(result.values, known_good.values)
     xr.testing.assert_equal(image_copy, image)
+
+
+@pytest.mark.registration
+def test_array_to_itk_spacing_order():
+    from scallops.registration.itk import _array_to_itk
+
+    itk_image = _array_to_itk(np.zeros((10, 20), dtype=np.float32), (0.5, 0.25))
+    # scallops spacing is (y, x); ITK spacing is (x, y)
+    assert tuple(itk_image.GetSpacing()) == (0.25, 0.5)
+
+
+@pytest.mark.registration
+def test_itk_align_across_channels():
+    import itk
+    from scipy.ndimage import gaussian_filter, shift
+
+    from scallops.registration.itk import (
+        itk_align_to_reference_time,
+        set_automatic_transform_initialization,
+    )
+
+    rng = np.random.default_rng(0)
+    base = gaussian_filter(rng.random((256, 256)), 4).astype(np.float32)
+    base = (base - base.min()) / (base.max() - base.min())
+    # inverted contrast to mimic a different stain
+    moving = 1 - shift(base, (4, -6), order=1, mode="nearest")
+    image = xr.DataArray(
+        np.stack([base, base, moving])[np.newaxis],
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[0], c=["a", "b", "c"]),
+    )
+    parameter_object_across_channels = itk.ParameterObject.New()
+    parameter_object_across_channels.AddParameterMap(
+        parameter_object_across_channels.GetDefaultParameterMap("translation")
+    )
+    set_automatic_transform_initialization(parameter_object_across_channels, False)
+
+    result = itk_align_to_reference_time(
+        moving_image=image,
+        moving_channel=[0, 1],
+        parameter_object=itk.ParameterObject.New(),
+        moving_image_spacing=(1.0, 1.0),
+        parameter_object_across_channels=parameter_object_across_channels,
+    )
+
+    # reference channels are not registered or resampled
+    np.testing.assert_array_equal(result.isel(t=0, c=0).values, base)
+    np.testing.assert_array_equal(result.isel(t=0, c=1).values, base)
+    interior = (slice(20, -20), slice(20, -20))
+    aligned = result.isel(t=0, c=2).values[interior]
+    expected = 1 - base[interior]
+    assert np.corrcoef(aligned.ravel(), expected.ravel())[0, 1] > 0.99
+    assert np.corrcoef(moving[interior].ravel(), expected.ravel())[0, 1] < 0.9

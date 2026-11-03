@@ -196,11 +196,9 @@ def _coords(exp, key: str) -> tuple[None | str, NDArray]:
             im = exp.images[key]
             if im is None:
                 return None, np.array([np.nan, np.nan])
-            pixels = im.attrs["ome"]["images"][0]["pixels"]
-            plane = pixels["planes"][0]
-            return well, np.array(
-                [plane["position_x"], plane["position_y"]], dtype=float
-            )
+            pixels = im.attrs["processed"].images[0].pixels
+            plane = pixels.planes[0]
+            return well, np.array([plane.position_x, plane.position_y], dtype=float)
         except ValidationError:
             return None, np.array([np.nan, np.nan])
     return None, np.array([np.nan, np.nan])

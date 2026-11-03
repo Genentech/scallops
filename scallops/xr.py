@@ -32,7 +32,10 @@ def _z_projection(
             from scallops.stitch.utils import _best_focus_z_index
 
             return data.isel(z=_best_focus_z_index(data))
-        return data.max(dim="z", keep_attrs=True)
+        elif z_index == "max":
+            return data.max(dim="z", keep_attrs=True)
+        else:
+            raise ValueError(f"Invalid z: {z_index}")
     return data.isel(z=z_index)
 
 

@@ -74,6 +74,24 @@ Example::
    --subset "A-3-IF" "A-3-FISH"
 
 
+Channels can be aligned to the reference channel (``--align-channel``) when writing the stitched image, to correct
+chromatic differences in magnification and position between channels. Give the channels to correct and the name of
+every input channel; channels without values in the parameter file are estimated from the tiles of each well.
+
+Example::
+
+   scallops stitch \
+   --images "s3://xxx-input/" \
+   --image-pattern "{plate}/{skip}/experiment/timepoint0/{skip}_t0_{well}_s{tile}_w{c}_z{z}.tif" \
+   --ffp "s3://xxx/stitch/pheno/illumination_correction/{plate}-{well}.ome.tiff" \
+   --image-output "s3://xxx/stitch/pheno/stitch/stitch.zarr" \
+   --report-output "s3://xxx/stitch/pheno/stitch/report" \
+   --groupby plate well \
+   --alignment-correction-channels all \
+   --alignment-correction-channel-order DAPI FITC TRITC CY5 CY7 \
+   --alignment-correction-params "s3://xxx/params/microscope-1-channel-alignment.json"
+
+
 Register ISS Images
 =====================
 

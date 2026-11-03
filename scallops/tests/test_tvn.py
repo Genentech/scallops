@@ -230,7 +230,7 @@ def test_tvn_matches_efaar_float32(by):
 def test_typical_variation_normalization_missing_by_value():
     """A missing `by` value forms its own group rather than dropping those rows."""
     data = _tvn_fixture()
-    batch = data.obs["batch"].astype(object).to_numpy()
+    batch = data.obs["batch"].astype(object).to_numpy().copy()
     batch[:4] = None
     data.obs["batch"] = batch
     result = typical_variation_normalization(data, "pert=='1'", "batch")

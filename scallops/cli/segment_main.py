@@ -10,12 +10,14 @@ from argparse import (
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.util import (
     SubParsers,
+    _label_args_type,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
     groupby_arg,
     image_pattern_arg,
     images_arg,
+    labels_arg,
     no_version_arg,
     subset_arg,
     z_index_arg,
@@ -209,7 +211,11 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
 
     parser.add_argument(
         "--nuclei-label",
-        help="Path to zarr directory containing nuclei labels for watershed or propagation segmentation",
+        nargs="+",
+        type=_label_args_type,
+        help="One or more paths to zarr stores containing a 'labels' group with nuclei "
+        "labels for watershed or propagation segmentation. If the same label name "
+        "appears in more than one store, the store listed last is used.",
     )
     parser.add_argument(
         "--method",
@@ -331,12 +337,8 @@ def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
         ),
     )
     required = parser.add_argument_group("required arguments")
-    required.add_argument(
-        "--labels",
-        required=True,
-        nargs="+",
-        help="Path to zarr directory containing labels",
-    )
+    labels_arg(required)
+
     required.add_argument(
         "--meta-output",
         required=True,

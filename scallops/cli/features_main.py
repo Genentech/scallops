@@ -12,6 +12,7 @@ from scallops.cli.util import (
     groupby_arg,
     image_pattern_arg,
     images_arg,
+    labels_arg,
     no_version_arg,
     output_dir_arg,
     subset_arg,
@@ -60,9 +61,9 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         :param x: The parser object.
         """
         print(x.old_help())
-        from scallops.features.info import HELP
+        from scallops.features.info import help_text
 
-        print(HELP)
+        print(help_text())
 
     # Override the default help formatter
     parser.format_help = MethodType(new_format_help, parser)
@@ -71,12 +72,7 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     images_arg(required)
 
     output_dir_arg(required)
-    required.add_argument(
-        "--labels",
-        dest="labels",
-        required=True,
-        help="Path to zarr directory containing labels",
-    )
+    labels_arg(required)
 
     generic_features_help = (
         "A space-separated list of features to extract (e.g., 'area intensity_0 corr_0_1').\n"

@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
 import pytest
-from pandas.core.dtypes.common import is_object_dtype
 
 from scallops.cli.pooled_if_sbs import _merged_to_matrix, merge_sbs_phenotype_pipeline
+from scallops.io import _PANDAS_3
 from scallops.reads import merge_sbs_phenotype
 
 
@@ -72,7 +72,7 @@ def test_merge_sbs_phenotype_df(tmp_path, df_known_good):
 
 
 @pytest.mark.utils
-def test_merge_sbs_phenotype_matrix(tmp_path, df_known_good):
+def test_merge_sbs_phenotype_matrix(tmp_path):
     df_cells = (
         pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.cells.csv")
         .rename(
@@ -130,14 +130,74 @@ def test_merge_sbs_phenotype_matrix(tmp_path, df_known_good):
         sbs_cycles=[1, 2, 3, 4, 5, 7, 8, 9, 10],
     )
     data_df = data_df.loc[merged_df.index]
-    merged_df["duplicate_prefix"] = merged_df["duplicate_prefix"].astype(str)
-    merged_df["duplicate_prefix_1"] = merged_df["duplicate_prefix_1"].astype(str)
-    for c in merged_df.columns:
-        if is_object_dtype(merged_df[c]):
-            merged_df[c] = merged_df[c].replace({np.nan: ""}).replace({"nan": ""})
-            data_df[c] = data_df[c].replace({"nan": ""}).replace({"None": ""})
 
-        np.testing.assert_array_equal(data_df[c].values, merged_df[c].values, err_msg=c)
+    pd.testing.assert_frame_equal(
+        _missing_as_nan(merged_df),
+        _missing_as_nan(data_df[merged_df.columns]),
+        check_dtype=False,
+    )
+
+
+@pytest.mark.utils
+def test_merged_to_matrix_object_columns(tmp_path):
+    import anndata
+
+    index = pd.Index([1, 2, 3], name="label")
+    pheno_path = str(tmp_path / "pheno.parquet")
+    pd.DataFrame({"f": [1.0, 2.0, 3.0]}, index=index).to_parquet(pheno_path)
+    merged_df = pd.DataFrame(
+        {
+            "barcode_0": pd.Series(["AC", np.nan, None], index=index, dtype=object),
+            "duplicate_prefix": pd.Series(
+                [False, np.nan, True], index=index, dtype=object
+            ),
+            # e.g. duplicate_prefix when there are no duplicates
+            "all_missing": pd.Series([np.nan] * 3, index=index, dtype=object),
+        },
+        index=index,
+    )
+    data = _merged_to_matrix(
+        merged_df=merged_df,
+        phenotype_paths=[pheno_path],
+        feature_names=["f"],
+        feature_columns=[["f"]],
+        name="test",
+        format="anndata",
+    )
+    path = str(tmp_path / "test.h5ad")
+    data.write_h5ad(path)
+    obs = anndata.read_h5ad(path).obs
+    # with pandas < 3, missing strings are saved as "nan" or "None" (astype(str))
+    nan, none = ("<NA>", "<NA>") if _PANDAS_3 else ("nan", "None")
+    assert list(obs["barcode_0"].astype(object).fillna("<NA>")) == ["AC", nan, none]
+    assert list(obs["all_missing"].astype(object).fillna("<NA>")) == [nan] * 3
+    assert list(obs["duplicate_prefix"].astype(object).fillna("<NA>")) == [
+        False,
+        "<NA>",
+        True,
+    ]
+
+
+def _missing_as_nan(df: pd.DataFrame) -> pd.DataFrame:
+    """Non-numeric columns as object with NaN for missing values.
+
+    Missing values in string, boolean, and categorical columns are NaN or pd.NA
+    depending on the dtype, which differs between pandas versions and between a
+    data frame and anndata obs. With pandas < 3, :func:`_merged_to_matrix` saves
+    missing strings in anndata obs as "nan" or "None", which are also treated as
+    missing.
+    """
+    df = df.copy()
+    for c in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(
+            df[c]
+        ):
+            values = df[c].astype(object)
+            missing = values.isna()
+            if not _PANDAS_3:
+                missing |= values.isin(["nan", "None"])
+            df[c] = values.where(~missing, np.nan)
+    return df
 
 
 _IMAGE_KEY = "A1-102"

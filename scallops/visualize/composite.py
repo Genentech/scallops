@@ -389,6 +389,8 @@ def imcomposite(
         and labels_contour.dtype in (np.uint16, np.uint8)
     ):
         labels_contour = labels_contour.astype(np.uint32, copy=False)
+    if labels is None and labels_contour is not None and labels_contour_cmap is None:
+        labels_contour_cmap = ListedColormap([(1, 1, 1)])  # white border
     if col_facet is not None or row_facet is not None:
         if image is None:
             raise ValueError("image is required when col_facet or row_facet is set")

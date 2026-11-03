@@ -303,7 +303,7 @@ def stitch_align(
             read_images[0].compute().shape
         )  # Update tile_shape in case cropping happens
         logger.info(
-            f"Radial correction K: {radial_correction_k}, crop width: {crop_width}."
+            f"Radial correction K: {radial_correction_k}, crop width: {crop_width[0]}, {crop_width[1]}."
         )
 
     #  Compute the null
@@ -362,7 +362,7 @@ def stitch_align(
         original_tile_shape,
         crop_width,
     )
-    logger.info(f"Crop for writing: {fuse_crop_width[0], fuse_crop_width[1]}.")
+    logger.info(f"Crop for writing: {fuse_crop_width[0]}, {fuse_crop_width[1]}.")
     if evaluate_stitching:
         # Global evaluation
         logger.info(

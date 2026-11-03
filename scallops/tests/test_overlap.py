@@ -366,3 +366,60 @@ def test_label_overlap_cli(
     pd.testing.assert_frame_equal(
         assignment_df[["label_1", "fraction_overlap"]], expected, check_dtype=False
     )
+
+
+@pytest.mark.features
+def test_label_overlap_cli_multiple_label_stores(
+    experiment_c_A1_102_cells, experiment_c_A1_102_nuclei, tmpdir
+):
+    # nuclei are only in the first store, "test-cell" is in both: the store listed
+    # last wins
+    cells = experiment_c_A1_102_cells.squeeze().data
+    nuclei = experiment_c_A1_102_nuclei.squeeze().data
+    filtered_cells = cells.copy()
+    filtered_cells[filtered_cells == 17] = 0
+
+    labels_path1 = str(tmpdir / "test1.zarr")
+    labels_path2 = str(tmpdir / "test2.zarr")
+    for path, labels in (
+        (labels_path1, {"test-nuclei": nuclei, "test-cell": filtered_cells}),
+        (labels_path2, {"test-cell": cells}),
+    ):
+        root = open_ome_zarr(path, mode="w")
+        for name, value in labels.items():
+            _write_zarr_labels(
+                name=name,
+                root=root,
+                labels=da.from_array(value, chunks=(50, 50)),
+                metadata=dict(physical_pixel_sizes=[0.5, 0.25]),
+                group_metadata={
+                    "image-label": {"source": {"image": "../../images/test"}}
+                },
+            )
+
+    for label_paths, has_cell_17 in (
+        ([labels_path1, labels_path2], True),
+        ([labels_path2, labels_path1], False),
+    ):
+        output_meta_path = str(tmpdir / f"output-{has_cell_17}")
+        check_call(
+            [
+                "scallops",
+                "segment",
+                "overlap",
+                "--labels",
+                *label_paths,
+                "--meta-output",
+                output_meta_path,
+                "--label-output",
+                str(tmpdir / f"output-{has_cell_17}.zarr"),
+                "--label-suffix-1",
+                "nuclei",
+                "--label-suffix-2",
+                "cell",
+                "--label-pattern",
+                "{well}",
+            ]
+        )
+        overlap_df = pd.read_parquet(output_meta_path + "/test-overlap.parquet")
+        assert (overlap_df["label_2"] == 17).any() == has_cell_17

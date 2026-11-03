@@ -256,7 +256,6 @@ def pooled_iss(
 def experiment_napari(
     experiment: Experiment,
     labels: Experiment | dict[str, NDArray | DataArray] | None = None,
-    title_attribute: str = "common_src",
     viewer: "napari.Viewer | None" = None,
     **kwargs,
 ) -> "napari.Viewer":
@@ -270,8 +269,6 @@ def experiment_napari(
         Experiment to display
     :param labels:
         Labels (e.g., from segmentation) that map image key to label array.
-    :param title_attribute:
-        Attribute to set as the window title
     :param viewer:
         An existing Napari viewer instance
     :param kwargs:
@@ -312,7 +309,7 @@ def experiment_napari(
         imnapari(
             image=experiment.images[name],
             viewer=viewer,
-            title_attribute=title_attribute,
+            title=name,
             labels=label,
             **kwargs,
         )
@@ -332,7 +329,7 @@ def imnapari(
     image: DataArray | dict[str, DataArray] | None,
     labels: None | NDArray | DataArray | dict[str, NDArray | DataArray] = None,
     points: pd.DataFrame | None = None,
-    title_attribute: str = "common_src",
+    title: str | None = None,
     viewer: "napari.Viewer | None" = None,
     point_size: int = 5,
     **kwargs,
@@ -346,7 +343,7 @@ def imnapari(
     :param points: Dataframe with peaks information
     :param image: Image(s) to display. If a dictionary, the key would be the display name
     :param labels: Labels (e.g., from segmentation) that map label name to label array.
-    :param title_attribute: Attribute to set as the window title
+    :param title: Window title
     :param viewer: An existing Napari viewer instance
     :param kwargs: Keyword arguments to be passed to viewer.add_image
     :return: Napari viewer
@@ -378,7 +375,7 @@ def imnapari(
             viewer = Viewer()
 
             # View the synthetic image in Napari
-            imnapari(synthetic_image, title_attribute="Synthetic Image", viewer=viewer)
+            imnapari(synthetic_image, title="Synthetic Image", viewer=viewer)
 
             # Run the Napari event loop
             viewer.show()
@@ -415,7 +412,8 @@ def imnapari(
                 **kwargs,
             )
             viewer.dims.axis_labels = axis_labels
-            viewer.title = img.attrs.get(title_attribute, "")
+            if title is not None:
+                viewer.title = title
 
     if labels is not None:
         if isinstance(labels, (np.ndarray, DataArray)):
@@ -547,24 +545,24 @@ def radial_distortion_estimation(
         clipboard.setText(command)
         print("Command copied to clipboard")
 
-    images_meta = {k: v.attrs["ome"]["images"][0]["pixels"] for k, v in images.items()}
+    images_meta = {k: v.attrs["processed"].images[0].pixels for k, v in images.items()}
     translations = [
         (0, 0),
         (
             0,
-            images_meta["top_left"]["size_x"]
-            - (images_meta["top_right"]["size_x"] * proportion_overlap),
+            images_meta["top_left"].size_x
+            - (images_meta["top_right"].size_x * proportion_overlap),
         ),
         (
-            images_meta["top_left"]["size_y"]
-            - (images_meta["bottom_left"]["size_y"] * proportion_overlap),
+            images_meta["top_left"].size_y
+            - (images_meta["bottom_left"].size_y * proportion_overlap),
             0,
         ),
         (
-            images_meta["top_left"]["size_y"]
-            - (images_meta["bottom_left"]["size_y"] * proportion_overlap),
-            images_meta["top_left"]["size_x"]
-            - (images_meta["top_right"]["size_x"] * proportion_overlap),
+            images_meta["top_left"].size_y
+            - (images_meta["bottom_left"].size_y * proportion_overlap),
+            images_meta["top_left"].size_x
+            - (images_meta["top_right"].size_x * proportion_overlap),
         ),
     ]
     viewer = napari.Viewer()

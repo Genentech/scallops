@@ -123,6 +123,7 @@ Tools for decoding sequencing spots and assigning them to barcodes and labels.
 
     scallops.reads.apply_channel_crosstalk_matrix
     scallops.reads.assign_barcodes_to_labels
+    scallops.reads.barcode_n_unique_bases
     scallops.reads.barcode_to_prefix
     scallops.reads.base_counts
     scallops.reads.channel_crosstalk_matrix

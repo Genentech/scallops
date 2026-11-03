@@ -12,7 +12,6 @@ import itertools
 import json
 import logging
 import os
-from bisect import bisect_right
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
@@ -40,7 +39,6 @@ from skimage.transform import rescale, resize
 from xarray import DataArray
 
 logger = logging.getLogger("scallops")
-
 
 # func(*blocks, left_pads, starts, stops, **kwargs) -> DataFrame of results for the blocks'
 # main region
@@ -311,9 +309,9 @@ def _fix_json(d):
     """Attempts to serialize and deserialize a dictionary to ensure it can be safely converted to
     JSON.
 
-    This function first tries to use the faster `ujson` library from `pandas` if available.
-    If `ujson` is not available, it defaults to the standard `json` library. If serialization
-    fails due to an `OverflowError`, a warning is logged, and an empty dictionary is returned.
+    Serialization uses the `ujson` encoder bundled with pandas, which also handles numpy
+    scalars and arrays. If serialization fails due to an `OverflowError`, a warning is
+    logged, and an empty dictionary is returned.
 
     :param d: The dictionary to be serialized and deserialized.
     :return: A deserialized version of the input dictionary or an empty dictionary
@@ -330,14 +328,11 @@ def _fix_json(d):
         print(fixed_data)
         # Output: {}
     """
-    import pandas._libs.json as ujson
-
     try:
-        # Try to use ujson for faster performance
-        dumps = ujson.ujson_dumps
-    except AttributeError:
-        # Fallback to standard JSON library's dumps if ujson is not available
-        dumps = ujson.dumps
+        # public since pandas 2.0; pandas._libs.json was renamed in pandas 3
+        from pandas.io.json import ujson_dumps as dumps
+    except ImportError:
+        from pandas.io.json import dumps  # pandas < 2
 
     try:
         # Serialize and deserialize the dictionary to ensure JSON compatibility
@@ -348,6 +343,19 @@ def _fix_json(d):
         d = {}
 
     return d
+
+
+def _dask_total_threads() -> int:
+    """Total number of threads available to dask: the threads of all workers when a
+    distributed client is active, otherwise the local CPU count (which honors
+    `SCALLOPS_CPU_COUNT`).
+    """
+    try:
+        from distributed import get_client
+
+        return max(1, sum(get_client().nthreads().values()))
+    except ValueError:  # no distributed client
+        return _cpu_count()
 
 
 def is_dask_distributed():
@@ -420,60 +428,6 @@ def match_size(image: NDArray, target: NDArray, order: Optional[str] = None) -> 
     return resize(image, target.shape, preserve_range=True, order=order).astype(
         image.dtype
     )
-
-
-def mlcs(strings: Sequence[str]):
-    """Return a long common subsequence of the strings. Uses a greedy algorithm, so the result is
-    not necessarily the longest common subsequence.
-
-    :param strings: list of strings to compare
-    """
-    if not isinstance(strings, list) or len(strings) < 1:
-        return strings
-    if len(strings) == 1:
-        return strings[0]
-    if not strings:
-        raise ValueError("mlcs() argument is an empty sequence")
-    strings = list(set(strings))  # deduplicate
-    alphabet = set.intersection(*(set(s) for s in strings))
-
-    indexes: dict[str, list[list[int]]] = {
-        letter: [[] for _ in strings] for letter in alphabet
-    }
-    for i, s in enumerate(strings):
-        for j, letter in enumerate(s):
-            if letter in alphabet:
-                indexes[letter][i].append(j)
-
-    # pos[right] is current position of search in strings[right].
-    pos = [len(s) for s in strings]
-
-    # Generate candidate positions for next step in search.
-    def _candidates():
-        for letter, letter_indexes in indexes.items():
-            distance, candidate = 0, []
-            for ind, p in zip(letter_indexes, pos):
-                right = bisect_right(ind, p - 1) - 1
-                q = ind[right]
-                if right < 0 or q > p - 1:
-                    break
-                candidate.append(q)
-                distance += (p - q) ** 2
-            else:
-                yield distance, letter, candidate
-
-    result: list[str] = []
-    while True:
-        try:
-            # Choose the closest candidate position, if any.
-            _, letter, pos = min(_candidates())
-        except ValueError:
-            combo = ["--", "-_", "-.", "_-", "__", "_.", ".-", "._", ".."]
-            res = "".join(reversed(result))
-            for c in combo:
-                res = res.replace(c, "_*_")
-            return res
-        result.append(letter)
 
 
 def id_well_edge(data_: NDArray) -> NDArray:

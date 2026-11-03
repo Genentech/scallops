@@ -43,6 +43,7 @@ dependencies = [
     "dask-image",
     "dask",
     "decorator",
+    "distributed",
     "filelock",
     "flox",
     "fsspec",
@@ -57,12 +58,12 @@ dependencies = [
     "numcodecs",
     "numpy",
     "ome-zarr",
-    "pandas<3",
+    "pandas",
     "pint",
     "psutil",
     "pyarrow",
     "pydantic",
-    "scikit-image",
+    "scikit-image>=0.26.0",
     "scikit-learn",
     "scipy",
     "seaborn",
@@ -122,6 +123,9 @@ Repository = "https://github.com/Genentech/scallops.git"
 [tool.setuptools]
 include-package-data = true
 zip-safe = false
+
+[tool.setuptools.package-data]
+"scallops.features" = ["features.rst"]
 
 [tool.setuptools.packages.find]
 include = ["scallops*"]

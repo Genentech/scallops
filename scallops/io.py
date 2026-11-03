@@ -47,9 +47,7 @@ import zarr
 from anndata._io.specs import read_elem
 from anndata.experimental import read_dispatched
 from bioio_ome_tiff.writers import OmeTiffWriter
-from dask.bag import from_sequence
 from dask.delayed import Delayed, delayed
-from dask.diagnostics import ProgressBar
 from dask.graph_manipulation import bind
 from natsort import natsort_keygen, natsorted
 from numpy.typing import NDArray
@@ -62,7 +60,7 @@ from zarr.storage import StoreLike
 
 from scallops.experiment.elements import Experiment, _LazyLoadData
 from scallops.externals.tifffile2014 import imsave
-from scallops.utils import forceTCZYX, mlcs
+from scallops.utils import forceTCZYX
 from scallops.xr import _crop
 from scallops.zarr_io import _get_store_path, _read_zarr_experiment, read_ome_zarr_array
 
@@ -128,8 +126,95 @@ def _pd_to_parquet(
     )
 
 
+_NONE_INDEX_LABEL = "__null_dask_index__"  # dask's name for an unnamed index
+_PANDAS_3 = int(pd.__version__.split(".")[0]) >= 3
+
+
+def _reset_index_like_dask(
+    sample: pd.DataFrame, write_index: bool
+) -> tuple[pd.DataFrame, list]:
+    """Reset the index as dask does before writing parquet.
+
+    :return: The frame and the names of the written index columns.
+    """
+    columns = list(sample.columns)
+    if not write_index:
+        return sample.reset_index(drop=True), []
+    # same as dask: reset the index, naming an unnamed index _NONE_INDEX_LABEL
+    reserved_names = [c for c in ("index", "level_0") if c not in columns]
+    none_index = list(sample.index.names) == [None]
+    sample = sample.reset_index()
+    if none_index:
+        sample = sample.rename(columns={c: _NONE_INDEX_LABEL for c in reserved_names})
+    return sample, [c for c in sample.columns if c not in set(columns)]
+
+
+def _parquet_schema(
+    df: dd.DataFrame, overrides: Mapping | None = None, write_index: bool = True
+) -> pa.Schema:
+    """Full Arrow schema for writing `df` to parquet with dask.
+
+    Non-object columns are typed from dask's fake data (``_meta_nonempty``), as
+    dask does. Object columns (including a written object index) without an
+    override are typed as strings. Unlike dask, which types object columns from the
+    first non-empty partition, no data is computed, so object columns that don't
+    hold strings (e.g. lists or arrays) need a type in `overrides`, otherwise the
+    write fails. This is needed with pandas >= 3, where dask fills object columns of
+    ``_meta_nonempty`` with ``object()``, which Arrow can't infer a type for.
+
+    :param df: Data frame to write.
+    :param overrides: Arrow types for specific columns.
+    :param write_index: Whether the index is written, as in
+        :meth:`dask.dataframe.DataFrame.to_parquet`.
+    :return: The schema.
+    """
+    columns = list(df.columns)
+    sample, index_columns = _reset_index_like_dask(df._meta_nonempty, write_index)
+    overrides = dict(overrides) if overrides is not None else {}
+    object_columns = {
+        c for c in sample.columns if pd.api.types.is_object_dtype(sample[c].dtype)
+    }
+    inferred = pa.Schema.from_pandas(
+        sample.drop(
+            columns=[c for c in sample.columns if c in object_columns or c in overrides]
+        ),
+        preserve_index=False,
+    )
+    fields = []
+    for c in columns + index_columns:  # index columns last, as pyarrow and dask
+        if c in overrides:
+            fields.append(pa.field(c, overrides[c]))
+        elif c in object_columns:
+            fields.append(pa.field(c, pa.string()))  # as dask with pandas < 3
+        else:
+            fields.append(inferred.field(c))
+    return pa.schema(fields)
+
+
+def _has_object_dtype(df: dd.DataFrame) -> bool:
+    meta = df._meta
+    return any(pd.api.types.is_object_dtype(dtype) for dtype in meta.dtypes) or any(
+        pd.api.types.is_object_dtype(meta.index.get_level_values(i).dtype)
+        for i in range(meta.index.nlevels)
+    )
+
+
 def _dd_to_parquet(df: dd.DataFrame, path: str, **kwargs) -> Delayed | None:
     compute = kwargs.pop("compute", True)
+    schema = kwargs.get("schema", "infer")
+    if (
+        _PANDAS_3
+        and (
+            (isinstance(schema, str) and schema == "infer") or isinstance(schema, dict)
+        )
+        and _has_object_dtype(df)
+    ):
+        # dask's own schema inference fails for object columns with pandas >= 3
+        kwargs["schema"] = _parquet_schema(
+            df,
+            overrides=schema if isinstance(schema, dict) else None,
+            write_index=kwargs.get("write_index", True),
+        )
     fs, fs_path = fsspec.url_to_fs(path)
 
     if fs.exists(fs_path):
@@ -271,7 +356,7 @@ def _create_image(path: str, **kwargs) -> bioio.BioImage:
         # Example usage of _create_image
         image = _create_image("data/sample_image.tiff", reconstruct_mosaic=True)
     """
-    img_args = dict(reconstruct_mosaic=False)
+    img_args = dict(reconstruct_mosaic=False, use_plugin_cache=True)
     img_args.update(**kwargs)
     path_lc = path.lower()
     base_path_lc, ext = os.path.splitext(path_lc)
@@ -360,10 +445,6 @@ def _read_image(
     if scene_id is not None:
         img.set_scene(scene_id=scene_id)
     data = img.xarray_data if not dask else img.xarray_dask_data
-    try:
-        data.attrs["ome"] = img.ome_metadata.model_dump()
-    except NotImplementedError:
-        pass
     for c in ["Z", "Y", "X"]:
         if c in data.coords:
             del data.coords[c]
@@ -1746,6 +1827,10 @@ def _get_fs_protocol(fs: fsspec.AbstractFileSystem) -> str:
     return fs.protocol[0] if isinstance(fs.protocol, (tuple, list)) else fs.protocol
 
 
+# (path or Zarr node, fields parsed from the file pattern or CSV row)
+_FileMatch = tuple[str | zarr.Group | zarr.Array, dict[str, Any]]
+
+
 def _set_up_experiment(
     image_path: str | Path | zarr.Group | Sequence[str | Path | zarr.Group],
     files_pattern: str | re.Pattern | None = "*",
@@ -1754,6 +1839,7 @@ def _set_up_experiment(
     scenes: bool | list[str] = False,
     file_sort_order: dict[str, list[str]] | None = None,
     case_sensitive: bool = False,
+    filter_matches: Callable[[list[_FileMatch]], list[_FileMatch]] | None = None,
 ) -> Generator[tuple[tuple[str, ...], Sequence[str], dict], None, None]:
     """Find images matching `files_pattern` and yield them in groups defined by `group_by`.
 
@@ -1804,6 +1890,10 @@ def _set_up_experiment(
         ``t``, ``c``, ``z``, and file path.
     :param case_sensitive: Whether `files_pattern` and wildcard or regular expression
         `subset` entries are case-sensitive.
+    :param filter_matches: Function called with each group's list of
+        ``(path or Zarr node, fields)`` matches, in input order and before sorting,
+        that returns the matches to keep.
+
     :return: Generator of ``(group, file_list, metadata)`` tuples, one per group (and
         scene), where ``group`` is the tuple of `group_by` values, ``file_list`` is the
         list of matched image paths or Zarr groups, and ``metadata`` is a dict with the
@@ -1814,8 +1904,7 @@ def _set_up_experiment(
         - ``file_metadata``: list with the fields extracted from each file (or the
           other columns of each row, for CSV/Parquet input)
         - ``group_metadata``: dict with ``group`` (dict of `group_by` field to value),
-          ``src`` (``file_list``), and ``common_src`` (longest common subsequence of the
-          file names)
+          ``src`` (``file_list``)
 
     :raises ValueError: If no images are found.
 
@@ -2049,6 +2138,7 @@ def _set_up_experiment(
     keys = files_pattern_keys if unique_csv_columns is None else unique_csv_columns
     sort_dims = list(dict.fromkeys([*(file_sort_order or {}), "t", "c", "z"]))
     sort_order_index: dict[str, dict[str, int]] | None = None
+
     if file_sort_order is not None:
         for k in file_sort_order:
             if k not in keys:
@@ -2097,6 +2187,8 @@ def _set_up_experiment(
         # Need to handle directory input where the cycle or channel is only in the folder name
         # or in the file name.
         matches = group_to_matches[group]
+        if filter_matches is not None:
+            matches = filter_matches(matches)
         matches.sort(key=sort_key)
         file_list = []
         file_metadata = []
@@ -2135,14 +2227,6 @@ def _set_up_experiment(
             group_metadata = dict(
                 group=dict(zip(group_by, group)),
                 src=file_list,
-                common_src=mlcs(
-                    [
-                        Path(x).stem
-                        if not isinstance(x, zarr.Group)
-                        else _get_store_path(x)
-                        for x in file_list
-                    ]
-                ),
             )
             metadata = dict(
                 file_metadata=file_metadata,
@@ -2236,30 +2320,6 @@ class _LazyLoadImage(_LazyLoadData):
             self._scene_id,
             **self._kwargs,
         )
-
-
-def _load_experiment(experiment: Experiment) -> Experiment:
-    """Loads all images from an experiment into memory in parallel.
-
-    :param experiment: Experiment
-        The experiment object containing the images to be loaded.
-    :return: None
-
-    :example:
-    .. code-block:: python
-
-        # Example usage of _load_experiment
-        _load_experiment(my_experiment)
-    """
-    b = from_sequence(experiment.images.keys())
-
-    def _load_image(key):
-        experiment.images[key]
-
-    bag = b.starmap(_load_image)
-    with ProgressBar():
-        bag.compute()
-    return experiment
 
 
 def _single_contrast(data: NDArray, display_ranges: Any) -> tuple[float, float]:

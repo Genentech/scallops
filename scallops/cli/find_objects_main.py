@@ -8,6 +8,7 @@ from scallops.cli.util import (
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
+    labels_arg,
     no_version_arg,
     output_dir_arg,
 )
@@ -32,12 +33,8 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         ),
     )
     required = parser.add_argument_group("required arguments")
-    required.add_argument(
-        "--labels",
-        required=True,
-        nargs="+",
-        help="Path to zarr directory containing labels",
-    )
+    labels_arg(required)
+
     output_dir_arg(required)
     required.add_argument(
         "--label-pattern",

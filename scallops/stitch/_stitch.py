@@ -15,15 +15,30 @@ import zarr
 from sklearn.cluster import AgglomerativeClustering
 
 from scallops.cli.util import _get_cli_logger, cli_metadata
-from scallops.io import is_parquet_file, read_image
+from scallops.io import _images2fov, _images2fov_array, is_parquet_file, read_image
 from scallops.stitch._align import stitch_align
+from scallops.stitch._channel_align import (
+    check_channel_order,
+    check_stage_positions_only,
+    fusion_crop,
+    metadata_channel_names,
+    resolve_channel_alignment,
+    write_record,
+)
+from scallops.stitch._channel_align import record as alignment_record
+from scallops.stitch._channel_align_estimate import estimate_well, raise_for_failures
 from scallops.stitch._plots import _qc_report
 from scallops.stitch.fuse import _fuse
-from scallops.stitch.shift_utils import _zncc, convert_stage_positions
+from scallops.stitch.shift_utils import (
+    _zncc,
+    convert_stage_positions,
+)
 from scallops.stitch.utils import (
     _autodetect_stage_positions_from_araceli_json,
     _download_path,
     _init_tiles,
+    _select_t_index,
+    _select_z_index,
     _stage_positions_from_image_metadata,
     get_pixel_size,
     read_stage_positions,
@@ -42,8 +57,13 @@ from scallops.zarr_io import (
 logger = _get_cli_logger()
 
 
+def _distance_to_center(coords: np.ndarray) -> np.ndarray:
+    """Euclidean distance from each tile position to the mean tile position."""
+    return np.sqrt(np.sum((coords - coords.mean(axis=0)) ** 2, axis=1))
+
+
 def _single_stitch(
-    image_tuple: tuple[tuple[str, ...], list[str], dict],
+    image_tuple: tuple[tuple[str, ...], Sequence[str], dict],
     stage_positions_path: str | None,
     image_output_root: zarr.Group | None,
     ffp_path: str | None,
@@ -77,8 +97,14 @@ def _single_stitch(
     channel_window: int | None,
     channel_filter_percentiles: tuple[float, float] | None,
     t_index: int | None = None,
+    alignment_correction: dict | None = None,
 ):
-    """Process a single cycle of images."""
+    """Process a single cycle of images.
+
+    :param alignment_correction: Optional per-channel alignment correction:
+        ``dict(channels, params, channel_order)`` with the parsed ``--alignment-correction-channels``, the loaded
+        parameter file and ``--alignment-correction-channel-order`` (see :mod:`scallops.stitch._channel_align`).
+    """
     _, image_filepaths, image_metadata = image_tuple
 
     image_key = (
@@ -141,9 +167,35 @@ def _single_stitch(
     fileattrs = init["fileattrs"]
     original_filepaths = init["original_filepaths"]
 
+    channel_alignment = None
+    if alignment_correction is not None:
+        # resolve before the (long) alignment so that option and parameter-file errors stop the run early
+        tile0 = _images2fov_array(
+            filepaths[0],
+            fileattrs[0] if fileattrs is not None else None,
+            dask=True,  # only the shape is needed
+            scene_id=0 if n_scenes is not None else None,
+        )
+        channel_alignment, to_estimate = resolve_channel_alignment(
+            correction_channels=alignment_correction["channels"],
+            params=alignment_correction["params"],
+            channel_order=alignment_correction["channel_order"],
+            n_channels=tile0.sizes["c"],
+            reference_channel=channel,
+            output_channels=output_channels,
+            tile_shape=(tile0.sizes["y"], tile0.sizes["x"]),
+        )
+        metadata_names = metadata_channel_names(
+            filepaths[0],
+            fileattrs[0] if fileattrs is not None else None,
+            tile0.sizes["c"],
+        )
+        check_channel_order(alignment_correction["channel_order"], metadata_names)
+        del tile0
+
     separate_z = (
         "z" in metadata_fields
-        and isinstance(tile_z_index, (Sequence, np.ndarray))
+        and isinstance(tile_z_index, (Sequence, np.ndarray, int, np.integer))
         and not isinstance(tile_z_index, str)
     )
 
@@ -178,11 +230,36 @@ def _single_stitch(
     if image_spacing is None:
         image_spacing = get_pixel_size(primary_filepaths, stage_positions_path)
 
+    estimation = None
+    if channel_alignment is not None and to_estimate:
+        assert alignment_correction is not None
+        estimated, estimation = _estimate_channel_alignment(
+            to_estimate=to_estimate,
+            channel_order=alignment_correction["channel_order"],
+            reference_channel=channel,
+            filepaths=filepaths,
+            fileattrs=fileattrs,
+            n_scenes=n_scenes,
+            stage_positions=stage_positions,
+            image_spacing=image_spacing,
+            z_index=tile_z_index if not separate_z else 0,
+            t_index=t_index,
+            random_seed=random_seed,
+            image_key=image_key,
+        )
+        channel_alignment.update(estimated)
+    if channel_alignment is not None and not channel_alignment:
+        logger.warning(
+            "No channel is left to align; stitching without the alignment correction."
+        )
+        channel_alignment = None
+
     output_metadata["image_spacing"] = (
         image_spacing.tolist()
         if isinstance(image_spacing, np.ndarray)
         else image_spacing
     )
+
     output_metadata["physical_pixel_sizes"] = output_metadata["image_spacing"]
     output_metadata["physical_pixel_units"] = ["micrometer", "micrometer"]
     auto_radial_correction = radial_correction_k == "auto"
@@ -226,6 +303,37 @@ def _single_stitch(
     output_metadata["area_fraction"] = stitch_result["area_fraction"]
     output_metadata["null_params"] = null_params
     output_metadata["radial_correction_k"] = fitted_radial_correction_k
+    if channel_alignment is not None:
+        assert alignment_correction is not None
+        output_metadata["channel_alignment"] = alignment_record(
+            resolved=channel_alignment,
+            metadata_names=metadata_names,
+            estimation=estimation,
+            params=alignment_correction["params"],
+            channel_order=alignment_correction["channel_order"],
+            channel_names=channel_names,
+            reference_channel=channel,
+            radial_correction_k=fitted_radial_correction_k,
+        )
+        if (
+            stitch_result["pairs_after_stitching"] is None
+            and len(stitch_result["stitched_positions"]) > 1
+        ):  # tiles placed at their stage positions: no crop can remove the bands
+            check_stage_positions_only(
+                channel_alignment,
+                tile_shape_no_crop,
+                fitted_radial_correction_k,
+                image_key,
+            )
+        fuse_crop_width, crop_record = fusion_crop(
+            channel_alignment,
+            tile_shape_no_crop,
+            fitted_radial_correction_k,
+            fuse_crop_width,
+            _has_neighbours(stitch_result),
+            image_key,
+        )
+        output_metadata["channel_alignment"]["fusion_crop"] = crop_record
     output_metadata["min_overlap_fraction"] = stitch_result["min_overlap_fraction"]
     swap = stitch_result["swap"]
     flip_y = stitch_result["flip_y"]
@@ -270,12 +378,12 @@ def _single_stitch(
         tile_z_index, str
     ):
         stitch_positions_df["z_index"] = tile_z_index
+    if separate_z:
+        stitch_positions_df["separate_z"] = separate_z
     del stitch_result
 
-    stitch_position_coords = stitch_positions_df[["y", "x"]].values
-    center = stitch_position_coords.mean(axis=0)
-    stitch_positions_df["distance_to_center"] = np.sqrt(
-        np.sum(stitch_position_coords - center, axis=1) ** 2
+    stitch_positions_df["distance_to_center"] = _distance_to_center(
+        stitch_positions_df[["y", "x"]].values
     )
 
     stitch_positions_df["source"] = (
@@ -350,7 +458,10 @@ def _single_stitch(
             flip_x,
             (1, 1),
         ),
-        final_shifts=final_shifts,
+        # stage positions are in µm, so convert shifts from pixels to µm
+        final_shifts=(final_shifts * image_spacing)
+        if final_shifts is not None
+        else None,
         spanning_tree_edges=spanning_tree_edges,
         pairs=pairs,
         zncc_val=zncc_val,
@@ -433,9 +544,112 @@ def _single_stitch(
         channel_window=channel_window,
         channel_filter_percentiles=channel_filter_percentiles,
         t_index=t_index,
+        channel_alignment=channel_alignment,
     )
+    if channel_alignment is not None:
+        alignment_json = dict(image=image_key, **output_metadata["channel_alignment"])
+        if not no_version:
+            alignment_json.update(cli_metadata())
+        write_record(
+            f"{other_output_path}{image_key}-channel-alignment.json", alignment_json
+        )
     if tmp_dir is not None:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _has_neighbours(stitch_result: dict) -> tuple[bool, bool]:
+    """Per axis (y, x), whether tiles have side-by-side neighbours along it after stitching (pairs that overlap by at
+    least half a tile across it, so diagonal neighbours don't count). Without them (e.g. a single tile), any fusion
+    crop opens no gaps between tiles."""
+    positions = np.asarray(stitch_result["stitched_positions"], float)
+    pairs = stitch_result["pairs_after_stitching"]
+    shape = stitch_result["tile_shape"]
+    found = [False, False]
+    for i, j in np.asarray(pairs if pairs is not None else [], int).reshape(-1, 2):
+        d = np.abs(positions[j] - positions[i])
+        for axis in (0, 1):
+            other = 1 - axis
+            if d[axis] >= d[other] and d[other] <= shape[other] / 2:
+                found[axis] = True
+    return found[0], found[1]
+
+
+def _estimate_channel_alignment(
+    to_estimate,
+    channel_order,
+    reference_channel,
+    filepaths,
+    fileattrs,
+    n_scenes,
+    stage_positions,
+    image_spacing,
+    z_index,
+    t_index,
+    random_seed,
+    image_key,
+):
+    """Estimate the alignment of channels ``to_estimate`` from this image's tiles (one well).
+
+    Tiles are read as fusion reads them (same t and z selection), without radial or illumination correction.
+    Raises if a channel fails its quality checks.
+    """
+    z_per_tile = isinstance(z_index, (Sequence, np.ndarray)) and not isinstance(
+        z_index, str
+    )
+
+    def read_tile(i, channels):
+        # read eagerly, as _read_tile does for tile alignment; remote files were localized by _init_tiles
+        img = _images2fov(
+            filepaths[0] if n_scenes is not None else filepaths[i],
+            fileattrs[i] if fileattrs is not None else None,
+            dask=False,
+            scene_id=i if n_scenes is not None else None,
+        )
+        img = _select_t_index(img, t_index)
+        # the z plane fusion uses; per-tile values as fusion gets them from the positions table (numpy integers)
+        img = _select_z_index(img, np.asarray(z_index)[i] if z_per_tile else z_index)
+        ref = img.isel(c=reference_channel).values
+        return ref, {c: img.isel(c=c).values for c in channels}
+
+    spacing = (
+        np.asarray(image_spacing, float).ravel() if image_spacing is not None else None
+    )
+    logger.info(
+        f"Estimating the alignment of channel(s) {', '.join(f'{c} ({channel_order[c]})' for c in to_estimate)} "
+        f"from the tiles of {image_key}."
+    )
+    result = estimate_well(
+        read_tile,
+        np.asarray(stage_positions, float),
+        to_estimate,
+        pixel_size_um=float(spacing[0])
+        if spacing is not None and spacing[0] > 0
+        else None,
+        seed=random_seed,
+    )
+    raise_for_failures(
+        result,
+        context=image_key,
+        names={c: f"{c} ({channel_order[c]})" for c in to_estimate},
+    )
+    estimated = {}
+    for c in to_estimate:
+        r = result["channels"][c]
+        estimated[c] = dict(
+            name=channel_order[c],
+            m=r["m"],
+            ty=r["ty"],
+            tx=r["tx"],
+            same_as=None,
+            source="estimated",
+            estimate={k: v for k, v in r.items() if k not in ("m", "ty", "tx")},
+        )
+        logger.info(
+            f"Channel {c} ({channel_order[c]}): m {r['m']:.3e}, ty {r['ty']:.3f}, tx {r['tx']:.3f} px from "
+            f"{r['n_valid']} of {r['n_tried']} tiles (95% uncertainty at the tile corner {r['ci95_corner_px']:.2f} px)."
+        )
+    well = {k: v for k, v in result.items() if k != "channels"}
+    return estimated, well
 
 
 def _write_arrays(
@@ -461,6 +675,7 @@ def _write_arrays(
     channel_window,
     channel_filter_percentiles,
     t_index=None,
+    channel_alignment=None,
 ):
     gc.collect()
     fmt = _current_format()
@@ -520,17 +735,20 @@ def _write_arrays(
             # check for swap
             if ffp.sizes["z"] > 1 and ffp.sizes["c"] == 1:
                 ffp = ffp.rename({"z": "c", "c": "z"})
-            squeeze_dims = [d for d in ["t", "z"] if d in ffp.dims]
+            squeeze_dims = [
+                d for d in ["t", "z"] if d in ffp.dims and ffp.sizes[d] == 1
+            ]
 
             if len(squeeze_dims) > 0:
                 ffp = ffp.squeeze(squeeze_dims)
             if "z" in ffp.dims:
-                if isinstance(z_index, str) and z_index == "max":
-                    ffp = ffp.max(dim="z")
-                elif isinstance(z_index, int):
+                if isinstance(z_index, (int, np.integer)):
                     ffp = ffp.isel(z=z_index)
-                else:
-                    raise ValueError(f"Unknown z index:{z_index}")
+                elif isinstance(z_index, str) and z_index == "max":
+                    ffp = ffp.max(dim="z")
+                else:  # when z_index is 'focus', z_index will be an array
+                    logger.warning("Using max z-projection for ffp.")
+                    ffp = ffp.max(dim="z")
 
             ffp = ffp.values
 
@@ -543,16 +761,19 @@ def _write_arrays(
             # check for swap
             if dfp.sizes["z"] > 1 and dfp.sizes["c"] == 1:
                 dfp = dfp.rename({"z": "c", "c": "z"})
-            squeeze_dims = [d for d in ["t", "z"] if d in dfp.dims]
+            squeeze_dims = [
+                d for d in ["t", "z"] if d in dfp.dims and dfp.sizes[d] == 1
+            ]
             if len(squeeze_dims) > 0:
                 dfp = dfp.squeeze(squeeze_dims)
             if "z" in dfp.dims:
-                if isinstance(z_index, str) and z_index == "max":
-                    dfp = dfp.max(dim="z")
-                elif isinstance(z_index, int):
+                if isinstance(z_index, (int, np.integer)):
                     dfp = dfp.isel(z=z_index)
-                else:
-                    raise ValueError(f"Unknown z index:{z_index}")
+                elif isinstance(z_index, str) and z_index == "max":
+                    dfp = dfp.max(dim="z")
+                else:  # when z_index is 'focus', z_index will be an array
+                    logger.warning("Using max z-projection for dfp.")
+                    dfp = dfp.max(dim="z")
 
             dfp = dfp.values
 
@@ -574,6 +795,7 @@ def _write_arrays(
             channel_window=channel_window,
             channel_filter_percentiles=channel_filter_percentiles,
             t_index=t_index,
+            channel_alignment=channel_alignment,
         )
 
     # cleanup
