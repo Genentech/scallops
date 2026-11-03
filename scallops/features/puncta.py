@@ -662,16 +662,17 @@ def _merge_saturated_plateaus(seg_labels, raw, roi):
     Camera saturation clips a bright punctum to a flat top, and watershed then seeds
     several times across it; each piece is >= min_size, so the small-piece merge does
     not rejoin them. A plateau is a 4-connected group of >= 2 foreground pixels within
-    _SATURATION_TOL x (max - median) of the ROI's maximum; all pieces that overlap one
-    plateau become one punctum. Seeding is unchanged. Only foreground pixels form
-    plateaus, so a merge never joins two foreground components and
+    _SATURATION_TOL x (max - median) of the foreground maximum (median over the ROI);
+    all pieces that overlap one plateau become one punctum. The maximum is taken over
+    foreground only, so a brighter background pixel (e.g. a hot pixel removed by the
+    size filter) cannot hide a plateau. Seeding is unchanged. Only foreground pixels
+    form plateaus, so a merge never joins two foreground components and
     PunctaCount >= FgObjectCount still holds.
     """
     if seg_labels.max() < 2:
         return seg_labels
-    values = raw[roi]
-    top = values.max()
-    tol = _SATURATION_TOL * (top - np.median(values))
+    top = raw[seg_labels > 0].max()
+    tol = _SATURATION_TOL * (top - np.median(raw[roi]))
     near_top = (raw >= top - tol) & (seg_labels > 0)
     if near_top.sum() < 2:
         return seg_labels

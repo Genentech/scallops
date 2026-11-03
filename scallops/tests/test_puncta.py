@@ -665,6 +665,18 @@ class TestMergeSaturatedPlateaus:
         out = _merge_saturated_plateaus(seg.copy(), raw, np.ones_like(seg, dtype=bool))
         assert out.max() == 2
 
+    def test_bright_background_pixel_does_not_hide_plateau(self):
+        # A background pixel brighter than the plateau (e.g. a hot pixel removed by
+        # the size filter) must not raise the threshold above the plateau.
+        seg = np.zeros((6, 12), dtype=int)
+        seg[1:5, 1:3], seg[1:5, 3:5] = 1, 2
+        raw = np.full((6, 12), 0.1, dtype=np.float32)
+        raw[seg > 0] = 0.5
+        raw[2:4, 2:4] = 0.9  # plateau across the 1|2 boundary
+        raw[0, 11] = 0.95  # brighter background pixel
+        roi = np.ones_like(seg, dtype=bool)
+        assert _merge_saturated_plateaus(seg.copy(), raw, roi).max() == 1
+
     def test_clipped_spot_is_one_punctum(self):
         # A Gaussian spot clipped at 1.0 (81 saturated px) split into 8 (sigma 10) or
         # 21 (sigma 0) pieces before the plateau merge. Also with a +-2% flatfield gain.
