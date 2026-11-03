@@ -372,6 +372,45 @@ def test_reads_nuclei_labels(tmp_path):
         out2 = pd.read_parquet(os.path.join(reads2, x))
         pd.testing.assert_frame_equal(out1, out2)
 
+    # splitting reads into chunks only changes the row order of the output
+    reads3 = str(tmp_path / "reads3")
+    subprocess.check_call(
+        [
+            "scallops",
+            "pooled-sbs",
+            "reads",
+            "--spots",
+            spot_detect_zarr,
+            "--labels",
+            segment_zarr_path,
+            "--barcodes",
+            str(data_path.joinpath("experimentC", "barcodes.csv")),
+            "--label-name",
+            "nuclei",
+            "--output",
+            reads3,
+            "--save-bases",
+            "--threshold-peaks",
+            "0.5",
+            "--read-chunk-size",
+            "500",
+            "--dask-cluster",
+            '{"n_workers":2, "threads_per_worker":1}',
+        ]
+    )
+    sort_keys = {
+        "bases": ["y", "x", "t", "c"],
+        "reads": ["y", "x"],
+        "labels": ["label"],
+    }
+    for x, keys in sort_keys.items():
+        out1 = pd.read_parquet(os.path.join(reads1, x))
+        out3 = pd.read_parquet(os.path.join(reads3, x))
+        pd.testing.assert_frame_equal(
+            out1.sort_values(keys).reset_index(drop=True),
+            out3.sort_values(keys).reset_index(drop=True),
+        )
+
 
 @pytest.mark.cli_e2e
 def test_e2e_cli(tmp_path, group_by_tile):
