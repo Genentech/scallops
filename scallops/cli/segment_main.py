@@ -266,9 +266,10 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
         "--cyto-channel",
         type=int,
         nargs="+",
-        help="Channel index (0-based) to infer cell segmentation from. Default is all non-DAPI channels. If more than"
-        " one channel specified, use minimum across time (cycles) then mean over channels, or if only one time "
-        "point is present, use mean over channels.",
+        help="Channel index (0-based) to infer cell segmentation from. Default is all non-DAPI channels. "
+        "If more than one channel is specified, use the minimum "
+        "across time (cycles) then the mean over channels, or if only one time point is present, use the "
+        "median over channels.",
     )
     parser.add_argument(
         "--mask-channel",
