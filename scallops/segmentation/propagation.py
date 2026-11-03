@@ -54,7 +54,7 @@ def _process_block(
 
 def segment_cells_propagation(
     image: xr.DataArray,
-    nuclei: NDArray,
+    nuclei: NDArray | da.Array,
     threshold: Literal["Li", "Otsu", "Local"] | float = "Li",
     cyto_channel: int | Sequence[int] | None = None,
     threshold_correction_factor: float = 1,
@@ -120,6 +120,8 @@ def segment_cells_propagation(
         depth=depth,
     )
     if rm_small_std is not None:
+        if isinstance(nuclei, da.Array):
+            nuclei = nuclei.compute()
         nuclei = remove_small_objects_std(nuclei, rm_small_std)
 
     if isinstance(image, da.Array):
@@ -127,7 +129,12 @@ def segment_cells_propagation(
             chunks = image.chunksize
 
         image = image.rechunk(chunks)
-        nuclei = da.from_array(nuclei, chunks=chunks)
+        nuclei = (
+            da.from_array(nuclei, chunks=chunks)
+            if not isinstance(nuclei, da.Array)
+            else nuclei.rechunk(chunks)
+        )
+
         mask = mask.rechunk(chunks)
         if image.chunksize != image.shape:
             labels = da.map_overlap(
@@ -156,6 +163,8 @@ def segment_cells_propagation(
             )
 
     else:
+        if isinstance(nuclei, da.Array):
+            nuclei = nuclei.compute()
         labels = _process_block(
             image=image,
             nuclei=nuclei,

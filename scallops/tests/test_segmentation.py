@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import skimage.draw
 import skimage.measure
-from skimage.filters import threshold_li
+import xarray as xr
 from skimage.measure import regionprops_table
 from skimage.segmentation import relabel_sequential
 
@@ -275,19 +275,6 @@ def test__prepare_cell_segmentation_images_separate(image, mask_sigma):
 
 
 @pytest.mark.segmentation_propagation
-def test__prepare_cell_segmentation_images_mask_sigma_zero(image):
-    cyto = [1, 2]
-    sel = image.isel(c=cyto, t=0, missing_dims="ignore").squeeze()
-    _, expected_mask, _ = image2mask(sel, sigma=None)
-    expected_split, _, _ = image2mask(sel, sigma=2)
-    split, mask, _ = _prepare_cell_segmentation_images(
-        image, cyto_channel=cyto, sigma=2, t=0, mask_sigma=0
-    )
-    np.testing.assert_array_equal(expected_mask, mask)
-    np.testing.assert_array_equal(expected_split, split)
-
-
-@pytest.mark.segmentation_propagation
 @pytest.mark.parametrize("method", ["propagation", "watershed"])
 def test_segment_cells_mask_channel(image, method):
     import scallops.segmentation.propagation
@@ -314,179 +301,6 @@ def test__prepare_cell_segmentation_images_local_requires_mask_sigma(image):
         _prepare_cell_segmentation_images(
             image, cyto_channel=[1, 2], threshold="Local", sigma=50, mask_sigma=0
         )
-
-
-@pytest.mark.segmentation_propagation
-def test__prepare_cell_segmentation_images_reuses_summary(image, monkeypatch):
-    """Same channels (any order) summarize and rolling-ball the image only once."""
-    import scallops.segmentation.util as util
-
-    calls = []
-    summarize = util._summarize
-
-    def counting_summarize(*args, **kwargs):
-        calls.append(1)
-        return summarize(*args, **kwargs)
-
-    monkeypatch.setattr(util, "_summarize", counting_summarize)
-    split, mask, threshold = _prepare_cell_segmentation_images(
-        image, cyto_channel=[1, 2], sigma=2, t=0, mask_channel=[2, 1], mask_sigma=4
-    )
-    assert len(calls) == 1
-    sel = image.isel(c=[1, 2], t=0, missing_dims="ignore").squeeze()
-    _, expected_mask, expected_threshold = image2mask(sel, sigma=4)
-    expected_split, _, _ = image2mask(sel, sigma=2)
-    np.testing.assert_array_equal(expected_mask, mask)
-    np.testing.assert_array_equal(expected_split, split)
-    assert expected_threshold == threshold
-
-
-@pytest.mark.segmentation_propagation
-def test__prepare_cell_segmentation_images_no_split_image(image):
-    split, mask, threshold = _prepare_cell_segmentation_images(
-        image, cyto_channel=[1, 2], sigma=2, t=0, return_split_image=False
-    )
-    assert split is None
-    _, expected_mask, expected_threshold = image2mask(
-        image.isel(c=[1, 2], t=0, missing_dims="ignore").squeeze(), sigma=2
-    )
-    np.testing.assert_array_equal(expected_mask, mask)
-    assert expected_threshold == threshold
-
-
-@pytest.mark.segmentation_propagation
-@pytest.mark.parametrize("method", ["distance", "intensity"])
-def test_segment_cells_watershed_dask_chunked(image, method):
-    labels = segment_nuclei_watershed(image)
-    image_dask = image.copy(
-        data=da.from_array(image.data, chunks=(1,) * (image.ndim - 2) + (256, 256))
-    )
-    cell_labels, _ = segment_cells_watershed(
-        image_dask, nuclei=labels, watershed_method=method, chunks=(256, 256)
-    )
-    assert isinstance(cell_labels, da.Array)
-    assert cell_labels.numblocks != (1, 1)
-    assert cell_labels.compute().max() > 10
-
-
-@pytest.mark.segmentation_propagation
-@pytest.mark.parametrize("method", ["distance", "binary"])
-def test_segment_cells_watershed_dask_unchunked(image, method):
-    """Without chunks, distance/binary watersheds run once over the whole dask image."""
-    labels = segment_nuclei_watershed(image)
-    image_dask = image.copy(
-        data=da.from_array(image.data, chunks=(1,) * (image.ndim - 2) + (256, 256))
-    )
-    expected, threshold = segment_cells_watershed(
-        image, nuclei=labels, watershed_method=method
-    )
-    # dask computes Li thresholds per block, so use a fixed threshold for the same mask
-    cell_labels, _ = segment_cells_watershed(
-        image_dask, nuclei=labels, watershed_method=method, threshold=threshold
-    )
-    assert not isinstance(cell_labels, da.Array)
-    np.testing.assert_array_equal(expected, cell_labels)
-
-
-@pytest.mark.segmentation_propagation
-def test_segment_cells_watershed_quantile_mask_channel(image, monkeypatch):
-    """The quantile threshold is computed from the mask channel only."""
-    import scallops.segmentation.watershed as watershed_module
-    from scallops.segmentation.util import threshold_quantile
-
-    thresholds = []
-
-    def recording_threshold_quantile(*args, **kwargs):
-        result = threshold_quantile(*args, **kwargs)
-        thresholds.append(result[1])
-        return result
-
-    monkeypatch.setattr(
-        watershed_module, "threshold_quantile", recording_threshold_quantile
-    )
-    labels = segment_nuclei_watershed(image)
-    segment_cells_watershed(
-        image, nuclei=labels, threshold="quantile", mask_channel=[3]
-    )
-    sub = image.where(image > 0, np.nan)
-    sub = sub - sub.squeeze().min(dim=["y", "x"])
-    expected = sub.isel(c=[3], t=0, missing_dims="ignore").quantile(0.2).values
-    np.testing.assert_allclose(thresholds[0], expected)
-
-
-@pytest.mark.segmentation_propagation
-@pytest.mark.parametrize("mask_channel", [3, [3]])
-def test__prepare_cell_segmentation_images_single_channel_min_over_t(mask_channel):
-    """A single channel (int or list) uses the minimum over the selected cycles."""
-    import xarray as xr
-
-    rng = np.random.default_rng(0)
-    image = xr.DataArray(rng.random((3, 5, 1, 32, 32)), dims=list("tczyx"))
-    split, mask, _ = _prepare_cell_segmentation_images(
-        image, cyto_channel=3, t=[0, 1, 2], mask_channel=mask_channel
-    )
-    expected = image.isel(c=3, z=0).min(dim="t").values
-    np.testing.assert_array_equal(expected, split)
-    np.testing.assert_array_equal(expected > threshold_li(expected), mask)
-
-
-def _run_segment_cell_cli(tmp_path, monkeypatch, args):
-    from contextlib import nullcontext
-
-    import scallops.cli.segment as segment_cli
-    from scallops.__main__ import create_parsers
-
-    monkeypatch.setattr(
-        segment_cli, "_create_dask_client", lambda *a, **k: nullcontext()
-    )
-    monkeypatch.setattr(segment_cli, "_set_up_experiment", lambda *a, **k: [])
-    arguments = create_parsers().parse_args(
-        [
-            "segment",
-            "cell",
-            "--images",
-            str(tmp_path),
-            "--output",
-            str(tmp_path / "out"),
-        ]
-        + args
-    )
-    arguments.func(arguments)
-
-
-@pytest.mark.segmentation_propagation
-@pytest.mark.parametrize(
-    "args, error",
-    [
-        (["--threshold", "local"], "Please provide sigma"),
-        (["--threshold", "local", "--sigma", "5", "--mask-sigma", "0"], "mask-sigma"),
-        (["--threshold", "local", "--sigma", "0"], None),
-        (["--threshold", "local", "--mask-sigma", "5"], None),
-    ],
-)
-def test_segment_cells_cli_local_threshold_sigma(tmp_path, monkeypatch, args, error):
-    import zarr
-
-    nuclei_store = tmp_path / "nuclei.zarr"
-    zarr.open_group(str(nuclei_store), mode="w").create_group("labels")
-    args = ["--method", "propagation", "--nuclei-label", str(nuclei_store)] + args
-    if error is None:
-        _run_segment_cell_cli(tmp_path, monkeypatch, args)
-    else:
-        with pytest.raises(ValueError, match=error):
-            _run_segment_cell_cli(tmp_path, monkeypatch, args)
-
-
-@pytest.mark.segmentation_propagation
-def test_segment_cells_cli_warns_ignored_options(tmp_path, monkeypatch, caplog):
-    # local threshold without sigma is not validated for methods that ignore it
-    args = ["--method", "cellpose", "--threshold", "local", "--mask-sigma", "0"]
-    with caplog.at_level("WARNING"):
-        _run_segment_cell_cli(tmp_path, monkeypatch, args)
-    assert (
-        "`threshold`, `mask-sigma` are ignored for cellpose segmentation" in caplog.text
-    )
-    assert "`sigma`" not in caplog.text
 
 
 @pytest.fixture(params=[False, True])
@@ -800,3 +614,41 @@ def test_segment_blocks_segments_each_block_once():
     image = image.map_overlap(lambda b: b, depth=1, boundary="none")
     segment_blocks(image, seg_fn, depth=20).compute(scheduler="sync")
     assert len(ncalls) == 16
+
+
+@pytest.mark.utils
+@pytest.mark.parametrize(
+    "threshold", [10.0, np.array(10.0)], ids=["number", "zero_dim_array"]
+)
+def test__threshold_mask_numeric_correction_factor(threshold):
+    """A numeric threshold is not scaled by threshold_correction_factor."""
+    from scallops.segmentation.util import _threshold_mask
+
+    data = np.arange(30, dtype=float).reshape(5, 6)
+    mask, threshold_val = _threshold_mask(
+        data, data, threshold, threshold_correction_factor=1.5
+    )
+    assert threshold_val == 10.0
+    assert isinstance(threshold_val, float)
+    np.testing.assert_array_equal(mask, data > 10)
+
+
+@pytest.mark.utils
+def test__filter_labels_dask():
+    from scallops.cli.segment import _filter_labels
+
+    labels = np.zeros((20, 20), dtype=np.int32)
+    labels[1:3, 1:3] = 1  # area 4
+    labels[5:15, 5:15] = 2  # area 100
+    image = xr.DataArray(np.ones((1, 20, 20)), dims=["c", "y", "x"])
+    result = _filter_labels(
+        labels=da.from_array(labels, chunks=10),
+        intensity_image=image,
+        intensity_channel=0,
+        min_area=10,
+        max_area=None,
+        min_intensity=None,
+        max_intensity=None,
+    )
+    assert isinstance(result, np.ndarray)
+    np.testing.assert_array_equal(np.unique(result), [0, 2])

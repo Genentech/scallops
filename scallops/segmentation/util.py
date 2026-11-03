@@ -134,10 +134,15 @@ def _threshold_mask(
 ) -> tuple[NDArray | da.Array, float | None]:
     """Compute mask from summarized and smoothed images.
 
-    :return: Mask and threshold if threshold is `Li`, `Otsu`, or a number.
+    `threshold_correction_factor` scales the computed `Li`/`Otsu` threshold and the smoothed
+    image when `local`. A numeric (e.g. manually set or quantile) threshold is used as is.
+
+    :return: Mask and threshold if threshold is `Li`, `Otsu`, or a number (including a 0-d
+        array such as a computed quantile). None for `local`, and for `Li`/`Otsu` on a dask
+        array, where the threshold is computed per block.
     """
     mask = None
-    threshold_val = threshold_method
+    threshold_val: Any = threshold_method
     if isinstance(threshold_method, str):
         if threshold_method == "local":
             mask = data > smoothed * threshold_correction_factor  # usually 1.01 - 1.10
@@ -172,9 +177,13 @@ def _threshold_mask(
                 threshold_val = threshold_val * threshold_correction_factor
     if mask is None:
         mask = smoothed > threshold_val
+    if isinstance(threshold_val, np.ndarray) and threshold_val.ndim == 0:
+        threshold_val = threshold_val.item()
     return (
         mask,
-        cast(float, threshold_val) if isinstance(threshold_val, Number) else None,
+        float(cast(float, threshold_val))
+        if isinstance(threshold_val, Number)
+        else None,
     )
 
 
@@ -208,6 +217,49 @@ def image2mask(
         data, smoothed, threshold_method, threshold_correction_factor, depth
     )
     return smoothed, mask, threshold_val
+
+
+def _channel_selection(
+    channel: int | Sequence[int] | NDArray, t: list[int] | int | None
+) -> dict[str, Any]:
+    """Return the `isel` selection for the given channel(s) and time indices at z=0.
+
+    The channel dim is kept (even for a single channel) so that
+    :func:`cyto_channel_summary` takes the minimum over cycles instead of only using
+    the first cycle.
+    """
+    sel: dict[str, Any] = dict(c=np.atleast_1d(channel), z=0)
+    if t is not None:
+        sel["t"] = t
+    return sel
+
+
+def _resolve_cell_segmentation_sigmas(
+    threshold: Literal["Li", "Otsu", "Local"] | float | NDArray,
+    sigma: float | None,
+    mask_sigma: float | None,
+    names: tuple[str, str] = ("sigma", "mask_sigma"),
+) -> tuple[str | float | NDArray, float | None, float | None]:
+    """Resolve the split and mask sigmas (0 means no smoothing) and validate the threshold.
+
+    :param threshold: Threshold method or value.
+    :param sigma: Gaussian filter sigma for the split image (and for the mask if `mask_sigma` is None).
+    :param mask_sigma: Gaussian filter sigma for the mask.
+    :param names: Names of the `sigma` and `mask_sigma` parameters used in error messages
+        (e.g. the CLI flags).
+    :return: Lower-cased threshold method (or the numeric threshold), sigma, and mask sigma.
+    """
+    if sigma == 0:
+        sigma = None
+    sigma_name = names[0]
+    if mask_sigma is None:
+        mask_sigma = sigma
+    elif mask_sigma == 0:
+        mask_sigma = None
+        sigma_name = f"a non-zero {names[1]}"
+    else:
+        sigma_name = names[1]
+    return _threshold_method(threshold, mask_sigma, sigma_name), sigma, mask_sigma
 
 
 def _prepare_cell_segmentation_images(
@@ -245,32 +297,21 @@ def _prepare_cell_segmentation_images(
     """
 
     def _select(channel):
-        # keep the channel dim (even for a single channel) so that cyto_channel_summary
-        # takes the minimum over cycles instead of only using the first cycle
-        sel: dict[str, Any] = dict(c=np.atleast_1d(channel), z=0)
-        if t is not None:
-            sel["t"] = t
-        selected = image.isel(sel, missing_dims="ignore")
+        selected = image.isel(_channel_selection(channel, t), missing_dims="ignore")
         if "t" in selected.dims and selected.sizes["t"] == 1:
             selected = selected.squeeze("t")
         return selected
 
-    sigma_name = "sigma"
-    if mask_sigma is None:
-        mask_sigma = sigma
-    elif mask_sigma == 0:
-        mask_sigma = None
-        sigma_name = "a non-zero mask_sigma"
-    else:
-        sigma_name = "mask_sigma"
-    threshold_method = _threshold_method(threshold, mask_sigma, sigma_name)
+    threshold_method, sigma, mask_sigma = _resolve_cell_segmentation_sigmas(
+        threshold, sigma, mask_sigma
+    )
 
     # channel summary is order-insensitive, so compare sorted channel lists
     same_channels = mask_channel is None or np.array_equal(
         np.sort(np.atleast_1d(mask_channel)), np.sort(np.atleast_1d(cyto_channel))
     )
     mask_data = _summarize(
-        _select(cyto_channel if same_channels else mask_channel),
+        _select(cyto_channel if mask_channel is None else mask_channel),
         rolling_ball=rolling_ball,
         depth=depth,
     )

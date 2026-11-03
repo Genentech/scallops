@@ -117,6 +117,10 @@ def _filter_labels(
         def filter_func(r):
             return all(f(r) for f in filters)
 
+        # regionprops and remove_labels require an in-memory array
+        if isinstance(labels, da.Array):
+            labels = labels.compute()
+
         return remove_labels_regionprops(
             labels=labels,
             regions=regionprops(labels, intensity_image=intensity_image_),
@@ -337,10 +341,11 @@ def segment_cells(
         return root
     image = _images2fov_array(file_list, metadata, dask=True).squeeze()
     image = _z_projection(image, z_index)
-    if cyto_channel is None:
+    if cyto_channel is None or len(cyto_channel) == 0:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), dapi_channel)
-    if len(cyto_channel) == 0:
-        cyto_channel = [dapi_channel]
+        if len(cyto_channel) == 0:
+            # DAPI-only image
+            cyto_channel = [dapi_channel]
     logger.info(f"Running cell segmentation for {image_key}")
 
     cell_seg_args: dict[str, Any] = {"nuclei_channel": dapi_channel}
@@ -663,16 +668,12 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
         kwargs["nuclei_intensity_channel"] = arguments.nuclei_intensity_channel
         kwargs["cyto_channel"] = arguments.cyto_channel
         kwargs["shrink_primary"] = arguments.shrink_nuclei
-        threshold = arguments.threshold.lower()
-        if threshold not in ["li", "otsu", "local"]:
-            try:
-                threshold = float(threshold)
-            except ValueError:
-                raise ValueError(
-                    "Threshold must be either `Li`, `Otsu`, `Local`, or a valid number. Got {}".format(
-                        threshold
-                    )
-                )
+        # threshold method names are validated by the segmentation functions
+        threshold = arguments.threshold
+        try:
+            threshold = float(threshold)
+        except ValueError:
+            pass
 
         kwargs["cell_segmentation_t"] = arguments.cell_segmentation_t
         if method in ["watershed", "watershed-intensity", "propagation"]:
@@ -681,19 +682,38 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 raise ValueError(
                     f"Please provide nuclei labels for {method} segmentation"
                 )
-            if threshold == "local":
-                # the mask is smoothed with mask-sigma, which defaults to sigma; 0 disables it
-                if arguments.mask_sigma is not None:
-                    if arguments.mask_sigma == 0:
-                        raise ValueError(
-                            "Please provide a non-zero mask-sigma for `local` threshold"
-                        )
-                elif arguments.cell_segmentation_sigma is None:
-                    raise ValueError(
-                        "Please provide sigma (or mask-sigma) for `local` threshold"
-                    )
+            # validate before loading any images, using the same rules as segmentation
+            from scallops.segmentation.util import _resolve_cell_segmentation_sigmas
+
+            _resolve_cell_segmentation_sigmas(
+                threshold,
+                arguments.cell_segmentation_sigma,
+                arguments.mask_sigma,
+                names=("--sigma", "--mask-sigma"),
+            )
             if method == "watershed":
                 kwargs["watershed_method"] = "distance"
+                # the distance watershed only uses the mask, not the split image
+                ignored = []
+                if (
+                    arguments.cell_segmentation_sigma  # 0 or None: no smoothing
+                    and arguments.mask_sigma is not None
+                ):
+                    ignored.append("`sigma` (`mask-sigma` is used for the mask)")
+                if (
+                    arguments.cyto_channel is not None
+                    and arguments.mask_channel is not None
+                ):
+                    ignored.append(
+                        "`cyto-channel` (`mask-channel` is used for the mask)"
+                    )
+                if ignored:
+                    logger.warning(
+                        f"{' and '.join(ignored)} "
+                        f"{'is' if len(ignored) == 1 else 'are'} ignored for watershed "
+                        "segmentation, use watershed-intensity or propagation to split "
+                        "cells using cyto-channel intensity"
+                    )
             elif method == "watershed-intensity":
                 method = "watershed"
                 kwargs["watershed_method"] = "intensity"
@@ -713,20 +733,9 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
         else:
             # options only used by the watershed and propagation methods
             ignored = [
-                name
-                for name, is_set in (
-                    ("threshold", threshold != "li"),
-                    (
-                        "threshold-correction-factor",
-                        arguments.threshold_correction_factor != 1,
-                    ),
-                    ("rolling-ball", arguments.cell_segmentation_rolling_ball),
-                    ("sigma", arguments.cell_segmentation_sigma is not None),
-                    ("mask-channel", arguments.mask_channel is not None),
-                    ("mask-sigma", arguments.mask_sigma is not None),
-                    ("closing-radius", arguments.closing_radius is not None),
-                )
-                if is_set
+                option.flag
+                for dest, option in arguments.split_only_options.items()
+                if getattr(arguments, dest) != option.default
             ]
             if ignored:
                 logger.warning(

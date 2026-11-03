@@ -145,7 +145,7 @@ task segment_cell {
         --groupby ~{sep=" " groupby} \
         ~{if defined(image_pattern) then '--image-pattern "' + image_pattern + '"' else ''} \
         ~{'--dapi-channel ' + dapi_channel} \
-        --cyto-channel ~{sep=" " cyto_channel} \
+        ~{if length(cyto_channel)>0 then '--cyto-channel' else ''} ~{sep=" " cyto_channel} \
         ~{"--nuclei-label " + nuclei_label} \
         ~{"--method " + method} \
         --output "~{output_directory}" \

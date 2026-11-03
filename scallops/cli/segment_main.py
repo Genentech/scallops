@@ -6,6 +6,7 @@ from argparse import (
     HelpFormatter,
     Namespace,
 )
+from typing import Any, NamedTuple
 
 from scallops.cli.arg_parser import _sort_groups
 from scallops.cli.util import (
@@ -187,6 +188,27 @@ def _add_nuclei_parser(subparsers: SubParsers, default_help: bool = True) -> Non
     parser.set_defaults(func=_run_pipeline_segment_nuclei)
 
 
+class _CliOption(NamedTuple):
+    """Long flag name (without leading dashes) and default value of a CLI option."""
+
+    flag: str
+    default: Any
+
+
+# destinations of the cell segmentation options only used by the watershed and
+# propagation methods
+_SPLIT_ONLY_OPTIONS = (
+    "threshold",
+    "threshold_correction_factor",
+    "mask_channel",
+    "cell_segmentation_rolling_ball",
+    "cell_segmentation_sigma",
+    "mask_sigma",
+    "closing_radius",
+    "cell_segmentation_t",
+)
+
+
 def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     """Add the parser for cell segmentation.
 
@@ -234,15 +256,16 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     )
     parser.add_argument(
         "--threshold-correction-factor",
-        help="Factor to adjust the computed threshold by if `threshold` is not a "
-        "manually determined value",
+        help="Factor to adjust the computed threshold by if `threshold` is `Li` or "
+        "`Otsu`, or the smoothed image by if `threshold` is `Local`. Not applied to a "
+        "manually provided value",
         type=float,
         default=1,
     )
     parser.add_argument(
         "--cyto-channel",
         type=int,
-        nargs="*",
+        nargs="+",
         help="Channel index (0-based) to infer cell segmentation from. Default is all non-DAPI channels. If more than"
         " one channel specified, use minimum across time (cycles) then mean over channels, or if only one time "
         "point is present, use mean over channels.",
@@ -270,7 +293,9 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     parser.add_argument(
         "--sigma",
         dest="cell_segmentation_sigma",
-        help="Standard deviation of the gaussian filter used to smooth the `cyto-channel` image",
+        help="Standard deviation of the gaussian filter used to smooth the `cyto-channel` image for "
+        "splitting touching cells. Also used to smooth the `mask-channel` image when `mask-sigma` is not "
+        "specified.",
         default=None,
         type=float,
     )
@@ -341,7 +366,30 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     dask_cluster_arg(parser)
 
     _sort_groups(parser)
-    parser.set_defaults(func=_run_pipeline_segment_cell)
+    parser.set_defaults(
+        func=_run_pipeline_segment_cell,
+        # used to warn about options that are set but ignored by the chosen method
+        split_only_options=_get_cli_options(parser, _SPLIT_ONLY_OPTIONS),
+    )
+
+
+def _get_cli_options(
+    parser: ArgumentParser, dests: tuple[str, ...]
+) -> dict[str, _CliOption]:
+    """Return the long flag and default of each option in `dests`.
+
+    Raises a KeyError if a destination is not defined by the parser.
+    """
+    actions = {
+        action.dest: action for action in parser._actions if action.option_strings
+    }
+    return {
+        dest: _CliOption(
+            flag=max(actions[dest].option_strings, key=len).lstrip("-"),
+            default=parser.get_default(dest),
+        )
+        for dest in dests
+    }
 
 
 def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
@@ -384,12 +432,12 @@ def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser.add_argument(
         "--additional-suffix",
         default=["cytosol"],
-        nargs="*",
+        nargs="+",
         help="Additional labels suffixes to rewrite",
     )
 
     parser.add_argument(
-        "-s", "--subset", nargs="*", help="Subset of labels to include."
+        "-s", "--subset", nargs="+", help="Subset of labels to include."
     )
     force_arg(parser)
     dask_client_arg(parser)
