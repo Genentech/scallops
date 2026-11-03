@@ -125,6 +125,7 @@ workflow stitch_workflow {
                 radial_correction_k=stitch_radial_correction_k,
                 channel_names=channel_names,
                 stage_positions=stitch_stage_positions,
+                extra_arguments=stitch_extra_arguments,
                 crop_y=stitch_crop_y,
                 crop_x=stitch_crop_x,
                 min_overlap_fraction=stitch_min_overlap_fraction,
