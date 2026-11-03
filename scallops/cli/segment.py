@@ -279,6 +279,8 @@ def segment_cells(
     threshold_correction_factor: float = 1,
     cell_segmentation_rolling_ball: bool = False,
     cell_segmentation_sigma: Optional[float] = None,
+    mask_channel: Sequence[int] | None = None,
+    mask_sigma: Optional[float] = None,
     closing_radius: Optional[int] = None,
     cell_segmentation_t: Optional[list[int]] = None,
     force: bool = False,
@@ -315,7 +317,13 @@ def segment_cells(
     :param cell_segmentation_threshold: Threshold for cell segmentation.
     :param threshold_correction_factor: Factor to adjust threshold by.
     :param cell_segmentation_rolling_ball: Use rolling ball mask for cell segmentation.
-    :param cell_segmentation_sigma: Standard deviation for smoothing in cell segmentation.
+    :param cell_segmentation_sigma: Standard deviation of the gaussian filter used to smooth the
+        `cyto_channel` image before splitting touching cells. Also used before thresholding unless
+        `mask_sigma` is specified.
+    :param mask_channel: Channel indices used for the cell mask (thresholding) step. Defaults to
+        `cyto_channel`.
+    :param mask_sigma: Standard deviation for smoothing prior to the cell mask (thresholding) step.
+        Defaults to `cell_segmentation_sigma`. Use 0 for no smoothing.
     :param closing_radius: Radius for closing operation in cell segmentation.
     :param cell_segmentation_t: List of timepoints to consider for cell segmentation.
     :param force: Whether to overwrite existing output
@@ -364,6 +372,8 @@ def segment_cells(
         cell_seg_args["threshold"] = cell_segmentation_threshold
         cell_seg_args["rolling_ball"] = cell_segmentation_rolling_ball
         cell_seg_args["sigma"] = cell_segmentation_sigma
+        cell_seg_args["mask_channel"] = mask_channel
+        cell_seg_args["mask_sigma"] = mask_sigma
         cell_seg_args["closing_radius"] = closing_radius
         cell_seg_args["t"] = cell_segmentation_t
     if method.__name__ == "segment_cells_watershed":
@@ -663,10 +673,6 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                         threshold
                     )
                 )
-        elif threshold == "local":
-            assert arguments.cell_segmentation_sigma is not None, (
-                "Please provide sigma for `local` threshold"
-            )
 
         kwargs["cell_segmentation_t"] = arguments.cell_segmentation_t
         if method in ["watershed", "watershed-intensity", "propagation"]:
@@ -675,6 +681,17 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 raise ValueError(
                     f"Please provide nuclei labels for {method} segmentation"
                 )
+            if threshold == "local":
+                # the mask is smoothed with mask-sigma, which defaults to sigma; 0 disables it
+                if arguments.mask_sigma is not None:
+                    if arguments.mask_sigma == 0:
+                        raise ValueError(
+                            "Please provide a non-zero mask-sigma for `local` threshold"
+                        )
+                elif arguments.cell_segmentation_sigma is None:
+                    raise ValueError(
+                        "Please provide sigma (or mask-sigma) for `local` threshold"
+                    )
             if method == "watershed":
                 kwargs["watershed_method"] = "distance"
             elif method == "watershed-intensity":
@@ -691,6 +708,31 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 arguments.cell_segmentation_rolling_ball
             )
             kwargs["cell_segmentation_sigma"] = arguments.cell_segmentation_sigma
+            kwargs["mask_channel"] = arguments.mask_channel
+            kwargs["mask_sigma"] = arguments.mask_sigma
+        else:
+            # options only used by the watershed and propagation methods
+            ignored = [
+                name
+                for name, is_set in (
+                    ("threshold", threshold != "li"),
+                    (
+                        "threshold-correction-factor",
+                        arguments.threshold_correction_factor != 1,
+                    ),
+                    ("rolling-ball", arguments.cell_segmentation_rolling_ball),
+                    ("sigma", arguments.cell_segmentation_sigma is not None),
+                    ("mask-channel", arguments.mask_channel is not None),
+                    ("mask-sigma", arguments.mask_sigma is not None),
+                    ("closing-radius", arguments.closing_radius is not None),
+                )
+                if is_set
+            ]
+            if ignored:
+                logger.warning(
+                    f"{', '.join('`' + name + '`' for name in ignored)} "
+                    f"{'is' if len(ignored) == 1 else 'are'} ignored for {method} segmentation"
+                )
 
     elif method in ["stardist"]:
         kwargs["clip"] = arguments.stardist_clip

@@ -8,8 +8,8 @@ from numpy.typing import NDArray
 
 from scallops.segmentation import _propagate
 from scallops.segmentation.util import (
+    _prepare_cell_segmentation_images,
     close_labels,
-    image2mask,
     remove_small_objects_std,
 )
 
@@ -64,6 +64,8 @@ def segment_cells_propagation(
     sigma: float | None = None,
     closing_radius: int | None = None,
     t: list[int] | int | None = 0,
+    mask_channel: int | Sequence[int] | None = None,
+    mask_sigma: float | None = None,
     regularization_factor: float = 0.05,
     fill_holes: bool = True,
     chunks: tuple[int, int] | None = None,
@@ -73,7 +75,8 @@ def segment_cells_propagation(
 
     :param image: Image with the dimensions (t, c, z, y, x)
     :param nuclei: Labeled segmentation mask of nuclei. Uses nuclei as seeds and matches cell labels to nuclei labels.
-    :param cyto_channel: Index or list of indices for cyto channel(s). If not provided, all channels except for
+    :param cyto_channel: Index or list of indices for cyto channel(s) used for splitting cells (and for the
+        cell mask if `mask_channel` is not specified). If not provided, all channels except for
         `nuclei_channel` are used.
     :param threshold:
         One of `Li`, `Otsu`,  or float value
@@ -86,9 +89,14 @@ def segment_cells_propagation(
         nuclei
     :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction to mask prior to calculating
         threshold
-    :param sigma: sigma (optional) gaussian filter sigma to smooth the image prior to computing threshold
+    :param sigma: sigma (optional) gaussian filter sigma to smooth the image used for splitting cells (and
+        prior to computing threshold if `mask_sigma` is not specified)
     :param closing_radius: (optional) disk radius for closing cell labels
     :param t: Optional list of time indices (0-based) to use for computing cell mask
+    :param mask_channel: Index or list of indices for channel(s) used to compute the cell mask (thresholding
+        step). Defaults to `cyto_channel`, which is then only used for the splitting step.
+    :param mask_sigma: Gaussian filter sigma used to smooth the image prior to computing the cell mask. Defaults
+        to `sigma`, which is then only used for the splitting step. Use 0 for no smoothing.
     :param regularization_factor: If method is propagation, takes two factors into account when deciding where to draw
         the dividing line between two touching secondary objects: the distance to the nearest primary object, and the
         intensity of the secondary object image
@@ -99,17 +107,16 @@ def segment_cells_propagation(
     """
     if cyto_channel is None:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), nuclei_channel)
-    sel = dict(c=cyto_channel, z=0)
-    if t is not None:
-        sel["t"] = t
-    image = image.isel(sel, missing_dims="ignore").squeeze()
-
-    image, mask, computed_threshold = image2mask(
+    image, mask, computed_threshold = _prepare_cell_segmentation_images(
         image=image,
+        cyto_channel=cyto_channel,
         threshold=threshold,
         threshold_correction_factor=threshold_correction_factor,
         rolling_ball=rolling_ball,
         sigma=sigma,
+        t=t,
+        mask_channel=mask_channel,
+        mask_sigma=mask_sigma,
         depth=depth,
     )
     if rm_small_std is not None:

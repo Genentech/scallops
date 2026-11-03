@@ -247,6 +247,14 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
         " one channel specified, use minimum across time (cycles) then mean over channels, or if only one time "
         "point is present, use mean over channels.",
     )
+    parser.add_argument(
+        "--mask-channel",
+        type=int,
+        nargs="+",
+        help="Channel index (0-based) used to compute the cell mask (thresholding step) for watershed or "
+        "propagation methods. Defaults to `cyto-channel`. When specified, `cyto-channel` is only used for "
+        "splitting touching cells.",
+    )
     image_pattern_arg(parser)
     groupby_arg(parser)
     _add_common_args(parser)
@@ -262,7 +270,16 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     parser.add_argument(
         "--sigma",
         dest="cell_segmentation_sigma",
-        help="Size of gaussian kernel used to smooth the cell mask prior to computing threshold",
+        help="Standard deviation of the gaussian filter used to smooth the `cyto-channel` image",
+        default=None,
+        type=float,
+    )
+
+    parser.add_argument(
+        "--mask-sigma",
+        dest="mask_sigma",
+        help="Standard deviation of the gaussian filter used to smooth the `mask-channel` image. "
+        "Defaults to `sigma`. Use 0 for no smoothing.",
         default=None,
         type=float,
     )
