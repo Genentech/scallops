@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from functools import partial
 from numbers import Number
 from pathlib import Path
-from typing import Callable, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 import dask
 import dask.array as da
@@ -43,85 +43,109 @@ def close_labels(labels: NDArray, disk_radius: int = 3) -> NDArray:
 
 
 def threshold_quantile(
-    image: xr.DataArray, quantile: float
+    image: xr.DataArray, quantile: float, sel: dict[str, Any] | None = None
 ) -> tuple[DataArray, NDArray]:
     """Compute threshold using specified quantile after subtraction of the minimum per channel.
 
     :param image: Image with the dimensions (t,c,z,y,x)
     :param quantile: Quantile (between 0 and 1 inclusive)
+    :param sel: Optional `isel` selection (e.g. the channels used for the mask) restricting which
+        pixels the quantile is computed from. The minimum is still subtracted from the whole image.
     :return: Tuple of image with minimum subtracted and computed threshold
     """
     image = image.where(image > 0, np.nan)
     mins = image.squeeze().min(dim=["y", "x"])
     image -= mins
-    threshold = image.quantile(quantile).values
+    quantile_image = image if sel is None else image.isel(sel, missing_dims="ignore")
+    threshold = quantile_image.quantile(quantile).values
     image = image.fillna(0)
     return image, threshold
 
 
-def image2mask(
-    image: xr.DataArray,
-    threshold: Literal["Li", "Otsu", "Local"] | float | NDArray = "Li",
-    threshold_correction_factor: float = 1,
-    rolling_ball: bool = False,
-    sigma: float | None = None,
-    depth: int = 30,
-) -> tuple[NDArray | da.Array, NDArray | da.Array, float | None]:
-    """Convert an image to a mask.
+_ROLLING_BALL_RADIUS = 100
+
+
+def _summarize(image: xr.DataArray, rolling_ball: bool = False) -> NDArray | da.Array:
+    """Summarize channels/cycles, then optionally apply rolling ball subtraction.
 
     :param image: Image with the dimensions (t, c, y, x)
-    :param threshold:
-        One of `Li`, `Otsu`, `Local`
-        If `Li`, use Li’s iterative Minimum Cross Entropy method :func:`~skimage.filters.thresholding.threshold_li`.
-        If `Otsu`, use Otsu’s method :func:`~skimage.filters.thresholding.threshold_otsu`.
-        If 'Local', compute mask using `image > smoothed * threshold_correction_factor`
-    :param threshold_correction_factor: Factor to adjust the computed threshold by.
-    :param threshold: Threshold to apply to mask.
-    :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction to mask prior to calculating threshold
-    :param sigma: sigma (optional) gaussian filter sigma to smooth the image prior to computing threshold
-    :param depth: The number of elements that each block should share with its neighbors when using dask
-    :return: Image, mask, and threshold if threshold is `Li` or `Otsu`.
+    :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction
+    :return: Summarized image.
     """
-
-    # lower-cased method name, or the numeric threshold
-    threshold_method: str | float | NDArray = threshold
-    if isinstance(threshold, str):
-        threshold_method = threshold.lower()
-        assert threshold_method in ("li", "otsu", "local")
-        if threshold_method == "local":
-            assert sigma is not None, "Please provide sigma when threshold == `local`"
-
-    image = cyto_channel_summary(image).data
+    data = cyto_channel_summary(image).data
     if rolling_ball:
-        if isinstance(image, da.Array):
+        if isinstance(data, da.Array):
 
             def process_block(x):
-                return x - apply_rolling_ball(x)
+                return x - apply_rolling_ball(x, radius=_ROLLING_BALL_RADIUS)
 
-            image = da.map_overlap(
+            data = da.map_overlap(
                 process_block,
-                image,
-                depth=depth,
+                data,
+                depth=_ROLLING_BALL_RADIUS,
                 boundary="reflect",
-                meta=image._meta,
-                dtype=image.dtype,
+                meta=data._meta,
+                dtype=data.dtype,
             )
         else:
-            image = image - apply_rolling_ball(image)
+            data = data - apply_rolling_ball(data, radius=_ROLLING_BALL_RADIUS)
+    return data
 
-    smoothed = image
-    if sigma is not None:
-        g = (
-            ndi.gaussian_filter
-            if not isinstance(image, da.Array)
-            else dask_ndi.gaussian_filter
-        )
-        smoothed = g(image, sigma=sigma)  # usually larger than cells, 25 - 200
+
+def _smooth(data: NDArray | da.Array, sigma: float | None) -> NDArray | da.Array:
+    """Optionally apply gaussian smoothing.
+
+    :param data: Image
+    :param sigma: sigma (optional) gaussian filter sigma
+    :return: Smoothed image, or `data` if `sigma` is None.
+    """
+    if sigma is None:
+        return data
+    g = (
+        ndi.gaussian_filter
+        if not isinstance(data, da.Array)
+        else dask_ndi.gaussian_filter
+    )
+    return g(data, sigma=sigma)  # usually larger than cells, 25 - 200
+
+
+def _threshold_method(
+    threshold: Literal["Li", "Otsu", "Local"] | float | NDArray,
+    sigma: float | None,
+    sigma_name: str = "sigma",
+) -> str | float | NDArray:
+    """Validate threshold and return the lower-cased method name, or the numeric threshold."""
+    if not isinstance(threshold, str):
+        return threshold
+    method = threshold.lower()
+    if method not in ("li", "otsu", "local"):
+        raise ValueError(f"Unknown threshold method: {threshold}")
+    if method == "local" and sigma is None:
+        raise ValueError(f"Please provide {sigma_name} when threshold == `local`")
+    return method
+
+
+def _threshold_mask(
+    data: NDArray | da.Array,
+    smoothed: NDArray | da.Array,
+    threshold_method: str | float | NDArray,
+    threshold_correction_factor: float = 1,
+    depth: int = 30,
+) -> tuple[NDArray | da.Array, float | None]:
+    """Compute mask from summarized and smoothed images.
+
+    `threshold_correction_factor` scales the computed `Li`/`Otsu` threshold and the smoothed
+    image when `local`. A numeric (e.g. manually set or quantile) threshold is used as is.
+
+    :return: Mask and threshold if threshold is `Li`, `Otsu`, or a number (including a 0-d
+        array such as a computed quantile). None for `local`, and for `Li`/`Otsu` on a dask
+        array, where the threshold is computed per block.
+    """
     mask = None
-    threshold_val = threshold_method
+    threshold_val: Any = threshold_method
     if isinstance(threshold_method, str):
         if threshold_method == "local":
-            mask = image > smoothed * threshold_correction_factor  # usually 1.01 - 1.10
+            mask = data > smoothed * threshold_correction_factor  # usually 1.01 - 1.10
         elif threshold_method in ("li", "otsu"):
             if isinstance(smoothed, da.Array):
 
@@ -153,11 +177,160 @@ def image2mask(
                 threshold_val = threshold_val * threshold_correction_factor
     if mask is None:
         mask = smoothed > threshold_val
+    if isinstance(threshold_val, np.ndarray) and threshold_val.ndim == 0:
+        threshold_val = threshold_val.item()
     return (
-        smoothed,
         mask,
-        cast(float, threshold_val) if isinstance(threshold_val, Number) else None,
+        float(cast(float, threshold_val))
+        if isinstance(threshold_val, Number)
+        else None,
     )
+
+
+def image2mask(
+    image: xr.DataArray,
+    threshold: Literal["Li", "Otsu", "Local"] | float | NDArray = "Li",
+    threshold_correction_factor: float = 1,
+    rolling_ball: bool = False,
+    sigma: float | None = None,
+    depth: int = 30,
+) -> tuple[NDArray | da.Array, NDArray | da.Array, float | None]:
+    """Convert an image to a mask.
+
+    :param image: Image with the dimensions (t, c, y, x)
+    :param threshold:
+        One of `Li`, `Otsu`, `Local`
+        If `Li`, use Li’s iterative Minimum Cross Entropy method :func:`~skimage.filters.thresholding.threshold_li`.
+        If `Otsu`, use Otsu’s method :func:`~skimage.filters.thresholding.threshold_otsu`.
+        If 'Local', compute mask using `image > smoothed * threshold_correction_factor`
+    :param threshold_correction_factor: Factor to adjust the computed threshold by.
+    :param threshold: Threshold to apply to mask.
+    :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction to mask prior to calculating threshold
+    :param sigma: sigma (optional) gaussian filter sigma to smooth the image prior to computing threshold
+    :param depth: The number of elements that each block should share with its neighbors when using dask
+    :return: Image, mask, and threshold if threshold is `Li` or `Otsu`.
+    """
+    threshold_method = _threshold_method(threshold, sigma)
+    data = _summarize(image, rolling_ball=rolling_ball)
+    smoothed = _smooth(data, sigma)
+    mask, threshold_val = _threshold_mask(
+        data, smoothed, threshold_method, threshold_correction_factor, depth
+    )
+    return smoothed, mask, threshold_val
+
+
+def _channel_selection(
+    channel: int | Sequence[int] | NDArray, t: list[int] | int | None
+) -> dict[str, Any]:
+    """Return the `isel` selection for the given channel(s) and time indices at z=0.
+
+    The channel dim is kept (even for a single channel) so that
+    :func:`cyto_channel_summary` takes the minimum over cycles instead of only using
+    the first cycle.
+    """
+    sel: dict[str, Any] = dict(c=np.atleast_1d(channel), z=0)
+    if t is not None:
+        sel["t"] = t
+    return sel
+
+
+def _resolve_cell_segmentation_sigmas(
+    threshold: Literal["Li", "Otsu", "Local"] | float | NDArray,
+    sigma: float | None,
+    mask_sigma: float | None,
+    names: tuple[str, str] = ("sigma", "mask_sigma"),
+) -> tuple[str | float | NDArray, float | None, float | None]:
+    """Resolve the split and mask sigmas (0 means no smoothing) and validate the threshold.
+
+    :param threshold: Threshold method or value.
+    :param sigma: Gaussian filter sigma for the split image (and for the mask if `mask_sigma` is None).
+    :param mask_sigma: Gaussian filter sigma for the mask.
+    :param names: Names of the `sigma` and `mask_sigma` parameters used in error messages
+        (e.g. the CLI flags).
+    :return: Lower-cased threshold method (or the numeric threshold), sigma, and mask sigma.
+    """
+    if sigma == 0:
+        sigma = None
+    sigma_name = names[0]
+    if mask_sigma is None:
+        mask_sigma = sigma
+    elif mask_sigma == 0:
+        mask_sigma = None
+        sigma_name = f"a non-zero {names[1]}"
+    else:
+        sigma_name = names[1]
+    return _threshold_method(threshold, mask_sigma, sigma_name), sigma, mask_sigma
+
+
+def _prepare_cell_segmentation_images(
+    image: xr.DataArray,
+    cyto_channel: int | Sequence[int] | NDArray,
+    threshold: Literal["Li", "Otsu", "Local"] | float | NDArray = "Li",
+    threshold_correction_factor: float = 1,
+    rolling_ball: bool = False,
+    sigma: float | None = None,
+    t: list[int] | int | None = None,
+    mask_channel: int | Sequence[int] | NDArray | None = None,
+    mask_sigma: float | None = None,
+    depth: int = 30,
+    return_split_image: bool = True,
+) -> tuple[NDArray | da.Array | None, NDArray | da.Array, float | None]:
+    """Compute the cell foreground mask and the image used to split touching cells.
+
+    The mask (thresholding) step uses `mask_channel` and `mask_sigma`, while the split
+    step (e.g. intensity watershed or propagation) uses `cyto_channel` and `sigma`.
+
+    :param image: Image with the dimensions (t, c, z, y, x)
+    :param cyto_channel: Index or list of indices of channel(s) used for the split image.
+    :param threshold: Threshold method or value. See :func:`image2mask`.
+    :param threshold_correction_factor: Factor to adjust the computed threshold by.
+    :param rolling_ball: If true, apply rolling ball subtraction to both the mask and split images.
+    :param sigma: Gaussian filter sigma for the split image (and for the mask if `mask_sigma` is None).
+    :param t: Optional time indices (0-based) to use.
+    :param mask_channel: Index or list of indices of channel(s) used for the mask. Defaults to
+        `cyto_channel`.
+    :param mask_sigma: Gaussian filter sigma for the mask. Defaults to `sigma`. Use 0 for no
+        smoothing.
+    :param depth: The number of elements that each block should share with its neighbors when using dask
+    :param return_split_image: If False, skip computing the split image and return None in its place.
+    :return: Split image, mask, and threshold if threshold is `Li` or `Otsu`.
+    """
+
+    def _select(channel):
+        selected = image.isel(_channel_selection(channel, t), missing_dims="ignore")
+        if "t" in selected.dims and selected.sizes["t"] == 1:
+            selected = selected.squeeze("t")
+        return selected
+
+    threshold_method, sigma, mask_sigma = _resolve_cell_segmentation_sigmas(
+        threshold, sigma, mask_sigma
+    )
+
+    # channel summary is order-insensitive, so compare sorted channel lists
+    same_channels = mask_channel is None or np.array_equal(
+        np.sort(np.atleast_1d(mask_channel)), np.sort(np.atleast_1d(cyto_channel))
+    )
+    mask_data = _summarize(
+        _select(cyto_channel if mask_channel is None else mask_channel),
+        rolling_ball=rolling_ball,
+    )
+    mask_smoothed = _smooth(mask_data, mask_sigma)
+    mask, computed_threshold = _threshold_mask(
+        mask_data, mask_smoothed, threshold_method, threshold_correction_factor, depth
+    )
+    if not return_split_image:
+        return None, mask, computed_threshold
+    if same_channels:
+        # reuse the summarized (and rolling ball subtracted) image
+        split_image = (
+            mask_smoothed if mask_sigma == sigma else _smooth(mask_data, sigma)
+        )
+    else:
+        split_image = _smooth(
+            _summarize(_select(cyto_channel), rolling_ball=rolling_ball),
+            sigma,
+        )
+    return split_image, mask, computed_threshold
 
 
 def remove_small_objects_std(labels: NDArray, rm_small_std: float) -> NDArray:
