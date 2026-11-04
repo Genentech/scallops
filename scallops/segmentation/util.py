@@ -62,14 +62,14 @@ def threshold_quantile(
     return image, threshold
 
 
-def _summarize(
-    image: xr.DataArray, rolling_ball: bool = False, depth: int = 150
-) -> NDArray | da.Array:
+_ROLLING_BALL_RADIUS = 100
+
+
+def _summarize(image: xr.DataArray, rolling_ball: bool = False) -> NDArray | da.Array:
     """Summarize channels/cycles, then optionally apply rolling ball subtraction.
 
     :param image: Image with the dimensions (t, c, y, x)
     :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction
-    :param depth: The number of elements that each block should share with its neighbors when using dask
     :return: Summarized image.
     """
     data = cyto_channel_summary(image).data
@@ -77,18 +77,18 @@ def _summarize(
         if isinstance(data, da.Array):
 
             def process_block(x):
-                return x - apply_rolling_ball(x)
+                return x - apply_rolling_ball(x, radius=_ROLLING_BALL_RADIUS)
 
             data = da.map_overlap(
                 process_block,
                 data,
-                depth=depth,
+                depth=_ROLLING_BALL_RADIUS,
                 boundary="reflect",
                 meta=data._meta,
                 dtype=data.dtype,
             )
         else:
-            data = data - apply_rolling_ball(data)
+            data = data - apply_rolling_ball(data, radius=_ROLLING_BALL_RADIUS)
     return data
 
 
@@ -193,7 +193,7 @@ def image2mask(
     threshold_correction_factor: float = 1,
     rolling_ball: bool = False,
     sigma: float | None = None,
-    depth: int = 150,
+    depth: int = 30,
 ) -> tuple[NDArray | da.Array, NDArray | da.Array, float | None]:
     """Convert an image to a mask.
 
@@ -211,7 +211,7 @@ def image2mask(
     :return: Image, mask, and threshold if threshold is `Li` or `Otsu`.
     """
     threshold_method = _threshold_method(threshold, sigma)
-    data = _summarize(image, rolling_ball=rolling_ball, depth=depth)
+    data = _summarize(image, rolling_ball=rolling_ball)
     smoothed = _smooth(data, sigma)
     mask, threshold_val = _threshold_mask(
         data, smoothed, threshold_method, threshold_correction_factor, depth
@@ -313,7 +313,6 @@ def _prepare_cell_segmentation_images(
     mask_data = _summarize(
         _select(cyto_channel if mask_channel is None else mask_channel),
         rolling_ball=rolling_ball,
-        depth=depth,
     )
     mask_smoothed = _smooth(mask_data, mask_sigma)
     mask, computed_threshold = _threshold_mask(
@@ -328,7 +327,7 @@ def _prepare_cell_segmentation_images(
         )
     else:
         split_image = _smooth(
-            _summarize(_select(cyto_channel), rolling_ball=rolling_ball, depth=depth),
+            _summarize(_select(cyto_channel), rolling_ball=rolling_ball),
             sigma,
         )
     return split_image, mask, computed_threshold

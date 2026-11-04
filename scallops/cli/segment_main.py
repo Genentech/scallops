@@ -121,7 +121,8 @@ def _add_common_args(parser: ArgumentParser) -> None:
     )
     parser.add_argument(
         "--chunk-overlap",
-        help="Chunk size overlap to use to perform segmentation using overlapping chunks",
+        help="Number of pixels each chunk shares with its neighbors when segmenting in "
+        "chunks.",
         type=int,
     )
     parser.add_argument(
