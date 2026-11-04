@@ -10,8 +10,9 @@ Authors:
     - The SCALLOPS development team
 """
 
-from typing import Callable, Literal, Sequence, cast
+from typing import Any, Callable, Literal, Sequence, cast
 
+import dask
 import dask.array as da
 import numpy as np
 import scipy.ndimage as ndi
@@ -26,8 +27,9 @@ from skimage.segmentation import watershed
 from skimage.util import img_as_ubyte
 
 from scallops.segmentation.util import (
+    _channel_selection,
+    _prepare_cell_segmentation_images,
     close_labels,
-    image2mask,
     relabel_sequential,
     remove_small_objects_std,
     threshold_quantile,
@@ -164,7 +166,14 @@ def segment_nuclei_watershed(
     return nuclei.astype(np.uint16)
 
 
-def _process_block(mask, nuclei, image, closing_radius, at_least_nuclei, method):
+def _process_block(
+    mask,
+    nuclei,
+    image,
+    closing_radius,
+    at_least_nuclei,
+    method,
+):
     if method == "binary":
         labels = watershed(ndi.distance_transform_cdt(nuclei == 0), nuclei, mask=mask)
     else:
@@ -182,9 +191,33 @@ def _process_block(mask, nuclei, image, closing_radius, at_least_nuclei, method)
     return labels
 
 
+def _select_used_channels(
+    image: xr.DataArray,
+    cyto_channel: int | Sequence[int] | NDArray,
+    mask_channel: int | Sequence[int] | NDArray | None,
+    t: list[int] | int | None,
+) -> tuple[xr.DataArray, NDArray, NDArray | None]:
+    """Subset `image` to the cycles `t` and the union of `cyto_channel` and `mask_channel`.
+
+    :return: Subset image, and `cyto_channel` and `mask_channel` re-indexed to it.
+    """
+    cyto = np.atleast_1d(cyto_channel)
+    mask = None if mask_channel is None else np.atleast_1d(mask_channel)
+    used = np.union1d(cyto, cyto if mask is None else mask)
+    sel: dict[str, Any] = dict(c=used)
+    if t is not None:
+        sel["t"] = np.atleast_1d(t)
+    image = image.isel(sel, missing_dims="ignore")
+    return (
+        image,
+        np.searchsorted(used, cyto),
+        None if mask is None else np.searchsorted(used, mask),
+    )
+
+
 def segment_cells_watershed(
     image: xr.DataArray,
-    nuclei: NDArray,
+    nuclei: NDArray | da.Array,
     threshold: Literal["Li", "quantile", "Otsu", "Local"] | float = "Li",
     cyto_channel: int | Sequence[int] | None = None,
     threshold_correction_factor: float = 1,
@@ -195,6 +228,8 @@ def segment_cells_watershed(
     sigma: float | None = None,
     closing_radius: int | None = None,
     t: list[int] | int | None = 0,
+    mask_channel: int | Sequence[int] | None = None,
+    mask_sigma: float | None = None,
     chunks: tuple[int, int] | None = None,
     depth: int = 30,
     watershed_method: Literal["binary", "distance", "intensity"] = "distance",
@@ -204,7 +239,8 @@ def segment_cells_watershed(
 
     :param image: Image with the dimensions (t, c, z, y, x)
     :param nuclei: Labeled segmentation mask of nuclei. Uses nuclei as seeds and matches cell labels to nuclei labels.
-    :param cyto_channel: Index or list of indices for cyto channel(s). If not provided, all channels except for `nuclei_channel` are used.
+    :param cyto_channel: Index or list of indices for cyto channel(s) used for splitting cells (and for the
+        cell mask if `mask_channel` is not specified). If not provided, all channels except for `nuclei_channel` are used.
     :param threshold:
         One of `Li`, `Otsu`, `quantile`, or float value
         If `Li`, use Li’s iterative Minimum Cross Entropy method :func:`~skimage.filters.thresholding.threshold_li`.
@@ -216,10 +252,17 @@ def segment_cells_watershed(
     :param nuclei_channel: DAPI channel index
     :param rm_small_std: If specified, remove objects smaller than specified number of standard deviations of identified nuclei
     :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction to mask prior to calculating threshold
-    :param sigma: sigma (optional) gaussian filter sigma to smooth the image prior to computing threshold
+    :param sigma: sigma (optional) gaussian filter sigma to smooth the image used for splitting cells (and
+        prior to computing threshold if `mask_sigma` is not specified)
     :param closing_radius: (optional) disk radius for closing cell labels
     :param t: Optional list of time indices (0-based) to use for computing cell mask
-    :param chunks: Chunk size to perform segmentation using non-overlapping chunks.
+    :param mask_channel: Index or list of indices for channel(s) used to compute the cell mask (thresholding
+        step). Defaults to `cyto_channel`, which is then only used for the splitting step.
+    :param mask_sigma: Gaussian filter sigma used to smooth the image prior to computing the cell mask. Defaults
+        to `sigma`, which is then only used for the splitting step. Use 0 for no smoothing.
+    :param chunks: Chunk size to perform segmentation using overlapping chunks. For the `distance` and
+        `binary` methods, dask images are only segmented in chunks if specified. For the `intensity` method,
+        defaults to the image chunk size.
     :param depth: The number of elements that each block should share with its neighbors when using dask
     :param at_least_nuclei: Ensure cells occupy at least the same pixels as nuclei
     :param watershed_method: Watershed method:
@@ -232,50 +275,75 @@ def segment_cells_watershed(
     """
     method = watershed_method.lower()
     assert method in ["binary", "distance", "intensity"]
-    # threshold passed to image2mask: a method name, a number, or the computed quantile
+    if cyto_channel is None:
+        cyto_channel = np.delete(np.arange(image.sizes["c"]), nuclei_channel)
+    # mask threshold: a method name, a number, or the computed quantile
     mask_threshold: Literal["Li", "Otsu", "Local"] | float | NDArray
     if threshold == "quantile":
+        # only process the channels and cycles used for the mask and split images
+        image, cyto_channel, mask_channel = _select_used_channels(
+            image, cyto_channel, mask_channel, t
+        )
+        t = None  # the image only contains the selected cycles
+        # compute the quantile only from the pixels used for the mask
         image, mask_threshold = threshold_quantile(
-            image=image, quantile=quantile_threshold
+            image=image,
+            quantile=quantile_threshold,
+            sel=_channel_selection(
+                cyto_channel if mask_channel is None else mask_channel, t
+            ),
         )
     else:
         mask_threshold = cast(Literal["Li", "Otsu", "Local"] | float, threshold)
 
-    if cyto_channel is None:
-        cyto_channel = np.delete(np.arange(image.sizes["c"]), nuclei_channel)
-    sel = dict(c=cyto_channel, z=0)
-    if t is not None:
-        sel["t"] = t
-
-    image = image.isel(sel, missing_dims="ignore").squeeze()
     if rm_small_std is not None:
+        if isinstance(nuclei, da.Array):
+            nuclei = nuclei.compute()
         nuclei = remove_small_objects_std(nuclei, rm_small_std)
 
-    image, mask, computed_threshold = image2mask(
+    # the split image is only used by the intensity watershed
+    image, mask, computed_threshold = _prepare_cell_segmentation_images(
         image=image,
+        cyto_channel=cyto_channel,
         threshold=mask_threshold,
         threshold_correction_factor=threshold_correction_factor,
         rolling_ball=rolling_ball,
         sigma=sigma,
+        t=t,
+        mask_channel=mask_channel,
+        mask_sigma=mask_sigma,
+        depth=depth,
+        return_split_image=method == "intensity",
     )
-    if method != "intensity":
-        image = None
 
-    if isinstance(image, da.Array):
+    # distance/binary watersheds only run per chunk when chunks are requested, otherwise
+    # a single watershed over the whole image avoids artifacts at chunk boundaries
+    if isinstance(mask, da.Array) and (chunks is not None or method == "intensity"):
         if chunks is None:
             chunks = mask.chunksize
 
         mask = mask.rechunk(chunks)
-        nuclei = da.from_array(nuclei, chunks=chunks)
+        nuclei = (
+            da.from_array(nuclei, chunks=chunks)
+            if not isinstance(nuclei, da.Array)
+            else nuclei.rechunk(chunks)
+        )
+        arrays = [mask, nuclei]
+        block_kwargs: dict[str, Any] = dict(
+            closing_radius=closing_radius,
+            at_least_nuclei=at_least_nuclei,
+            method=method,
+        )
+        # image is None unless using the intensity watershed
+        if image is not None:
+            arrays.append(image.rechunk(chunks))
+        else:
+            block_kwargs["image"] = None
         if mask.chunksize != mask.shape:
             labels = da.map_overlap(
                 _process_block,
-                mask,
-                nuclei,
-                image,
-                closing_radius=closing_radius,
-                at_least_nuclei=at_least_nuclei,
-                method=method,
+                *arrays,
+                **block_kwargs,
                 depth=depth,
                 dtype=np.int32,
                 meta=np.array((), dtype=np.int32),
@@ -283,17 +351,15 @@ def segment_cells_watershed(
         else:
             labels = da.map_blocks(
                 _process_block,
-                mask,
-                nuclei,
-                image,
-                closing_radius=closing_radius,
-                at_least_nuclei=at_least_nuclei,
-                method=method,
+                *arrays,
+                **block_kwargs,
                 dtype=np.int32,
                 meta=np.array((), dtype=np.int32),
             )
 
     else:
+        # compute together so that shared upstream tasks only run once
+        mask, nuclei = dask.compute(mask, nuclei)
         labels = _process_block(
             mask,
             nuclei,

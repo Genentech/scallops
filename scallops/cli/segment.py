@@ -117,6 +117,10 @@ def _filter_labels(
         def filter_func(r):
             return all(f(r) for f in filters)
 
+        # regionprops and remove_labels require an in-memory array
+        if isinstance(labels, da.Array):
+            labels = labels.compute()
+
         return remove_labels_regionprops(
             labels=labels,
             regions=regionprops(labels, intensity_image=intensity_image_),
@@ -279,6 +283,8 @@ def segment_cells(
     threshold_correction_factor: float = 1,
     cell_segmentation_rolling_ball: bool = False,
     cell_segmentation_sigma: Optional[float] = None,
+    mask_channel: Sequence[int] | None = None,
+    mask_sigma: Optional[float] = None,
     closing_radius: Optional[int] = None,
     cell_segmentation_t: Optional[list[int]] = None,
     force: bool = False,
@@ -315,7 +321,13 @@ def segment_cells(
     :param cell_segmentation_threshold: Threshold for cell segmentation.
     :param threshold_correction_factor: Factor to adjust threshold by.
     :param cell_segmentation_rolling_ball: Use rolling ball mask for cell segmentation.
-    :param cell_segmentation_sigma: Standard deviation for smoothing in cell segmentation.
+    :param cell_segmentation_sigma: Standard deviation of the gaussian filter used to smooth the
+        `cyto_channel` image before splitting touching cells. Also used before thresholding unless
+        `mask_sigma` is specified.
+    :param mask_channel: Channel indices used for the cell mask (thresholding) step. Defaults to
+        `cyto_channel`.
+    :param mask_sigma: Standard deviation for smoothing prior to the cell mask (thresholding) step.
+        Defaults to `cell_segmentation_sigma`. Use 0 for no smoothing.
     :param closing_radius: Radius for closing operation in cell segmentation.
     :param cell_segmentation_t: List of timepoints to consider for cell segmentation.
     :param force: Whether to overwrite existing output
@@ -329,10 +341,11 @@ def segment_cells(
         return root
     image = _images2fov_array(file_list, metadata, dask=True).squeeze()
     image = _z_projection(image, z_index)
-    if cyto_channel is None:
+    if cyto_channel is None or len(cyto_channel) == 0:
         cyto_channel = np.delete(np.arange(image.sizes["c"]), dapi_channel)
-    if len(cyto_channel) == 0:
-        cyto_channel = [dapi_channel]
+        if len(cyto_channel) == 0:
+            # DAPI-only image
+            cyto_channel = [dapi_channel]
     logger.info(f"Running cell segmentation for {image_key}")
 
     cell_seg_args: dict[str, Any] = {"nuclei_channel": dapi_channel}
@@ -364,6 +377,8 @@ def segment_cells(
         cell_seg_args["threshold"] = cell_segmentation_threshold
         cell_seg_args["rolling_ball"] = cell_segmentation_rolling_ball
         cell_seg_args["sigma"] = cell_segmentation_sigma
+        cell_seg_args["mask_channel"] = mask_channel
+        cell_seg_args["mask_sigma"] = mask_sigma
         cell_seg_args["closing_radius"] = closing_radius
         cell_seg_args["t"] = cell_segmentation_t
     if method.__name__ == "segment_cells_watershed":
@@ -653,20 +668,12 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
         kwargs["nuclei_intensity_channel"] = arguments.nuclei_intensity_channel
         kwargs["cyto_channel"] = arguments.cyto_channel
         kwargs["shrink_primary"] = arguments.shrink_nuclei
-        threshold = arguments.threshold.lower()
-        if threshold not in ["li", "otsu", "local"]:
-            try:
-                threshold = float(threshold)
-            except ValueError:
-                raise ValueError(
-                    "Threshold must be either `Li`, `Otsu`, `Local`, or a valid number. Got {}".format(
-                        threshold
-                    )
-                )
-        elif threshold == "local":
-            assert arguments.cell_segmentation_sigma is not None, (
-                "Please provide sigma for `local` threshold"
-            )
+        # threshold method names are validated by the segmentation functions
+        threshold = arguments.threshold
+        try:
+            threshold = float(threshold)
+        except ValueError:
+            pass
 
         kwargs["cell_segmentation_t"] = arguments.cell_segmentation_t
         if method in ["watershed", "watershed-intensity", "propagation"]:
@@ -675,8 +682,38 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 raise ValueError(
                     f"Please provide nuclei labels for {method} segmentation"
                 )
+            # validate before loading any images, using the same rules as segmentation
+            from scallops.segmentation.util import _resolve_cell_segmentation_sigmas
+
+            _resolve_cell_segmentation_sigmas(
+                threshold,
+                arguments.cell_segmentation_sigma,
+                arguments.mask_sigma,
+                names=("--sigma", "--mask-sigma"),
+            )
             if method == "watershed":
                 kwargs["watershed_method"] = "distance"
+                # the distance watershed only uses the mask, not the split image
+                ignored = []
+                if (
+                    arguments.cell_segmentation_sigma  # 0 or None: no smoothing
+                    and arguments.mask_sigma is not None
+                ):
+                    ignored.append("`sigma` (`mask-sigma` is used for the mask)")
+                if (
+                    arguments.cyto_channel is not None
+                    and arguments.mask_channel is not None
+                ):
+                    ignored.append(
+                        "`cyto-channel` (`mask-channel` is used for the mask)"
+                    )
+                if ignored:
+                    logger.warning(
+                        f"{' and '.join(ignored)} "
+                        f"{'is' if len(ignored) == 1 else 'are'} ignored for watershed "
+                        "segmentation, use watershed-intensity or propagation to split "
+                        "cells using cyto-channel intensity"
+                    )
             elif method == "watershed-intensity":
                 method = "watershed"
                 kwargs["watershed_method"] = "intensity"
@@ -691,6 +728,20 @@ def _run_segment_pipeline(arguments: argparse.Namespace, nuclei: bool):
                 arguments.cell_segmentation_rolling_ball
             )
             kwargs["cell_segmentation_sigma"] = arguments.cell_segmentation_sigma
+            kwargs["mask_channel"] = arguments.mask_channel
+            kwargs["mask_sigma"] = arguments.mask_sigma
+        else:
+            # options only used by the watershed and propagation methods
+            ignored = [
+                option.flag
+                for dest, option in arguments.split_only_options.items()
+                if getattr(arguments, dest) != option.default
+            ]
+            if ignored:
+                logger.warning(
+                    f"{', '.join('`' + name + '`' for name in ignored)} "
+                    f"{'is' if len(ignored) == 1 else 'are'} ignored for {method} segmentation"
+                )
 
     elif method in ["stardist"]:
         kwargs["clip"] = arguments.stardist_clip
