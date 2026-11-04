@@ -775,7 +775,7 @@ workflow ops_workflow {
                 }
             }
         }
-         if (defined(barcodes)) {
+         if (defined(barcodes) && (length(select_all([features_nuclei.output_url]))>0) || length(select_all([features_cell.output_url]))>0 || length(select_all([features_cytosol.output_url]))>0) {
 
                 call tasks.merge as merge_features {
                     input:
