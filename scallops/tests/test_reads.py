@@ -673,7 +673,7 @@ def test_barcode_n_unique_bases():
 def test_make_decoy_barcodes():
     rng = np.random.default_rng(0)
     library = np.unique(["".join(rng.choice(list("ACGT"), 10)) for _ in range(500)])
-    decoys = make_decoy_barcodes(pd.DataFrame({"barcode": library}), seed=1)
+    decoys = make_decoy_barcodes(library, seed=1)
     assert len(decoys) == len(library)
     assert len(set(decoys)) == len(decoys)
     assert not set(decoys) & set(library)
@@ -692,6 +692,20 @@ def test_make_decoy_barcodes():
     assert len(make_decoy_barcodes(library, n=50)) == 50
     with pytest.raises(ValueError, match="same length"):
         make_decoy_barcodes(["ACG", "ACGT"])
+    with pytest.raises(ValueError, match="at least 1"):
+        make_decoy_barcodes(library, n=0)
+    with pytest.raises(ValueError, match="at least 2 unique"):
+        make_decoy_barcodes(["ACGTACGT", "ACGTACGT"], min_mismatches=3)
+    assert all(type(d) is str for d in decoys)
+    assert all(
+        type(d) is str for d in make_decoy_barcodes(library, match_density=False)
+    )
+    with pytest.raises(ValueError, match="one-dimensional"):
+        make_decoy_barcodes(pd.DataFrame({"barcode": library, "gene": "g"}))
+    # a single column is fine
+    np.testing.assert_array_equal(
+        decoys, make_decoy_barcodes(pd.Series(library), seed=1)
+    )
 
 
 def _mean_capture(targets, decoys):
@@ -758,3 +772,74 @@ def test_one_mismatch_index_capture(length):
 
     for sel in (np.ones(len(codes), bool), rng.random(len(codes)) < 0.6):
         np.testing.assert_array_equal(index.capture(sel)[sel], brute(sel)[sel])
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("length", [5, 24])  # integer and byte-string keys
+def test_one_mismatch_index_extend(length):
+    """An extended index matches one built from scratch, and count_within matches
+    a brute-force count."""
+    from scallops.reads import _encode_alphabet, _OneMismatchIndex
+
+    rng = np.random.default_rng(0)
+    bc = np.unique(["".join(r) for r in rng.choice(list("ACGT"), (120, length))])
+    a = _encode_alphabet(bc[:80], "ACGT")
+    b = _encode_alphabet(bc[80:], "ACGT")
+    extended = _OneMismatchIndex(a, "ACGT").extend(b)
+    full = _OneMismatchIndex(np.vstack([a, b]), "ACGT")
+    np.testing.assert_array_equal(extended.capture(), full.capture())
+    queries = np.vstack(
+        [
+            _encode_alphabet(
+                ["".join(r) for r in rng.choice(list("ACGT"), (200, length))], "ACGT"
+            ),
+            b[:10],
+        ]
+    )
+    queries[:20, 0] = full.codes[:20, 0]  # some queries one mismatch away
+    expected = ((queries[:, None] != full.codes[None]).sum(axis=2) <= 1).sum(axis=1)
+    np.testing.assert_array_equal(extended.count_within(queries), expected)
+
+
+@pytest.mark.basecalls
+def test_decoy_partners():
+    """Each partner is one or two mismatches from its barcode, never changes a
+    position that is constant in the whitelist, and only uses whitelist bases at
+    each position."""
+    from scallops.reads import _base_frequencies, _decoy_partners, _encode_alphabet
+
+    rng = np.random.default_rng(0)
+    library = np.array(
+        [
+            "".join(r)
+            for r in rng.choice(list("ACGT"), (300, 10), p=[0.7, 0.1, 0.1, 0.1])
+        ]
+    )
+    library = np.char.add(library, "AC")  # two constant positions
+    targets = _encode_alphabet(library, "ACGT")
+    codes = targets[rng.permutation(len(targets))]
+    for _ in range(20):
+        mut = _decoy_partners(codes, _base_frequencies(targets, 4), rng)
+        dist = (mut != codes).sum(axis=1)
+        assert set(dist) <= {1, 2} and 2 in dist
+        np.testing.assert_array_equal(mut[:, -2:], codes[:, -2:])
+        for j in range(10):
+            assert set(mut[:, j]) <= set(targets[:, j])
+
+
+@pytest.mark.basecalls
+def test_draw_never_zero_weight():
+    """_draw picks only positive-weight columns, even when the uniform draw
+    rounds up to the row total."""
+    from scallops.reads import _draw
+
+    weights = np.array([[0.0, 1.0, 0.0, 2.0, 0.0], [3.0, 0.0, 0.0, 0.0, 0.0]])
+
+    class Top:  # uniform draws at the top of [0, 1)
+        def random(self, n):
+            return np.ones(n)
+
+    np.testing.assert_array_equal(_draw(weights, Top()), [3, 0])
+    rng = np.random.default_rng(0)
+    picks = np.stack([_draw(weights, rng) for _ in range(300)])
+    assert set(picks[:, 0]) == {1, 3} and set(picks[:, 1]) == {0}
