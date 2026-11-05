@@ -11,20 +11,6 @@ Example data paths in the notebooks may need to be updated to reflect your local
 
 ----
 
-End-to-End Tutorial
---------------------
-
-A production-grade walkthrough of the full SCALLOPS pipeline using the PERISCOPE dataset.
-Covers every major stage in sequence: illumination correction, image stitching, ISS
-registration, cellular segmentation, spot detection, base calling, feature extraction, and
-final data merging. This is the recommended starting point for understanding how all
-components fit together in a real experiment. Downstream analyses, quality control, and
-visualization are explored in more depth in the `OPS Analysis`_ and `Plotting`_ notebooks.
-
-`Open notebook <notebooks/End-to-End.ipynb>`_
-
-----
-
 OPS Analysis
 -------------
 
@@ -61,6 +47,22 @@ SCALLOPS represents and manipulates imaging data.
 
 ----
 
+
+End-to-End Tutorial
+--------------------
+
+A production-grade walkthrough of the full SCALLOPS pipeline using the PERISCOPE dataset.
+Covers every major stage in sequence: illumination correction, image stitching, ISS
+registration, cellular segmentation, spot detection, base calling, feature extraction, and
+final data merging. This is the recommended starting point for understanding how all
+components fit together in a real experiment. Downstream analyses, quality control, and
+visualization are explored in more depth in the `OPS Analysis`_ and `Plotting`_ notebooks.
+
+`Open notebook <notebooks/End-to-End.ipynb>`_
+
+
+----
+
 Barrel Distortion Estimation
 ------------------------------
 
@@ -70,3 +72,12 @@ workflow in Napari for estimating and applying the correction coefficient. Relev
 users working with wide-field objectives or lenses that introduce radial distortion.
 
 `Open notebook <notebooks/barrel_distortion_estimation.ipynb>`_
+
+.. toctree::
+   :hidden:
+
+   notebooks/End-to-End
+   notebooks/ops
+   notebooks/plotting
+   notebooks/data_structures
+   notebooks/barrel_distortion_estimation

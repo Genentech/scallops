@@ -43,7 +43,7 @@ def input_arg(parser: argparse.ArgumentParser):
         nargs="+",
         required=True,
         help="Path to one or more zarr, h5ad, or Parquet files or a "
-        "pattern to match files (e.g. s3://foo/*.zarr).",
+        "pattern to match files (e.g. ``s3://foo/*.zarr``).",
     )
 
 

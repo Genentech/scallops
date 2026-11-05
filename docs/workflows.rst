@@ -342,6 +342,7 @@ Below is the complete list of exposed options covering registration, feature ext
    * - **batch_size**
      - Int
      - Number of groups to process in one batch.
+
 Outputs
 -------
 

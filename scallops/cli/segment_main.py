@@ -397,8 +397,8 @@ def _get_cli_options(
 def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser = subparsers.add_parser(
         "overlap",
-        help="Find the fraction of `label-1` contained within `label-2",
-        description="Find the fraction of `label-1` contained within `label-2",
+        help="Find the fraction of `label-1` contained within `label-2`",
+        description="Find the fraction of `label-1` contained within `label-2`",
         formatter_class=(
             ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
         ),

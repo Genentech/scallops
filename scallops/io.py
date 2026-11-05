@@ -1128,7 +1128,7 @@ def to_label_crops(
     :param label_col: Column in `df` containing label id. Set to `None` if label is found in data frame index.
     :param gaussian_sigma: If not None, apply gaussian-smoothed mask to isolate target mask
     :return: Input data frame with objects at well edges removed. Adds columns `crop_url`, the URL to
-    output label crops, and crop-bbox-0, crop-bbox-2, crop-bbox-1, crop-bbox-3 containing the coordinates of the crop.
+        output label crops, and crop-bbox-0, crop-bbox-2, crop-bbox-1, crop-bbox-3 containing the coordinates of the crop.
     """
     output_dir = output_dir.rstrip("/")
     is_dask_array = isinstance(intensity_image, da.Array)
