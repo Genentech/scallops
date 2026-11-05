@@ -48,9 +48,9 @@ intersphinx_mapping = dict(
     python=("https://docs.python.org/3", None),
     scipy=("https://docs.scipy.org/doc/scipy/", None),
     seaborn=("https://seaborn.pydata.org/", None),
-    skimage=("https://scikit-image.org/docs/stable/api/", None),
+    skimage=("https://scikit-image.org/docs/stable/", None),
     sklearn=("https://scikit-learn.org/dev/", None),
-    xarray=("https://docs.xarray.dev/", None),
+    xarray=("https://docs.xarray.dev/en/stable/", None),
 )
 intersphinx_disabled_reftypes = ["*"]
 # -- Options for HTML output -------------------------------------------------

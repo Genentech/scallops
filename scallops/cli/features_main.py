@@ -76,10 +76,10 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
 
     generic_features_help = (
         "A space-separated list of features to extract (e.g., 'area intensity_0 corr_0_1').\n"
-        "Channels are 0-indexed. Use shortcuts for efficiency:\n"
-        "  - For specific channels: 'intensity_0,1,2'\n"
-        "  - For all channels (wildcard): 'intensity_*'\n"
-        "  - For all channel pairs: 'colocalization_*_*'"
+        "Channels are 0-indexed. Use shortcuts for efficiency:\n\n"
+        "- For specific channels: 'intensity_0,1,2'\n"
+        "- For all channels (wildcard): 'intensity_*'\n"
+        "- For all channel pairs: 'colocalization_*_*'"
     )
 
     image_pattern_arg(parser)

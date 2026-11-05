@@ -70,3 +70,12 @@ workflow in Napari for estimating and applying the correction coefficient. Relev
 users working with wide-field objectives or lenses that introduce radial distortion.
 
 `Open notebook <notebooks/barrel_distortion_estimation.ipynb>`_
+
+.. toctree::
+   :hidden:
+
+   notebooks/End-to-End
+   notebooks/ops
+   notebooks/plotting
+   notebooks/data_structures
+   notebooks/barrel_distortion_estimation
