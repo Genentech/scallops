@@ -11,20 +11,6 @@ Example data paths in the notebooks may need to be updated to reflect your local
 
 ----
 
-End-to-End Tutorial
---------------------
-
-A production-grade walkthrough of the full SCALLOPS pipeline using the PERISCOPE dataset.
-Covers every major stage in sequence: illumination correction, image stitching, ISS
-registration, cellular segmentation, spot detection, base calling, feature extraction, and
-final data merging. This is the recommended starting point for understanding how all
-components fit together in a real experiment. Downstream analyses, quality control, and
-visualization are explored in more depth in the `OPS Analysis`_ and `Plotting`_ notebooks.
-
-`Open notebook <notebooks/End-to-End.ipynb>`_
-
-----
-
 OPS Analysis
 -------------
 
@@ -58,6 +44,22 @@ experiment, and save and reload data using the Zarr format. Useful for understan
 SCALLOPS represents and manipulates imaging data.
 
 `Open notebook <notebooks/data_structures.ipynb>`_
+
+----
+
+
+End-to-End Tutorial
+--------------------
+
+A production-grade walkthrough of the full SCALLOPS pipeline using the PERISCOPE dataset.
+Covers every major stage in sequence: illumination correction, image stitching, ISS
+registration, cellular segmentation, spot detection, base calling, feature extraction, and
+final data merging. This is the recommended starting point for understanding how all
+components fit together in a real experiment. Downstream analyses, quality control, and
+visualization are explored in more depth in the `OPS Analysis`_ and `Plotting`_ notebooks.
+
+`Open notebook <notebooks/End-to-End.ipynb>`_
+
 
 ----
 
