@@ -1457,7 +1457,7 @@ class _OneMismatchIndex:
         self.mask = len(self.alphabet) + 2  # codes are 1..A, A + 1 for unknown
         base = self.mask + 1
         self.length = codes.shape[1]
-        self.int_keys = float(base) ** self.length < 2**62
+        self.int_keys = base**self.length < 2**62
         self.powers = base ** np.arange(self.length, dtype=np.int64)
         self.n = len(codes)
         self.exact = self._runs(np.sort(self._keys(codes)))
