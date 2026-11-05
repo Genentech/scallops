@@ -129,6 +129,7 @@ Tools for decoding sequencing spots and assigning them to barcodes and labels.
     scallops.reads.channel_crosstalk_matrix
     scallops.reads.correct_mismatches
     scallops.reads.decode_max
+    scallops.reads.make_decoy_barcodes
     scallops.reads.merge_sbs_phenotype
     scallops.reads.peaks_to_bases
     scallops.reads.quality_softmax

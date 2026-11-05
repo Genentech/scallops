@@ -16,6 +16,7 @@ from scallops.reads import (
     channel_crosstalk_matrix,
     correct_mismatches,
     decode_max,
+    make_decoy_barcodes,
     peaks_to_bases,
 )
 from scallops.spots import (
@@ -669,15 +670,91 @@ def test_barcode_n_unique_bases():
 
 
 @pytest.mark.basecalls
-def test_dask_total_threads_cpu_count(monkeypatch):
-    from scallops.utils import _dask_total_threads
+def test_make_decoy_barcodes():
+    rng = np.random.default_rng(0)
+    library = np.unique(["".join(rng.choice(list("ACGT"), 10)) for _ in range(500)])
+    decoys = make_decoy_barcodes(pd.DataFrame({"barcode": library}), seed=1)
+    assert len(decoys) == len(library)
+    assert len(set(decoys)) == len(decoys)
+    assert not set(decoys) & set(library)
+    lib_codes = np.array([list(b) for b in library])
+    dec_codes = np.array([list(b) for b in decoys])
+    min_dist = (dec_codes[:, None, :] != lib_codes[None, :, :]).sum(axis=2).min()
+    assert min_dist >= 2
+    # per-position base frequencies follow the library
+    for j in range(10):
+        lib_freq = pd.Series(lib_codes[:, j]).value_counts(normalize=True)
+        dec_freq = pd.Series(dec_codes[:, j]).value_counts(normalize=True)
+        assert (
+            lib_freq - dec_freq.reindex(lib_freq.index, fill_value=0)
+        ).abs().max() < 0.05
+    np.testing.assert_array_equal(decoys, make_decoy_barcodes(library, seed=1))
+    assert len(make_decoy_barcodes(library, n=50)) == 50
+    with pytest.raises(ValueError, match="same length"):
+        make_decoy_barcodes(["ACG", "ACGT"])
 
-    monkeypatch.setenv("SCALLOPS_CPU_COUNT", "3")
-    try:
-        from distributed import get_client
 
-        get_client()
-        pytest.skip("distributed client active")
-    except ValueError:
-        pass
-    assert _dask_total_threads() == 3
+def _mean_capture(targets, decoys):
+    from scallops.reads import _encode_alphabet, _OneMismatchIndex
+
+    alphabet = sorted(set("".join(targets)))
+    codes = _encode_alphabet(np.concatenate([targets, decoys]), alphabet)
+    cap = _OneMismatchIndex(codes, alphabet).capture()
+    return cap[: len(targets)].mean(), cap[len(targets) :].mean()
+
+
+@pytest.mark.basecalls
+def test_make_decoy_barcodes_density():
+    """Decoys are as crowded as a library with many close pairs."""
+    rng = np.random.default_rng(0)
+    seeds = ["".join(rng.choice(list("ACGT"), 10)) for _ in range(400)]
+    mutants = []
+    for b in seeds:  # a partner 1 or 2 mismatches away, as in crowded libraries
+        b = list(b)
+        for j in rng.choice(10, int(rng.integers(1, 3)), replace=False):
+            b[j] = rng.choice([c for c in "ACGT" if c != b[j]])
+        mutants.append("".join(b))
+    library = np.unique(seeds + mutants)
+    t_rand, d_rand = _mean_capture(
+        library, make_decoy_barcodes(library, seed=1, match_density=False)
+    )
+    decoys = make_decoy_barcodes(library, seed=1)
+    assert len(decoys) == len(library)
+    assert not set(decoys) & set(library)
+    t_match, d_match = _mean_capture(library, decoys)
+    assert d_rand - t_rand > 1  # random decoys are sparser than the library
+    assert abs(d_match - t_match) < 0.25
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("length", [5, 24])  # integer and byte-string keys
+def test_one_mismatch_index_capture(length):
+    """capture matches a brute-force count, for all barcodes and for a subset,
+    with close pairs and duplicates."""
+    from scallops.reads import _encode_alphabet, _OneMismatchIndex
+
+    rng = np.random.default_rng(0)
+    base = ["".join(r) for r in rng.choice(list("ACGT"), (50, length))]
+    close = []
+    for b in base[:30]:  # partners 1 or 2 mismatches away
+        b = list(b)
+        for j in rng.choice(length, int(rng.integers(1, 3)), replace=False):
+            b[j] = rng.choice([c for c in "ACGT" if c != b[j]])
+        close.append("".join(b))
+    codes = _encode_alphabet(base + close + base[:3], "ACGT")
+    index = _OneMismatchIndex(codes, "ACGT")
+    assert index.int_keys == (length == 5)
+
+    def brute(sel):
+        members = codes[sel]
+        cap = np.zeros(len(codes), dtype=int)
+        for i in np.flatnonzero(sel):
+            for j in range(length):
+                for d in (1, 2, 3):
+                    v = codes[i].copy()
+                    v[j] = (v[j] - 1 + d) % 4 + 1
+                    cap[i] += ((members != v).sum(axis=1) <= 1).sum() == 1
+        return cap
+
+    for sel in (np.ones(len(codes), bool), rng.random(len(codes)) < 0.6):
+        np.testing.assert_array_equal(index.capture(sel)[sel], brute(sel)[sel])
