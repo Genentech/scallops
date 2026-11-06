@@ -87,7 +87,9 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
         "--moving-channel",
         type=int,
         default=0,
-        help="Moving channel index (0-based) to use for alignment",
+        help="Moving channel index (0-based) to use for alignment. When timepoints have "
+        "different numbers of channels and --unroll-channels is not specified, the index "
+        "refers to the channels after padding with leading empty channels",
     )
     parser.add_argument(
         "--fixed-channel",
@@ -121,7 +123,9 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser.add_argument(
         "--unroll-channels",
         action="store_true",
-        help="Unroll channels (drop 't' dimension) in output image",
+        help="Unroll channels (drop 't' dimension) in output image. If not specified, "
+        "timepoints with fewer channels than the maximum are padded with leading empty "
+        "channels",
     )
     # parser.add_argument(
     #     "--register-within-t",

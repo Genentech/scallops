@@ -197,3 +197,102 @@ def test_itk_align_across_channels():
     expected = 1 - base[interior]
     assert np.corrcoef(aligned.ravel(), expected.ravel())[0, 1] > 0.99
     assert np.corrcoef(moving[interior].ravel(), expected.ravel())[0, 1] < 0.9
+
+
+@pytest.mark.registration
+@pytest.mark.parametrize("unroll_channels", [False, True])
+def test_itk_align_reference_time_different_nchannels(tmp_path, unroll_channels):
+    import itk
+    import zarr
+
+    from scallops.registration.itk import (
+        _itk_align_reference_time_zarr,
+        itk_align_to_reference_time,
+    )
+    from scallops.zarr_io import read_ome_zarr_array
+
+    rng = np.random.default_rng(0)
+    shape = (32, 32)
+    t0 = xr.DataArray(
+        rng.random((1, 3) + shape, dtype=np.float32),
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[0], c=["a", "b", "c"]),
+    )
+    t1 = xr.DataArray(
+        rng.random((1, 2) + shape, dtype=np.float32),
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[1], c=["a", "b"]),
+    )
+    # empty parameter object: images are not transformed
+    kwargs = dict(
+        moving_image=[t0, t1],
+        # padded channel 1 is t1's channel 0
+        moving_channel=0 if unroll_channels else 1,
+        parameter_object=itk.ParameterObject.New(),
+        moving_image_spacing=(1.0, 1.0),
+        unroll_channels=unroll_channels,
+    )
+    result = itk_align_to_reference_time(**kwargs)
+    root = zarr.open_group(tmp_path / "test.zarr", mode="w")
+    _itk_align_reference_time_zarr(image_root=root, image_name="test", **kwargs)
+    result_zarr = read_ome_zarr_array(root["images"]["test"])
+
+    for r in (result, result_zarr):
+        if unroll_channels:
+            assert r.dims == ("c", "y", "x")
+            assert r.sizes["c"] == 5
+            np.testing.assert_array_equal(r.values[:3], t0.values[0])
+            np.testing.assert_array_equal(r.values[3:], t1.values[0])
+        else:
+            assert r.dims == ("t", "c", "y", "x")
+            assert r.sizes["t"] == 2 and r.sizes["c"] == 3
+            assert r.coords["c"].values.tolist() == ["a", "b", "c"]
+            np.testing.assert_array_equal(r.values[0], t0.values[0])
+            np.testing.assert_array_equal(r.values[1, 0], np.zeros(shape))
+            np.testing.assert_array_equal(r.values[1, 1:], t1.values[0])
+
+
+@pytest.mark.registration
+def test_itk_align_reference_time_padded_moving_channel():
+    import itk
+    from scipy.ndimage import gaussian_filter, shift
+
+    from scallops.registration.itk import (
+        itk_align_to_reference_time,
+        set_automatic_transform_initialization,
+    )
+
+    rng = np.random.default_rng(0)
+    base = gaussian_filter(rng.random((256, 256)), 4).astype(np.float32)
+    base = (base - base.min()) / (base.max() - base.min())
+    other = gaussian_filter(rng.random((256, 256)), 4).astype(np.float32)
+    # t1 is missing the leading channel, so padded channel 1 is t1's channel 0
+    t0 = xr.DataArray(
+        np.stack([other, base])[np.newaxis],
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[0], c=["a", "b"]),
+    )
+    t1 = xr.DataArray(
+        shift(base, (4, -6), order=1, mode="nearest")[np.newaxis, np.newaxis],
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[1], c=["b"]),
+    )
+    parameter_object = itk.ParameterObject.New()
+    parameter_object.AddParameterMap(
+        parameter_object.GetDefaultParameterMap("translation")
+    )
+    set_automatic_transform_initialization(parameter_object, False)
+    kwargs = dict(
+        moving_image=[t0, t1],
+        parameter_object=parameter_object,
+        moving_image_spacing=(1.0, 1.0),
+    )
+    with pytest.raises(ValueError, match="empty"):
+        itk_align_to_reference_time(moving_channel=0, **kwargs)
+
+    result = itk_align_to_reference_time(moving_channel=1, **kwargs)
+    assert result.sizes["t"] == 2 and result.sizes["c"] == 2
+    np.testing.assert_array_equal(result.isel(t=1, c=0).values, 0)
+    interior = (slice(20, -20), slice(20, -20))
+    aligned = result.isel(t=1, c=1).values[interior]
+    assert np.corrcoef(aligned.ravel(), base[interior].ravel())[0, 1] > 0.99

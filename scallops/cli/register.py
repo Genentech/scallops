@@ -37,6 +37,7 @@ from scallops.registration.itk import (
     _itk_transform_image_zarr,
     _load_itk_parameters,
     _load_itk_parameters_from_dir,
+    _padded_to_local_channel,
     itk_align,
     itk_transform_labels,
     set_automatic_transform_initialization,
@@ -424,8 +425,17 @@ def single_registration(
         set_automatic_transform_initialization(parameter_object, False)
         if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
             new_moving_image = []
+            max_nchannels = max(img.sizes["c"] for img in moving_image)
             for img in moving_image:
-                new_moving_image.append(img.isel(c=[moving_channel]))
+                # without unrolling, moving_channel indexes the layout padded with
+                # leading empty channels
+                c = _padded_to_local_channel(
+                    moving_channel,
+                    offset=0 if unroll_channels else max_nchannels - img.sizes["c"],
+                    nchannels=img.sizes["c"],
+                    t=img.coords["t"].values.ravel()[0],
+                )
+                new_moving_image.append(img.isel(c=[c]))
             moving_channel = 0
             moving_image = new_moving_image
         if not no_version:

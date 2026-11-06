@@ -253,7 +253,8 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
 
 
 @pytest.mark.registration
-def test_register_itk_cli_concat_t(tmp_path):
+@pytest.mark.parametrize("unroll_channels", [False, True])
+def test_register_itk_cli_concat_t(tmp_path, unroll_channels):
     transform_output_dir = os.path.join(tmp_path, "transform")
     image = (
         read_experiment(
@@ -272,14 +273,15 @@ def test_register_itk_cli_concat_t(tmp_path):
     img = img.copy()
     img.attrs["stitch_coords"] = "test2"
     exp.images["A1-2"] = img
-    exp.save("test.zarr")
+    moving_path = os.path.join(tmp_path, "test.zarr")
+    exp.save(moving_path)
     elastix_output_dir = os.path.join(tmp_path, "elastix-output.zarr")
     cmd = [
         "scallops",
         "registration",
         "elastix",
         "--moving",
-        "test.zarr",
+        moving_path,
         "--moving-image-pattern",
         "{well}-{t}",
         "--no-landmarks",
@@ -294,13 +296,25 @@ def test_register_itk_cli_concat_t(tmp_path):
         "--moving-output",
         elastix_output_dir,
     ]
-    " ".join(cmd)
+    if unroll_channels:
+        cmd.append("--unroll-channels")
+    else:
+        # t=1 is padded with 3 leading empty channels, so its channel 0 is channel 3
+        cmd += ["--moving-channel", "3"]
     subprocess.check_call(cmd)
     transformed_image = read_ome_zarr_array(
         os.path.join(elastix_output_dir, "images/A1")
     )
     assert transformed_image.attrs["stitch_coords"] == ["test1", "test2"]
-    assert transformed_image.sizes["c"] == 7
+    if unroll_channels:
+        assert "t" not in transformed_image.dims
+        assert transformed_image.sizes["c"] == 7
+    else:
+        # second timepoint is padded with leading empty channels
+        assert transformed_image.sizes["t"] == 2
+        assert transformed_image.sizes["c"] == 5
+        assert (transformed_image.isel(t=1, c=[0, 1, 2]).values == 0).all()
+        assert (transformed_image.isel(t=1, c=[3, 4]).values != 0).any()
 
 
 @pytest.mark.registration
