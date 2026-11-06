@@ -29,6 +29,7 @@ _COMMANDS = _commands(create_parsers())
 @pytest.mark.parametrize(
     "parser", [p for _, p in _COMMANDS], ids=[" ".join(c) for c, _ in _COMMANDS]
 )
+@pytest.mark.io
 def test_command_handler_resolves(parser):
     # lazy_handler targets are strings, so a typo or a renamed implementation function
     # would otherwise only fail when the command runs
