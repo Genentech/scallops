@@ -45,6 +45,7 @@ def _write_params(path, doc):
     return str(path)
 
 
+@pytest.mark.registration
 def test_parse_correction_channels():
     assert parse_correction_channels(None) is None
     assert parse_correction_channels([]) is None
@@ -60,6 +61,7 @@ def test_parse_correction_channels():
         parse_correction_channels(["-1"])
 
 
+@pytest.mark.registration
 def test_load_params(tmp_path):
     doc = _params_doc(
         FITC={"m": 0.00075, "ty": 0.34, "tx": -0.16}, TL={"same_as": "FITC"}
@@ -86,6 +88,7 @@ def test_load_params(tmp_path):
             load_params(_write_params(tmp_path / f"bad{i}.json", d))
 
 
+@pytest.mark.registration
 def test_resolve_channel_alignment(tmp_path):
     doc = _params_doc(
         FITC={"m": 0.00075, "ty": 0.34, "tx": -0.16},
@@ -134,6 +137,7 @@ def test_resolve_channel_alignment(tmp_path):
         resolve_channel_alignment([5], channel_order=order, **kw)
 
 
+@pytest.mark.registration
 def test_channel_names_are_text_and_case_insensitive(tmp_path):
     doc = _params_doc(
         **{"405": {"m": 0.0, "ty": 0.0, "tx": 0.0}, "Cy7": {"same_as": 405}}
@@ -156,12 +160,14 @@ def test_channel_names_are_text_and_case_insensitive(tmp_path):
     assert sorted(r) == [1] and est == [] and r[1]["name"] == "CY7"
 
 
+@pytest.mark.registration
 def test_check_channel_order_warns_on_mismatch(caplog):
     check_channel_order(["DAPI", "cy7", "-", "FITC"], ["dapi", "CY5", "TRITC", None])
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1 and "Channel 1" in warnings[0] and "CY5" in warnings[0]
 
 
+@pytest.mark.registration
 def test_alignment_coords_match_radial_mapping():
     shape, k = (64, 80), 1e-5
     yy, xx = np.mgrid[0 : shape[0], 0 : shape[1]]
@@ -186,6 +192,7 @@ def _blobs(y, x, centres, sigma=2.5):
     return out
 
 
+@pytest.mark.registration
 def test_warp_image_accuracy():
     rng = np.random.default_rng(0)
     shape = (128, 128)
@@ -354,6 +361,7 @@ def test_stitch_alignment_correction_refuses_channel_reference(tmp_path):
     assert "--channel-reference" in result.stderr
 
 
+@pytest.mark.registration
 def test_correction_channels_need_the_channel_order(tmp_path):
     r = subprocess.run(
         [
@@ -373,6 +381,7 @@ def test_correction_channels_need_the_channel_order(tmp_path):
     assert "--alignment-correction-channel-order is required" in r.stderr
 
 
+@pytest.mark.registration
 def test_bare_correction_channels_flag_is_an_error(tmp_path):
     r = subprocess.run(
         [
@@ -390,6 +399,7 @@ def test_bare_correction_channels_flag_is_an_error(tmp_path):
     assert r.returncode == 2 and "expected at least one argument" in r.stderr
 
 
+@pytest.mark.registration
 def test_metadata_channel_names_open_a_multichannel_file_once(tmp_path, monkeypatch):
     import tifffile
 
@@ -414,6 +424,7 @@ def test_metadata_channel_names_open_a_multichannel_file_once(tmp_path, monkeypa
     assert len(opens) == 1
 
 
+@pytest.mark.registration
 def test_ixm_channel_name_only_for_single_channel_files(tmp_path):
     import tifffile
 
@@ -430,6 +441,7 @@ def test_ixm_channel_name_only_for_single_channel_files(tmp_path):
     assert _file_channel_names(str(three), 3) == [None, None, None]
 
 
+@pytest.mark.registration
 def test_estimation_reads_the_z_plane_fusion_uses(tmp_path, monkeypatch):
     import tifffile
 
@@ -548,12 +560,14 @@ def test_estimation_reads_the_z_plane_fusion_uses(tmp_path, monkeypatch):
     np.testing.assert_array_equal(captured["ref"], data[1, 0])
 
 
+@pytest.mark.registration
 def test_edge_band_width():
     assert edge_band_width((512, 512), None) == (0, 0)
     assert edge_band_width((512, 512), None, 0.0, 30.0, 0.0) == (30, 0)
     assert edge_band_width((512, 512), None, 0.0, -12.5, 7.2) == (13, 8)
 
 
+@pytest.mark.registration
 def test_edge_band_width_counts_only_what_the_crop_keeps():
     # with the radial correction, the corners reach furthest; columns cropped anyway don't count
     shape, k, crop = (512, 512), 2e-7, (24, 24)
@@ -568,6 +582,7 @@ def test_edge_band_width_counts_only_what_the_crop_keeps():
         assert (((c < 0) | (c > 511)).any()) != clean
 
 
+@pytest.mark.registration
 def test_fusion_crop_keeps_scallops_crop_or_stops():
     def shifted(ty):
         return {1: dict(name="CY7", m=0.0, ty=ty, tx=0.0)}
@@ -595,6 +610,7 @@ def test_fusion_crop_keeps_scallops_crop_or_stops():
     ] == (40, 0)
 
 
+@pytest.mark.registration
 def test_fusion_crop_ignores_the_radial_band():
     k = 2e-7  # radial correction alone: 7 px band on a 512 px tile (6 px within a 24 px crop)
     zero = {1: dict(name="CY7", m=0.0, ty=0.0, tx=0.0)}
@@ -612,6 +628,7 @@ def test_fusion_crop_ignores_the_radial_band():
         fusion_crop(shifted, (512, 512), k, (24, 24), (True, True), "A1")
 
 
+@pytest.mark.registration
 def test_fusion_crop_measures_bands_within_the_crop():
     # 25 px across the full width, 24 px within the columns the 24 px crop keeps: accepted
     k = 2e-7
@@ -672,6 +689,7 @@ def test_stitch_stops_when_overlap_is_too_small(tmp_path):
     )
 
 
+@pytest.mark.registration
 def test_has_neighbours_counts_side_by_side_pairs():
     from scallops.stitch._stitch import _has_neighbours
 
@@ -697,6 +715,7 @@ def test_has_neighbours_counts_side_by_side_pairs():
     assert _has_neighbours(result([(0, 0)], None)) == (False, False)  # a single tile
 
 
+@pytest.mark.registration
 def test_estimators_survive_patches_leaving_the_tile(monkeypatch):
     import scallops.stitch._channel_align_estimate as E
 
@@ -716,6 +735,7 @@ def test_estimators_survive_patches_leaving_the_tile(monkeypatch):
     assert rms == float("inf")
 
 
+@pytest.mark.registration
 def test_stage_positions_only_stops_when_bands_would_remain():
     alignment = {
         1: dict(name="FITC", m=0.0, ty=1.5, tx=0.0),
@@ -738,6 +758,7 @@ def test_stage_positions_only_stops_when_bands_would_remain():
     )
 
 
+@pytest.mark.registration
 def test_stage_positions_only_ignores_the_radial_band():
     k = 2e-7  # radial correction alone: 7 px band on a 512 px tile
     alignment = {
@@ -753,6 +774,7 @@ def test_stage_positions_only_ignores_the_radial_band():
     assert "wider than the 7 px the radial correction alone leaves" in message
 
 
+@pytest.mark.registration
 def test_record_with_fewer_channel_names_than_channels():
     resolved = {1: dict(name="CY7", m=0.0, ty=1.0, tx=0.0, source="params_file")}
     rec = record(

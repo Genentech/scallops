@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 from argparse import (
-    ArgumentDefaultsHelpFormatter,
     ArgumentParser,
-    HelpFormatter,
-    Namespace,
 )
 from typing import Any, NamedTuple
 
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
+from scallops.cli.args import (
     SubParsers,
     _label_args_type,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -19,36 +16,11 @@ from scallops.cli.util import (
     image_pattern_arg,
     images_arg,
     labels_arg,
+    lazy_handler,
     no_version_arg,
     subset_arg,
     z_index_arg,
 )
-
-
-def _run_pipeline_overlap(arguments: Namespace) -> None:
-    from scallops.cli.segment import _run_overlap_pipeline
-
-    _run_overlap_pipeline(arguments)
-
-
-def _run_pipeline_segment_nuclei(arguments: Namespace) -> None:
-    """Run the pipeline for nuclei segmentation.
-
-    :param arguments: Parsed command-line arguments.
-    """
-    from scallops.cli.segment import _run_pipeline_segment_nuclei
-
-    _run_pipeline_segment_nuclei(arguments)
-
-
-def _run_pipeline_segment_cell(arguments: Namespace) -> None:
-    """Run the pipeline for cell segmentation.
-
-    :param arguments: Parsed command-line arguments.
-    """
-    from scallops.cli.segment import _run_pipeline_segment_cell
-
-    _run_pipeline_segment_cell(arguments)
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
@@ -57,13 +29,12 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     :param subparsers: Subparsers object to which segmentation parsers will be added.
     :param default_help: Whether to use argparse's default help formatter.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "segment",
+        default_help,
         help="Nuclei and cell segmentation",
         description="Segmentation",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
     )
     subparsers = parser.add_subparsers(help="sub-command help")
     _add_nuclei_parser(subparsers, default_help)
@@ -139,11 +110,10 @@ def _add_nuclei_parser(subparsers: SubParsers, default_help: bool = True) -> Non
 
     :param subparsers: Subparsers object to which the nuclei parser will be added.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "nuclei",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
+        default_help,
         description="Nuclei segmentation. Outputs a Zarr image containing nuclei labels.",
     )
     required = parser.add_argument_group("required arguments")
@@ -185,8 +155,9 @@ def _add_nuclei_parser(subparsers: SubParsers, default_help: bool = True) -> Non
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
 
-    _sort_groups(parser)
-    parser.set_defaults(func=_run_pipeline_segment_nuclei)
+    parser.set_defaults(
+        func=lazy_handler("scallops.cli.segment:_run_pipeline_segment_nuclei")
+    )
 
 
 class _CliOption(NamedTuple):
@@ -215,11 +186,10 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
 
     :param subparsers: Subparsers object to which the cell parser will be added.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "cell",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
+        default_help,
         description="Cell segmentation. Outputs a Zarr image containing cell labels.",
     )
     required = parser.add_argument_group("required arguments")
@@ -367,9 +337,8 @@ def _add_cell_parser(subparsers: SubParsers, default_help: bool = True) -> None:
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
 
-    _sort_groups(parser)
     parser.set_defaults(
-        func=_run_pipeline_segment_cell,
+        func=lazy_handler("scallops.cli.segment:_run_pipeline_segment_cell"),
         # used to warn about options that are set but ignored by the chosen method
         split_only_options=_get_cli_options(parser, _SPLIT_ONLY_OPTIONS),
     )
@@ -395,13 +364,12 @@ def _get_cli_options(
 
 
 def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "overlap",
+        default_help,
         help="Find the fraction of `label-1` contained within `label-2`",
         description="Find the fraction of `label-1` contained within `label-2`",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     labels_arg(required)
@@ -446,7 +414,6 @@ def _overlap_parser(subparsers: SubParsers, default_help: bool) -> None:
     dask_cluster_arg(parser)
 
     no_version_arg(parser)
-    _sort_groups(parser)
     parser.set_defaults(
-        func=_run_pipeline_overlap,
+        func=lazy_handler("scallops.cli.segment:_run_overlap_pipeline"),
     )

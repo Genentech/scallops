@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import argparse
-
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
+from scallops.cli.args import (
     SubParsers,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     expected_images_arg,
@@ -12,21 +10,12 @@ from scallops.cli.util import (
     groupby_arg,
     image_pattern_arg,
     images_arg,
+    lazy_handler,
     no_version_arg,
     subset_arg,
     t_index_arg,
     z_index_tile_arg,
 )
-
-
-def _run_illumination_correction_agg(arguments: argparse.Namespace):
-    """Execute the mean/median-based illumination correction based on provided arguments.
-
-    :param arguments: Parsed command-line arguments.
-    """
-    from scallops.cli.illumination_correction import run_illumination_correction_agg
-
-    run_illumination_correction_agg(arguments)
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
@@ -36,15 +25,12 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     :param default_help: Flag for default help formatter.
     :return: None
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "illum-corr",
+        default_help,
         description="Calculate illumination correction",
         help="Calculate illumination correction",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
 
     subparsers = parser.add_subparsers(help="sub-command help")
@@ -57,13 +43,10 @@ def _add_agg_parser(subparsers: SubParsers, default_help: bool) -> None:
     :param subparsers: Subparsers object for adding subcommands.
     :return: None
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "agg",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
+        default_help,
         description="Calculate illumination correction by aggregating images by mean, median or min, "
         "followed by median filter and rescaling. Outputs flat-field TIFF or Zarr image.",
     )
@@ -119,5 +102,8 @@ def _add_agg_parser(subparsers: SubParsers, default_help: bool) -> None:
     no_version_arg(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_run_illumination_correction_agg)
+    parser.set_defaults(
+        func=lazy_handler(
+            "scallops.cli.illumination_correction:run_illumination_correction_agg"
+        )
+    )

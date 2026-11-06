@@ -99,6 +99,7 @@ def test_auc_variance():
 
 
 @pytest.mark.parametrize("target_area", [0.1, 0.2, 0.3])
+@pytest.mark.stats
 def test_generate_cdfs_with_area_difference(target_area):
     seed = 123456
     x, cdf1, cdf2, final_area, data1, data2 = generate_cdfs_with_area_difference(

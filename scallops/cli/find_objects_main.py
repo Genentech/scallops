@@ -1,36 +1,26 @@
 from __future__ import annotations
 
-import argparse
-
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
+from scallops.cli.args import (
     SubParsers,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
     labels_arg,
+    lazy_handler,
     no_version_arg,
     output_dir_arg,
 )
 
 
-def _run_pipeline_find_objects(arguments: argparse.Namespace):
-    from scallops.cli.find_objects import run_pipeline_find_objects
-
-    run_pipeline_find_objects(arguments)
-
-
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "find-objects",
+        default_help,
         help="Find objects in a labeled array.",
         description="Find objects in a labeled array and output Parquet file with label"
         " as index.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     labels_arg(required)
@@ -56,7 +46,6 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     dask_cluster_arg(parser)
 
     no_version_arg(parser)
-    _sort_groups(parser)
     parser.set_defaults(
-        func=_run_pipeline_find_objects,
+        func=lazy_handler("scallops.cli.find_objects:run_pipeline_find_objects"),
     )

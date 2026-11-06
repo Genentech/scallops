@@ -18,9 +18,9 @@ from zarr.core.group import AsyncGroup
 from zarr.errors import ContainsGroupError
 
 from scallops import zarr_io
+from scallops.cli.args import _label_args_type
 from scallops.cli.util import (
     _group_src_attrs,
-    _label_args_type,
     find_label_group,
     last_label_match,
 )
