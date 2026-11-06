@@ -13,6 +13,7 @@ import xarray as xr
 import zarr
 from skimage.measure import regionprops
 
+from scallops.datasets._registry import cache_dir
 from scallops.experiment.elements import Experiment
 from scallops.features.bounding_box import bounding_box_to_edge_distance
 from scallops.features.constants import (
@@ -29,9 +30,11 @@ from scallops.features.spots import spot_count
 from scallops.features.texture import pftas
 from scallops.io import read_image, to_label_crops
 
+DATA_DIR = cache_dir()
+
 __this__ = Path(__file__).resolve()
 __tests__ = __this__.parent
-__data__ = __tests__.joinpath("data")
+__data__ = DATA_DIR
 
 
 @pytest.mark.parametrize("mask", [True, False])
@@ -811,7 +814,7 @@ def test_distance_from_bounding_box_to_edge():
 def test_fish_spots(experiment_c_A1_102_cells):
     pytest.importorskip("ufish")
     image = read_image(
-        "scallops/tests/data/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
+        f"{DATA_DIR}/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
     )
     image = image.squeeze().transpose(*("y", "x", "c")).data
     cells = experiment_c_A1_102_cells.squeeze().data

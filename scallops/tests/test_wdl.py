@@ -10,9 +10,12 @@ import pytest
 import xarray as xr
 
 from scallops import Experiment
+from scallops.datasets._registry import cache_dir
 from scallops.features.util import pandas_to_anndata
 from scallops.io import read_image, save_ome_tiff
 from scallops.tests.test_stitch import _write_image_with_position
+
+DATA_DIR = cache_dir()
 
 
 def add_physical_size(input_path, output_path):
@@ -126,11 +129,11 @@ def test_ops_wdl(tmp_path):
     sbs_dir.mkdir()
     pheno_dir.mkdir()
     output.mkdir()
-    for p in glob.glob("scallops/tests/data/experimentC/input/*/*Tile-102*"):
+    for p in glob.glob(f"{DATA_DIR}/experimentC/input/*/*Tile-102*"):
         add_physical_size(p, str(sbs_dir / os.path.basename(p)))
 
     pheno_img = read_image(
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
     pheno_img.attrs["physical_pixel_sizes"] = (1, 1)
     phenotype_mask = np.ones(
@@ -172,7 +175,7 @@ def test_ops_wdl(tmp_path):
         "groupby": ["well", "tile"],
         "reads_threshold_peaks": "0",
         "reads_threshold_peaks_crosstalk": "20",
-        "barcodes": os.path.abspath("scallops/tests/data/experimentC/barcodes.csv"),
+        "barcodes": os.path.abspath(f"{DATA_DIR}/experimentC/barcodes.csv"),
         "mark_stitch_boundary_cells": False,
         "reads_labels": "cell",
         "merge_extra_arguments": "--format parquet",

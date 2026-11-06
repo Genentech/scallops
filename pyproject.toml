@@ -125,6 +125,7 @@ include-package-data = true
 zip-safe = false
 
 [tool.setuptools.package-data]
+"scallops.datasets" = ["registry.txt"]
 "scallops.features" = ["features.rst"]
 
 [tool.setuptools.packages.find]

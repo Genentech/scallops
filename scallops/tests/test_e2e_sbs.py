@@ -2,20 +2,22 @@ import glob
 import os
 import shutil
 import subprocess
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from scallops import Experiment
+from scallops.datasets._registry import cache_dir
 from scallops.io import read_experiment, read_image
 from scallops.registration.crosscorrelation import align_images
 from scallops.tests.test_features import diff_pheno
 from scallops.tests.test_reads import diff_reads
 from scallops.zarr_io import _write_zarr_image, open_ome_zarr, read_ome_zarr_array
 
-data_path = Path("scallops") / "tests" / "data"
+DATA_DIR = cache_dir()
+
+data_path = DATA_DIR
 
 
 @pytest.fixture(params=[False, True])
