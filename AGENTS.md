@@ -19,7 +19,7 @@ scikit-image, and anndata, and ships a `scallops` CLI plus WDL workflows for Ter
   - `registration/`, `stitch/`, `illumination_correction.py` — image alignment and preprocessing
   - `experiment/` — `Experiment` data structure
   - `cli/` — CLI subcommands; entry point is `scallops/__main__.py`
-  - `tests/` — pytest suite; test data in `tests/data/` (Git LFS)
+  - `tests/` — pytest suite; test data is downloaded from GitHub release assets (see Testing)
 - `wdl/` — WDL workflows/tasks (`ops_*`, `stitch_*`, `pert_map_*`, `utils.wdl`)
 - `docs/` — Sphinx docs (`api.rst` drives autosummary; `release_notes.rst`; notebooks are Git LFS)
 
@@ -31,8 +31,20 @@ uv pip install -r requirements.txt -e ".[test,dev]"
 pre-commit install
 ```
 
-Test data and notebooks are stored with **Git LFS** (`git lfs install && git lfs pull`). `conftest.py`
-asserts that the LFS files exist and fails fast if they don't.
+Test data is stored as assets of the `test-data` GitHub release, not in git. `conftest.py`
+downloads missing or outdated files before tests run into the scallops cache directory
+(`SCALLOPS_CACHE_DIR`, or the platform default such as `~/.cache/scallops` or
+`~/Library/Caches/scallops`); `python scripts/test_data.py download` does the same by hand.
+Tests reference data via `DATA_DIR = cache_dir()` (from `scallops.datasets._registry`), never
+via paths inside the repo. `scallops/datasets/registry.txt`
+lists each file's sha256; `scallops.datasets` downloads from the same registry.
+
+To add or change test data, put the file in that directory, run
+`python scripts/test_data.py upload` (needs an authenticated `gh`), and commit the updated
+`registry.txt`. Don't delete release assets: older commits still reference them.
+
+Notebooks (`*.ipynb`, `docs/notebooks/img/`) are still stored with **Git LFS**
+(`git lfs install && git lfs pull`).
 
 Installing in editable mode compiles the Cython extension `scallops.segmentation._propagate`. If you
 edit `_propagate.pyx` or `heap.pxd`, reinstall (`uv pip install -e .`) to rebuild it.

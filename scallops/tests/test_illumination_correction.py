@@ -8,8 +8,11 @@ import zarr
 from zarr.storage import ZipStore
 
 from scallops.cli.illumination_correction import single_agg_illumination_correction
+from scallops.datasets._registry import cache_dir
 from scallops.io import read_image
 from scallops.zarr_io import open_ome_zarr
+
+DATA_DIR = cache_dir()
 
 
 @pytest.mark.io
@@ -20,7 +23,7 @@ def test_illumination_correction_cli(tmp_path):
         "illum-corr",
         "agg",
         "--images",
-        "scallops/tests/data/experimentC/input/10X_c1-SBS-1",
+        f"{DATA_DIR}/experimentC/input/10X_c1-SBS-1",
         "--image-pattern",
         "{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
         "--output-image-format",
@@ -32,7 +35,7 @@ def test_illumination_correction_cli(tmp_path):
     ]
     subprocess.check_call(args)
 
-    with ZipStore("scallops/tests/data/ops-illum-corr.zip", mode="r") as store:
+    with ZipStore(f"{DATA_DIR}/ops-illum-corr.zip", mode="r") as store:
         root = zarr.open(store=store)
         np.testing.assert_equal(
             root["data"][...],

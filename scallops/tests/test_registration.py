@@ -4,17 +4,20 @@ import skimage
 import xarray as xr
 from scipy.ndimage import fourier_shift
 
+from scallops.datasets._registry import cache_dir
 from scallops.io import read_experiment, read_image
 from scallops.registration.crosscorrelation import align_image, align_images
+
+DATA_DIR = cache_dir()
 
 
 @pytest.mark.registration
 def test_align_images(experiment_c_A1_102_pheno_aligned):
     pheno_image = read_image(
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
     image = read_experiment(
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
     ).images["A1-102"]
     aligned_pheno_image = align_images(image.isel(t=0, z=0), pheno_image.isel(t=0, z=0))
@@ -122,7 +125,7 @@ def test_align_image_align_within_time(experiment_c):
         align_between_time_channel=None,
         filter_percentiles=[0, 90],
     )
-    known_good = read_image("scallops/tests/data/align/align_within_time_channels.tif")
+    known_good = read_image(f"{DATA_DIR}/align/align_within_time_channels.tif")
     np.testing.assert_array_equal(result.values, known_good.values)
 
     xr.testing.assert_equal(image_copy, image)
@@ -138,7 +141,7 @@ def test_align_image_align_between_time(experiment_c):
         align_between_time_channel=0,
         filter_percentiles=[0, 90],
     )
-    known_good = read_image("scallops/tests/data/align/align_between_time_channel.tif")
+    known_good = read_image(f"{DATA_DIR}/align/align_between_time_channel.tif")
     np.testing.assert_array_equal(result.values, known_good.values)
     xr.testing.assert_equal(image_copy, image)
 

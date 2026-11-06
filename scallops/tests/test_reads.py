@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scallops.datasets._registry import cache_dir
 from scallops.io import read_image
 from scallops.reads import (
     annotated_spots,
@@ -27,14 +28,14 @@ from scallops.spots import (
     transform_log,
 )
 
+DATA_DIR = cache_dir()
+
 __root__ = Path(__file__).resolve().parent
 
 
 def diff_reads(test_df_bases, test_df_reads, test_df_cell):
     known_good_df_bases = (
-        pd.read_csv(
-            str(__root__.joinpath("data", "process_fig4", "10X_A1_Tile-102.bases.csv"))
-        )
+        pd.read_csv(str(DATA_DIR.joinpath("process_fig4", "10X_A1_Tile-102.bases.csv")))
         .rename(
             {"i": "y", "j": "x", "channel": "c", "cycle": "t", "cell": "label"}, axis=1
         )
@@ -59,9 +60,7 @@ def diff_reads(test_df_bases, test_df_reads, test_df_cell):
     skip_cols = [f"Q_{i}" for i in range(9)] + ["Q_min"]  # we use a different method
     # reads
     known_good_df_reads = (
-        pd.read_csv(
-            str(__root__.joinpath("data", "process_fig4", "10X_A1_Tile-102.reads.csv"))
-        )
+        pd.read_csv(str(DATA_DIR.joinpath("process_fig4", "10X_A1_Tile-102.reads.csv")))
         .rename({"i": "y", "j": "x", "cell": "label"}, axis=1)
         .reset_index()
         .drop(["index", "read", "peak", "tile", "well"] + skip_cols, axis=1)
@@ -86,9 +85,7 @@ def diff_reads(test_df_bases, test_df_reads, test_df_cell):
         .sort_values("label")
     )
     known_good_df_cell = (
-        pd.read_csv(
-            str(__root__.joinpath("data", "process_fig4", "10X_A1_Tile-102.cells.csv"))
-        )
+        pd.read_csv(str(DATA_DIR.joinpath("process_fig4", "10X_A1_Tile-102.cells.csv")))
         .rename(
             {
                 "cell": "label",
@@ -199,7 +196,7 @@ def test_peaks_to_bases(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
 
 @pytest.mark.basecalls
 def test_peak_thresholds_from_reads():
-    df = pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.reads.csv")
+    df = pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.reads.csv")
     df["Q_mean"] = df["Q_min"].apply(lambda p: -10 * np.log10(p + 1e-6))
     df_cutoff = peak_thresholds_from_reads(df)
     cutoff = df_cutoff.iloc[0]["threshold"]
@@ -298,8 +295,8 @@ def test_sbs_dask(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
 
 @pytest.mark.basecalls
 def test_annotated(experiment_c_A1_102_cells):
-    path = __root__.joinpath("data", "annotated", "10X_A1_Tile-102.annotated.npz")
-    aln_path = __root__.joinpath("data", "process_fig4")
+    path = DATA_DIR.joinpath("annotated", "10X_A1_Tile-102.annotated.npz")
+    aln_path = DATA_DIR.joinpath("process_fig4")
     cells = experiment_c_A1_102_cells.values.squeeze()
     maxed = read_image(f"{aln_path.joinpath('10X_A1_Tile-102.maxed.tif')}").isel(z=0)
     peaks = read_image(f"{aln_path.joinpath('10X_A1_Tile-102.peaks.tif')}").squeeze()
