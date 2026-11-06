@@ -1,7 +1,7 @@
 import argparse
 
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
+from scallops.cli.args import (
+    add_command,
     barcodes_arg,
     dask_client_arg,
     dask_cluster_arg,
@@ -10,41 +10,12 @@ from scallops.cli.util import (
     image_pattern_arg,
     images_arg,
     labels_arg,
+    lazy_handler,
     no_version_arg,
     output_dir_arg,
     subset_arg,
     z_index_arg,
 )
-
-
-def _merge_main(arguments: argparse.Namespace):
-    """Entry point for merging SBS barcodes and phenotype data.
-
-    :param arguments: Parsed command-line arguments containing the merge parameters.
-    """
-    from scallops.cli.pooled_if_sbs import merge_main
-
-    merge_main(arguments)
-
-
-def _reads_main(arguments: argparse.Namespace):
-    """Entry point for running the read calling pipeline.
-
-    :param arguments: Parsed command-line arguments containing read calling parameters.
-    """
-    from scallops.cli.pooled_if_sbs import reads_main
-
-    reads_main(arguments)
-
-
-def _spot_detect_main(arguments: argparse.Namespace):
-    """Entry point for running the spot detection pipeline.
-
-    :param arguments: Parsed command-line arguments containing spot detection parameters.
-    """
-    from scallops.cli.pooled_if_sbs import spot_detect_main
-
-    spot_detect_main(arguments)
 
 
 def _napari_pooled_if_sbs_main(arguments: argparse.Namespace):
@@ -67,17 +38,13 @@ def _create_napari_parser(subparsers, default_help=False):
     :param subparsers: Subparser object to register the command.
     :param default_help: Boolean flag to enable default help formatting.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "napari",
+        default_help,
         help="Run Napari with results from `scallops pooled-sbs`",
         description="Run Napari with results from `scallops pooled-sbs`",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
-    _sort_groups(parser)
     parser.set_defaults(func=_napari_pooled_if_sbs_main)
     parser.add_argument("url", help="URL to pooled-sbs images.zarr directory")
 
@@ -88,14 +55,11 @@ def _create_merge_parser(subparsers, default_help):
     :param subparsers: Subparser object to register the command.
     :param default_help: Boolean flag to enable default help formatting.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "merge",
+        default_help,
         description="Join in-situ barcodes with phenotype data and output as Parquet.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     required.add_argument(
@@ -142,8 +106,7 @@ def _create_merge_parser(subparsers, default_help):
     dask_cluster_arg(parser)
 
     no_version_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_merge_main)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pooled_if_sbs:merge_main"))
 
 
 def _read_chunk_size(value: str) -> int | str:
@@ -163,16 +126,13 @@ def _create_reads_parser(subparsers, default_help):
     :param subparsers: Subparser object to register the command.
     :param default_help: Boolean flag to enable default help formatting.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "reads",
+        default_help,
         help="In-situ read calling",
         description="Run pooled in-situ sequencing read calling. "
         "Outputs reads, barcodes to labels assignments, crosstalk matrix, and table with corrected and uncorrected base intensities. ",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     required.add_argument(
@@ -306,8 +266,9 @@ def _create_reads_parser(subparsers, default_help):
     no_version_arg(parser)
     dask_client_arg(parser)
     dask_cluster_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_reads_main, save=[])
+    parser.set_defaults(
+        func=lazy_handler("scallops.cli.pooled_if_sbs:reads_main"), save=[]
+    )
 
 
 def _create_spot_detect_parser(subparsers, default_help):
@@ -316,8 +277,10 @@ def _create_spot_detect_parser(subparsers, default_help):
     :param subparsers: Subparser object to register the command.
     :param default_help: Boolean flag to enable default help formatting.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "spot-detect",
+        default_help,
         help="In-situ spot detection",
         description="Run pooled in-situ sequencing spot detection. "
         "Outputs table of all candidate peaks and `max`, the input images with LoG and "
@@ -325,11 +288,6 @@ def _create_spot_detect_parser(subparsers, default_help):
         "contains the standard deviation over cycles, followed by the mean across "
         "channels to identify spot locations and the `LoG` image, which contains the "
         "LoG filtered image.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     images_arg(required)
@@ -422,7 +380,6 @@ def _create_spot_detect_parser(subparsers, default_help):
     )
 
     no_version_arg(parser)
-    _sort_groups(parser)
     parser.add_argument(
         "--spot-detection-method",
         help=argparse.SUPPRESS,
@@ -435,7 +392,7 @@ def _create_spot_detect_parser(subparsers, default_help):
         type=int,
     )
     parser.set_defaults(
-        func=_spot_detect_main,
+        func=lazy_handler("scallops.cli.pooled_if_sbs:spot_detect_main"),
     )
 
 
@@ -445,15 +402,12 @@ def _create_parser(subparsers, default_help):
     :param subparsers: Subparser object to register the command.
     :param default_help: Boolean flag to enable default help formatting.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "pooled-sbs",
+        default_help,
         help="SBS image processing",
         description="SBS image processing pipeline.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     subparsers = parser.add_subparsers(help="Sub-command help.")
     _create_spot_detect_parser(subparsers, default_help)

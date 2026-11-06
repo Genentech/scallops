@@ -1,42 +1,18 @@
 from __future__ import annotations
 
-import argparse
-
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
+from scallops.cli.args import (
+    ArgContainer,
     SubParsers,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
+    lazy_handler,
     no_version_arg,
 )
 
 
-def _run_filter_data(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_filter_data
-
-    run_filter_data(arguments)
-
-
-def _run_pca(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_pca
-
-    run_pca(arguments)
-
-
-def _run_tvn(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_tvn
-
-    run_tvn(arguments)
-
-
-def _run_aggregate(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_aggregate
-
-    run_aggregate(arguments)
-
-
-def input_arg(parser: argparse.ArgumentParser):
+def input_arg(parser: ArgContainer):
     parser.add_argument(
         "--input",
         type=str,
@@ -48,7 +24,7 @@ def input_arg(parser: argparse.ArgumentParser):
 
 
 def common_args(
-    parser: argparse.ArgumentParser,
+    parser: ArgContainer,
     metadata: bool = True,
     pre_rechunk: bool = True,
     post_rechunk: bool = True,
@@ -70,11 +46,10 @@ def common_args(
     dask_cluster_arg(parser)
     force_arg(parser)
     no_version_arg(parser)
-    _sort_groups(parser)
 
 
 def pre_rechunk_args(
-    parser: argparse.ArgumentParser,
+    parser: ArgContainer,
     rechunk_features: str | None = None,
     rechunk_labels: str | None = None,
 ):
@@ -96,7 +71,7 @@ def pre_rechunk_args(
 
 
 def post_rechunk_args(
-    parser: argparse.ArgumentParser,
+    parser: ArgContainer,
     rechunk_features: str | None = None,
     rechunk_labels: str | None = None,
 ):
@@ -115,32 +90,8 @@ def post_rechunk_args(
     )
 
 
-def _run_norm_features(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_norm_features
-
-    run_norm_features(arguments)
-
-
-def _run_similarity_matrix(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_similarity_matrix
-
-    run_similarity_matrix(arguments)
-
-
-def _run_set_enrichment(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_set_enrichment
-
-    run_set_enrichment(arguments)
-
-
-def _run_recall(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_recall
-
-    run_recall(arguments)
-
-
 def filter_args(
-    parser: argparse.ArgumentParser,
+    parser: ArgContainer,
     label_filter: bool = True,
     feature_filter: bool = True,
 ):
@@ -160,7 +111,7 @@ def filter_args(
         )
 
 
-def metadata_args(parser: argparse.ArgumentParser):
+def metadata_args(parser: ArgContainer):
     parser.add_argument(
         "--metadata",
         help="Path to CSV or Parquet file containing metadata to join with dataset.",
@@ -175,14 +126,11 @@ def metadata_args(parser: argparse.ArgumentParser):
 def _create_similarity_matrix_parser(
     subparsers: SubParsers, default_help: bool
 ) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "similarity-matrix",
+        default_help,
         help="Create pairwise similarity matrix",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     input_arg(required)
@@ -194,18 +142,17 @@ def _create_similarity_matrix_parser(
     )
 
     common_args(parser=parser, metadata=False, pre_rechunk=False, post_rechunk=False)
-    parser.set_defaults(func=_run_similarity_matrix)
+    parser.set_defaults(
+        func=lazy_handler("scallops.cli.pert_map:run_similarity_matrix")
+    )
 
 
 def _create_aggregate_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "aggregate",
+        default_help,
         help="Run aggregatation",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     input_arg(required)
@@ -229,18 +176,15 @@ def _create_aggregate_parser(subparsers: SubParsers, default_help: bool) -> None
     filter_args(parser)
 
     common_args(parser, dask_client_value="none", pre_rechunk=True, post_rechunk=False)
-    parser.set_defaults(func=_run_aggregate)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pert_map:run_aggregate"))
 
 
 def _create_tvn_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "tvn",
+        default_help,
         help="Run TNV",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     input_arg(required)
@@ -270,18 +214,15 @@ def _create_tvn_parser(subparsers: SubParsers, default_help: bool) -> None:
     filter_args(parser)
 
     common_args(parser, pre_rechunk=True, post_rechunk=True)
-    parser.set_defaults(func=_run_tvn)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pert_map:run_tvn"))
 
 
 def _create_set_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "enrichment",
+        default_help,
         help="Run enrichment",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
 
     required = parser.add_argument_group("required arguments")
@@ -306,18 +247,15 @@ def _create_set_parser(subparsers: SubParsers, default_help: bool) -> None:
         post_rechunk=False,
         dask_client_value="none",
     )
-    parser.set_defaults(func=_run_set_enrichment)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pert_map:run_set_enrichment"))
 
 
 def _create_recall_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "recall",
+        default_help,
         help="Run recall",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
 
     required = parser.add_argument_group("required arguments")
@@ -349,18 +287,15 @@ def _create_recall_parser(subparsers: SubParsers, default_help: bool) -> None:
         post_rechunk=False,
         dask_client_value="none",
     )
-    parser.set_defaults(func=_run_recall)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pert_map:run_recall"))
 
 
 def _create_pca_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "pca",
+        default_help,
         help="Run PCA",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     input_arg(required)
@@ -394,18 +329,15 @@ def _create_pca_parser(subparsers: SubParsers, default_help: bool) -> None:
         help="Number of samples to use for each batch",
     )
     common_args(parser, pre_rechunk=True, post_rechunk=True)
-    parser.set_defaults(func=_run_pca)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pert_map:run_pca"))
 
 
 def _create_normalize_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "normalize",
+        default_help,
         help="Normalize features",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     input_arg(required)
@@ -476,19 +408,16 @@ def _create_normalize_parser(subparsers: SubParsers, default_help: bool) -> None
     )
 
     common_args(parser, pre_rechunk=True, post_rechunk=True)
-    parser.set_defaults(func=_run_norm_features)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pert_map:run_norm_features"))
 
 
 def _create_filter_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "filter",
+        default_help,
         help="Filter labels and features",
         description="Filter labels and features.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     input_arg(required)
@@ -539,25 +468,16 @@ def _create_filter_parser(subparsers: SubParsers, default_help: bool) -> None:
         rechunk_labels="auto",
     )
     parser.set_defaults(
-        func=_run_filter_data,
+        func=lazy_handler("scallops.cli.pert_map:run_filter_data"),
     )
 
 
-def _run_rank_features(arguments: argparse.Namespace):
-    from scallops.cli.pert_map import run_rank_features
-
-    run_rank_features(arguments)
-
-
 def _create_rank_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "rank",
+        default_help,
         help="Rank features from output of `merge` command",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     input_arg(required)
@@ -606,19 +526,16 @@ def _create_rank_parser(subparsers: SubParsers, default_help: bool) -> None:
     )
 
     common_args(parser, pre_rechunk=True, post_rechunk=False)
-    parser.set_defaults(func=_run_rank_features)
+    parser.set_defaults(func=lazy_handler("scallops.cli.pert_map:run_rank_features"))
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool):
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "pert-map",
+        default_help,
         help="Perturbation map processing",
         description="Perturbation map processing.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     subparsers = parser.add_subparsers(help="Sub-command help.")
     _create_filter_parser(subparsers, default_help)
