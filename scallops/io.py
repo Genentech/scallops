@@ -1425,6 +1425,13 @@ def _images2fov(
         concat_dims = [c for c in concat_dims if c in file_metadata[0]]
     image_attrs = []
 
+    # convert "t" to int only if every file's "t" is an integer string, so that
+    # coords and attrs never mix int and str values
+    convert_t = file_metadata is not None and all(
+        isinstance(md.get("t"), str) and md["t"].isascii() and md["t"].isdecimal()
+        for md in file_metadata
+    )
+
     for i in range(len(file_list)):
         url = file_list[i]
 
@@ -1435,14 +1442,8 @@ def _images2fov(
             raise ValueError(f"{file_list[i]} could not be read.")
         # copy so the caller's metadata is not modified in place
         md = dict(file_metadata[i]) if file_metadata is not None else {}
-        if (
-            "t" in md and isinstance(md["t"], str) and md["t"].isdigit()
-        ):  # convert to int
-            try:
-                md["t"] = int(md["t"])
-            except ValueError:
-                # conversion to int failed
-                pass
+        if convert_t:
+            md["t"] = int(md["t"])
         image.attrs.update(md)
         image_attrs.append(image.attrs.copy())
 
