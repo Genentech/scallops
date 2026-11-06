@@ -74,6 +74,7 @@ BOUNDARIES = ["reflect", "periodic", "nearest", "none"]
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
+@pytest.mark.utils
 def test_map_overlap_ragged_no_rechunk(boundary):
     # Every chunk is at least as large as the depth, so da.overlap.overlap keeps the chunks as is
     x = da.arange(np.prod(shape)).reshape(shape).rechunk((-1, -1, 10, 10))
@@ -85,6 +86,7 @@ def test_map_overlap_ragged_no_rechunk(boundary):
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
+@pytest.mark.utils
 def test_map_overlap_ragged_rechunk(boundary):
     # The last chunk along axis 2 (4) is smaller than the depth (5), so da.overlap.overlap rechunks
     x = da.arange(np.prod(shape)).reshape(shape).rechunk((-1, -1, (48, 48, 4), 10))
@@ -97,6 +99,7 @@ def test_map_overlap_ragged_rechunk(boundary):
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
+@pytest.mark.utils
 def test_map_overlap_ragged_multiple_arrays(boundary):
     # Arrays with different chunks are aligned so each call gets the same region of both
     x = da.arange(np.prod(shape)).reshape(shape).rechunk((-1, -1, (48, 48, 4), 10))
@@ -176,6 +179,7 @@ def _run_sum_func(arrays, depth, boundary):
         ((10, 1, 1, 100), (5, 1, 1, 100)),  # Size-1 axes with overlap depth
     ],
 )
+@pytest.mark.utils
 def test_map_overlap_ragged_broadcast(boundary, y_shape, y_chunks):
     x = da.arange(np.prod(shape)).reshape(shape).rechunk((-1, -1, (48, 48, 4), 10))
     y = da.arange(np.prod(y_shape)).reshape(y_shape).rechunk(y_chunks) * 0.5
@@ -189,6 +193,7 @@ def test_map_overlap_ragged_broadcast(boundary, y_shape, y_chunks):
     assert len(df) == x.size
 
 
+@pytest.mark.utils
 def test_map_overlap_ragged_broadcast_lower_ndim_first():
     # The broadcast shape doesn't depend on which array comes first
     x = da.arange(np.prod(shape)).reshape(shape).rechunk((-1, -1, 25, 25))
@@ -200,6 +205,7 @@ def test_map_overlap_ragged_broadcast_lower_ndim_first():
     pd.testing.assert_frame_equal(df, expected)
 
 
+@pytest.mark.utils
 def test_map_overlap_ragged_shape_mismatch():
     x = da.zeros((10, 10), chunks=5)
     y = da.zeros((10, 9), chunks=5)
@@ -209,6 +215,7 @@ def test_map_overlap_ragged_shape_mismatch():
         )
 
 
+@pytest.mark.utils
 def test_map_overlap_ragged_kwargs():
     # Extra keyword arguments are passed to func; depth and boundary accept the same forms
     # as da.map_overlap
@@ -235,6 +242,7 @@ def test_map_overlap_ragged_kwargs():
         ({2: 5, 3: 1}, None),  # Missing depth axes are 0, boundary None is "none"
     ],
 )
+@pytest.mark.utils
 def test_map_overlap_ragged_depth_boundary_forms(depth, boundary):
     x = da.arange(np.prod(shape)).reshape(shape).rechunk((-1, -1, (48, 48, 4), 10))
     y = da.arange(100 * 100).reshape((100, 100)).rechunk(25) * 0.5
@@ -269,6 +277,7 @@ def test_map_overlap_ragged_depth_boundary_forms(depth, boundary):
     np.testing.assert_array_equal(x2[starts], df["mean"].to_numpy())
 
 
+@pytest.mark.utils
 def test_map_overlap_ragged_type_errors():
     meta = pd.DataFrame()
     with pytest.raises(TypeError, match="callable"):

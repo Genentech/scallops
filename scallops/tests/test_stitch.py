@@ -878,6 +878,7 @@ def test_pixel_size_from_plain_tiff_metadata(tmp_path):
     np.testing.assert_allclose(get_pixel_size([str(path)], None), [0.65, 0.65])
 
 
+@pytest.mark.io
 def test_pixel_size_from_ome_zarr_multiscales():
     """The guard must not disable the multiscales branch for OME-Zarr input."""
     image = types.SimpleNamespace(

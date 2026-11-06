@@ -58,6 +58,7 @@ def _circle_grid(radius_tiles=22):
     )  # stage positions, um
 
 
+@pytest.mark.registration
 def test_scale_settings_reproduce_validated_constants():
     s = E.scale_settings(E.REF_NUCLEUS_RADIUS, E.REF_PIXEL_SIZE)
     assert s["patch_radius"] == 48 and s["norm_radius"] == 20 and s["min_area"] == 150
@@ -77,6 +78,7 @@ def test_scale_settings_reproduce_validated_constants():
     )
 
 
+@pytest.mark.registration
 def test_nucleus_radius():
     rng = np.random.default_rng(0)
     ref, _ = _synthetic_tile((512, 512), _nuclei((512, 512), 150, rng), rng)
@@ -84,6 +86,7 @@ def test_nucleus_radius():
     assert np.isnan(E.nucleus_radius(np.zeros((64, 64))))
 
 
+@pytest.mark.registration
 def test_estimate_tile_recovers_known_alignment():
     rng = np.random.default_rng(1)
     shape = (768, 768)
@@ -96,6 +99,7 @@ def test_estimate_tile_recovers_known_alignment():
     assert abs(r["ty"] - TY) < 0.06 and abs(r["tx"] - TX) < 0.06
 
 
+@pytest.mark.registration
 def test_magnification_needs_three_occupied_regions():
     # one occupied region can't separate m from (ty, tx): the fit is exact (rms 0) whatever m is
     rng = np.random.default_rng(3)
@@ -115,6 +119,7 @@ def test_magnification_needs_three_occupied_regions():
     )  # one row of regions is enough: m is one value for both axes
 
 
+@pytest.mark.registration
 def test_region_mean_patches_drops_patches_outside_the_tile():
     rng = np.random.default_rng(3)
     img = rng.random((200, 200)).astype(np.float32)
@@ -138,6 +143,7 @@ def test_region_mean_patches_drops_patches_outside_the_tile():
     np.testing.assert_array_equal(M_all, M_in)
 
 
+@pytest.mark.registration
 def test_tile_pool_rules():
     pos = _circle_grid()
     pool, rule = E.tile_pool(pos)
@@ -163,6 +169,7 @@ def _plan():
     return pos, pool, E.sampling_plan(pos, pool, seed=3)
 
 
+@pytest.mark.registration
 def test_sampling_first_draws_are_spaced_and_balanced():
     pos, pool, plan = _plan()
     first = [i for q in range(4) for i in plan["first"][q]]
@@ -180,6 +187,7 @@ def test_sampling_first_draws_are_spaced_and_balanced():
     )
 
 
+@pytest.mark.registration
 def test_sampling_replaces_within_quadrant_without_spacing():
     pos, pool, plan = _plan()
     bad = set(plan["first"][0][:5] + plan["first"][2][:3])
@@ -191,6 +199,7 @@ def test_sampling_replaces_within_quadrant_without_spacing():
     )  # replacements: next in the order
 
 
+@pytest.mark.registration
 def test_sampling_caps_a_bad_quadrant():
     pos, pool, plan = _plan()
     bad_q = 1
@@ -199,6 +208,7 @@ def test_sampling_caps_a_bad_quadrant():
     assert sum(len(valid[q]) for q in range(4)) == 100
 
 
+@pytest.mark.registration
 def test_sampling_requests_until_evaluated():
     pos, pool, plan = _plan()
     known = {}
@@ -229,6 +239,7 @@ def _well(n_side, shape=(512, 512)):
     return pos, read_tile
 
 
+@pytest.mark.registration
 def test_estimate_well_small_well_uses_all_tiles_and_fails_blank_channel():
     pos, read_tile = _well(5)
     result = E.estimate_well(
@@ -251,6 +262,7 @@ def test_estimate_well_small_well_uses_all_tiles_and_fails_blank_channel():
     )
 
 
+@pytest.mark.registration
 def test_exception_on_a_tile_stops_estimation(monkeypatch):
     pos, read_tile = _well(5)
 
@@ -262,6 +274,7 @@ def test_exception_on_a_tile_stops_estimation(monkeypatch):
         E.estimate_well(read_tile, pos, ["CY7"], seed=0)
 
 
+@pytest.mark.registration
 def test_tile_without_nuclei_is_invalid_not_an_error():
     pos, read_tile = _well(5)
     blank = {3, 11}
@@ -274,6 +287,7 @@ def test_tile_without_nuclei_is_invalid_not_an_error():
     assert cy7["passed"] and not blank & set(cy7["tiles_used"])
 
 
+@pytest.mark.registration
 def test_implausible_estimate_requires_parameters():
     tiles = {i: dict(channels={"c": dict(m=0.0, ty=12.0, tx=0.0)}) for i in range(30)}
     valid = {0: list(range(30)), 1: [], 2: [], 3: []}
@@ -285,6 +299,7 @@ def test_implausible_estimate_requires_parameters():
     )
 
 
+@pytest.mark.registration
 def test_no_nuclei_in_reference_is_explained():
     pos = _circle_grid(3)
 
