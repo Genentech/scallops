@@ -1433,19 +1433,17 @@ def _images2fov(
         )
         if image is None:
             raise ValueError(f"{file_list[i]} could not be read.")
-        if file_metadata is not None:
-            # copy so the caller's metadata is not modified in place
-            md = dict(file_metadata[i])
-            if (
-                "t" in md and isinstance(md["t"], str) and md["t"].isdigit()
-            ):  # convert to int
-                try:
-                    # note we replace "_" with "-" so we don't convert "1_2" to 12 e.g.
-                    md["t"] = int(md["t"].replace("_", "-"))
-                except ValueError:
-                    # conversion to int failed
-                    pass
-            image.attrs.update(md)
+        # copy so the caller's metadata is not modified in place
+        md = dict(file_metadata[i]) if file_metadata is not None else {}
+        if (
+            "t" in md and isinstance(md["t"], str) and md["t"].isdigit()
+        ):  # convert to int
+            try:
+                md["t"] = int(md["t"])
+            except ValueError:
+                # conversion to int failed
+                pass
+        image.attrs.update(md)
         image_attrs.append(image.attrs.copy())
 
         coords = dict()
@@ -1453,7 +1451,7 @@ def _images2fov(
         if "z" in concat_dims:
             ensure_dims.append("z")
         for d in ensure_dims:
-            if file_metadata is not None and d in md:
+            if d in md:
                 if d not in image.dims:
                     axis = 0
                     if d == "t":
