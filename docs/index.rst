@@ -28,8 +28,8 @@ environments, making it ideal for scaling to large datasets without compromising
 
 Modular Workflows:
 ------------------
-SCALLOPS provides an end-to-end WDL workflow that can be customized, allowing users to tailor analyses
-to their specific experimental needs.
+SCALLOPS provides WDL workflows for stitching, OPS analysis, and perturbation map building that can be
+customized, allowing users to tailor analyses to their specific experimental needs.
 
 Key Features:
 -------------
@@ -44,14 +44,15 @@ Command-Line Interface:
 A user-friendly command-line interface (CLI) enables automation and batch processing, making it easy to
 integrate SCALLOPS into larger pipelines.
 
-Customizable Outputs:
-^^^^^^^^^^^^^^^^^^^^^
-The package can generate versatile outputs, including data visualizations and summary statistics, which
-can be easily integrated into downstream analyses.
+Standard Output Formats:
+^^^^^^^^^^^^^^^^^^^^^^^^
+Images are written as OME-Zarr, tables (reads, per-cell features) as Parquet, and aggregated results as
+AnnData, alongside plots and summary statistics, so results are easy to use in downstream analyses. See
+:ref:`outputs`.
 
 Notebook Examples:
 ^^^^^^^^^^^^^^^^^^
-SCALLOPS includes practical Jupyter notebooks that walk users through typical workflows, making it easy to
+:doc:`Example Jupyter notebooks <example_notebooks>` walk users through typical workflows, making it easy to
 get started with real-world datasets.
 
 Custom Features:

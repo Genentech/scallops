@@ -7,7 +7,7 @@
 
 [![PyPI version](https://badge.fury.io/py/scallops.svg)](https://badge.fury.io/py/scallops)
 [![Python Versions](https://img.shields.io/pypi/pyversions/scallops.svg)](https://pypi.org/project/scallops/)
-[![License](https://img.shields.io/pypi/l/scallops.svg)](https://raw.githubusercontent.com/Genentech/scallops/refs/heads/main/LICENSE)
+[![License](https://img.shields.io/pypi/l/scallops.svg)](https://github.com/Genentech/scallops/blob/main/LICENSE)
 
 SCALLOPS (Scalable Library for Optical Pooled Screens) is a comprehensive Python package designed to
 streamline and scale the analysis of Optical Pooled Screens (OPS) for biological data. With a focus on
@@ -15,25 +15,7 @@ handling large-scale, high-throughput screening data, SCALLOPS provides tools fo
 analyzing, and interpreting OPS data, leveraging modern distributed computing frameworks like Dask.
 
 ## Documentation
-The full documentation, API reference, and tutorials can be found at: http://scallops.readthedocs.io
-
-## Repository Structure
-
-```text
-scallops/
-├── .github/             # CI/CD workflows
-├── docs/                # Documentation source (Sphinx)
-├── scallops/            # Main Python package source
-│   ├── cli/             # CLI entry points
-│   ├── core/            # Core processing logic
-│   └── utils/           # Utilities
-├── wdl/                 # WDL pipeline definitions
-├── Dockerfile           # Docker image definition
-├── pyproject.toml       # Build metadata
-├── requirements.txt     # Main dependencies
-├── setup.py             # Installation script
-└── README.md            # Project overview
-```
+The full documentation, API reference, and tutorials can be found at: https://scallops.readthedocs.io
 
 ## Getting Started
 
@@ -65,6 +47,20 @@ The easiest way to install the stable version is via pip (or uv pip):
 uv pip install scallops
 ```
 
+Optional features are available as extras:
+
+| Extra | Adds |
+|-------|------|
+| `cellpose` | Cellpose segmentation |
+| `dask-ml` | Distributed PCA with dask-ml |
+| `dialout` | Dial-out PCR analysis (`pysam`) |
+| `napari` | Viewing images in napari |
+| `ufish` | U-FISH spot detection |
+
+```bash
+uv pip install "scallops[cellpose,napari]"
+```
+
 #### Option 2: Run via Docker (GitHub Container Registry)
 SCALLOPS is available as a containerized image via the GitHub Container Registry (GHCR). This is the
 best option for ensuring environment consistency.
@@ -82,27 +78,33 @@ If you wish to contribute to the codebase or need the latest unreleased changes:
 
 1. Clone the repository:
 ```bash
-git clone [https://github.com/Genentech/scallops.git](https://github.com/Genentech/scallops.git)
+git clone https://github.com/Genentech/scallops.git
 cd scallops
 ```
 
-2. Install in editable mode:
+2. Install in editable mode with the test and development tools, and set up the pre-commit hooks:
 ```bash
-uv pip install -r requirements.txt -e .
+uv pip install -r requirements.txt -e ".[test,dev]"
+pre-commit install
+```
+
+3. Run the tests (test data is downloaded automatically on the first run):
+```bash
+pytest -n auto
 ```
 
 ## Main Focus Areas
 
 * **High-Throughput Data Processing**: Designed to manage massive datasets typical of OPS experiments across multiple scales.
 * **Scalability and Performance**: Optimized for both local and cloud-based distributed environments using Dask.
-* **Modular Workflows**: Includes customizable WDL workflows for cloud platforms like Terra or Cromwell.
+* **Modular Workflows**: Includes customizable WDL workflows that run locally with miniwdl or in the cloud on Terra, AWS HealthOmics, and Google Cloud Batch.
 
 ## Key Features
 
 * **Efficient Data Handling**: Advanced memory management and lazy evaluation to minimize resource usage.
 * **Command-Line Interface (CLI)**: Automates batch processing for seamless pipeline integration.
-* **Customizable Outputs**: Generates versatile data visualizations and summary statistics.
-* **Notebook Examples**: Practical Jupyter notebooks are included to guide users through real-world workflows.
+* **Standard Output Formats**: Writes images as OME-Zarr, tables (reads, per-cell features) as Parquet, and aggregated results as AnnData, alongside plots and summary statistics.
+* **Notebook Examples**: [Example Jupyter notebooks](https://scallops.readthedocs.io/en/latest/example_notebooks.html) walk through real-world workflows.
 * **Rich API**: A comprehensive API that allows for the creation of fully customized biological data pipelines.
 
 ## Typical Use Cases
@@ -113,3 +115,8 @@ uv pip install -r requirements.txt -e .
 ## Contributing to SCALLOPS
 
 We welcome all forms of contributions, including bug reports, documentation improvements, and feature enhancements.
+
+* Report bugs and request features on the [issue tracker](https://github.com/Genentech/scallops/issues).
+* To contribute code, follow Option 3 above to set up a development environment, create a branch,
+  and open a pull request against `main`. The pre-commit hooks run Ruff and mypy; please make sure
+  `pytest -n auto` passes and add an entry to `docs/release_notes.rst` for user-facing changes.

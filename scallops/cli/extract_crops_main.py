@@ -86,7 +86,7 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
 
     parser.add_argument(
         "--label-filter",
-        help="Expression to filter labels (e.g. barcode_Q_mean_0/barcode_Q_mean > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
+        help="Expression to filter labels (e.g. barcode_count_0/barcode_count > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
     )
 
     parser.add_argument(

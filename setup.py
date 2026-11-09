@@ -67,7 +67,7 @@ if HAS_CYTHON:
         extensions = cythonize(
             pyx_extensions,
             compiler_directives={
-                "language_level": "3",  # From your pyproject.toml (requires-python = ">=3.11")
+                "language_level": "3",  # From pyproject.toml (requires-python = ">=3.12")
                 "embedsignature": True,  # Useful for docstrings
             },
             # force=True, # Uncomment to always re-cythonize, useful for debugging CI
@@ -82,9 +82,9 @@ setup(
     # For PEP517 builds, [build-system].requires in pyproject.toml is used.
     # If you want to ensure Cython/NumPy are available for direct setup.py calls:
     # setup_requires=[
-    #    'setuptools>=42',
-    #    'cython>=0.29', # Or match your pyproject.toml's [build-system]
-    #    'numpy<2.0',    # Or match your pyproject.toml's [build-system] and runtime deps
+    #    'cython',  # Keep in sync with pyproject.toml's [build-system].requires
+    #    'numpy',
+    #    'setuptools>=77',
+    #    'setuptools_scm>=8',
     # ],
-    zip_safe=False,  # Good practice for packages with C extensions
 )

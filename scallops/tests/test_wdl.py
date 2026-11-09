@@ -73,7 +73,7 @@ def test_stitch_wdl_z_stack(tmp_path):
         "wdl/stitch_workflow.wdl",
     ]
     env = os.environ.copy()
-    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_local"
     env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
 
@@ -114,7 +114,7 @@ def test_stitch_wdl(tmp_path):
         "wdl/stitch_workflow.wdl",
     ]
     env = os.environ.copy()
-    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_local"
     env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
     image = read_image(tmp_path / "out" / "stitch" / "stitch.zarr" / "images" / "test")
@@ -193,7 +193,7 @@ def test_ops_wdl(tmp_path):
         "wdl/ops_workflow.wdl",
     ]
     env = os.environ.copy()
-    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_local"
     env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
 
@@ -348,7 +348,7 @@ def test_pert_map_wdl(tmp_path):
         "wdl/pert_map_workflow.wdl",
     ]
     env = os.environ.copy()
-    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_test_local"
+    env["MINIWDL__SCHEDULER__CONTAINER_BACKEND"] = "miniwdl_local"
     env["SCALLOPS_TEST"] = "1"
     check_call(cmd, env=env)
 

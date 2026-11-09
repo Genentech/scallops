@@ -72,8 +72,8 @@ def single_agg_illumination_correction(
 
     :param image_tuple: Placeholder argument.
     :param root: Output root directory or zarr group.
-    :param smooth: The radius of the disk-shaped footprint for the median filter. If None, no
-        smoothing is applied.
+    :param smooth: The radius of the disk-shaped footprint for the median filter. If None,
+        the radius is sqrt((image_width * image_height) / (pi * 20)); 0 disables smoothing.
     :param rescale: Whether to use the 2nd percentile for robust minimum rescaling.
     :param output_image_format: Output image format, either 'zarr' or 'tiff'.
     :param z_index: Either 'max' to use the maximum z-projection or a specific z-index.

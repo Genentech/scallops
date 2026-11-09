@@ -2,6 +2,14 @@
 Release Notes
 *****************
 
+* Unreleased
+    * When registering timepoints of a moving image with different numbers of channels without
+      ``--unroll-channels``, pad timepoints with leading empty channels to match the timepoint with
+      the most channels instead of unrolling channels.
+      ``--moving-channel`` indexes the padded channels.
+    * Wheels no longer include the test suite. The ``miniwdl_local`` miniwdl container backend
+      moved to ``scallops._miniwdl_local``.
+
 * v1.0.1, August 4, 2026
     * Remove support for zarr <3.
     * Only compute features for cells with a valid barcode by default in WDL workflow.
