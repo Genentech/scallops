@@ -18,15 +18,16 @@ FAQ
         TMPDIR=. pip install scallops
 
 #. Unable to download model for Stardist or other deep learning models
-    Some workflow environments (e.g. AWS HealthOmics) prohibit accesssing public websites.
+    Some workflow environments (e.g. AWS HealthOmics) prohibit accessing public websites.
     You need to download model files to an accessible location, and set the workflow input, `model_dir`
     to this location.
 
     Example::
 
         wget https://github.com/stardist/stardist-models/releases/download/v0.1/python_2D_versatile_fluo.zip
-        aws s3 cp python_2D_versatile_fluo.zip s3://my-bucket/model/
+        aws s3 cp python_2D_versatile_fluo.zip s3://my-bucket/model/2D_versatile_fluo.zip
 
+    SCALLOPS looks for the StarDist model as ``2D_versatile_fluo.zip``, so rename the file when you copy it.
     In your OPS workflow input JSON, set `model_dir` to `s3://my-bucket/model/`
 
 #. How do I pass configuration parameters when reading or writing to S3, GCP, or other file systems?
@@ -38,9 +39,9 @@ FAQ
 
 
 
-#. How long it takes SCALLOPS to install?
-    This is highly dependant on your mahcine, internet speed, network speed, and resource manege used.
-    On a Macbook air laptop, using regular pip install command on a virtual environment on a comercial network:
+#. How long does it take to install SCALLOPS?
+    This depends on your machine, network speed, and package manager. On a MacBook Air laptop, using
+    ``pip install`` in a virtual environment:
 
     ::
 
@@ -48,7 +49,7 @@ FAQ
         user	0m38.533s
         sys	0m15.782s
 
-    but using uv engine:
+    and using ``uv pip install``:
     ::
 
         real	0m26.296s

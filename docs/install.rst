@@ -5,9 +5,32 @@ Installation
 
 PyPI Release
 =========================
-Install SCALLOPS using your favorite environment manager::
+SCALLOPS requires Python 3.12 or newer. Install it using your favorite environment manager::
 
     pip install scallops
+
+Optional features are available as extras:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Extra
+     - Adds
+   * - ``cellpose``
+     - Cellpose segmentation (``scallops segment ... --method cellpose``)
+   * - ``dask-ml``
+     - Distributed PCA with dask-ml
+   * - ``dialout``
+     - Dial-out PCR analysis (``scallops dialout``)
+   * - ``napari``
+     - Viewing images in napari
+   * - ``ufish``
+     - U-FISH spot detection (the ``spots`` feature in ``scallops features``)
+
+For example::
+
+    pip install "scallops[cellpose,napari]"
 
 
 Developer Instructions
@@ -22,26 +45,40 @@ Developer Instructions
 
     cd scallops
 
-
-4. Create a new environment using venv, mamba, conda or your preferred tool::
+3. Create a new environment using venv, uv, mamba, conda or your preferred tool::
 
     mamba create --name scallops python=3.12
 
-
-5. Activate the environment::
+4. Activate the environment::
 
     mamba activate scallops
 
+5. Install SCALLOPS in editable mode with the test and development tools::
 
-6. Install SCALLOPS::
+    pip install -r requirements.txt -e ".[test,dev]"
 
-    pip install -r requirements.txt -e .
+6. Install the pre-commit hooks (Ruff and mypy)::
+
+    pre-commit install
+
+7. Run the tests. Test data is downloaded automatically on the first run::
+
+    pytest -n auto
+
+Installing in editable mode compiles the Cython extension
+``scallops.segmentation._propagate``. If you change ``_propagate.pyx`` or ``heap.pxd``,
+run ``pip install -e .`` again to rebuild it.
 
 Docker
 ======
 
-Pre-built images are published to the GitHub Container Registry after every
-push to ``main`` and on every release tag::
+Pre-built images are published to the GitHub Container Registry:
+
+* each release tag publishes ``:X.Y.Z``, ``:vX.Y.Z``, ``:X.Y``, ``:X`` and ``:latest``
+* each push to ``main`` publishes ``:main``
+* every image is also tagged with its full commit SHA (``:sha-<commit>``)
+
+::
 
     docker pull ghcr.io/genentech/scallops:latest
 
@@ -57,68 +94,80 @@ Mount local data into the container::
 Building locally
 ----------------
 
-A ``docker.mk`` file is provided that acts as the local equivalent of the CI
-workflow.  It runs ``setuptools_scm`` as a preflight step to stamp the correct
-version into the image, attaches OCI labels, and tags the image with the
-current version::
+Build the CPU image from the repository root::
 
-    make -f docker.mk docker
+    docker build --platform linux/amd64 -t scallops .
+
+The version is computed from the git tags by ``setuptools_scm``, so build from a git
+checkout (the ``.git`` directory must be in the build context).
+
+The Dockerfile accepts these build arguments:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 50
+
+   * - Argument
+     - Default
+     - Description
+   * - ``BASE_IMAGE``
+     - ``python:3.13-slim-bookworm``
+     - Base image; must provide Python 3.12 or newer
+   * - ``TORCH``
+     - ``1``
+     - ``0`` skips installing PyTorch (Cellpose and U-FISH still install it when enabled)
+   * - ``TORCH_CUDA``
+     - ``0``
+     - PyTorch wheel index tag, for example ``cu126``; ``0`` installs the CPU wheel
+   * - ``TF_CUDA``
+     - ``0``
+     - ``1`` installs ``tensorflow[and-cuda]``
+   * - ``RAPIDS_VERSION``, ``RAPIDS_CUDA``
+     - empty
+     - Install RAPIDS (cuDF, cuML, dask-cudf), for example ``26.6.0`` and ``cu12``
+   * - ``UFISH``
+     - ``1``
+     - ``0`` skips U-FISH
+   * - ``CELLPOSE_VERSION``
+     - ``3.1.1.2``
+     - Cellpose version; empty skips Cellpose
 
 GPU support
 -----------
 
-Both the CPU and GPU images use ``python:${PYTHON_VERSION}-slim-bookworm``
-(default ``3.13``) as their base.  All CUDA libraries are installed from pip
-wheels — no ``nvidia/cuda`` base image is needed.  The table below summarises
-GPU availability per library:
+All CUDA libraries are installed from pip wheels, so no ``nvidia/cuda`` base image is
+needed. The default image is CPU only:
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 20 35 25
+   :widths: 20 35 45
 
    * - Library
-     - GPU in default (CPU) image
-     - Affected commands
-     - Notes
+     - Used by
+     - GPU build argument
    * - PyTorch
-     - No (CPU-only wheel)
-     - ``segment`` (cellpose backend), ``dialout`` (U-FISH)
-     - CPU image installs the ``cpu`` wheel explicitly; GPU image installs the
-       CUDA wheel (``cu126`` by default)
+     - Cellpose segmentation, U-FISH spot detection
+     - ``TORCH_CUDA=cu126``
    * - TensorFlow
-     - No (CPU only)
-     - ``segment`` (StarDist backend)
-     - GPU image installs ``tensorflow[and-cuda]``, which bundles CUDA via pip
+     - StarDist segmentation
+     - ``TF_CUDA=1``
    * - RAPIDS
-     - No (CPU only)
-     - All commands using pandas / scikit-learn / dask internally
-     - GPU image only; requires RAPIDS ≥ 25.12 for scikit-learn 1.9 compatibility
+     - GPU PCA (cuML)
+     - ``RAPIDS_VERSION=26.6.0 RAPIDS_CUDA=cu12``; RAPIDS must be a
+       `current RAPIDS release`_ and 25.12 or newer
 
-**GPU image** — installs ``tensorflow[and-cuda]``, RAPIDS (cuDF, cuML,
-dask-cudf), and a CUDA-enabled PyTorch wheel.  ``RAPIDS_VERSION`` must be a
-`current RAPIDS release`_ and ≥ 25.12::
+Build a GPU image::
 
-    make -f docker.mk docker-gpu RAPIDS_VERSION=26.6.0
-
-A single ``CUDA_VERSION`` knob (default ``12.6``) drives the RAPIDS package
-suffix and the PyTorch wheel index.  Override it if your driver requires a
-different minor version::
-
-    make -f docker.mk docker-gpu RAPIDS_VERSION=26.6.0 CUDA_VERSION=12.4
-
-The Python version is independently configurable for both images::
-
-    make -f docker.mk docker PYTHON_VERSION=3.11
-
-The build automatically sets the ``IS_GPU`` environment variable to ``1``
-inside the container.  You can inspect it at runtime to confirm GPU support::
-
-    docker run --rm <gpu-image> printenv IS_GPU
+    docker build --platform linux/amd64 \
+        --build-arg TORCH_CUDA=cu126 \
+        --build-arg TF_CUDA=1 \
+        --build-arg RAPIDS_VERSION=26.6.0 --build-arg RAPIDS_CUDA=cu12 \
+        -t scallops-gpu .
 
 At runtime, pass ``--gpus all`` (Docker) or the equivalent Podman flag and
 ensure the `NVIDIA Container Toolkit`_ is installed on the host::
 
-    docker run --gpus all --rm <gpu-image> scallops segment ...
+    docker run --gpus all --rm scallops-gpu scallops segment ...
 
 .. note::
 
@@ -127,8 +176,5 @@ ensure the `NVIDIA Container Toolkit`_ is installed on the host::
    ``nvidia-cudnn``, etc.) are installed as pip wheels inside the image and do
    not require a matching system CUDA toolkit.
 
-.. _Mamba: https://mamba.readthedocs.io/en/latest/installation.html
-.. _Conda: https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html
 .. _NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
-.. _RAPIDS: https://rapids.ai
 .. _current RAPIDS release: https://docs.rapids.ai/install

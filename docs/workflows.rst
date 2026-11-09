@@ -2,7 +2,7 @@
 Workflow Reference
 ********************
 
-Scallops provides two primary end-to-end pipelines written in **WDL** (Workflow Description Language). These workflows are designed for scalability and reproducibility across various environments, including local machines, cloud infrastructure, and high-performance computing (HPC) clusters.
+SCALLOPS provides three end-to-end pipelines written in **WDL** (Workflow Description Language): stitching, OPS, and perturbation map building. These workflows are designed for scalability and reproducibility across various environments, including local machines, cloud infrastructure, and high-performance computing (HPC) clusters.
 
 .. contents:: Table of Contents
    :local:
@@ -34,7 +34,7 @@ Inputs
 Minimal Configuration (Required)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-These are the absolute minimum parameters required to run the stitching workflow.
+These are the parameters needed to run the stitching workflow.
 
 .. list-table::
    :widths: 20 15 65
@@ -47,8 +47,9 @@ These are the absolute minimum parameters required to run the stitching workflow
      - Array[String]
      - List of directories containing raw images (e.g S3 URLs).
    * - **image_pattern**
-     - String
-     - Regex-like pattern to parse filenames (e.g., ``"Well{well}_Point{point}.nd2"``).
+     - String (optional)
+     - Pattern with ``{field}`` placeholders used to parse metadata from file paths (e.g.,
+       ``"Well{well}_Point{point}.nd2"``). Only ``groupby`` fields that appear in the pattern are used.
    * - **output_directory**
      - String
      - Base path for outputs.
@@ -63,7 +64,7 @@ These are the absolute minimum parameters required to run the stitching workflow
       "urls": ["s3://your-bucket/experiment_data/"],
       "image_pattern": "20231010_10x_6W_SBS_c{t}/plate{plate}/Well{well}_Point{skip}_{skip}_Channel{skip}_Seq{skip}.nd2",
       "output_directory": "s3://your-bucket/experiment_data/stitch/iss/",
-      "docker":"772311241819.dkr.ecr.us-west-2.amazonaws.com/scallops:1.0.0"
+      "docker": "ghcr.io/genentech/scallops:<version>"
    }
 
 Full Parameter Reference (Advanced)
@@ -99,9 +100,9 @@ Below is the complete list of exposed options, including optional settings for g
    * - **stitch_blend**
      - String
      - Blending method for overlapping regions.
-   * - **stitch_crop**
+   * - **stitch_crop_y**, **stitch_crop_x**
      - Int
-     - Pixels to crop from edges before stitching.
+     - Pixels to crop from tile edges in y and x before stitching.
    * - **stitch_min_overlap_fraction**
      - Float
      - Minimum overlap required between tiles.
@@ -129,7 +130,7 @@ Outputs
 
 The workflow generates the following directory structure in `output_directory`:
 
-* ``illumination_correction/``: Contains calculated flatfield (and optionally darkfield) images in TIFF format.
+* ``illumination_correction/``: Contains calculated flatfield images in OME-TIFF format.
 * ``stitch/``: Contains the stitched images in OME-Zarr format.
 
 --------------------------------------------------------------------------------
@@ -163,7 +164,7 @@ Inputs
 Minimal Configuration (Required)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-These are the absolute minimum parameters required to run the OPS workflow.
+These are the parameters needed to run the OPS workflow.
 
 .. list-table::
    :widths: 20 15 65
@@ -204,7 +205,7 @@ These are the absolute minimum parameters required to run the OPS workflow.
       "phenotype_dapi_channel": 4,
       "phenotype_cyto_channel": [6],
       "reads_labels": "cell",
-      "docker":"772311241819.dkr.ecr.us-west-2.amazonaws.com/scallops:1.0.0"
+      "docker": "ghcr.io/genentech/scallops:<version>"
    }
 
 Full Parameter Reference (Advanced)
@@ -329,7 +330,7 @@ Below is the complete list of exposed options covering registration, feature ext
      - Description
    * - **model_dir**
      - String
-     - Path containing deep learning model resouces (See :doc:`FAQ <faq>` for more details.)
+     - Path containing deep learning model resources (See :doc:`FAQ <faq>` for more details.)
    * - **run_<task>**
      - Boolean
      - Set to ``false``, (e.g. run_nuclei_segmentation) to skip task
@@ -348,26 +349,50 @@ Outputs
 
 The `output_directory` will contain subdirectories for every major step:
 
-* ``segment.zarr``: Nuclei and Cell labels.
-* ``pheno-to-iss-registered.zarr``: Phenotype images transformed to align with ISS.
+* ``pheno-registered.zarr``: Phenotype rounds registered to the reference timepoint.
+* ``segment.zarr``: Nuclei, cell and cytosol labels.
+* ``objects-nuclei/``, ``objects-cell/``, ``objects-cytosol/``: Object locations, bounding boxes and areas.
+* ``iss-registered-t0.zarr``: ISS cycles registered to the first cycle.
+* ``pheno-to-iss-registered.zarr``: Phenotype images and labels transformed to align with ISS.
 * ``features-nuclei-<index>/``, ``features-cell-<index>/``, ``features-cytosol-<index>/``: Parquet files containing calculated features. The ``<index>`` refers to different splits of the data that had been run in parallel.
-* ``spot-detect.zarr``: Raw spot locations.
-* ``reads/``: Decoded reads per cell.
-* ``merge/``: **Final Output.** A merged Parquet dataset linking Cell IDs, Barcodes, and Phenotypic Features.
+* ``spot-detect.zarr``: Detected spots and spot detection images.
+* ``reads/``: Called reads and barcode assignments per cell.
+* ``merge-sbs-metadata/``: Barcode assignments merged with object locations and registration QC.
+* ``merge-features/``: **Final Output.** Parquet tables linking cell IDs, barcodes, and phenotypic features.
+
+The output folder names can be changed with the ``*_suffix`` inputs. See :ref:`outputs` for the
+contents of each output.
+
+--------------------------------------------------------------------------------
+
+Perturbation Map Workflow
+=========================
+**File:** ``pert_map_workflow.wdl``
+
+Builds a perturbation map from per-cell features (for example the ``merge-features`` output of the OPS
+workflow). The steps are: filter features, normalize, PCA, typical variation normalization (TVN), aggregate
+by perturbation, compute a similarity matrix, and evaluate it (recall and enrichment).
+
+The required inputs are ``inputs`` (one or more Zarr, h5ad or Parquet paths or glob patterns),
+``output_directory``, ``tvn_reference_query`` (a query selecting the control cells, for example
+``"gene_symbol=='NTC'"``) and ``docker``. Each step writes to ``output_directory``
+(``filter.zarr``, ``normalize.zarr``, ``pca.zarr``, ``tvn.zarr``, ``agg.zarr``, ``sim.zarr``,
+``recall.parquet`` and ``enrichment.parquet``). See ``wdl/pert_map_workflow.wdl`` for all inputs.
 
 --------------------------------------------------------------------------------
 
 Running on AWS HealthOmics
 ==========================
 
-AWS HealthOmics provides a managed service for running bioinformatics workflows at scale. Scallops workflows (WDL) are fully compatible with HealthOmics. We recommend using the `miniwdl-omics-run` tool to simplify the submission process.
+AWS HealthOmics provides a managed service for running bioinformatics workflows at scale. SCALLOPS workflows (WDL) are fully compatible with HealthOmics. We recommend using the `miniwdl-omics-run` tool to simplify the submission process.
 
 Prerequisites
 -------------
 
 1.  **S3 Buckets:** You must have S3 buckets for inputs (images) and outputs.
 2.  **IAM Role:** An IAM role with permissions to read/write to your S3 buckets and execution permissions for HealthOmics.
-3.  **Docker Images:** The Scallops Docker image must be in Amazon ECR (Elastic Container Registry).
+3.  **Docker Images:** The SCALLOPS Docker image must be in Amazon ECR (Elastic Container Registry). You can copy
+    ``ghcr.io/genentech/scallops:<version>`` into your ECR repository.
 
 Step 1: Configure Input JSON
 ----------------------------
@@ -414,7 +439,7 @@ Use the `miniwdl-omics-run` utility to submit the workflow. This tool zips your 
 .. code-block:: bash
 
    miniwdl-omics-run \
-     scallops/wdl/ops_workflow.wdl \
+     wdl/ops_workflow.wdl \
      -i ops_input.json \
      --role-arn arn:aws:iam::123456789012:role/YourHealthOmicsWorkflowRole \
      --output-uri s3://your-output-bucket/omics-logs/ \
@@ -422,7 +447,7 @@ Use the `miniwdl-omics-run` utility to submit the workflow. This tool zips your 
 
 Arguments Explained:
 ^^^^^^^^^^^^^^^^^^^^
-* **Workflow File**: Points to the local main WDL file (e.g., ``scallops/wdl/ops_workflow.wdl``). It will automatically bundle dependencies like ``ops_tasks.wdl``.
+* **Workflow File**: Points to the local main WDL file (e.g., ``wdl/ops_workflow.wdl``). It will automatically bundle dependencies like ``ops_tasks.wdl``.
 * **-i**: The input JSON file you created in Step 1.
 * **--role-arn**: The AWS IAM role ARN that HealthOmics assumes to access S3 and CloudWatch.
 * **--output-uri**: The S3 location where HealthOmics will store execution logs (different from the workflow `output_directory`).
@@ -433,25 +458,25 @@ Arguments Explained:
 Customizing Workflows
 =====================
 
-Scallops' WDL architecture is modular. Key computational steps (such as stitching, registration, and segmentation) are defined as independent **Tasks** in files like ``ops_tasks.wdl`` and ``stitch_tasks.wdl``. This design allows you to construct your own custom workflows by importing these tasks, rather than relying solely on the pre-built end-to-end pipelines.
+The SCALLOPS WDL architecture is modular. Key computational steps (such as stitching, registration, and segmentation) are defined as independent **Tasks** in files like ``ops_tasks.wdl`` and ``stitch_tasks.wdl``. This design allows you to construct your own custom workflows by importing these tasks, rather than relying solely on the pre-built end-to-end pipelines.
 
-You can mix and match Scallops tasks with your own custom tasks (e.g., for QC or specific file conversions) to create tailored analysis solutions.
+You can mix and match SCALLOPS tasks with your own custom tasks (e.g., for QC or specific file conversions) to create tailored analysis solutions.
 
 Example: Building a Custom Registration Workflow
 ------------------------------------------------
 
-Suppose you only need to perform image registration without the full segmentation or sequencing analysis. You can create a simple WDL file that imports the Scallops tasks and calls only the registration step.
+Suppose you only need to perform image registration without the full segmentation or sequencing analysis. You can create a simple WDL file that imports the SCALLOPS tasks and calls only the registration step.
 
 1.  **Create a new WDL file** (e.g., ``my_registration.wdl``).
-2.  **Import the Scallops tasks** file.
+2.  **Import the SCALLOPS tasks** file.
 3.  **Define a workflow** that calls the specific task.
 
 .. code-block:: text
 
     version 1.0
 
-    # Import the existing Scallops tasks
-    import "scallops/wdl/ops_tasks.wdl" as tasks
+    # Import the existing SCALLOPS tasks (path relative to this file)
+    import "wdl/ops_tasks.wdl" as tasks
 
     workflow my_custom_registration {
         input {
@@ -461,33 +486,25 @@ Suppose you only need to perform image registration without the full segmentatio
             String docker
         }
 
-        # Call the existing Scallops registration task
+        # Call the existing SCALLOPS registration task
         call tasks.register_elastix {
             input:
                 moving = [moving_image],
                 fixed = fixed_image,
+                groupby = ["plate", "well"],
+                subset = "A-1",
                 transform_output_directory = output_dir + "/transforms",
                 moving_output_directory = output_dir + "/registered_images",
-                # Pass through required runtime parameters
+                # Required runtime parameters
                 docker = docker,
                 cpu = 4,
                 memory = "16 GiB",
-                # ... (other required inputs like zones, disks, etc.)
+                disks = "local-disk 100 HDD",
+                zones = "",
+                preemptible = 0,
+                aws_queue_arn = "",
+                max_retries = 0
         }
     }
-
-Modifying Existing Tasks
-------------------------
-
-If the pre-built tasks do not perfectly fit your needs (e.g., you need to change the resource allocation or add a specific command-line flag not currently exposed), you can modify the task definitions directly:
-
-1.  Copy the relevant task file (e.g., ``ops_tasks.wdl``) to your local directory.
-2.  Edit the ``runtime`` block to adjust memory/CPU, or the ``command`` block to add new flags.
-3.  Point your workflow to import your modified task file instead of the standard one.
-
-.. code-block:: text
-
-    # In your workflow file
-    import "my_modified_tasks.wdl" as tasks
 
 .. _WDL: https://openwdl.org/

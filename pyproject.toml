@@ -1,11 +1,10 @@
 [build-system]
 build-backend = "setuptools.build_meta"
 requires = [
-    "cython",
+    "cython>=3.0",
     "numpy",
-    "setuptools>=42",
-    "setuptools_scm[toml]>=3.4",
-    "wheel"
+    "setuptools>=77",
+    "setuptools_scm>=8",
 ]
 
 [project]
@@ -27,6 +26,9 @@ classifiers = [
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
@@ -112,17 +114,14 @@ doc = [
 ]
 
 [project.entry-points."miniwdl.plugin.container_backend"]
-miniwdl_test_local = "scallops.tests.miniwdl_local.local_runner:LocalRunner"
+miniwdl_local = "scallops._miniwdl_local:LocalRunner"
 
 [project.scripts]
 scallops = 'scallops.__main__:main'
 
 [project.urls]
-Repository = "https://github.com/Genentech/scallops.git"
-
-[tool.setuptools]
-include-package-data = true
-zip-safe = false
+Documentation = "https://scallops.readthedocs.io"
+Repository = "https://github.com/Genentech/scallops"
 
 [tool.setuptools.package-data]
 "scallops.datasets" = ["registry.txt"]
@@ -130,7 +129,12 @@ zip-safe = false
 
 [tool.setuptools.packages.find]
 include = ["scallops*"]
-exclude = ["docs*", "scallops/tests*"]
+exclude = ["docs*", "scallops.tests*"]
+
+[tool.setuptools.exclude-package-data]
+scallops = ["tests/**"]
+# Build-only sources; the compiled extension and _propagate.pyi still ship.
+"scallops.segmentation" = ["*.pyx", "*.pxd", "*.cpp"]
 
 [tool.setuptools_scm]
 tag_regex = "^(?P<version>v?[0-9]{1,2}\\.[0-9]+\\.[0-9]+)$"
@@ -155,7 +159,7 @@ markers = [
     "cli_e2e: marks tests for the CLI end to end",
     "cli_segment: marks tests for the CLI segmentation",
     "cli_spot: marks tests for the CLI spot calling",
-    "features: mark tests for IO",
+    "features: mark tests for features",
     "io: mark tests for IO",
     "registration: tests for registration",
     "segmentation_cellpose: tests for segmentation using cellpose",
@@ -183,6 +187,3 @@ filterwarnings = [
     'ignore:.* MMStack file name is invalid',
     'ignore:.* MMStack series is missing files .*'
 ]
-
-[tool.distutils.bdist_wheel]
-universal = false # since we have cython we should not use universal wheels

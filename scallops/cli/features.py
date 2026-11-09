@@ -206,7 +206,7 @@ def single_feature(
         If True, existing files with the same names will be overwritten. If False,
         skip computation for labels with existing output files.
     :param channel_names: Dict mapping channel index to channel name
-    :param label_filter: Expression to filter labels (e.g.barcode_Q_mean_0/barcode_Q_mean > 0.5).
+    :param label_filter: Expression to filter labels (e.g. barcode_count_0/barcode_count > 0.5).
     :param no_version: Whether to skip version/CLI information in output.
     :param normalize: Normalize image.
     :returns: List of delayed results

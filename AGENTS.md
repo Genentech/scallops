@@ -61,8 +61,10 @@ pytest -m "not cli_e2e"                     # skip slow end-to-end CLI/WDL tests
   new marker must be registered under `[tool.pytest.ini_options].markers` in `pyproject.toml`.
 - `xfail_strict = true`: an xfail test that passes counts as a failure.
 - Use the `client` fixture in `conftest.py` for tests that need a Dask cluster.
-- WDL tests (`test_wdl.py`) need `miniwdl`; they run through the local container backend in
-  `scallops/tests/miniwdl_local/`.
+- WDL tests (`test_wdl.py`) need `miniwdl`; they run through the local container backend
+  `miniwdl_local` (`scallops/_miniwdl_local.py`, registered as a miniwdl plugin entry point),
+  which runs tasks without containers. It lives in the package, not `tests/`, because tests are
+  excluded from the wheel and miniwdl loads every registered backend.
 - CI (`.github/workflows/test.yml`) runs on Python 3.13 with `pytest -n auto`.
 
 ## Code style
