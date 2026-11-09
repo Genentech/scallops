@@ -10,8 +10,7 @@ Release Notes
     * Add the ``puncta`` feature, which detects small bright spots (vesicles, granules, Golgi
       fragments) in each label and measures their number, size, intensity and spatial
       distribution, using a threshold relative to each cell's local background.
-    * Add ``segment overlap`` (also added to the WDL workflow), which computes the overlap
-      between nuclei and cells and renumbers cells to match nuclei.
+    * Add ``segment overlap`` (also added to the WDL workflow), which computes the overlap between nuclei and cells and renumbers cells to match nuclei for non watershed-based cell segmentation algorithms.
     * Segmentation can use a separate channel and smoothing for the threshold mask
       (``--mask-channel``, ``--mask-sigma``).
     * Stitching can correct alignment between channels
