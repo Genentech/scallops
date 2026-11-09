@@ -790,17 +790,21 @@ def comparative_effect_scatter(
     :param effect_size_column: The name of the column representing the effect size.
     :param highlight_mode: Method for highlighting. Either 'query' or 'regression'.
     :param highlight_query: Defines what to highlight.
+
         - If `highlight_mode='query'`: An `int` for top/bottom N points or a `str` query.
         - If `highlight_mode='regression'`: A `dict`, e.g., `{'pi': 0.95, 'n_closest': 10}`. 'pi' sets the prediction
-            interval, and 'n_closest' sets the number of points to highlight within the interval.
+          interval, and 'n_closest' sets the number of points to highlight within the interval.
+
     :param regression_params: A dictionary to control regression fitting and plotting. If None,
         no regression is performed. Expected keys:
+
         - 'method' (str): 'ols' (Ordinary Least Squares, default) or 'ransac' (for robust regression).
         - 'residual_threshold' (float): For RANSAC, the maximum residual for a point to be
-            considered an inlier. A larger value makes the fit less strict.
+          considered an inlier. A larger value makes the fit less strict.
         - 'ci_style' (str): 'fill' or 'line' to draw the prediction interval.
         - 'line_kws' (dict): Keyword arguments for styling the regression line (e.g., {'color': 'red'}).
         - 'ci_kws' (dict): Keyword arguments for styling the PI (e.g., {'alpha': 0.1}).
+
     :param legend_cols: Number of columns in the legend.
     :param match_axes: If True, sets x and y axis limits to be the same.
     :param transform: An optional function to apply to the effect size column.

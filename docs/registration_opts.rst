@@ -1,7 +1,7 @@
 Predefined Registration parameters
 ----------------------------------------
 
-Scallops provides a set of predefined parameters for registration.
+SCALLOPS provides a set of predefined parameters for registration. The default is ``affine nl-100``.
 
 Available Options
 ^^^^^^^^^^^^^^^^^^
@@ -18,7 +18,7 @@ Available Options
 
 - nl-100
 
-   * Description: Non-linear registration using B-splines using 1 resolution and a final grid spacing of 100 microns..
+   * Description: Non-linear registration using B-splines using 1 resolution and a final grid spacing of 100 physical units (microns when the image spacing is in microns).
    * Transformations: Non-linear (B-spline)
 
 
@@ -27,7 +27,7 @@ the suffixes `ams` and `anc` respectively. For example, `rigid-anc`.
 
 Note that parameters can be composed in any manner. For example `rigid affine nl-100`.
 
-In order to use custom registration parameters, pass a set of JSON files to the `itk-parameters` argument.
+To use custom registration parameters, pass JSON or elastix text parameter files to ``--itk-parameters``.
 Please refer to the `Elastix <ElastixWebsite_>`_ manual for more information.
 
 

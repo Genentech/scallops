@@ -10,6 +10,7 @@ import argparse
 import json
 import warnings
 from collections.abc import Collection, Iterable, Sequence
+from inspect import signature
 from itertools import zip_longest
 
 import dask.array
@@ -40,6 +41,7 @@ from scallops.features.constants import (
 )
 from scallops.features.find_objects import find_objects
 from scallops.features.generate import label_features, normalize_features
+from scallops.features.puncta import puncta
 from scallops.features.util import _get_names_from_pd_query
 from scallops.io import (
     _dd_to_parquet,
@@ -112,6 +114,15 @@ def get_labels(label_groups: list[Group], name: str, suffix: str) -> zarr.Array:
 
     g = find_label_group(label_groups, f"{name}-{suffix}")
     return g[list(g.keys())[0]]
+
+
+def _puncta_anchor(feature: str) -> str | None:
+    """Anchor ("nc" or "rc") of a puncta feature string, or None for other features."""
+    tokens = feature.lower().split("_")
+    if tokens[0] != "puncta":
+        return None
+    position = list(signature(puncta).parameters).index("anchor") + 1
+    return tokens[position] if len(tokens) > position else "nc"
 
 
 def _read_image(file_list: Sequence[str | Group], metadata: dict) -> xr.DataArray:
@@ -195,7 +206,7 @@ def single_feature(
         If True, existing files with the same names will be overwritten. If False,
         skip computation for labels with existing output files.
     :param channel_names: Dict mapping channel index to channel name
-    :param label_filter: Expression to filter labels (e.g.barcode_Q_mean_0/barcode_Q_mean > 0.5).
+    :param label_filter: Expression to filter labels (e.g. barcode_count_0/barcode_count > 0.5).
     :param no_version: Whether to skip version/CLI information in output.
     :param normalize: Normalize image.
     :returns: List of delayed results
@@ -342,6 +353,19 @@ def single_feature(
         ]
         for c in bounding_box_columns:
             merged_df[c] = merged_df[c].astype(int)
+        nuclei_labels = None
+        if any(_puncta_anchor(f) == "nc" for f in features):
+            try:
+                nuclei_labels = get_labels(
+                    label_groups=label_groups, name=image_key, suffix="nuclei"
+                )
+            except ValueError as e:
+                raise ValueError(
+                    "puncta with anchor 'nc' (nucleus centroid) needs nuclei labels, "
+                    f"but {image_key}-nuclei is not in any --labels store. Add the "
+                    "store with the nuclei to --labels, or use anchor 'rc' (ROI "
+                    "centroid)."
+                ) from e
         df = label_features(
             objects_df=merged_df,
             label_image=label_image,
@@ -355,6 +379,7 @@ def single_feature(
                 f"{label_prefix}_AreaShape_BoundingBoxMaximum_X",
             ],
             channel_names=channel_names,
+            nuclei_label_image=nuclei_labels,
         )
         # df will be None if only area and coordinates requested
 

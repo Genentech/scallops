@@ -3,14 +3,17 @@ import pandas as pd
 import pytest
 
 from scallops.cli.pooled_if_sbs import _merged_to_matrix, merge_sbs_phenotype_pipeline
+from scallops.datasets._registry import cache_dir
 from scallops.io import _PANDAS_3
 from scallops.reads import merge_sbs_phenotype
+
+DATA_DIR = cache_dir()
 
 
 @pytest.fixture
 def df_known_good():
     df = (
-        pd.read_csv("scallops/tests/data/process_fig4/combined.csv")
+        pd.read_csv(f"{DATA_DIR}/process_fig4/combined.csv")
         .rename(
             {
                 "cell": "label",
@@ -32,7 +35,7 @@ def df_known_good():
 @pytest.mark.utils
 def test_merge_sbs_phenotype_df(tmp_path, df_known_good):
     df_cells = (
-        pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.cells.csv")
+        pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.cells.csv")
         .rename(
             {
                 "cell": "label",
@@ -47,7 +50,7 @@ def test_merge_sbs_phenotype_df(tmp_path, df_known_good):
         .drop(["tile", "well"], axis=1)
     )
     df_phenotype = (
-        pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.phenotype.csv")
+        pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.phenotype.csv")
         .rename(
             {"cell": "label"},
             axis=1,
@@ -55,7 +58,7 @@ def test_merge_sbs_phenotype_df(tmp_path, df_known_good):
         .set_index("label")
         .drop(["tile", "well"], axis=1)
     )  # (2538, 16)
-    df_barcode = pd.read_csv("scallops/tests/data/experimentC/barcodes.csv")
+    df_barcode = pd.read_csv(f"{DATA_DIR}/experimentC/barcodes.csv")
 
     test_merged_df = merge_sbs_phenotype(
         df_labels=df_cells,
@@ -74,7 +77,7 @@ def test_merge_sbs_phenotype_df(tmp_path, df_known_good):
 @pytest.mark.utils
 def test_merge_sbs_phenotype_matrix(tmp_path):
     df_cells = (
-        pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.cells.csv")
+        pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.cells.csv")
         .rename(
             {
                 "cell": "label",
@@ -89,7 +92,7 @@ def test_merge_sbs_phenotype_matrix(tmp_path):
         .drop(["tile", "well"], axis=1)
     )
     df_phenotype = (
-        pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.phenotype.csv")
+        pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.phenotype.csv")
         .rename(
             {"cell": "label"},
             axis=1,
@@ -97,7 +100,7 @@ def test_merge_sbs_phenotype_matrix(tmp_path):
         .set_index("label")
         .drop(["tile", "well"], axis=1)
     )  # (2538, 16)
-    df_barcode = pd.read_csv("scallops/tests/data/experimentC/barcodes.csv")
+    df_barcode = pd.read_csv(f"{DATA_DIR}/experimentC/barcodes.csv")
     metadata_columns = ["i_cell", "j_cell", "i_nucleus", "j_nucleus"]
     feature_names = df_phenotype.drop(metadata_columns, axis=1).columns.tolist()
     # test anndata output
@@ -216,7 +219,7 @@ _BARCODE_COLUMNS = ["barcode", "sgRNA", "gene_symbol", "duplicate_prefix"]
 def merge_paths(tmp_path):
     """Write the SBS and phenotype tables as Parquet in the layout `merge` expects."""
     df_cells = (
-        pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.cells.csv")
+        pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.cells.csv")
         .rename(
             {
                 "cell": "label",
@@ -231,7 +234,7 @@ def merge_paths(tmp_path):
         .drop(["tile", "well"], axis=1)
     )
     df_phenotype = (
-        pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.phenotype.csv")
+        pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.phenotype.csv")
         .rename({"cell": "label"}, axis=1)
         .set_index("label")
         .drop(["tile", "well"], axis=1)
@@ -251,7 +254,7 @@ def merge_paths(tmp_path):
 @pytest.mark.utils
 def test_merge_sbs_phenotype_pipeline_prefixes(tmp_path, merge_paths):
     sbs_path, phenotype_path, phenotype_columns = merge_paths
-    df_barcode = pd.read_csv("scallops/tests/data/experimentC/barcodes.csv")
+    df_barcode = pd.read_csv(f"{DATA_DIR}/experimentC/barcodes.csv")
     assert df_barcode.columns.tolist() == _BARCODE_COLUMNS[:-1]
 
     def run(name, **kwargs):

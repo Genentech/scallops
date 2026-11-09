@@ -1,5 +1,4 @@
 import argparse
-from pathlib import Path
 from types import SimpleNamespace
 
 import dask.array as da
@@ -10,6 +9,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from scallops.datasets._registry import cache_dir
 from scallops.io import read_barcodes, read_image
 from scallops.reads import (
     annotated_spots,
@@ -22,6 +22,7 @@ from scallops.reads import (
     decode_polar,
     decode_se,
     fit_base_mixture,
+    make_decoy_barcodes,
     peaks_to_bases,
     read_statistics,
 )
@@ -35,14 +36,12 @@ from scallops.spots import (
     transform_log,
 )
 
-__root__ = Path("scallops/tests")  # Path(__file__).resolve().parent
+DATA_DIR = cache_dir()
 
 
 def diff_reads(test_df_bases, test_df_reads, test_df_cell):
     known_good_df_bases = (
-        pd.read_csv(
-            str(__root__.joinpath("data", "process_fig4", "10X_A1_Tile-102.bases.csv"))
-        )
+        pd.read_csv(str(DATA_DIR.joinpath("process_fig4", "10X_A1_Tile-102.bases.csv")))
         .rename(
             {"i": "y", "j": "x", "channel": "c", "cycle": "t", "cell": "label"}, axis=1
         )
@@ -67,9 +66,7 @@ def diff_reads(test_df_bases, test_df_reads, test_df_cell):
     skip_cols = [f"Q_{i}" for i in range(9)] + ["Q_min"]  # we use a different method
     # reads
     known_good_df_reads = (
-        pd.read_csv(
-            str(__root__.joinpath("data", "process_fig4", "10X_A1_Tile-102.reads.csv"))
-        )
+        pd.read_csv(str(DATA_DIR.joinpath("process_fig4", "10X_A1_Tile-102.reads.csv")))
         .rename({"i": "y", "j": "x", "cell": "label"}, axis=1)
         .reset_index()
         .drop(["index", "read", "peak", "tile", "well"] + skip_cols, axis=1)
@@ -94,9 +91,7 @@ def diff_reads(test_df_bases, test_df_reads, test_df_cell):
         .sort_values("label")
     )
     known_good_df_cell = (
-        pd.read_csv(
-            str(__root__.joinpath("data", "process_fig4", "10X_A1_Tile-102.cells.csv"))
-        )
+        pd.read_csv(str(DATA_DIR.joinpath("process_fig4", "10X_A1_Tile-102.cells.csv")))
         .rename(
             {
                 "cell": "label",
@@ -168,7 +163,7 @@ def test_decoders_4ch(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
 
     image = experiment_c_A1_102_aligned.isel(z=0, c=[1, 2, 3, 4])
     barcodes_A1_102 = read_barcodes(
-        str(__root__.joinpath("data", "experimentC", "barcodes.csv")),
+        str(DATA_DIR.joinpath("experimentC", "barcodes.csv")),
         image.t.values - 1,
     )
     loged = transform_log(image)
@@ -588,7 +583,7 @@ def test_peaks_to_bases(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
 
 @pytest.mark.basecalls
 def test_peak_thresholds_from_reads():
-    df = pd.read_csv("scallops/tests/data/process_fig4/10X_A1_Tile-102.reads.csv")
+    df = pd.read_csv(f"{DATA_DIR}/process_fig4/10X_A1_Tile-102.reads.csv")
     df["Q_mean"] = df["Q_min"].apply(lambda p: -10 * np.log10(p + 1e-6))
     df_cutoff = peak_thresholds_from_reads(df)
     cutoff = df_cutoff.iloc[0]["threshold"]
@@ -687,8 +682,8 @@ def test_sbs_dask(experiment_c_A1_102_aligned, experiment_c_A1_102_cells):
 
 @pytest.mark.basecalls
 def test_annotated(experiment_c_A1_102_cells):
-    path = __root__.joinpath("data", "annotated", "10X_A1_Tile-102.annotated.npz")
-    aln_path = __root__.joinpath("data", "process_fig4")
+    path = DATA_DIR.joinpath("annotated", "10X_A1_Tile-102.annotated.npz")
+    aln_path = DATA_DIR.joinpath("process_fig4")
     cells = experiment_c_A1_102_cells.values.squeeze()
     maxed = read_image(f"{aln_path.joinpath('10X_A1_Tile-102.maxed.tif')}").isel(z=0)
     peaks = read_image(f"{aln_path.joinpath('10X_A1_Tile-102.peaks.tif')}").squeeze()
@@ -1196,15 +1191,176 @@ def test_barcode_n_unique_bases():
 
 
 @pytest.mark.basecalls
-def test_dask_total_threads_cpu_count(monkeypatch):
-    from scallops.utils import _dask_total_threads
+def test_make_decoy_barcodes():
+    rng = np.random.default_rng(0)
+    library = np.unique(["".join(rng.choice(list("ACGT"), 10)) for _ in range(500)])
+    decoys = make_decoy_barcodes(library, seed=1)
+    assert len(decoys) == len(library)
+    assert len(set(decoys)) == len(decoys)
+    assert not set(decoys) & set(library)
+    lib_codes = np.array([list(b) for b in library])
+    dec_codes = np.array([list(b) for b in decoys])
+    min_dist = (dec_codes[:, None, :] != lib_codes[None, :, :]).sum(axis=2).min()
+    assert min_dist >= 2
+    # per-position base frequencies follow the library
+    for j in range(10):
+        lib_freq = pd.Series(lib_codes[:, j]).value_counts(normalize=True)
+        dec_freq = pd.Series(dec_codes[:, j]).value_counts(normalize=True)
+        assert (
+            lib_freq - dec_freq.reindex(lib_freq.index, fill_value=0)
+        ).abs().max() < 0.05
+    np.testing.assert_array_equal(decoys, make_decoy_barcodes(library, seed=1))
+    assert len(make_decoy_barcodes(library, n=50)) == 50
+    with pytest.raises(ValueError, match="same length"):
+        make_decoy_barcodes(["ACG", "ACGT"])
+    with pytest.raises(ValueError, match="at least 1"):
+        make_decoy_barcodes(library, n=0)
+    with pytest.raises(ValueError, match="at least 2 unique"):
+        make_decoy_barcodes(["ACGTACGT", "ACGTACGT"], min_mismatches=3)
+    assert all(type(d) is str for d in decoys)
+    assert all(
+        type(d) is str for d in make_decoy_barcodes(library, match_density=False)
+    )
+    with pytest.raises(ValueError, match="one-dimensional"):
+        make_decoy_barcodes(pd.DataFrame({"barcode": library, "gene": "g"}))
+    # a single column is fine
+    np.testing.assert_array_equal(
+        decoys, make_decoy_barcodes(pd.Series(library), seed=1)
+    )
 
-    monkeypatch.setenv("SCALLOPS_CPU_COUNT", "3")
-    try:
-        from distributed import get_client
 
-        get_client()
-        pytest.skip("distributed client active")
-    except ValueError:
-        pass
-    assert _dask_total_threads() == 3
+def _mean_capture(targets, decoys):
+    from scallops.reads import _encode_alphabet, _OneMismatchIndex
+
+    alphabet = sorted(set("".join(targets)))
+    codes = _encode_alphabet(np.concatenate([targets, decoys]), alphabet)
+    cap = _OneMismatchIndex(codes, alphabet).capture()
+    return cap[: len(targets)].mean(), cap[len(targets) :].mean()
+
+
+@pytest.mark.basecalls
+def test_make_decoy_barcodes_density():
+    """Decoys are as crowded as a library with many close pairs."""
+    rng = np.random.default_rng(0)
+    seeds = ["".join(rng.choice(list("ACGT"), 10)) for _ in range(400)]
+    mutants = []
+    for b in seeds:  # a partner 1 or 2 mismatches away, as in crowded libraries
+        b = list(b)
+        for j in rng.choice(10, int(rng.integers(1, 3)), replace=False):
+            b[j] = rng.choice([c for c in "ACGT" if c != b[j]])
+        mutants.append("".join(b))
+    library = np.unique(seeds + mutants)
+    t_rand, d_rand = _mean_capture(
+        library, make_decoy_barcodes(library, seed=1, match_density=False)
+    )
+    decoys = make_decoy_barcodes(library, seed=1)
+    assert len(decoys) == len(library)
+    assert not set(decoys) & set(library)
+    t_match, d_match = _mean_capture(library, decoys)
+    assert d_rand - t_rand > 1  # random decoys are sparser than the library
+    assert abs(d_match - t_match) < 0.25
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("length", [5, 24])  # integer and byte-string keys
+def test_one_mismatch_index_capture(length):
+    """capture matches a brute-force count, for all barcodes and for a subset,
+    with close pairs and duplicates."""
+    from scallops.reads import _encode_alphabet, _OneMismatchIndex
+
+    rng = np.random.default_rng(0)
+    base = ["".join(r) for r in rng.choice(list("ACGT"), (50, length))]
+    close = []
+    for b in base[:30]:  # partners 1 or 2 mismatches away
+        b = list(b)
+        for j in rng.choice(length, int(rng.integers(1, 3)), replace=False):
+            b[j] = rng.choice([c for c in "ACGT" if c != b[j]])
+        close.append("".join(b))
+    codes = _encode_alphabet(base + close + base[:3], "ACGT")
+    index = _OneMismatchIndex(codes, "ACGT")
+    assert index.int_keys == (length == 5)
+
+    def brute(sel):
+        members = codes[sel]
+        cap = np.zeros(len(codes), dtype=int)
+        for i in np.flatnonzero(sel):
+            for j in range(length):
+                for d in (1, 2, 3):
+                    v = codes[i].copy()
+                    v[j] = (v[j] - 1 + d) % 4 + 1
+                    cap[i] += ((members != v).sum(axis=1) <= 1).sum() == 1
+        return cap
+
+    for sel in (np.ones(len(codes), bool), rng.random(len(codes)) < 0.6):
+        np.testing.assert_array_equal(index.capture(sel)[sel], brute(sel)[sel])
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("length", [5, 24])  # integer and byte-string keys
+def test_one_mismatch_index_extend(length):
+    """An extended index matches one built from scratch, and count_within matches
+    a brute-force count."""
+    from scallops.reads import _encode_alphabet, _OneMismatchIndex
+
+    rng = np.random.default_rng(0)
+    bc = np.unique(["".join(r) for r in rng.choice(list("ACGT"), (120, length))])
+    a = _encode_alphabet(bc[:80], "ACGT")
+    b = _encode_alphabet(bc[80:], "ACGT")
+    extended = _OneMismatchIndex(a, "ACGT").extend(b)
+    full = _OneMismatchIndex(np.vstack([a, b]), "ACGT")
+    np.testing.assert_array_equal(extended.capture(), full.capture())
+    queries = np.vstack(
+        [
+            _encode_alphabet(
+                ["".join(r) for r in rng.choice(list("ACGT"), (200, length))], "ACGT"
+            ),
+            b[:10],
+        ]
+    )
+    queries[:20, 0] = full.codes[:20, 0]  # some queries one mismatch away
+    expected = ((queries[:, None] != full.codes[None]).sum(axis=2) <= 1).sum(axis=1)
+    np.testing.assert_array_equal(extended.count_within(queries), expected)
+
+
+@pytest.mark.basecalls
+def test_decoy_partners():
+    """Each partner is one or two mismatches from its barcode, never changes a
+    position that is constant in the whitelist, and only uses whitelist bases at
+    each position."""
+    from scallops.reads import _base_frequencies, _decoy_partners, _encode_alphabet
+
+    rng = np.random.default_rng(0)
+    library = np.array(
+        [
+            "".join(r)
+            for r in rng.choice(list("ACGT"), (300, 10), p=[0.7, 0.1, 0.1, 0.1])
+        ]
+    )
+    library = np.char.add(library, "AC")  # two constant positions
+    targets = _encode_alphabet(library, "ACGT")
+    codes = targets[rng.permutation(len(targets))]
+    for _ in range(20):
+        mut = _decoy_partners(codes, _base_frequencies(targets, 4), rng)
+        dist = (mut != codes).sum(axis=1)
+        assert set(dist) <= {1, 2} and 2 in dist
+        np.testing.assert_array_equal(mut[:, -2:], codes[:, -2:])
+        for j in range(10):
+            assert set(mut[:, j]) <= set(targets[:, j])
+
+
+@pytest.mark.basecalls
+def test_draw_never_zero_weight():
+    """_draw picks only positive-weight columns, even when the uniform draw
+    rounds up to the row total."""
+    from scallops.reads import _draw
+
+    weights = np.array([[0.0, 1.0, 0.0, 2.0, 0.0], [3.0, 0.0, 0.0, 0.0, 0.0]])
+
+    class Top:  # uniform draws at the top of [0, 1)
+        def random(self, n):
+            return np.ones(n)
+
+    np.testing.assert_array_equal(_draw(weights, Top()), [3, 0])
+    rng = np.random.default_rng(0)
+    picks = np.stack([_draw(weights, rng) for _ in range(300)])
+    assert set(picks[:, 0]) == {1, 3} and set(picks[:, 1]) == {0}

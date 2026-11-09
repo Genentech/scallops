@@ -8,11 +8,13 @@ Authors:
 - The SCALLOPS development team
 """
 
+import copy
 import itertools
 import logging
 import math
 import random
 from collections.abc import Callable, Sequence
+from functools import cache
 from itertools import product
 from typing import Literal, Tuple
 
@@ -42,7 +44,7 @@ DEFAULT_MIN_P_ERROR = 1e-6
 _STR_DTYPE = pd.Series([""]).dtype
 
 
-def _encode_barcodes(barcodes: Sequence[str]) -> NDArray:
+def _encode_barcodes(barcodes: Sequence[str] | NDArray) -> NDArray:
     """Encode equal-length barcodes as a 2-D array of character codes.
 
     :param barcodes: Barcodes, all of the same length (not checked).
@@ -3058,3 +3060,527 @@ def li_and_speed_cc_number(bases: xr.DataArray) -> float:
             _, slope = li_speed_slope(x, y)
             max_slope = max(max_slope, abs(slope))
     return max_slope
+
+
+class _OneMismatchIndex:
+    """Exact index of equal-length barcodes for lookups within one mismatch.
+
+    Two barcodes are at most one mismatch apart exactly when they agree with some
+    one position masked, so each query is a sorted lookup per position rather than
+    a nearest-neighbor search.  Barcodes are packed into integer keys (or byte
+    strings, for long barcodes).
+
+    :param codes: ``(barcode, position)`` codes from :func:`_encode_alphabet`.
+    :param alphabet: Alphabet used to encode ``codes``.
+    """
+
+    def __init__(self, codes: NDArray, alphabet: Sequence[str]):
+        self.n_alphabet = len(alphabet)
+        self.codes = codes
+        self.mask = self.n_alphabet + 2  # codes are 1..A, A + 1 for unknown
+        base = self.mask + 1
+        self.length = codes.shape[1]
+        self.int_keys = base**self.length < 2**62
+        self.powers = base ** np.arange(self.length, dtype=np.int64)
+        self.n = len(codes)
+        sorted_keys, order = [], []
+        for k in range(self.length):
+            key = self._keys(codes, k)
+            o = np.argsort(key)
+            sorted_keys.append(key[o])
+            order.append(o)
+        self._set_keys(np.sort(self._keys(codes)), sorted_keys, order)
+
+    def _set_keys(
+        self, exact_keys: NDArray, sorted_keys: list[NDArray], order: list[NDArray]
+    ) -> None:
+        self.exact_keys = exact_keys
+        self.exact = self._runs(exact_keys)
+        self.sorted_keys = sorted_keys
+        self.order = order
+        self.masked = [self._runs(key) for key in sorted_keys]
+        self._conflicts: tuple[NDArray, NDArray, NDArray] | None = None
+
+    def extend(self, codes: NDArray) -> "_OneMismatchIndex":
+        """A new index of the indexed barcodes followed by ``codes``.
+
+        The new keys are sorted and merged into the existing sorted keys, so the
+        indexed barcodes are not sorted again.
+        """
+        new = copy.copy(self)
+        new.codes = np.vstack([self.codes, codes])
+        new.n = len(new.codes)
+
+        def merge(old: NDArray, keys: NDArray) -> tuple[NDArray, NDArray, NDArray]:
+            o = np.argsort(keys)
+            keys = keys[o]
+            at = np.searchsorted(old, keys)
+            return np.insert(old, at, keys), at, o
+
+        exact_keys = merge(self.exact_keys, self._keys(codes))[0]
+        sorted_keys, order = [], []
+        for k in range(self.length):
+            key, at, o = merge(self.sorted_keys[k], self._keys(codes, k))
+            sorted_keys.append(key)
+            order.append(np.insert(self.order[k], at, o + self.n))
+        new._set_keys(exact_keys, sorted_keys, order)
+        return new
+
+    @property
+    def n_neighbors(self) -> int:
+        """Number of one-mismatch neighbors of each barcode, ``L * (A - 1)``."""
+        return self.length * (self.n_alphabet - 1)
+
+    def _keys(self, codes: NDArray, masked: int | list[int] | None = None) -> NDArray:
+        if masked is not None:
+            codes = codes.copy()
+            codes[:, masked] = self.mask
+        if self.int_keys:
+            return codes.astype(np.int64) @ self.powers
+        return np.ascontiguousarray(codes).view(f"S{self.length}").ravel()
+
+    @staticmethod
+    def _runs(sorted_keys: NDArray) -> tuple[NDArray, NDArray, NDArray]:
+        """Unique keys with the start and length of each one's run."""
+        new = np.ones(len(sorted_keys), dtype=bool)
+        new[1:] = sorted_keys[1:] != sorted_keys[:-1]
+        start = np.flatnonzero(new)
+        return sorted_keys[start], start, np.diff(start, append=len(sorted_keys))
+
+    @staticmethod
+    def _count(runs: tuple[NDArray, NDArray, NDArray], q: NDArray) -> NDArray:
+        """Number of sorted keys equal to each query."""
+        uniq, _, cnt = runs
+        if len(uniq) == 0:
+            return np.zeros(len(q), dtype=np.int64)
+        i = np.minimum(np.searchsorted(uniq, q), len(uniq) - 1)
+        return np.where(uniq[i] == q, cnt[i], 0)
+
+    def count_within(self, codes: NDArray) -> NDArray:
+        """Number of indexed barcodes at most one mismatch from each query (an
+        indexed barcode equal to the query included)."""
+        n_exact = self._count(self.exact, self._keys(codes))
+        n_within = np.zeros(len(codes), dtype=np.int64)
+        for k in range(self.length):
+            n_within += self._count(self.masked[k], self._keys(codes, k))
+        # an exact match matches every mask
+        return n_within - (self.length - 1) * n_exact
+
+    @staticmethod
+    def _group_pairs(
+        order: NDArray, runs: tuple[NDArray, NDArray, NDArray]
+    ) -> tuple[NDArray, NDArray]:
+        """All ordered pairs of distinct barcodes with equal (sorted) keys."""
+        _, start, cnt = runs
+        big = cnt > 1
+        s, c = start[big], cnt[big]
+
+        def expand(first: NDArray, size: NDArray) -> NDArray:  # first + 0..size-1
+            return np.repeat(first - (np.cumsum(size) - size), size) + np.arange(
+                size.sum()
+            )
+
+        elem = expand(s, c)
+        elem_start, elem_cnt = np.repeat(s, c), np.repeat(c, c)
+        a = np.repeat(elem, elem_cnt)
+        b = expand(elem_start, elem_cnt)
+        keep = a != b
+        return order[a[keep]], order[b[keep]]
+
+    def _neighbor_conflicts(self) -> tuple[NDArray, NDArray, NDArray]:
+        """For each indexed barcode's one-mismatch neighbor, the other indexed
+        barcodes within one mismatch of it.
+
+        Barcode ``y`` is within one mismatch of a neighbor of ``x`` exactly when
+        ``x`` and ``y`` are at most two mismatches apart: one mismatch, at ``p``,
+        blocks all of ``x``'s neighbors at ``p``; two, at ``p`` and ``q``, block the
+        neighbors taking ``y``'s base at ``p`` or at ``q``; duplicates block all.
+        So conflicts come from grouping barcodes with one or two positions masked.
+
+        :return: ``(neighbor, owner, blocker)``: for each ``(neighbor, blocker)``
+            pair, an index into the blocked neighbors, whose ``owner`` is the
+            barcode they are a neighbor of.
+        """
+        A = self.n_alphabet
+        m = self.n_neighbors
+        codes = self.codes.astype(np.int64)
+        # neighbor j * (A - 1) + d - 1 of barcode i (base d steps on at position j)
+        # has id i * m + j * (A - 1) + d - 1
+        all_d = np.arange(A - 1)
+        neighbors, blockers = [], []
+
+        def toward(x: NDArray, y: NDArray, j: int) -> NDArray:
+            return x * m + j * (A - 1) + (codes[y, j] - codes[x, j]) % A - 1
+
+        for k in range(self.length):
+            x, y = self._group_pairs(self.order[k], self.masked[k])
+            one = codes[x, k] != codes[y, k]
+            if k == 0:  # duplicates agree at every position
+                xd, yd = x[~one], y[~one]
+                neighbors.append((xd[:, None] * m + np.arange(m)).ravel())
+                blockers.append(np.repeat(yd, m))
+            x, y = x[one], y[one]
+            neighbors.append((x[:, None] * m + k * (A - 1) + all_d).ravel())
+            blockers.append(np.repeat(y, A - 1))
+        for p in range(self.length):
+            for q in range(p + 1, self.length):
+                key = self._keys(self.codes, [p, q])
+                o = np.argsort(key)
+                x, y = self._group_pairs(o, self._runs(key[o]))
+                two = (codes[x, p] != codes[y, p]) & (codes[x, q] != codes[y, q])
+                x, y = x[two], y[two]
+                neighbors.extend([toward(x, y, p), toward(x, y, q)])
+                blockers.extend([y, y])
+        ids, neighbor = np.unique(np.concatenate(neighbors), return_inverse=True)
+        blocker = np.concatenate(blockers)
+        return neighbor.astype(np.int32), ids // m, blocker.astype(np.int32)
+
+    def capture(self, selected: NDArray | None = None) -> NDArray:
+        """Number of each indexed barcode's one-mismatch neighbors that are within
+        one mismatch of no other indexed barcode, i.e. that one-mismatch correction
+        (:func:`correct_mismatches` with ``delta_mismatches=1``) assigns to it.
+
+        The neighbor conflicts are computed once, so capture within many subsets of
+        the indexed barcodes is cheap.
+
+        :param selected: Boolean mask of the indexed barcodes to correct against
+            (all by default); capture is meaningful only for selected barcodes.
+        """
+        if self._conflicts is None:
+            self._conflicts = self._neighbor_conflicts()
+        neighbor, owner, blocker = self._conflicts
+        if selected is not None:
+            neighbor = neighbor[selected[blocker]]
+        blocked = np.zeros(len(owner), dtype=bool)
+        blocked[neighbor] = True
+        return self.n_neighbors - np.bincount(owner[blocked], minlength=self.n)
+
+
+def _encode_alphabet(
+    barcodes: Sequence[str] | NDArray, alphabet: Sequence[str]
+) -> NDArray:
+    """``(barcode, position)`` codes, 1 to A for the alphabet, A + 1 otherwise."""
+    lut = np.full(256, len(alphabet) + 1, np.uint8)
+    for i, a in enumerate(alphabet):
+        lut[ord(a)] = i + 1
+    chars = _encode_barcodes(barcodes)
+    return lut[np.minimum(chars, 255)].astype(np.uint8)
+
+
+def _barcode_alphabet(*barcode_sets: Sequence[str] | NDArray) -> list[str]:
+    return sorted(set().union(*({c for b in bs for c in b} for bs in barcode_sets)))
+
+
+def make_decoy_barcodes(
+    barcodes: Sequence[str],
+    n: int | None = None,
+    min_mismatches: int = 2,
+    max_rounds: int = 100,
+    match_density: bool = True,
+    seed: int = 0,
+) -> NDArray:
+    """Decoy barcodes for estimating how often spots match the whitelist by chance.
+
+    Decoys are made by permuting each position independently across the whitelist,
+    so each position has about the same base frequencies as the whitelist.  Each
+    permutation keeps them exactly, but dropping candidates shifts them: candidates
+    near the whitelist are rich in each position's common bases, so in skewed
+    libraries decoys have fewer of them (e.g. by up to 0.18 at a position where
+    the whitelist is 70% one base; under 0.03 for uniform libraries).
+    Candidates within ``min_mismatches - 1`` mismatches of a whitelist barcode are
+    dropped, as are whitelist barcodes and duplicates.  With the default of 2, a
+    real read with one sequencing error cannot match a decoy exactly.
+
+    With ``match_density``, the decoys are also as crowded as the whitelist, so
+    one-mismatch correction (:func:`correct_mismatches` with
+    ``delta_mismatches=1``) corrects as many one-mismatch neighbors, on average, to
+    each decoy as to each target.  A barcode's one-mismatch neighbor is corrected
+    to it only if no other barcode is within one mismatch of the neighbor, so
+    barcodes with close neighbors collect fewer sequences.  Libraries are often
+    more crowded than random barcodes, and permuted decoys can be more or less
+    crowded among themselves than the whitelist is.  To match, a pool of
+    candidates is drawn:
+
+    - the decoys from permutation,
+    - as many more permuted candidates (sparse choices), and
+    - as many partners of the first decoys, exactly one or two mismatches away, at
+      distinct positions (crowded choices).  Positions are chosen in proportion to
+      the chance that redrawing them from the whitelist's base frequencies changes
+      them, and each new base is drawn by frequency among the other bases, so
+      partners nearly keep the whitelist's frequencies (only one or two positions
+      change, and those lean slightly away from common bases).  Positions that
+      are constant in the whitelist never change.
+
+    Each batch may come up short when the whitelist leaves little room.  Decoys
+    are then sampled from the pool, without replacement, with weights
+    ``exp(lam * crowding)``, where crowding is the number of a candidate's
+    one-mismatch neighbors that are also within one mismatch of another candidate
+    (crowding between targets and decoys affects both alike, so it is not
+    counted).  ``lam`` is set by bisection so that, with targets and decoys
+    corrected together, the mean number of neighbors corrected to each decoy and
+    to each target agree within 0.02; if they cannot, the closest pick is kept and
+    a warning is logged.  As many decoys are picked as the first permutation
+    made, so neither the extra candidates nor the partners make up a shortfall.
+
+    :param barcodes: Whitelist barcodes, a one-dimensional sequence of strings
+        (e.g. a list, array or :class:`pandas.Series`), all of the same length.
+        Duplicates are ignored.
+    :param n: Number of decoys (at least 1); defaults to the number of unique
+        whitelist barcodes.
+    :param min_mismatches: Minimum Hamming distance from every whitelist barcode.
+        Values of 1 or less only require decoys to differ from the whitelist.
+        Values above 2 need at least 2 unique whitelist barcodes.
+    :param max_rounds: Maximum rounds of drawing for each batch of candidates
+        before giving up.
+    :param match_density: Match the whitelist's density of one-mismatch neighbors.
+    :param seed: Random seed; the result is deterministic for a given seed.
+    :return: Object array of unique decoy barcodes (Python strings), fewer than
+        ``n`` (with a warning) if the whitelist leaves too little room.  The order
+        carries no meaning.
+    :raises ValueError: If ``barcodes`` is not one-dimensional (e.g. a
+        :class:`pandas.DataFrame`; pass its barcode column), is empty, or the
+        barcodes differ in length; if ``n`` is less than 1; or if
+        ``min_mismatches`` is above 2 and the whitelist has only one unique
+        barcode.
+    """
+
+    barcode_array = np.asarray(barcodes, dtype=object)
+    if barcode_array.ndim != 1:
+        raise ValueError(
+            f"barcodes must be one-dimensional, got shape {barcode_array.shape}; "
+            "pass a single column (e.g. df['barcode'])"
+        )
+    targets = np.unique(barcode_array)
+    if len(targets) == 0:
+        raise ValueError("barcodes is empty")
+    lengths = {len(b) for b in targets}
+    if len(lengths) != 1:
+        raise ValueError(f"Barcodes must have the same length, got {sorted(lengths)}")
+    n = len(targets) if n is None else int(n)
+    if n < 1:
+        raise ValueError(f"n must be at least 1, got {n}")
+    if min_mismatches > 2 and len(targets) < 2:
+        raise ValueError(
+            "min_mismatches above 2 needs at least 2 unique whitelist barcodes"
+        )
+    # candidates only use whitelist bases, so the whitelist's alphabet covers them
+    alphabet = _barcode_alphabet(targets)
+    letters = np.array(alphabet)
+    target_codes = _encode_alphabet(targets, alphabet)  # (barcode, position), 1..A
+    length = target_codes.shape[1]
+
+    @cache
+    def target_index() -> _OneMismatchIndex:
+        """Index of the whitelist, built on first use (for the min_mismatches == 2
+        filter and density matching)."""
+        return _OneMismatchIndex(target_codes, alphabet)
+
+    def to_str(codes: NDArray) -> list[str]:
+        """Barcodes from ``(barcode, position)`` codes (1..A)."""
+        rows = np.ascontiguousarray(letters[codes - 1])
+        return rows.view(f"<U{length}").ravel().tolist()
+
+    # whether each row of candidate codes is far enough from the whitelist
+    far_enough: Callable[[NDArray], NDArray]
+    if min_mismatches == 2:
+        # one sorted lookup per position instead of a nearest-neighbor search
+        def far_enough(codes: NDArray) -> NDArray:
+            return target_index().count_within(codes) == 0
+
+    elif min_mismatches > 2:
+        index = _fit_whitelist(targets)
+
+        def far_enough(codes: NDArray) -> NDArray:
+            reads = np.asarray(to_str(codes), dtype=object)
+            mismatches = _hamming_distance(index, reads)["mismatches"]
+            return mismatches.values >= min_mismatches
+
+    else:
+
+        def far_enough(codes: NDArray) -> NDArray:
+            return np.ones(len(codes), dtype=bool)
+
+    rng = np.random.default_rng(seed)
+    seen = set(targets)
+
+    def keep_new(codes: NDArray, k: int) -> list[str]:
+        """Up to ``k`` of the barcodes encoded in ``codes`` (1..A) that are new and
+        far enough from the whitelist, which are then marked as seen.  Codes are
+        deduplicated and filtered before any strings are made."""
+        # codes are 1..A, never 0, so fixed-width bytes keep every row intact
+        uniq = np.unique(np.ascontiguousarray(codes, np.uint8).view(f"S{length}"))
+        codes = uniq.view(np.uint8).reshape(-1, length)
+        codes = codes[far_enough(codes)]
+        cand = [c for c in to_str(codes) if c not in seen]
+        cand = [cand[i] for i in rng.permutation(len(cand))[:k]]
+        seen.update(cand)
+        return cand
+
+    def permuted(k: int) -> list[str]:
+        """Up to ``k`` new candidates from permuting each position."""
+        out: list[str] = []
+        for _ in range(max_rounds):
+            if len(out) >= k:
+                break
+            perm = np.stack(
+                [rng.permutation(target_codes[:, j]) for j in range(length)], axis=1
+            )
+            out.extend(keep_new(perm, k - len(out)))
+        return out
+
+    decoys = permuted(n)
+    if match_density and decoys:
+        # more permuted candidates, so the pool also has sparse candidates to pick
+        # from (partners make the candidates they come from crowded too)
+        extra = permuted(len(decoys))
+        # partners 1 or 2 mismatches from the decoys, so the pool has crowded
+        # candidates to pick from (random barcodes rarely have close neighbors)
+        decoy_codes = _encode_alphabet(decoys, alphabet)
+        freq = _base_frequencies(target_codes, len(alphabet))
+        varies = ((freq > 0).sum(axis=1) > 1).any()  # else no partners exist
+        partners: list[str] = []
+        for _ in range(max_rounds if varies else 0):
+            need = len(decoys) - len(partners)
+            if need <= 0:
+                break
+            # partners of a random subset of decoys, twice as many as still
+            # needed to allow for duplicates and candidates too close to targets
+            rows = rng.permutation(len(decoy_codes))[: 2 * need]
+            mut = _decoy_partners(decoy_codes[rows], freq, rng)
+            partners.extend(keep_new(mut, need))
+        # pick as many decoys as the first permutation made, so neither extra
+        # candidates nor partners stand in for missing decoys (partners would make
+        # the decoys more crowded than intended)
+        n_pick = len(decoys)
+        pool = np.array(decoys + extra + partners)
+        # Python strings, as without match_density
+        decoys = _match_decoy_density(
+            target_index(), pool, alphabet, n_pick, rng
+        ).tolist()
+    if len(decoys) < n:
+        logger.warning(
+            f"Made {len(decoys)} of {n} decoys at least {min_mismatches} mismatches "
+            "from the whitelist"
+        )
+    return np.array(decoys, dtype=object)
+
+
+def _draw(weights: NDArray, rng: np.random.Generator) -> NDArray:
+    """Column drawn from each row of nonnegative ``weights`` (each row with some
+    positive weight), in proportion to the weights; never a zero-weight column."""
+    cum = np.cumsum(weights, axis=1)
+    u = rng.random(len(cum)) * cum[:, -1]
+    idx = (cum <= u[:, None]).sum(axis=1)
+    # u can round up to the row total; fall back to the last positive column
+    last = weights.shape[1] - 1 - np.argmax(weights[:, ::-1] > 0, axis=1)
+    return np.minimum(idx, last)
+
+
+def _base_frequencies(codes: NDArray, n_alphabet: int) -> NDArray:
+    """``(position, base)`` frequencies of ``(barcode, position)`` codes (1..A)."""
+    return np.stack(
+        [
+            np.bincount(codes[:, j] - 1, minlength=n_alphabet)
+            for j in range(codes.shape[1])
+        ]
+    ) / len(codes)
+
+
+def _decoy_partners(codes: NDArray, freq: NDArray, rng: np.random.Generator) -> NDArray:
+    """One partner of each barcode, one or two mismatches away.
+
+    This is equivalent to redrawing a uniformly chosen position from the
+    whitelist's base frequencies and keeping only redraws that change the base,
+    without the wasted draws: positions are chosen in proportion to how likely a
+    redraw changes them, and each new base is drawn by frequency among the other
+    bases.  Keeping only changes makes the bases written lean away from common
+    bases, but since only one or two positions change, partners nearly keep the
+    whitelist's frequencies.  The two positions differ, and positions that are
+    constant in the whitelist never change.
+
+    :param codes: ``(barcode, position)`` codes (1..A) of the barcodes, using only
+        bases that occur at each position of the whitelist.
+    :param freq: The whitelist's base frequencies from :func:`_base_frequencies`;
+        some position must have two or more bases.
+    :return: Partner codes.
+    """
+    change = 1 - freq[np.arange(freq.shape[0]), codes - 1]  # (barcode, position)
+    n_changeable = (change > 0).sum(axis=1)
+    mut = codes.copy()
+    n_mut = np.minimum(rng.integers(1, 3, size=len(mut)), n_changeable)
+    for i in range(2):
+        rows = np.flatnonzero(n_mut > i)
+        pos = _draw(change[rows], rng)
+        change[rows, pos] = 0  # the second mutation goes elsewhere
+        base_w = freq[pos].copy()
+        base_w[np.arange(len(rows)), mut[rows, pos] - 1] = 0
+        mut[rows, pos] = _draw(base_w, rng) + 1
+    return mut
+
+
+def _match_decoy_density(
+    target_index: _OneMismatchIndex,
+    pool: NDArray,
+    alphabet: Sequence[str],
+    n: int,
+    rng: np.random.Generator,
+    tol: float = 0.02,
+) -> NDArray:
+    """Pick ``n`` decoys from ``pool`` as crowded as the targets.
+
+    Crowding is the number of a candidate's one-mismatch neighbors that other
+    candidates take from it (:meth:`_OneMismatchIndex.capture`).  Decoys are the top ``n``
+    candidates by ``lam * crowding + g``, with ``g`` fixed Gumbel noise (sampling
+    without replacement with weights ``exp(lam * crowding)``), and ``lam`` is set by
+    bisection so the mean capture of decoys and targets, indexed together, agree
+    within ``tol``.  If they cannot, the closest pick is returned with a warning.
+
+    :param target_index: Index of the whitelist codes from :func:`_encode_alphabet`.
+    :param pool: Candidate decoys, using only bases in ``alphabet``.
+    :param alphabet: Alphabet used to encode the whitelist.
+    """
+    nt = target_index.n
+    # targets and the whole pool indexed once (the pool merged into the target
+    # index); each lam scores a subset of it
+    index = target_index.extend(_encode_alphabet(pool, alphabet))
+    codes = index.codes
+    # crowding by other candidates only: crowding between targets and decoys is
+    # mutual, so it changes both sides' capture alike and cannot close the gap
+    in_pool = np.arange(len(codes)) >= nt
+    crowd = index.n_neighbors - index.capture(in_pool)[nt:]
+    g = rng.gumbel(size=len(pool))
+
+    def pick(lam: float) -> NDArray:
+        return np.sort(np.argsort(-(lam * crowd + g), kind="stable")[:n])
+
+    gaps: dict[float, float] = {}
+
+    def gap(lam: float) -> float:
+        if lam not in gaps:
+            selected = np.zeros(len(codes), dtype=bool)
+            selected[:nt] = True
+            selected[nt + pick(lam)] = True
+            cap = index.capture(selected)
+            gaps[lam] = float(cap[nt:][selected[nt:]].mean() - cap[:nt].mean())
+        return gaps[lam]
+
+    # gap falls as lam rises (more crowded decoys collect fewer neighbors)
+    lo, hi = -1.0, 1.0
+    while gap(lo) < 0 and lo > -16:
+        lo *= 2
+    while gap(hi) > 0 and hi < 16:
+        hi *= 2
+    if gap(lo) >= 0 and gap(hi) <= 0:  # bracketed
+        for _ in range(12):
+            mid = (lo + hi) / 2
+            if abs(gap(mid)) < tol:
+                break
+            lo, hi = (mid, hi) if gap(mid) > 0 else (lo, mid)
+    logger.debug(f"density gaps by tilt: {sorted(gaps.items())}")
+    lam = min(gaps, key=lambda x: abs(gaps[x]))
+    if abs(gaps[lam]) >= tol:
+        logger.warning(
+            "Could not match the whitelist's density of one-mismatch neighbors; "
+            f"decoys differ by {gaps[lam]:+.2f} neighbors per barcode"
+        )
+    return pool[pick(lam)]

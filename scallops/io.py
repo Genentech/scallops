@@ -1128,7 +1128,7 @@ def to_label_crops(
     :param label_col: Column in `df` containing label id. Set to `None` if label is found in data frame index.
     :param gaussian_sigma: If not None, apply gaussian-smoothed mask to isolate target mask
     :return: Input data frame with objects at well edges removed. Adds columns `crop_url`, the URL to
-    output label crops, and crop-bbox-0, crop-bbox-2, crop-bbox-1, crop-bbox-3 containing the coordinates of the crop.
+        output label crops, and crop-bbox-0, crop-bbox-2, crop-bbox-1, crop-bbox-3 containing the coordinates of the crop.
     """
     output_dir = output_dir.rstrip("/")
     is_dask_array = isinstance(intensity_image, da.Array)
@@ -1425,6 +1425,13 @@ def _images2fov(
         concat_dims = [c for c in concat_dims if c in file_metadata[0]]
     image_attrs = []
 
+    # convert "t" to int only if every file's "t" is an integer string, so that
+    # coords and attrs never mix int and str values
+    convert_t = file_metadata is not None and all(
+        isinstance(md.get("t"), str) and md["t"].isascii() and md["t"].isdecimal()
+        for md in file_metadata
+    )
+
     for i in range(len(file_list)):
         url = file_list[i]
 
@@ -1433,19 +1440,11 @@ def _images2fov(
         )
         if image is None:
             raise ValueError(f"{file_list[i]} could not be read.")
-        if file_metadata is not None:
-            if (
-                "t" in file_metadata[i]
-                and isinstance(file_metadata[i]["t"], str)
-                and file_metadata[i]["t"].isdigit()
-            ):  # convert to int
-                try:
-                    # note we replace "_" with "-" so we don't convert "1_2" to 12 e.g.
-                    file_metadata[i]["t"] = int(file_metadata[i]["t"].replace("_", "-"))
-                except ValueError:
-                    # conversion to int failed
-                    pass
-            image.attrs.update(file_metadata[i])
+        # copy so the caller's metadata is not modified in place
+        md = dict(file_metadata[i]) if file_metadata is not None else {}
+        if convert_t:
+            md["t"] = int(md["t"])
+        image.attrs.update(md)
         image_attrs.append(image.attrs.copy())
 
         coords = dict()
@@ -1453,7 +1452,7 @@ def _images2fov(
         if "z" in concat_dims:
             ensure_dims.append("z")
         for d in ensure_dims:
-            if file_metadata is not None and d in file_metadata[i]:
+            if d in md:
                 if d not in image.dims:
                     axis = 0
                     if d == "t":
@@ -1467,7 +1466,7 @@ def _images2fov(
                             axis = 1
                     image = image.expand_dims(d, axis=axis)
                     logger.debug(f"Added dimension {d}")
-                coords[d] = [file_metadata[i][d]]
+                coords[d] = [md[d]]
         image = image.assign_coords(coords)
         images.append(image)
 

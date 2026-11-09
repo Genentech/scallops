@@ -9,6 +9,7 @@ import xarray as xr
 from skimage.measure import regionprops_table
 from skimage.segmentation import relabel_sequential
 
+from scallops.datasets._registry import cache_dir
 from scallops.experiment.elements import Experiment
 from scallops.io import read_experiment
 from scallops.segmentation import remove_boundary_labels
@@ -26,6 +27,8 @@ from scallops.segmentation.watershed import (
     segment_cells_watershed,
     segment_nuclei_watershed,
 )
+
+DATA_DIR = cache_dir()
 
 
 def jaccard(labels1, labels2):
@@ -345,7 +348,7 @@ def run_segment_nuclei_cmd(tmp_path, segment_method, extra_args=None):
         "--method",
         segment_method,
         "--images",
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "--groupby",
         "well",
         "tile",
@@ -378,7 +381,7 @@ def test_segment_cells_cmd(experiment_c, tmp_path):
         "--nuclei-label",
         str(tmp_path),
         "--images",
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "--groupby",
         "well",
         "tile",
@@ -423,7 +426,7 @@ def test_segment_cells_cmd_mask_channel(experiment_c, tmp_path):
         "--nuclei-label",
         str(tmp_path),
         "--images",
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "--groupby",
         "well",
         "tile",

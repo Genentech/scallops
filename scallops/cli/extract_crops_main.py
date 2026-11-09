@@ -1,133 +1,28 @@
 from __future__ import annotations
 
-import argparse
-
-import fsspec
-
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.extract_crops import single_crop
-from scallops.cli.util import (
+from scallops.cli.args import (
     SubParsers,
-    _create_dask_client,
-    _create_default_dask_config,
-    _dask_workers_threads,
-    _get_cli_logger,
     _label_args_type,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
     groupby_arg,
     image_pattern_arg,
     images_arg,
-    load_json,
+    lazy_handler,
     no_version_arg,
     output_dir_arg,
     subset_arg,
 )
-from scallops.io import (
-    _set_up_experiment,
-)
-
-logger = _get_cli_logger()
-
-
-def run_pipeline_extract_crops(arguments: argparse.Namespace):
-    images_paths = arguments.images
-    dask_server_url = arguments.client
-    dask_cluster_parameters = (
-        load_json(arguments.dask_cluster) if arguments.dask_cluster is not None else {}
-    )
-    if dask_server_url is None and arguments.dask_cluster is None:
-        dask_cluster_parameters = _dask_workers_threads()
-    image_patterns = arguments.image_pattern
-    output_dir = arguments.output
-    merge_dir = arguments.merge
-    subset = arguments.subset
-    force = arguments.force
-    groupby = arguments.groupby
-    crop_size = arguments.crop_size
-    crop_size = (crop_size, crop_size)
-    label_filter = arguments.label_filter
-    mask = arguments.mask
-    percentile_min = arguments.percentile_min
-    percentile_max = arguments.percentile_max
-    output_format = arguments.output_format
-    local_percentile_normalize = arguments.local_percentile_normalize
-    local_normalize_overlap = arguments.local_percentile_overlap
-    percentile_normalize = None
-    if percentile_min <= 0 or percentile_min >= 100:
-        percentile_min = None
-    if percentile_max <= 0 or percentile_max >= 100:
-        percentile_max = None
-    if percentile_min is not None or percentile_max is not None:
-        if percentile_min is None:
-            percentile_min = 0
-        if percentile_max is None:
-            percentile_max = 100
-        percentile_normalize = (percentile_min, percentile_max)
-    gaussian_sigma = arguments.gaussian_sigma
-    if gaussian_sigma is not None and not mask:
-        raise ValueError("Please specify `mask` flag when providing `gaussian sigma`")
-    label_name = arguments.label_name  # cell, cytosol, nuclei
-    chunks = arguments.chunks
-
-    merge_dir_sep = fsspec.core.url_to_fs(merge_dir)[0].sep
-    merge_dir = merge_dir.rstrip(merge_dir_sep)
-
-    output_fs, _ = fsspec.core.url_to_fs(output_dir)
-    output_dir = output_dir.rstrip(output_fs.sep)
-
-    label_groups = arguments.labels
-    no_version = arguments.no_version
-
-    if not mask and label_groups is not None and len(label_groups) > 0:
-        logger.warning("Ignoring provided labels")
-        label_groups = []
-    if (label_groups is None or len(label_groups) == 0) and mask:
-        raise ValueError("Labels must be provided when `mask` is true.")
-
-    with (
-        _create_default_dask_config(
-            {"distributed.admin.large-graph-warning-threshold": "250MB"}
-        ),
-        _create_dask_client(dask_server_url, **dask_cluster_parameters),
-    ):
-        for image_tuple in _set_up_experiment(
-            images_paths,
-            files_pattern=image_patterns,
-            subset=subset,
-            group_by=groupby,
-        ):
-            single_crop(
-                *image_tuple,
-                output_dir=output_dir,
-                output_sep=output_fs.sep,
-                merge_dir=merge_dir,
-                merge_dir_sep=merge_dir_sep,
-                label_groups=label_groups,
-                label_filter=label_filter,
-                label_name=label_name,
-                percentile_normalize=percentile_normalize,
-                local_normalize_overlap=local_normalize_overlap,
-                local_percentile_normalize=local_percentile_normalize,
-                crop_size=crop_size,
-                output_format=output_format,
-                gaussian_sigma=gaussian_sigma,
-                chunks=chunks,
-                force=force,
-                no_version=no_version,
-            )
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "extract-crops",
+        default_help,
         help="Extract crops from labeled images.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
 
     required = parser.add_argument_group("required arguments")
@@ -191,7 +86,7 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
 
     parser.add_argument(
         "--label-filter",
-        help="Expression to filter labels (e.g. barcode_Q_mean_0/barcode_Q_mean > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
+        help="Expression to filter labels (e.g. barcode_count_0/barcode_count > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
     )
 
     parser.add_argument(
@@ -218,8 +113,7 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     dask_cluster_arg(parser)
 
     no_version_arg(parser)
-    _sort_groups(parser)
 
     parser.set_defaults(
-        func=run_pipeline_extract_crops,
+        func=lazy_handler("scallops.cli.extract_crops:run_pipeline_extract_crops"),
     )

@@ -313,14 +313,17 @@ def _itk_align_reference_time_zarr(
 
     :param moving_image: A single xarray DataArray or a list of DataArrays representing the moving
         image(s).
-    :param moving_channel: Channel(s) to align.
+    :param moving_channel: Channel(s) to align. When timepoints have
+        different numbers of channels and channels are not unrolled, indexes the
+        channels after padding with leading empty channels.
     :param parameter_object: ITK ParameterObject containing transformation parameters.
     :param image_root: Zarr group where the aligned image will be stored.
     :param image_name: Name of the image to store within the Zarr group.
     :param moving_image_spacing: Physical spacing (y, x) for the moving image, or None to infer from
         metadata.
     :param output_dir: Optional output directory for intermediate results.
-    :param unroll_channels: If True, unrolls channels in the output.
+    :param unroll_channels: If True, unrolls channels in the output. Otherwise, time points with fewer
+        channels than the maximum are padded with leading empty channels.
     :param reference_timepoint: Timepoint index to use as the reference for alignment.
     :param parameter_object_across_channels: Align across channels.
     """
@@ -344,6 +347,8 @@ def _itk_align_reference_time_zarr(
                 shape=shape,
                 chunks=(1,) * (len(shape) - 2) + chunk_size,
                 dtype=dtype,
+                # padded channels are never written, so they read as fill_value
+                fill_value=0,
                 overwrite=True,
                 **_create_array_kwargs(),
             )
@@ -430,13 +435,16 @@ def itk_align_to_reference_time(
 
     :param moving_image: The time-series of moving images to be aligned, represented as a DataArray
         or a list of data arrays representing each timepoint.
-    :param moving_channel: The channel index to consider during registration.
+    :param moving_channel: The channel index to consider during registration. When timepoints have
+        different numbers of channels and channels are not unrolled, indexes the
+        channels after padding with leading empty channels.
     :param parameter_object: The ITK parameter object containing registration parameters.
     :param moving_image_spacing: Optional spacing information for the moving images. If not
         provided, it is determined from the image metadata.
     :param output_dir: Optional directory to save intermediate outputs and ITK parameters per
         timepoint. If None, outputs are not saved.
-    :param unroll_channels: Whether to concatenate time along the channel dimension.
+    :param unroll_channels: Whether to concatenate time along the channel dimension. Otherwise, time points with fewer
+        channels than the maximum are padded with leading empty channels.
     :param reference_timepoint: Index of the timepoint to align to
     :param parameter_object_across_channels: Optional ITK parameter object used to align each
         channel to `moving_channel` before aligning across time.
@@ -476,6 +484,34 @@ def itk_align_to_reference_time(
         reference_timepoint=reference_timepoint,
         parameter_object_across_channels=parameter_object_across_channels,
     )
+
+
+def _padded_to_local_channel(
+    channel: int | Sequence[int], offset: int, nchannels: int, t: Any = None
+) -> int | list[int]:
+    """Convert channel index(es) in a layout padded with ``offset`` leading empty
+    channels to index(es) within the ``nchannels`` channels of one timepoint.
+
+    :param channel: Channel index or indices in the padded layout. Negative indices
+        count from the end.
+    :param offset: Number of leading empty channels.
+    :param nchannels: Number of channels in the timepoint.
+    :param t: Timepoint, used in error messages.
+    :return: Channel index or indices within the timepoint.
+    """
+    width = offset + nchannels
+    local = []
+    for c in np.atleast_1d(channel).tolist():
+        if not -width <= c < width:
+            raise ValueError(f"Channel {c} is out of range at t={t}.")
+        padded_index = c % width
+        if padded_index < offset:
+            raise ValueError(
+                f"Channel {c} is an empty (padded) channel at t={t}, which has "
+                f"{nchannels} channels."
+            )
+        local.append(padded_index - offset)
+    return local if isinstance(channel, (list, tuple, np.ndarray)) else local[0]
 
 
 def _read_itk_point_set(path: str) -> tuple[list[float], list[float]]:
@@ -567,13 +603,16 @@ def _itk_align_reference_time(
 
     :param moving_image: The time-series of moving images to be aligned, represented as a DataArray
         or a list of data arrays representing each timepoint.
-    :param moving_channel: The channel index to consider during registration.
+    :param moving_channel: The channel index to consider during registration. When timepoints have
+        different numbers of channels and channels are not unrolled, indexes the
+        channels after padding with leading empty channels.
     :param parameter_object: The ITK parameter object containing registration parameters.
     :param moving_image_spacing: Optional spacing information for the moving images. If not
         provided, it is determined from the metadata.
     :param output_dir: Optional directory to save intermediate outputs and ITK parameters per
         timepoint. If None, outputs are not saved.
-    :param unroll_channels: Whether to concatenate time along the channel dimension.
+    :param unroll_channels: Whether to concatenate time along the channel dimension. Otherwise, time points with fewer
+        channels than the maximum are padded with leading empty channels.
     :param reference_timepoint: Reference timepoint to align to
     :param attrs_keep: Sequence of attributes to keep. Stored as list in result dataset attributes.
     :param parameter_object_across_channels: The ITK parameter object containing
@@ -599,18 +638,6 @@ def _itk_align_reference_time(
             moving_images.append(img)
         moving_image = moving_images
 
-    moving_image_reference_t_moving_c = (
-        moving_image.isel(t=reference_timepoint, c=moving_channel)
-        if isinstance(moving_image, xr.DataArray)
-        else moving_image[reference_timepoint].isel(c=moving_channel)
-    )
-    if (
-        "c" in moving_image_reference_t_moving_c.dims
-        and moving_image_reference_t_moving_c.sizes["c"] > 1
-    ):
-        moving_image_reference_t_moving_c = moving_image_reference_t_moving_c.median(
-            dim="c", keep_attrs=True
-        )
     if isinstance(moving_image, xr.DataArray):
         times = moving_image.coords["t"].values.tolist()
     else:
@@ -620,21 +647,52 @@ def _itk_align_reference_time(
             if t.ndim > 0:
                 t = t[0]
             times.append(t)
-    if len(times) < 2 and parameter_object_across_channels is None:
-        logger.warning("Only one timepoint provided.")
-
     nchannels = (
         [moving_image.sizes["c"] for i in range(moving_image.sizes["t"])]
         if isinstance(moving_image, xr.DataArray)
         else [moving_image[i].sizes["c"] for i in range(len(moving_image))]
     )
-    if not unroll_channels:
-        if not all(x == nchannels[0] for x in nchannels):
-            unroll_channels = True
-            logger.info(
-                "Unrolling channel dimension as time points have different number of "
-                "channels."
-            )
+    max_nchannels = max(nchannels)
+    # when not unrolling, timepoints with fewer channels than the maximum are padded
+    # with leading empty channels
+    channel_offsets = (
+        [0] * len(nchannels)
+        if unroll_channels
+        else [max_nchannels - n for n in nchannels]
+    )
+    padded = not unroll_channels and any(offset > 0 for offset in channel_offsets)
+    if padded:
+        logger.info(
+            "Adding leading empty channels as time points have different number of "
+            f"channels ({', '.join([str(c) for c in nchannels])})."
+        )
+
+    def _local_moving_channel(t_index: int) -> int | list[int]:
+        return _padded_to_local_channel(
+            moving_channel,
+            offset=channel_offsets[t_index],
+            nchannels=nchannels[t_index],
+            t=times[t_index],
+        )
+
+    moving_image_reference_t_moving_c = (
+        moving_image.isel(
+            t=reference_timepoint, c=_local_moving_channel(reference_timepoint)
+        )
+        if isinstance(moving_image, xr.DataArray)
+        else moving_image[reference_timepoint].isel(
+            c=_local_moving_channel(reference_timepoint)
+        )
+    )
+    if (
+        "c" in moving_image_reference_t_moving_c.dims
+        and moving_image_reference_t_moving_c.sizes["c"] > 1
+    ):
+        moving_image_reference_t_moving_c = moving_image_reference_t_moving_c.median(
+            dim="c", keep_attrs=True
+        )
+    if len(times) < 2 and parameter_object_across_channels is None:
+        logger.warning("Only one timepoint provided.")
 
     channels = (
         [
@@ -671,10 +729,10 @@ def _itk_align_reference_time(
         result_image_attrs["src_channels"] = channels
         result_image_attrs["src_times"] = times
 
-    else:  # all images must have the same number of channels
+    else:
         dims = ["t", "c", "y", "x"]
-        leading_dims_shape = len(times), nchannels[0]
-        coords = dict(t=times, c=channels[0])
+        leading_dims_shape = len(times), max_nchannels
+        coords = dict(t=times, c=channels[nchannels.index(max_nchannels)])
 
     result_image_shape = leading_dims_shape + (
         moving_image_reference_t_moving_c.sizes["y"],
@@ -703,16 +761,12 @@ def _itk_align_reference_time(
     moving_image_reference_t_moving_c = (
         moving_image_reference_t_moving_c.compute()
     )  # all steps need this so load into memory
-    moving_channels = (
-        set(np.atleast_1d(moving_channel).tolist())
-        if parameter_object_across_channels is not None
-        else set()
-    )
+
     for i in range(len(times)):
         moving_image_ti_moving_c = (
-            moving_image.isel(t=i, c=moving_channel)
+            moving_image.isel(t=i, c=_local_moving_channel(i))
             if isinstance(moving_image, xr.DataArray)
-            else moving_image[i].isel(c=moving_channel)
+            else moving_image[i].isel(c=_local_moving_channel(i))
         )
 
         for attr_name in attrs_keep:
@@ -814,7 +868,9 @@ def _itk_align_reference_time(
             del elastix_object
             # transform every c+t separately
 
+        local_moving_channels = np.atleast_1d(_local_moving_channel(i))
         for j in range(nchannels[i]):
+            output_j = channel_offsets[i] + j  # index in output (padded) channels
             image_i_j = (
                 moving_image.isel(t=i, c=j)
                 if isinstance(moving_image, xr.DataArray)
@@ -822,15 +878,13 @@ def _itk_align_reference_time(
             ).squeeze()
             if (
                 parameter_object_across_channels is not None
-                and j not in moving_channels
+                and j not in local_moving_channels
             ):
                 # first align and transform to reference channel
-                logger.info(f"Registering c={j} to c={moving_channel} at t={i}.")
+                logger.info(f"Registering c={output_j} to c={moving_channel} at t={i}.")
                 dest_channel = None
                 if output_fs is not None:
-                    dest_channel = (
-                        f"{output_dir}{output_fs.sep}t={times[i]}{output_fs.sep}c={j}"
-                    )
+                    dest_channel = f"{output_dir}{output_fs.sep}t={times[i]}{output_fs.sep}c={output_j}"
                     if output_fs.isdir(dest_channel):
                         output_fs.rm(dest_channel, recursive=True)
                     output_fs.makedirs(dest_channel, exist_ok=True)
@@ -864,8 +918,8 @@ def _itk_align_reference_time(
                     or get_image_spacing(moving_image_reference_t_moving_c.attrs),
                 )["image"]
 
-            index = (i, j) if not unroll_channels else unrolled_t_index + j
-            logger.info(f"Writing t={i}, c={j}.")
+            index = (i, output_j) if not unroll_channels else unrolled_t_index + j
+            logger.info(f"Writing t={i}, c={output_j}.")
             write_callback(result_array, index, image_i_j)
             del image_i_j
 

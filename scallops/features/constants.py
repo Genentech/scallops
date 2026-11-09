@@ -19,6 +19,7 @@ from scallops.features.intensity_distribution import (
 )
 from scallops.features.neighbors import neighbors
 from scallops.features.other import corr_region, intersects_boundary
+from scallops.features.puncta import puncta
 from scallops.features.spots import spot_count
 from scallops.features.texture import haralick, pftas
 
@@ -38,6 +39,7 @@ _cp_features_single_channel: dict[str, Callable] = {
 _other_features_single_channel: dict[str, Callable] = {
     "intersectsboundary": intersects_boundary,
     "spots": spot_count,
+    "puncta": puncta,
 }
 
 _cp_features_multichannel: dict[str, Callable] = {

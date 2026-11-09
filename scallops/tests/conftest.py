@@ -5,23 +5,32 @@ import pandas as pd
 import pytest
 from distributed import Client, LocalCluster
 
+from scallops.datasets._registry import cache_dir
 from scallops.io import read_experiment, read_image
 
 __root__ = Path(__file__).parent
 
-__data_dir__ = __root__.joinpath("data")
+__data_dir__ = cache_dir()
 
 __experimentc_dir__ = __data_dir__.joinpath("experimentC")
 __pheno_dir__ = __experimentc_dir__.joinpath("10X_c0-DAPI-p65ab")
 
 __processfig4_dir__ = __data_dir__.joinpath("process_fig4")
 
-__nisseq_dir__ = __data_dir__.joinpath("nis-seq")
+# NIS-seq test data is not yet in the GitHub release assets; it is tracked in the repo.
+__nisseq_dir__ = __root__.joinpath("data", "nis-seq")
 __nisseq_tile__ = __nisseq_dir__.joinpath("Fig1E_NIS_HeLa_tile40")
 
-assert __root__.joinpath(
-    "data", "experimentC", "input", "10X_c1-SBS-1", "10X_c1-SBS-1_A1_Tile-102.sbs.tif"
-).exists(), "Test files not found. Please ensure you have Git LFS installed"
+
+def pytest_configure(config):
+    # Download test data from GitHub release assets to the scallops cache directory
+    # (override with SCALLOPS_CACHE_DIR); up-to-date files are skipped. Run only in the
+    # controller process so pytest-xdist workers don't download concurrently.
+    if hasattr(config, "workerinput"):
+        return
+    from scallops.datasets._registry import fetch
+
+    fetch(verbose=True)
 
 
 @pytest.fixture(scope="module")

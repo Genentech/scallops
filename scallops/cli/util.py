@@ -6,7 +6,6 @@ scallops package.
 Authors:     - The SCALLOPS development team
 """
 
-import argparse
 import functools
 import json
 import logging
@@ -18,7 +17,7 @@ import types
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from importlib.metadata import version
-from typing import Any, Literal, TypeAlias
+from typing import Any, TypeAlias
 
 import dask
 import fsspec
@@ -26,9 +25,6 @@ import zarr
 from distributed import Client
 
 from scallops.utils import _cpu_count
-
-SubParsers: TypeAlias = argparse._SubParsersAction
-"""Type of the object returned by :meth:`argparse.ArgumentParser.add_subparsers`."""
 
 ImageTuple: TypeAlias = tuple[tuple[str, ...], Sequence[str | zarr.Group], dict]
 """Group key, image sources, and metadata yielded by :func:`scallops.io._set_up_experiment`."""
@@ -193,20 +189,6 @@ def _group_src_attrs(
     return keys, filelist, attrs_list
 
 
-def images_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the images argument to a parser."""
-    parser.add_argument(
-        "-i",
-        "--images",
-        nargs="+",
-        required=True,
-        help="Paths to input images or CVS/Parquet with `image` column "
-        "containing full image path and additional columns "
-        "containing metadata such as `plate`, `well`, `t`, `c`, or `z`. Note that "
-        "image pattern is ignored when CSV/Parquet is used.",
-    )
-
-
 def _get_version() -> str:
     return version("scallops")
 
@@ -225,113 +207,13 @@ def cli_metadata():
     return dict(scallops_version=_get_version(), scallops_command=_get_command())
 
 
-def cli_parquet_metadata():
-    d = cli_metadata()
-    d["scallops"] = json.dumps(d["scallops"])
-    return d
-
-
-def no_version_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the --no-version argument to a parser."""
-    parser.add_argument(
-        "--no-version",
-        action="store_true",
-        help="Do not store command line arguments and scallops version in "
-        "output metadata.",
-    )
-
-
-def image_pattern_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the image pattern argument to a parser."""
-    parser.add_argument(
-        "--image-pattern", help="Pattern to extract metadata from file names."
-    )
-
-
-def groupby_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the groupby argument to a parser."""
-    parser.add_argument("-g", "--groupby", nargs="*", help="Keys to group images.")
-
-
-def expected_images_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--expected-images",
-        type=int,
-        help="Validate that the specified number of images are provided.",
-    )
-
-
-def subset_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the subset argument to a parser."""
-    parser.add_argument(
-        "-s", "--subset", nargs="*", help="Subset of images to include."
-    )
-
-
-def force_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the '--force' argument to the parser to enable overwriting existing output.
-
-    :param parser: The argument parser to which the '--force' argument is added.
-    """
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite existing output",
-    )
-
-
-def _z_index_type(s: str) -> int | Literal["max"]:
-    """Parse and validate the z-index argument.
-
-    This function ensures that the input is a non-negative integer 'max'
-
-    :param s: The input string representing a z-index.
-    :return: The validated z-index as an integer or a string if == 'max'
-    :raises ValueError: If the input is not a non-negative integer and != 'max'
-
-    .. example::
-
-       >>> _z_index_type("max")
-       'max'
-       >>> _z_index_type("3")
-       3
-       >>> _z_index_type("-1")
-       Traceback (most recent call last):
-           ...
-       ValueError: z-index must be >=0
-    """
-
-    s = s.strip()
-    if s == "max":
-        return "max"
-    try:
-        value = int(s)
-    except ValueError:
-        raise ValueError("z-index must be either a non-negative integer or `max`")
-    if value < 0:
-        raise ValueError("z-index must be >=0")
-    return value
-
-
-def _label_args_type(s: str) -> zarr.Group:
-    # argparse only reports ArgumentTypeError/ValueError/TypeError as usage errors
-    try:
-        label_root = zarr.open(s, mode="r")
-    except Exception as e:
-        raise argparse.ArgumentTypeError(f"Unable to open {s}: {e}") from e
-    labels_group = label_root.get("labels")
-    if labels_group is None:
-        raise argparse.ArgumentTypeError(f"Labels group not found for {s}")
-    return labels_group
-
-
 def find_label_group(label_groups: Sequence[zarr.Group], key: str) -> zarr.Group:
     """Find the label image `key` in one or more 'labels' groups.
 
     If `key` is present in more than one group, the group listed last wins. Entries
     that are not OME-Zarr images (e.g. left behind by an interrupted run) are not skipped.
 
-    :param label_groups: The 'labels' groups to search, e.g. from :func:`labels_arg`.
+    :param label_groups: The 'labels' groups to search, e.g. from :func:`scallops.cli.args.labels_arg`.
     :param key: The label image name, e.g. `A1-102-nuclei`.
     :return: The OME-Zarr group for `key`.
     :raises ValueError: If `key` is not found in any group.
@@ -358,133 +240,6 @@ def last_label_match(matches: list) -> list:
         skipped = ", ".join(str(m[0]) for m in matches[:-1])
         logging.getLogger("scallops").info(f"Skipping duplicate labels at {skipped}.")
     return matches[-1:]
-
-
-def z_index_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--z-index",
-        help="Either `max` or a z-index (0-based)",
-        default="max",
-        type=_z_index_type,
-    )
-
-
-def _z_index_tile_type(s: str) -> int | str:
-    """Parse and validate the per-tile z-index argument.
-
-    :param s: The input string: 'max', 'focus', a z-index, or a Parquet path.
-    :return: 'max', 'focus', the z-index as an integer, or the Parquet path.
-    :raises argparse.ArgumentTypeError: If the input is a negative integer or an
-        unrecognized keyword that does not look like a path.
-
-    .. example::
-
-       >>> _z_index_tile_type("Focus")
-       'focus'
-       >>> _z_index_tile_type("3")
-       3
-       >>> _z_index_tile_type("z.parquet")
-       'z.parquet'
-    """
-
-    s = s.strip()
-    if s.lower() in ("max", "focus"):
-        return s.lower()
-
-    try:
-        value = int(s)
-    except ValueError:
-        # parquet path
-        return s
-    if value < 0:
-        raise argparse.ArgumentTypeError("z-index must be >=0")
-    return value
-
-
-def z_index_tile_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--z-index",
-        help="Either `max`, `focus`, z-index (0-based), or a path to a Parquet file "
-        "containing columns `key` and `z_index`. `focus` selects the best "
-        "z-index using the slope of the image log-log power spectrum.",
-        default="max",
-        type=_z_index_tile_type,
-    )
-
-
-def t_index_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--t-index",
-        dest="t_index",
-        default=None,
-        type=int,
-        help="Time index (0-based) to select from images with a time dimension. "
-        "Required when images have more than one timepoint (e.g. live imaging data).",
-    )
-
-
-def labels_arg(parser: argparse.ArgumentParser, required: bool = True) -> None:
-    parser.add_argument(
-        "--labels",
-        required=required,
-        type=_label_args_type,
-        nargs="+",
-        help="One or more paths to zarr stores containing a 'labels' group. If the same "
-        "label name appears in more than one store, the store listed last is used.",
-    )
-
-
-def output_dir_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the output directory argument to a parser.
-
-    :param parser: The argument parser to which the output directory argument is added.
-    """
-    parser.add_argument(
-        "-o",
-        "--output",
-        dest="output",
-        required=True,
-        help="Path to the output directory where the results will be saved.",
-    )
-
-
-def dask_client_arg(parser: argparse.ArgumentParser, value=None) -> None:
-    """Add the Dask client argument to a parser.
-
-    :param parser: The argument parser to which the Dask client argument is added.
-    :param value: Default value.
-    """
-    parser.add_argument(
-        "--client",
-        type=str,
-        default=value,
-        help="URL of the Dask scheduler. Use 'none' to disable distributed execution.",
-    )
-
-
-def dask_cluster_arg(parser: argparse.ArgumentParser) -> None:
-    """Add the Dask cluster parameters.
-
-    :param parser: The argument parser to which the Dask client argument is added.
-    """
-    parser.add_argument(
-        "--dask-cluster",
-        type=str,
-        help="JSON URL or inline JSON containing dask cluster parameters.",
-    )
-
-
-def barcodes_arg(parser: argparse.ArgumentParser, required: bool = True) -> None:
-    """Add the barcodes file argument to a parser.
-
-    :param parser: The argument parser to which the barcodes file argument is added.
-    """
-    parser.add_argument(
-        "--barcodes",
-        dest="barcodes",
-        required=required,
-        help="Path to the barcode CSV file containing a column named 'barcode'.",
-    )
 
 
 def load_json(path_or_str: str) -> dict:

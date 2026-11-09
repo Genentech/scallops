@@ -115,7 +115,6 @@ def pooled_iss(
     .. code-block:: python
 
         from scallops.visualize.napari import pooled_iss
-        import scallops
 
         # URL to pooled in-situ sequencing results
         url = "path/to/images.zarr"
@@ -281,7 +280,7 @@ def experiment_napari(
     .. code-block:: python
 
         from scallops.visualize.napari import expnapari
-        import scallops
+        import scallops.io
 
         # Load an exp
         exp = scallops.io.read_experiment("path/to/exp")

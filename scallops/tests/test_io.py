@@ -18,12 +18,13 @@ from zarr.core.group import AsyncGroup
 from zarr.errors import ContainsGroupError
 
 from scallops import zarr_io
+from scallops.cli.args import _label_args_type
 from scallops.cli.util import (
     _group_src_attrs,
-    _label_args_type,
     find_label_group,
     last_label_match,
 )
+from scallops.datasets._registry import cache_dir
 from scallops.experiment.elements import Experiment
 from scallops.features.util import _slice_anndata
 from scallops.io import (
@@ -49,6 +50,8 @@ from scallops.zarr_io import (
     open_ome_zarr,
     read_ome_zarr_array,
 )
+
+DATA_DIR = cache_dir()
 
 
 @pytest.mark.io
@@ -177,7 +180,7 @@ def test_match_images():
 @pytest.mark.parametrize("scenes", [True, False, ["Image:1"]])
 def test_read_experiment_multi_scene(scenes):
     exp = read_experiment(
-        "scallops/tests/data/tif",
+        f"{DATA_DIR}/tif",
         "{well}_3_t_1_c_3_z_5.ome.tiff",
         group_by=("well",),
         scenes=scenes,
@@ -210,12 +213,12 @@ def test_read_tif(use_dask):
     # bioio.formats.FORMAT_IMPLEMENTATIONS["tif"] = ["bioio.readers.tiff_reader.TiffReader"]
     """
     data = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
+        f"{DATA_DIR}/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
         dask=use_dask,
     )
     if use_dask:
         data2 = read_image(
-            "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
+            f"{DATA_DIR}/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
             dask=False,
         )
         np.testing.assert_array_equal(data.compute().values, data2.values)
@@ -306,7 +309,7 @@ def test_write_non_ome_zarr_image_no_dims(tmp_path):
 @pytest.mark.parametrize("use_dask", [True, False])
 def test_write_non_ome_zarr_image(tmp_path, use_dask):
     image = read_image(
-        "scallops/tests/data/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
+        f"{DATA_DIR}/tif/10X_c0-DAPI-p65ab_A1_Tile-7.phenotype.tif",
         dask=use_dask,
     )
     image.attrs = {"test": "1"}
@@ -336,8 +339,8 @@ def test_irregular_chunks(tmp_path):
 @pytest.mark.io
 def test_experiment_file_list():
     image_paths = (
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif",
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-",
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif",
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-",
     )
 
     gen = list(_set_up_experiment(image_paths, group_by=("*",)))
@@ -352,7 +355,7 @@ def test_experiment_file_list():
 def test_experiment_pattern_prefix(tmp_path):
     image_pattern = "c{t}/Well{well}_Point{point}_{tile}_Channel{channel}_Seq{seq}.tif"
     image_no_match = "xxx/Well{well}_Point{point}_{tile}_Channel{channel}_Seq{seq}.tif"
-    src_path = "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+    src_path = f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     times = ["1", "2"]
     for c in times:
         dest = tmp_path / image_pattern.format(
@@ -423,7 +426,7 @@ def test_experiment_separate_t_c(use_dask, tmp_path):
 @pytest.mark.parametrize("use_dask", [True, False])
 def test_group_by_one_field(use_dask):
     exp = read_experiment(
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-102.{datatype}.tif",
         group_by=("well",),
         dask=use_dask,
@@ -552,7 +555,7 @@ def test_set_up_experiment_zarr_group_stack(tmp_path):
 def test_set_up_experiment_no_groupby():
     gen = list(
         _set_up_experiment(
-            "scallops/tests/data/experimentC/input",
+            f"{DATA_DIR}/experimentC/input",
             files_pattern="10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
         )
     )
@@ -606,9 +609,7 @@ def test_read_write_experiment_nd2(tmp_path):
     # tests serializing nd2 attrs to json
     # from https://cellpainting-gallery.s3.amazonaws.com/cpg0021-periscope/broad/images/20200805_A549_WG_Screen/images/CP186A/10X_c10-SBS-10/Well1_Point1_0001_ChannelDAPI%2CCy3%2CA594%2CCy5%2CCy7_Seq0001.nd2
     file_pattern = "Well{well}_Point{skip}_{skip}_Seq{tile}.nd2"
-    exp = read_experiment(
-        os.path.join("scallops", "tests", "data", "nd2"), file_pattern
-    )
+    exp = read_experiment(os.path.join(DATA_DIR, "nd2"), file_pattern)
     path = os.path.join(tmp_path, "test.zarr")
     exp.save(path)
     exp = read_experiment(path)
@@ -618,10 +619,10 @@ def test_read_write_experiment_nd2(tmp_path):
 @pytest.mark.io
 def test_read_write_image_spacing_stack(tmp_path):
     image1 = read_image(
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     ).squeeze()
     image2 = read_image(
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-103.phenotype.tif"
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-103.phenotype.tif"
     ).squeeze()
     img_path = os.path.join(tmp_path, "images")
     os.makedirs(img_path, exist_ok=True)
@@ -646,7 +647,7 @@ def test_read_write_image_spacing_stack(tmp_path):
 @pytest.mark.io
 def test_read_file_sort_order(tmp_path):
     img = read_image(
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     ).squeeze()
     img_path = os.path.join(tmp_path, "images")
     os.makedirs(img_path, exist_ok=True)
@@ -711,11 +712,11 @@ def test_read_file_sort_order_numeric_values(tmp_path):
 @pytest.mark.io
 def test_read_experiment_csv(tmp_path):
     exp = read_experiment(
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "10X_c{t}-SBS-{t}/{ignore}X_c{t}-{ignore}-{t}_{well}_Tile-{tile}.{ignore}.tif",
         group_by=("well", "tile"),
     )
-    paths = glob.glob("scallops/tests/data/experimentC/input/**/*.tif")
+    paths = glob.glob(f"{DATA_DIR}/experimentC/input/**/*.tif")
     wells = []
     tiles = []
     times = []

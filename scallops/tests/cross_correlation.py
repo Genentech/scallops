@@ -6,19 +6,20 @@ from argparse import (
 import zarr
 from dask.bag import from_sequence
 
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
-    _create_dask_client,
-    _create_default_dask_config,
-    _get_cli_logger,
+from scallops.cli.args import (
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
     groupby_arg,
     image_pattern_arg,
     images_arg,
-    load_json,
     subset_arg,
+)
+from scallops.cli.util import (
+    _create_dask_client,
+    _create_default_dask_config,
+    _get_cli_logger,
+    load_json,
 )
 from scallops.io import (
     _add_suffix,
@@ -181,7 +182,7 @@ def _create_cross_correlation_parser():
     force_arg(parser)
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
-    _sort_groups(parser)
+
     return parser
 
 

@@ -91,12 +91,12 @@ scallops illum-corr
 The `scallops illum-corr` command is used for performing illumination correction on images, a crucial
 preprocessing step in biomedical image analysis. Uneven illumination can introduce artifacts that affect
 the accuracy of downstream analysis tasks like segmentation and feature extraction.
-SCALLOPS provides an aggregation method for illumination correction with two aggregators: Median and mean.
+SCALLOPS provides an aggregation method for illumination correction with three aggregators: mean, median and min.
 
 Key Features:
 
-* This method computes illumination correction by aggregating images using mean or median, followed by
-  an optional median filter and rescaling. It offers a simple and effective approach for addressing
+* This method computes illumination correction by aggregating images using mean, median or min, followed by
+  a median filter (radius set with ``--smooth``; ``0`` disables it) and optional rescaling. It offers a simple and effective approach for addressing
   illumination variations. The output can be saved as Zarr or TIFF images.
 * This method is designed to improve image uniformity, thereby enhancing the reliability of image analysis
   workflows, particularly in the context of high-throughput biomedical imaging data.
@@ -112,8 +112,8 @@ scallops pooled-sbs
 ===================
 
 The `scallops pooled-sbs` command is designed for processing images from pooled in-situ sequencing (SBS)
-experiments. This pipeline includes spot detection, read calling, and merging of single-cell sequencing
-(SCS) data with phenotype data.
+experiments. This pipeline includes spot detection, read calling, and merging of in situ sequencing reads
+with phenotype data.
 
 Key Features:
 
@@ -150,16 +150,13 @@ scallops registration
 ======================
 
 The `scallops registration` command provides functionality for performing image registration.
-This includes image alignment using ITK, cross-correlation-based registration, and applying precomputed transformations
-to images or labels.
+This includes image alignment using elastix (ITK) and applying precomputed transformations to images or labels.
 
 Key Features:
 
 * **ITK Registration**: The elastix subcommand performs registration of moving images to fixed images or across timepoints
-  using ITK. It supports the use of pre-configured ITK parameters and outputs transformed images and/or
+  using elastix (ITK). It supports the use of pre-configured ITK parameters and outputs transformed images and/or
   labels in Zarr format.
-* **Cross-Correlation Registration**: The `cross-correlation` subcommand registers images by aligning them within and across timepoints,
-  using cross-correlation and specified channels for registration.
 * **Transform Application**: The `transformix` subcommand applies previously computed ITK transformations to images or labels,
   storing the results in a Zarr output directory.
 
@@ -179,10 +176,13 @@ segmentation. It supports various segmentation algorithms and outputs segmented 
 
 Key Features:
 
-* **Nuclei Segmentation**: The `nuclei` subcommand performs nuclei segmentation using methods such as Stardist and Cellpose, with
-  optional filtering based on area.
-* **Cell Segmentation**: The `cell` subcommand performs cell segmentation using methods like Watershed, Cellpose, and
-  Propagation. It also supports various cytoplasmic channels, thresholding, and post-segmentation filtering.
+* **Nuclei Segmentation**: The `nuclei` subcommand performs nuclei segmentation using StarDist (default) or Cellpose, with
+  optional filtering based on area and intensity.
+* **Cell Segmentation**: The `cell` subcommand performs cell segmentation using propagation (default), watershed,
+  watershed-intensity, or Cellpose. It also supports various cytoplasmic channels, thresholding, and post-segmentation
+  filtering.
+* **Overlap**: The `overlap` subcommand finds the fraction of each label in one segmentation that is contained within
+  labels of another segmentation.
 
 .. argparse::
    :module: scallops.__main__

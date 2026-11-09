@@ -9,6 +9,7 @@ import xarray as xr
 from skimage.data import camera
 from skimage.transform import SimilarityTransform, resize, warp
 
+from scallops.datasets._registry import cache_dir
 from scallops.experiment.elements import Experiment
 from scallops.io import read_experiment, read_image, save_ome_tiff
 from scallops.registration.itk import (
@@ -21,6 +22,8 @@ from scallops.registration.itk import (
 )
 from scallops.xr import apply_data_array
 from scallops.zarr_io import read_ome_zarr_array
+
+DATA_DIR = cache_dir()
 
 
 def add_physical_size(path, physical_size):
@@ -72,7 +75,7 @@ def test_register_cross_correlation_cli(tmp_path, experiment_c_A1_102_aligned):
         "python",
         "scallops/tests/cross_correlation.py",
         "--images",
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "--image-pattern",
         "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
         "--subset=A1-102",
@@ -156,7 +159,7 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
         "registration",
         "elastix",
         "--moving",
-        "scallops/tests/data/experimentC/input",
+        f"{DATA_DIR}/experimentC/input",
         "--no-landmarks",
         "--moving-image-spacing",
         "1,1",
@@ -186,7 +189,7 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
     assert transformed_image.dtype == np.uint16
     original_image = (
         read_experiment(
-            "scallops/tests/data/experimentC/input",
+            f"{DATA_DIR}/experimentC/input",
             "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
             group_by=("well", "tile"),
         )
@@ -250,11 +253,12 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
 
 
 @pytest.mark.registration
-def test_register_itk_cli_concat_t(tmp_path):
+@pytest.mark.parametrize("unroll_channels", [False, True])
+def test_register_itk_cli_concat_t(tmp_path, unroll_channels):
     transform_output_dir = os.path.join(tmp_path, "transform")
     image = (
         read_experiment(
-            "scallops/tests/data/experimentC/input",
+            f"{DATA_DIR}/experimentC/input",
             "10X_c{t}-SBS-{t}/{mag}X_c{t}-{exp}-{t}_{well}_Tile-{tile}.{datatype}.tif",
             group_by=("well", "tile"),
         )
@@ -269,14 +273,15 @@ def test_register_itk_cli_concat_t(tmp_path):
     img = img.copy()
     img.attrs["stitch_coords"] = "test2"
     exp.images["A1-2"] = img
-    exp.save("test.zarr")
+    moving_path = os.path.join(tmp_path, "test.zarr")
+    exp.save(moving_path)
     elastix_output_dir = os.path.join(tmp_path, "elastix-output.zarr")
     cmd = [
         "scallops",
         "registration",
         "elastix",
         "--moving",
-        "test.zarr",
+        moving_path,
         "--moving-image-pattern",
         "{well}-{t}",
         "--no-landmarks",
@@ -291,13 +296,25 @@ def test_register_itk_cli_concat_t(tmp_path):
         "--moving-output",
         elastix_output_dir,
     ]
-    " ".join(cmd)
+    if unroll_channels:
+        cmd.append("--unroll-channels")
+    else:
+        # t=1 is padded with 3 leading empty channels, so its channel 0 is channel 3
+        cmd += ["--moving-channel", "3"]
     subprocess.check_call(cmd)
     transformed_image = read_ome_zarr_array(
         os.path.join(elastix_output_dir, "images/A1")
     )
     assert transformed_image.attrs["stitch_coords"] == ["test1", "test2"]
-    assert transformed_image.sizes["c"] == 7
+    if unroll_channels:
+        assert "t" not in transformed_image.dims
+        assert transformed_image.sizes["c"] == 7
+    else:
+        # second timepoint is padded with leading empty channels
+        assert transformed_image.sizes["t"] == 2
+        assert transformed_image.sizes["c"] == 5
+        assert (transformed_image.isel(t=1, c=[0, 1, 2]).values == 0).all()
+        assert (transformed_image.isel(t=1, c=[3, 4]).values != 0).any()
 
 
 @pytest.mark.registration
@@ -308,7 +325,7 @@ def test_register_transform_labels_moving_only(tmp_path):
     output_transforms = tmp_path / "transforms"
 
     img = read_image(
-        "scallops/tests/data/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
+        f"{DATA_DIR}/experimentC/10X_c0-DAPI-p65ab/10X_c0-DAPI-p65ab_A1_Tile-102.phenotype.tif"
     )
     img.attrs["physical_pixel_sizes"] = (5, 4, 3)
 
@@ -369,7 +386,7 @@ def test_register_transform_labels_moving_only(tmp_path):
 def test_register_itk_cli(tmp_path, experiment_c_A1_102_nuclei):
     st = SimilarityTransform(translation=[100, 20])
     image = read_image(
-        "scallops/tests/data/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
+        f"{DATA_DIR}/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
     ).squeeze()
     moving_image = image.copy()
 

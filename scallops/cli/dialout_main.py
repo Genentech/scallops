@@ -1,35 +1,6 @@
 from __future__ import annotations
 
-import argparse
-
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import SubParsers
-
-
-def _run_report(arguments: argparse.Namespace):
-    """Executes the report generation process for the 'dialout' command.
-
-    This internal function imports and runs the report generation logic using the provided
-    arguments.
-
-    :param arguments: Parsed command-line arguments for the report generation.
-    """
-    from scallops.cli.dialout import run_report
-
-    run_report(arguments)
-
-
-def _run_dialout_pipeline(arguments: argparse.Namespace):
-    """Executes the analysis pipeline for the 'dialout' command.
-
-    This internal function imports and runs the dialout analysis pipeline using the provided
-    arguments.
-
-    :param arguments: Parsed command-line arguments for the analysis pipeline.
-    """
-    from scallops.cli.dialout import run_dialout_pipeline
-
-    run_dialout_pipeline(arguments)
+from scallops.cli.args import SubParsers, add_command, lazy_handler
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
@@ -41,26 +12,20 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     :param subparsers: The subparsers object from the main parser to which new parsers are added.
     :param default_help: Determines whether to include default values in help messages.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "dialout",
+        default_help,
         help="Pooled dialout library sequencing data analysis and report",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
 
     subparsers = parser.add_subparsers(help="sub-command help")
 
     # Analysis subcommand
-    analysis_parser = subparsers.add_parser(
+    analysis_parser = add_command(
+        subparsers,
         "analysis",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
+        default_help,
         help="Pooled dialout library sequencing data analysis",
     )
     required = analysis_parser.add_argument_group("required arguments")
@@ -98,17 +63,15 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         help="Whether to save unaligned reads to FASTA file",
         action="store_true",
     )
-    _sort_groups(analysis_parser)
-    analysis_parser.set_defaults(func=_run_dialout_pipeline)
+    analysis_parser.set_defaults(
+        func=lazy_handler("scallops.cli.dialout:run_dialout_pipeline")
+    )
 
     # Report subcommand
-    report_parser = subparsers.add_parser(
+    report_parser = add_command(
+        subparsers,
         "report",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
+        default_help,
         help="Pooled dialout library sequencing report",
     )
     required = report_parser.add_argument_group("required arguments")
@@ -155,5 +118,4 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         "--sample-names",
         help="Path to CSV file containing the columns `index` and `sample`",
     )
-    _sort_groups(report_parser)
-    report_parser.set_defaults(func=_run_report)
+    report_parser.set_defaults(func=lazy_handler("scallops.cli.dialout:run_report"))

@@ -211,3 +211,6 @@ __marimo__/
 
 scallops/_version.py
 scallops/segmentation/_*.cpp
+
+# Former location of test data (now downloaded to the scallops cache directory)
+scallops/tests/data/

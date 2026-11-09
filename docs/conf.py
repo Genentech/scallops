@@ -38,7 +38,14 @@ autodoc_typehints = "description"
 autosummary_generate = True
 todo_include_todos = False
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+# outputs.rst and registration_opts.rst are included in command_line.rst
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    "outputs.rst",
+    "registration_opts.rst",
+]
 
 intersphinx_mapping = dict(
     matplotlib=("https://matplotlib.org/stable/", None),
@@ -48,9 +55,9 @@ intersphinx_mapping = dict(
     python=("https://docs.python.org/3", None),
     scipy=("https://docs.scipy.org/doc/scipy/", None),
     seaborn=("https://seaborn.pydata.org/", None),
-    skimage=("https://scikit-image.org/docs/stable/api/", None),
+    skimage=("https://scikit-image.org/docs/stable/", None),
     sklearn=("https://scikit-learn.org/dev/", None),
-    xarray=("https://docs.xarray.dev/", None),
+    xarray=("https://docs.xarray.dev/en/stable/", None),
 )
 intersphinx_disabled_reftypes = ["*"]
 # -- Options for HTML output -------------------------------------------------

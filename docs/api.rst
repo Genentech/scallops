@@ -133,6 +133,7 @@ Tools for decoding sequencing spots and assigning them to barcodes and labels.
     scallops.reads.decode_polar
     scallops.reads.decode_se
     scallops.reads.fit_base_mixture
+    scallops.reads.make_decoy_barcodes
     scallops.reads.make_encoding
     scallops.reads.merge_sbs_phenotype
     scallops.reads.peaks_to_bases

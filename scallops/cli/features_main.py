@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import argparse
-from types import MethodType
 
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
+from scallops.cli.args import (
     SubParsers,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
@@ -13,23 +12,11 @@ from scallops.cli.util import (
     image_pattern_arg,
     images_arg,
     labels_arg,
+    lazy_handler,
     no_version_arg,
     output_dir_arg,
     subset_arg,
 )
-
-
-def _run_pipeline_compute_features(arguments: argparse.Namespace):
-    """Executes the feature computation pipeline for the 'features' command.
-
-    This internal function imports and runs the feature computation logic using the provided
-    arguments.
-
-    :param arguments: Parsed command-line arguments for the feature computation pipeline.
-    """
-    from scallops.cli.features import run_pipeline_compute_features
-
-    run_pipeline_compute_features(arguments)
 
 
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
@@ -42,31 +29,23 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
         added.
     :param default_help: Determines whether to include default values in help messages.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "features",
+        default_help,
         help="Compute features",
         description="Compute features and output Parquet files with label as index.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
 
-    parser.old_help = parser.format_help
+    format_help = parser.format_help
 
-    def new_format_help(x):
-        """Custom help formatter that appends feature descriptions to the help output.
-
-        :param x: The parser object.
-        """
-        print(x.old_help())
+    def format_help_with_features() -> str:
+        """Append feature descriptions to the help output."""
         from scallops.features.info import help_text
 
-        print(help_text())
+        return f"{format_help()}\n{help_text()}\n"
 
-    # Override the default help formatter
-    parser.format_help = MethodType(new_format_help, parser)
+    parser.format_help = format_help_with_features  # type: ignore[method-assign]
     required = parser.add_argument_group("required arguments")
     # Add common arguments
     images_arg(required)
@@ -76,10 +55,10 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
 
     generic_features_help = (
         "A space-separated list of features to extract (e.g., 'area intensity_0 corr_0_1').\n"
-        "Channels are 0-indexed. Use shortcuts for efficiency:\n"
-        "  - For specific channels: 'intensity_0,1,2'\n"
-        "  - For all channels (wildcard): 'intensity_*'\n"
-        "  - For all channel pairs: 'colocalization_*_*'"
+        "Channels are 0-indexed. Use shortcuts for efficiency:\n\n"
+        "- For specific channels: 'intensity_0,1,2'\n"
+        "- For all channels (wildcard): 'intensity_*'\n"
+        "- For all channel pairs: 'colocalization_*_*'"
     )
 
     image_pattern_arg(parser)
@@ -123,7 +102,7 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     )
     parser.add_argument(
         "--label-filter",
-        help="Expression to filter labels (e.g. barcode_Q_mean_0/barcode_Q_mean > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
+        help="Expression to filter labels (e.g. barcode_count_0/barcode_count > 0.5 & Nuclei_Correlation_PearsonBox_ISS_PHENO>=0.9).",
     )
 
     parser.add_argument(
@@ -187,7 +166,6 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     dask_cluster_arg(parser)
 
     no_version_arg(parser)
-    _sort_groups(parser)
     parser.set_defaults(
-        func=_run_pipeline_compute_features,
+        func=lazy_handler("scallops.cli.features:run_pipeline_compute_features"),
     )

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import dask.array as da
 import matplotlib as mpl
 import numpy as np
@@ -9,6 +7,7 @@ import xarray as xr
 from matplotlib import pyplot as plt
 from matplotlib.collections import QuadMesh
 
+from scallops.datasets._registry import cache_dir
 from scallops.reads import (
     apply_channel_crosstalk_matrix,
     channel_crosstalk_matrix,
@@ -17,9 +16,11 @@ from scallops.reads import (
 )
 from scallops.visualize.crosstalk import pairwise_channel_scatter_plot
 
+DATA_DIR = cache_dir()
+
 mpl.use("Agg")
 
-data_path = Path("scallops") / "tests" / "data"
+data_path = DATA_DIR
 
 
 def bases_df_to_xarray(df):

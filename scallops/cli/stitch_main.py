@@ -1,43 +1,26 @@
 from __future__ import annotations
 
-import argparse
 from argparse import (
-    ArgumentDefaultsHelpFormatter,
     ArgumentParser,
-    HelpFormatter,
-    Namespace,
 )
 
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.register_main import image_spacing_arg
-from scallops.cli.util import (
+from scallops.cli.args import (
     SubParsers,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     expected_images_arg,
     force_arg,
     groupby_arg,
     image_pattern_arg,
+    image_spacing_arg,
     images_arg,
+    lazy_handler,
     no_version_arg,
     subset_arg,
     t_index_arg,
     z_index_tile_arg,
 )
-
-
-def _run_stitch(arguments: Namespace) -> None:
-    """Execute the stitching pipeline."""
-    from scallops.cli.stitch import run_stitch
-
-    run_stitch(arguments)
-
-
-def _run_stitch_preview(arguments: Namespace) -> None:
-    """Execute the stitching preview pipeline."""
-    from scallops.cli.stitch import run_stitch_preview
-
-    run_stitch_preview(arguments)
 
 
 def _create_stitch_preview_parser(
@@ -49,15 +32,12 @@ def _create_stitch_preview_parser(
     :param default_help: Boolean indicating whether to use default argparse help formatting.
     :return: Configured argparse parser for the stitch preview command.
     """
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "stitch-preview",
+        default_help,
         help="Preview stitched images",
         description="Create a multi-tile image using image stage positions.",
-        formatter_class=(
-            argparse.ArgumentDefaultsHelpFormatter
-            if default_help
-            else argparse.HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     images_arg(required)
@@ -106,19 +86,17 @@ def _create_stitch_preview_parser(
     )
     z_index_tile_arg(parser)
     t_index_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_run_stitch_preview)
+    parser.set_defaults(func=lazy_handler("scallops.cli.stitch:run_stitch_preview"))
     return parser
 
 
 def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> ArgumentParser:
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "stitch",
+        default_help,
         help="Stitch images",
         description="Stitch microscopy images",
-        formatter_class=ArgumentDefaultsHelpFormatter
-        if default_help
-        else HelpFormatter,
     )
     required = parser.add_argument_group("required arguments")
     images_arg(required)
@@ -329,6 +307,11 @@ def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> Argumen
     dask_cluster_arg(parser)
     expected_images_arg(parser)
     no_version_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_run_stitch)
+    parser.set_defaults(func=lazy_handler("scallops.cli.stitch:run_stitch"))
     return parser
+
+
+def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
+    """Add the `stitch` and `stitch-preview` commands."""
+    _create_stitch_parser(subparsers, default_help)
+    _create_stitch_preview_parser(subparsers, default_help)

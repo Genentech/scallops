@@ -1,68 +1,30 @@
 from __future__ import annotations
 
 import argparse
-from argparse import (
-    ArgumentDefaultsHelpFormatter,
-    HelpFormatter,
-    Namespace,
-)
 
-from scallops.cli.arg_parser import _sort_groups
-from scallops.cli.util import (
+from scallops.cli.args import (
     SubParsers,
+    add_command,
     dask_client_arg,
     dask_cluster_arg,
     force_arg,
     groupby_arg,
+    image_spacing_arg,
+    lazy_handler,
     no_version_arg,
     subset_arg,
     z_index_arg,
 )
 
 
-def image_spacing_arg(s: str) -> tuple[float, float]:
-    """Parse image spacing argument.
-
-    This function takes a string containing physical size values (y, x)
-    and returns a tuple of floats representing the physical size in the y
-    and x dimensions.
-
-    :param s: String with physical size values in the format "y,x".
-    :return: Tuple containing two float values representing the physical size in y and x.
-
-    .. example::
-
-        >>> image_spacing_arg("1.34,1.34")
-        (1.34, 1.34)
-    """
-    image_spacing = s.split(",")
-    assert len(image_spacing) == 2, "Image spacing must contain 'y,x' values"
-    return float(image_spacing[0]), float(image_spacing[1])
-
-
-def _run_itk_registration(arguments: Namespace) -> None:
-    """Run ITK registration."""
-    from scallops.cli.register import run_itk_registration
-
-    run_itk_registration(arguments)
-
-
-def _run_itk_transform(arguments: Namespace) -> None:
-    """Run ITK transformation."""
-    from scallops.cli.register import run_itk_transform
-
-    run_itk_transform(arguments)
-
-
 def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Create the main parser for image registration."""
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "registration",
+        default_help,
         help="Image registration",
         description="Image registration",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
     )
     subparsers = parser.add_subparsers(help="sub-command help")
     _create_elastix_parser(subparsers, default_help)
@@ -71,13 +33,12 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
 
 def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Create the parser for Elastix-based registration."""
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "elastix",
+        default_help,
         description="Register moving image to fixed image using ITK. "
         "If no fixed image is provided, registers moving image to a specified timepoint.",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     required.add_argument(
@@ -126,7 +87,9 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
         "--moving-channel",
         type=int,
         default=0,
-        help="Moving channel index (0-based) to use for alignment",
+        help="Moving channel index (0-based) to use for alignment. When timepoints have "
+        "different numbers of channels and --unroll-channels is not specified, the index "
+        "refers to the channels after padding with leading empty channels",
     )
     parser.add_argument(
         "--fixed-channel",
@@ -160,7 +123,9 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser.add_argument(
         "--unroll-channels",
         action="store_true",
-        help="Unroll channels (drop 't' dimension) in output image",
+        help="Unroll channels (drop 't' dimension) in output image. If not specified, "
+        "timepoints with fewer channels than the maximum are padded with leading empty "
+        "channels",
     )
     # parser.add_argument(
     #     "--register-within-t",
@@ -269,18 +234,19 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     dask_cluster_arg(parser)
 
     no_version_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_run_itk_registration, output="register")
+    parser.set_defaults(
+        func=lazy_handler("scallops.cli.register:run_itk_registration"),
+        output="register",
+    )
 
 
 def _create_transform_parser(subparsers: SubParsers, default_help: bool) -> None:
     """Create the parser for ITK-based transformations."""
-    parser = subparsers.add_parser(
+    parser = add_command(
+        subparsers,
         "transformix",
+        default_help,
         description="Transform moving image to fixed image using previously computed ITK transformations",
-        formatter_class=(
-            ArgumentDefaultsHelpFormatter if default_help else HelpFormatter
-        ),
     )
     required = parser.add_argument_group("required arguments")
     required.add_argument(
@@ -312,5 +278,4 @@ def _create_transform_parser(subparsers: SubParsers, default_help: bool) -> None
     force_arg(parser)
     dask_client_arg(parser, value="none")
     dask_cluster_arg(parser)
-    _sort_groups(parser)
-    parser.set_defaults(func=_run_itk_transform)
+    parser.set_defaults(func=lazy_handler("scallops.cli.register:run_itk_transform"))

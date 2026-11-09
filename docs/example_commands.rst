@@ -2,21 +2,22 @@
 Command Line Examples
 *********************
 
-Welcome to the command-line guide for Scallops. This documentation walks you through the complete image processing and
+Welcome to the command-line guide for SCALLOPS. This documentation walks you through the complete image processing and
 analysis pipeline, designed specifically for large-scale optical pooled screens (OPS).
 
-The Scallops pipeline takes you from raw, uncorrected microscope image tiles to fully registered, segmented datasets,
+The SCALLOPS pipeline takes you from raw, uncorrected microscope image tiles to fully registered, segmented datasets,
 feature extraction, and downstream statistical analysis.
 
-.. note:: A complete notebook tutorial with real data is also available to help you walk through this pipeline step-by-step on the `periscope data <https://github.com/broadinstitute/2022_PERISCOPE>`_.
+.. note:: The :doc:`End-to-End notebook <notebooks/End-to-End>` walks through this pipeline step by step using data from the `PERISCOPE study <https://github.com/broadinstitute/2022_PERISCOPE>`_.
 
 
 Illumination Correction
 ========================
 Illumination correction is computed separately for each well, cycle, and channel using all image tiles as
-input. It is calculated by computing the mean (or median; see --agg-method option), followed by a median filter
-(radius of the disk-shaped footprint is 1/20th area of image), and rescaling using 2nd percentile for a robust
-minimum in the aggregation method. This method is equivalent to CellProfiler's CorrectIlluminationCalculate_
+input. It is calculated by aggregating the images (mean by default; median or min with ``--agg-method``), applying a
+median filter with a disk-shaped footprint whose area is 1/20 of the image area (change the radius with
+``--smooth``), and rescaling using the 2nd
+percentile as a robust minimum (disable with ``--no-rescale``). This method is equivalent to CellProfiler's CorrectIlluminationCalculate_
 module with option "Regular", "All", "Median Filter". The algorithm was originally benchmarked using ~250 images per
 plate to calculate plate-wise illumination correction functions `(Singh et al. J Microscopy, 2014)`_.
 
@@ -118,8 +119,8 @@ the registered image has the FISH channels followed by the IF channels.
 
 Example::
 
-    scallops registration elastix -\
-    -groupby plate well \
+    scallops registration elastix \
+    --groupby plate well \
     --moving-image-pattern '{plate}-{well}-{t}' \
     --moving-output s3://xxx/ops/pheno-registered.zarr \
     --moving s3://xxx/stitch/pheno/stitch/stitch.zarr/ \
@@ -231,7 +232,9 @@ Example::
 
 Find objects
 ==================
-Find objects in a labeled array (output from segmentation).
+Find objects in a labeled array (output from segmentation). ``--label-suffix`` accepts several suffixes and
+defaults to ``cell cytosol nuclei``, so the three commands below can also be run as one command with a single
+``--output`` directory; results are written to one subdirectory per suffix.
 
 Nuclei::
 
@@ -249,7 +252,7 @@ Cells::
     --subset A-3 \
     --label-pattern {plate}-{well} \
     --label-suffix cell \
-    --output s3://xxx/ops/objects-cell\
+    --output s3://xxx/ops/objects-cell
 
 Cytosol::
 
@@ -268,7 +271,7 @@ Compute phenotype features.
 Nuclei::
 
     scallops features \
-    --features-nuclei intensity_* \
+    --features-nuclei 'intensity_*' \
     --labels s3://xxx/ops/segment.zarr \
     --groupby plate well \
     --subset A-3 \
@@ -280,7 +283,7 @@ Nuclei::
 Cells::
 
     scallops features \
-    --features-cell intensity_* \
+    --features-cell 'intensity_*' \
     --labels s3://xxx/ops/segment.zarr \
     --groupby plate well \
     --subset A-3 \
@@ -292,7 +295,7 @@ Cells::
 Cytosol::
 
     scallops features \
-    --features-cytosol intensity_* \
+    --features-cytosol 'intensity_*' \
     --labels s3://xxx/ops/segment.zarr \
     --groupby plate well \
     --subset A-3 \
@@ -391,7 +394,7 @@ Example::
     scallops pooled-sbs merge \
     --sbs s3://xxx/ops/reads/labels \
     --output s3://xxx/ops/merge \
-    --barcodes s3://bigdipir-ctg-s3/internal/singa166-lab/barcodes/dialout-5.csv \
+    --barcodes s3://xxx/barcodes/dialout-5.csv \
     --phenotype s3://xxx/ops/objects-nuclei \
     s3://xxx/ops/objects-cell \
     s3://xxx/ops/objects-cytosol \
@@ -414,11 +417,11 @@ Example::
     --input s3://xxx/ops/merge/A-3.parquet \
     --reference "NTC" \
     --feature-filter "index=='Nuclei_Intensity_MedianIntensity_Channel5'" \
-    --label-filter "barcode_Q_mean_0/barcode_Q_mean==1 & \
+    --label-filter "barcode_count_0/barcode_count==1 & \
     Nuclei_Correlation_PearsonBox_ISS_PHENO>0.9 & \
     Nuclei_Correlation_PearsonBox_FISH_IF>0.9 & \
-    ~Cells_Location_IntersectsBoundary_Channel0==False & \
-    ~Cells_Location_IntersectsBoundary_Channel0_intersects_boundary_t==False" \
+    Cells_Location_IntersectsBoundary_Channel0==False & \
+    Cells_Location_IntersectsBoundary_Channel0_intersects_boundary_t==False" \
     --output s3://xxx/ops/rank-features/A-3.parquet
 
 

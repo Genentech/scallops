@@ -11,7 +11,7 @@ It sets up argument parsing using the argparse library and defines subcommands f
 - Image segmentation
 - Image stitching
 
-Each subcommand is handled by a specific function imported from the `scallops.cli` module. The `create_parsers` function
+Each subcommand is defined by a ``scallops.cli.<name>_main`` module and implemented in ``scallops.cli.<name>``. The `create_parsers` function
 sets up the CLI argument parsing, while the `main` function processes the command-line arguments and executes the
 appropriate subcommand.
 
@@ -46,8 +46,21 @@ from scallops.cli import (
     segment_main,
     stitch_main,
 )
-from scallops.cli.arg_parser import ScallopsArgumentParser
-from scallops.cli.util import _get_cli_logger
+from scallops.cli.args import ScallopsArgumentParser, _sort_groups_recursive
+
+_COMMANDS = (
+    pooled_if_sbs_main,
+    features_main,
+    extract_crops_main,
+    find_objects_main,
+    segment_main,
+    illumination_correction_main,
+    dialout_main,
+    pert_map_main,
+    register_main,
+    stitch_main,
+)
+"""Modules that define a command with `_create_parser`, in help order."""
 
 
 def create_parsers(default_help: bool = False) -> argparse.ArgumentParser:
@@ -58,17 +71,9 @@ def create_parsers(default_help: bool = False) -> argparse.ArgumentParser:
         "--version", action="version", version=f"%(prog)s {version('scallops')}"
     )
     subparsers = root_parser.add_subparsers(help="Command help")
-    pooled_if_sbs_main._create_parser(subparsers, default_help)
-    features_main._create_parser(subparsers, default_help)
-    extract_crops_main._create_parser(subparsers, default_help)
-    find_objects_main._create_parser(subparsers, default_help)
-    segment_main._create_parser(subparsers, default_help)
-    illumination_correction_main._create_parser(subparsers, default_help)
-    dialout_main._create_parser(subparsers, default_help)
-    pert_map_main._create_parser(subparsers, default_help)
-    register_main._create_parser(subparsers, default_help)
-    stitch_main._create_stitch_parser(subparsers, default_help)
-    stitch_main._create_stitch_preview_parser(subparsers, default_help)
+    for module in _COMMANDS:
+        module._create_parser(subparsers, default_help)
+    _sort_groups_recursive(root_parser)
     return root_parser
 
 
@@ -79,6 +84,8 @@ def main():
     if "func" not in args:
         root_parser.print_help()
     else:
+        from scallops.cli.util import _get_cli_logger
+
         logger = _get_cli_logger()
         logger.info(f"Scallops version: {version('scallops')}")
         cmd = ["scallops"] + sys.argv[1:]
