@@ -1,7 +1,7 @@
 [build-system]
 build-backend = "setuptools.build_meta"
 requires = [
-    "cython",
+    "cython>=3.0",
     "numpy",
     "setuptools>=77",
     "setuptools_scm>=8",
@@ -133,6 +133,8 @@ exclude = ["docs*", "scallops.tests*"]
 
 [tool.setuptools.exclude-package-data]
 scallops = ["tests/**"]
+# Build-only sources; the compiled extension and _propagate.pyi still ship.
+"scallops.segmentation" = ["*.pyx", "*.pxd", "*.cpp"]
 
 [tool.setuptools_scm]
 tag_regex = "^(?P<version>v?[0-9]{1,2}\\.[0-9]+\\.[0-9]+)$"
