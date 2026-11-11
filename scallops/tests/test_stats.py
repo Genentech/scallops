@@ -76,6 +76,14 @@ def test_fisher_combined_pvalue():
 
 
 @pytest.mark.stats
+def test_fisher_combined_pvalue_small():
+    # strong signals must not round down to 0
+    combined_p_value = fisher_combined_pvalue([1e-8, 1e-8, 1e-8])
+    assert combined_p_value > 0
+    np.testing.assert_allclose(combined_p_value, 1.5832087e-21, rtol=1e-6)
+
+
+@pytest.mark.stats
 def test_meta_analysis_mannwhitneyu():
     U_statistics = [20, 25, 30]
     sample_sizes = [(50, 50), (60, 60), (70, 70)]
@@ -138,4 +146,4 @@ def test_random_effects_meta_analysis_mannwhitneyu():
     )
     assert result.combined_effect == expected_effect
     assert result.combined_variance == expected_variance
-    assert result.pvalue == expected_pvalue
+    np.testing.assert_allclose(result.pvalue, expected_pvalue, rtol=1e-12)
