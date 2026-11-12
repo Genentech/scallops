@@ -200,7 +200,9 @@ def channel_crosstalk_matrix(
     :param a: data to compute crosstalk matrix for (read, t, c)
     :param by_t: Compute separate matrices per cycle.
     :param method: Either median or li_and_speed
-    :return: The inverse matrix, w (c,c) or an array of (t, c, c) if `by_t`
+    :return: The inverse matrix, w (c, c), or an array of (t, c, c) if `by_t` — except that with
+        `method="median"` on a dask-backed `a`, a single cycle still returns (c, c) even if `by_t`
+        is set, since there is nothing to stack.
     """
 
     method_name = str(method).lower()
@@ -612,7 +614,12 @@ def assign_barcodes_to_labels(
 
     :param df_reads: Table of all called reads. See :func:`~decode_max`
     :param sort_by: Which column(s) to sort aggregated barcodes by.
-    :return: Table of all labels containing sequencing reads.
+    :return: One row per label, with columns ``label``, ``barcode_0``/``barcode_1`` (the top two
+        barcodes by `sort_by`), ``barcode_count`` (total reads in the label),
+        ``barcode_count_0``/``barcode_count_1`` (reads with that barcode), ``mismatch`` (whether no
+        read exactly matched a barcode), the summed per-cycle ``barcode_Q_{0,1}``, and, for each
+        of ``Q_mean``, ``Q_min``, and ``peak`` present in `df_reads`, a summed
+        ``barcode_{column}_{0,1}``. See :ref:`outputs` for the full column reference.
     """
     sort_by = [sort_by] if isinstance(sort_by, str) else list(sort_by)
     top2_columns = ["Q"]
@@ -792,7 +799,10 @@ def decode_max(
     :param spots: Spots returned from peaks_to_bases containing dimensions (read,t,c)
     :param barcodes: Table of designed barcode sequences used for indicating whether a
         barcode is an exact match. Expected to have column 'barcode'.
-    :return: The reads data frame
+    :return: One row per read, with the coordinates of `spots["read"]` (e.g. ``y``, ``x``,
+        ``sigma``, ``peak``, ``label``, if present) plus the called ``barcode`` (one base per
+        cycle), ``Q`` (per-cycle quality), ``Q_mean``, ``Q_min``, and, when `barcodes` is given,
+        ``barcode_match`` (whether `barcode` is in `barcodes`).
     """
 
     whitelist = barcodes["barcode"].values if barcodes is not None else None
@@ -935,8 +945,9 @@ def peaks_to_bases(
     :param read_chunk_size: Number of reads per chunk for parallel processing, or
         "auto" to choose from the number of reads and dask worker threads. Use None or
         <= 0 for a single chunk. Ignored when `maxed` is not dask-backed.
-    :return: DataArray with dimensions (read,t,c) where read is spot with coordinates y, x, peak,
-        and label
+    :return: DataArray with dimensions (read,t,c) where read is spot with coordinates for every
+        column of `peaks` (typically ``y``, ``x``, ``sigma``, ``peak``), plus ``label`` when
+        `labels` is given.
     """
     if isinstance(labels, xr.DataArray):
         labels = labels.data
@@ -1097,10 +1108,13 @@ def merge_sbs_phenotype(
     return df_combined
 
 
-def barcode_to_prefix(barcode: pd.Series, sbs_cycles: Sequence[int]) -> str:
+def barcode_to_prefix(barcode: str, sbs_cycles: Sequence[int]) -> str:
     """Utility function to generate prefixes based on barcodes.
 
-    :param barcode: pd.Series with barcode information
+    Intended to be called per-row via ``Series.apply(barcode_to_prefix, args=(sbs_cycles,))``, so
+    `barcode` is a single barcode string, not a Series.
+
+    :param barcode: A single barcode string, one base per cycle.
     :param sbs_cycles: Cycles to work on (starting from 1)
     :return: Prefix combining all channels
     """
@@ -1112,7 +1126,13 @@ def read_statistics(reads_df: pd.DataFrame | dd.DataFrame) -> dict[str, float | 
     average_reads_per_label.
 
     :param reads_df: Reads data frame
-    :return: Dictionary containing statistics
+    :return: Dictionary with keys ``mapped_reads``, ``number_of_reads``, ``mapping_rate``,
+        ``mapping_rate_within_labels``, ``mapped_reads_within_labels``,
+        ``average_reads_per_label``, ``average_mapped_reads_per_label``,
+        ``number_of_unique_barcodes_in_labels``, ``mean_barcode_count_in_labels``,
+        ``labels_with_reads``, and ``labels_with_mapped_reads``; plus, only when `reads_df` has
+        reads outside any label (``label == 0``), ``mapping_rate_outside_labels`` and
+        ``mapped_reads_outside_labels``.
     """
     unique_cell_col = (
         "label" if "unique_label" not in reads_df.columns else "unique_label"
@@ -1160,7 +1180,9 @@ def base_counts(reads_df: pd.DataFrame, normalize: bool = False) -> pd.DataFrame
 
     :param reads_df: Data frame containing reads
     :param normalize: Whether to normalize the counts
-    :return: Data frame containing read index and counts
+    :return: One row per base and cycle, with columns ``base``, ``t`` (cycle), and ``count`` (the
+        number of reads with that base at that cycle, or its fraction of the cycle's reads if
+        `normalize`).
     """
     read_len = reads_df["barcode"].str.len().max()
     counts_df = pd.DataFrame()

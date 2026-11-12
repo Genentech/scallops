@@ -279,14 +279,14 @@ def experiment_napari(
 
     .. code-block:: python
 
-        from scallops.visualize.napari import expnapari
+        from scallops.visualize.napari import experiment_napari
         import scallops.io
 
         # Load an exp
         exp = scallops.io.read_experiment("path/to/exp")
 
         # View the exp in Napari
-        napari_viewer = expnapari(exp)
+        napari_viewer = experiment_napari(exp)
     """
     import napari
     from qtpy.QtWidgets import QListWidget

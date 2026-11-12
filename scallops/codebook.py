@@ -18,11 +18,13 @@ from sklearn.metrics.pairwise import ArgKmin
 
 
 def image_to_codes(array: xr.DataArray) -> NDArray:
-    """Reshape a 5-dimensional array of shape (t, c, z, y, x) to a 2-dimensional array of shape
-    (z+y+x, t+c).
+    """Reshape an array of shape (t, c, z, y, x), or (t, c, y, x) if there is no `z` dimension, to
+    a 2-dimensional array of shape (z*y*x, t*c), or (y*x, t*c) without `z`.
 
-    :param array: The input 5-dimensional array representing images. Dimensions: (t, c, z, y, x).
-    :return: Reshaped 2-dimensional array of shape (z+y+x, t+c).
+    :param array: The input array representing images, with dimensions (t, c, z, y, x) or
+        (t, c, y, x).
+    :return: Reshaped 2-dimensional array of shape (z*y*x, t*c), or (y*x, t*c) if `array` has no
+        `z` dimension.
 
     :example:
 
@@ -41,7 +43,7 @@ def image_to_codes(array: xr.DataArray) -> NDArray:
         # Reshape the 5D array to a 2D array
         reshaped_array = image_to_codes(imagestack)
     """
-    # Rearrange axes to z, y, x, t, c and then reshape to 2D array of (z+y+x, t+c)
+    # Rearrange axes to z, y, x, t, c and then reshape to 2D array of (z*y*x, t*c)
     dims = ["y", "x", "t", "c"]
     if "z" in array.dims:
         dims = ["z"] + dims
@@ -147,7 +149,10 @@ def decode_metric(
     :param max_distance: Maximum distance between a feature and its closest code for which the coded
         target will be assigned.
     :param scale_factors: Optional 1-d array (time, channel) to divide array by
-    :return: Data frame containing called features
+    :return: Data frame with one row per called region, with columns ``y``, ``x`` (centroid),
+        ``mean_distance`` and ``min_distance`` (to the nearest codebook entry), ``area`` (pixel
+        count), ``feature`` (the matched codebook entry), and ``z`` (centroid) if `array` has a
+        ``z`` dimension.
     """
     codes = image_to_codes(array)
     argmin, distances, trace_norms, passes_filters = _decode_metric(

@@ -86,7 +86,9 @@ def rank_features(
 
     :param data: Annotated data matrix.
     :param perturbation_column: Column in `data.obs` containing perturbation.
-    :param reference_value: Reference value (e.g. NTC).
+    :param reference_value: Reference value (e.g. NTC) to compare every other value of
+        `perturbation_column` against. Despite the ``str | None`` type, ``None`` is not actually
+        supported and raises an error; a real value present in `perturbation_column` is required.
     :param method: Statistical method to use.
     :param by: Column(s) in `data.obs` to stratify by.
     :param min_labels: Include perturbations with at least this many observations.

@@ -265,7 +265,7 @@ def plot_percentile_montage(
     vmaxq: float = 0.9,
     vminq: float = 0.1,
     labels_key_pattern: str | None = None,
-) -> tuple[plt.Figure, dict[str, list[tuple[int, str, int, int]]]]:
+) -> tuple[plt.Figure, dict[str, list[np.ndarray]]]:
     """Plot a montage of gene-specific images at specified feature percentiles from a dataframe and
     image stack.
 
@@ -291,8 +291,9 @@ def plot_percentile_montage(
     :param vminq: Lower quantile for color scaling. Defaults to 0.1.
     :param labels_key_pattern: String pattern of the type '{well}-nuclei' to index labels if using Experiment.
         Defaults to None.
-    :return: A tuple containing the matplotlib Figure object and a dictionary mapping gene symbols to selected
-        coordinates.
+    :return: A tuple containing the matplotlib Figure object and a dictionary mapping each gene symbol
+        to the list of extracted (and resized to `pad` x `pad`) image crops shown for that gene, one
+        per row of `df` for that gene.
 
 
     :example:
