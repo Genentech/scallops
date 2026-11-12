@@ -462,12 +462,19 @@ def plot_well_aggregated_heatmaps(
     This function creates a figure containing heatmaps for six wells based on the provided DataFrame.
     Each heatmap represents the spatial distribution of a computed metric over a grid, calculated using the supplied aggregation function.
 
-    :param df: Input DataFrame containing data for all wells. Must contain 'well', 'x', and 'y' columns.
+    Only wells numbered 1 through 6 are ever computed and plotted, regardless of `plate_shape`: a
+    `plate_shape` other than one with 6 wells total will fail the `nwells == nrows * ncols` check
+    below, and even a 6-well `plate_shape` other than ``(2, 3)`` only changes the subplot grid layout,
+    not which wells are read.
+
+    :param df: Input DataFrame containing data for all wells. Must contain 'well', 'x', and 'y' columns,
+        with 'well' values 1 through 6.
     :param agg_function: Aggregation function to apply to each group of data in the grid (e.g., np.mean, np.sum).
                          The function should accept a DataFrame and return a scalar value.
     :param feature: feature to plot. Must exist in dataframe as column
     :param grid_size: Size of the grid (number of bins along x and y axes). Default is 40.
-    :param plate_shape: Tuple with row,column shape of the plate
+    :param plate_shape: Tuple with row,column shape of the plate; `nrows * ncols` must equal the
+        number of unique values in the 'well' column (currently only 6-well plates are supported).
     :param tile_size_x: Size of the tile along the x-axis, used to bin the x coordinates. Default is 2720.
     :param tile_size_y: Size of the tile along the y-axis, used to bin the y coordinates. Default is 2720.
     :param xlabel: Dictionary with label as key and a function to compute a value from the heatmap. Default is {'Minimum number of spots per cell:': np.nanmin}.

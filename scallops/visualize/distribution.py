@@ -816,7 +816,9 @@ def comparative_effect_scatter(
     :param grouping: The column name that contains the labels for the points (e.g., "Gene").
     :param randomseed: The random seed for ransac regression.
     :param kwargs: Additional keyword arguments passed to `adjust_text` for label placement.
-    :return: A tuple containing the Matplotlib Figure and Axes objects.
+    :return: A tuple ``(fig, ax, ransac)`` with the Matplotlib Figure and Axes objects, and the
+        fitted `RANSACRegressor` if `regression_params["method"] == "ransac"` was used to draw a
+        regression line, or ``None`` otherwise (including the default OLS method).
 
     :example:
 

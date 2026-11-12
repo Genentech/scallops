@@ -129,6 +129,9 @@ class Experiment:
     def save(self, store: StoreLike):
         """Save this experiment in Zarr format.
 
+        Opens `store` in overwrite mode (``mode="w"``), so any existing data already at `store`
+        is discarded first.
+
         :param store: Either a Zarr store or a string.
         """
         from scallops.zarr_io import (

@@ -293,13 +293,14 @@ def align_image(
 
     .. code-block:: python
 
+        import numpy as np
         import xarray as xr
         from scallops.registration.crosscorrelation import align_image
 
-        # Create a sample DataArray
+        # Create a sample DataArray with dimensions (t, c, z, y, x)
         channels = ["ChannelA", "ChannelT", "ChannelG", "ChannelC"]
         data = xr.DataArray(
-            np.random.rand(100, 10, len(channels)),
+            np.random.rand(3, len(channels), 1, 100, 100),
             dims=("t", "c", "z", "y", "x"),
             coords={"c": channels},
         )
@@ -374,18 +375,19 @@ def align_images(
 
     .. code-block:: python
 
+        import numpy as np
         import xarray as xr
-        from your_module import align_images
+        from scallops.registration.crosscorrelation import align_images
 
-        # Create two sample DataArrays
+        # Create two sample DataArrays with dimensions (t, c, z, y, x)
         channels = ["ChannelA", "ChannelT", "ChannelG", "ChannelC"]
         data_1 = xr.DataArray(
-            np.random.rand(100, 10, len(channels)),
+            np.random.rand(3, len(channels), 1, 100, 100),
             dims=("t", "c", "z", "y", "x"),
             coords={"c": channels},
         )
         data_2 = xr.DataArray(
-            np.random.rand(100, 10, len(channels)),
+            np.random.rand(3, len(channels), 1, 100, 100),
             dims=("t", "c", "z", "y", "x"),
             coords={"c": channels},
         )

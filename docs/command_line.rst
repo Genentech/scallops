@@ -136,7 +136,33 @@ Key Features:
 scallops pert-map
 ===================
 
-The `scallops pert-map` command provides tools for perturbation map building and evaluation.
+The `scallops pert-map` command builds and evaluates perturbation maps from per-cell features (for
+example the ``merge-features`` output of the OPS workflow). It replaces the older ``norm-features``
+and ``rank-features`` commands. Each subcommand reads one or more Zarr, h5ad or Parquet inputs and
+writes to Zarr, h5ad or Parquet.
+
+Key Features:
+
+* **filter**: Drop labels and features before downstream processing, by query/Parquet filters
+  (``--label-filter``, ``--feature-filter``) and by feature variance (``--min-feature-variance``,
+  ``--max-feature-variance``, ``--n-features``).
+* **normalize**: Z-score (or local z-score) normalize features, optionally relative to a reference
+  population (``--reference-query``, e.g. non-targeting controls) and stratified by group (``--by``).
+* **rank**: Compare each perturbation against a reference (``--reference``) using Welch's t-test,
+  Student's t-test, or Mann-Whitney U, producing per-feature effect sizes and FDR-corrected p-values.
+* **pca**: Reduce features to principal components, fit on a reference population if given.
+* **tvn**: Typical variation normalization — further align treatments and controls across batches
+  using the covariance of reference (control) observations.
+* **aggregate**: Aggregate single-cell data to one row per perturbation (``--by``), optionally
+  centering to a reference first.
+* **similarity-matrix**: Compute a pairwise similarity matrix between aggregated perturbations.
+* **enrichment**: Test similarity-matrix neighborhoods for enrichment of gene sets (``--set``, GMT
+  format).
+* **recall**: Evaluate a similarity matrix against known relationships (``--ground-truth-corum``) at
+  given recall thresholds.
+
+See :doc:`the Perturbation Map Workflow <workflows>` for how these steps compose into an end-to-end
+pipeline, and :ref:`example_commands:Rank Features` for a worked CLI example.
 
 .. argparse::
    :module: scallops.__main__
@@ -182,7 +208,10 @@ Key Features:
   watershed-intensity, or Cellpose. It also supports various cytoplasmic channels, thresholding, and post-segmentation
   filtering.
 * **Overlap**: The `overlap` subcommand finds the fraction of each label in one segmentation that is contained within
-  labels of another segmentation.
+  labels of another segmentation (``--meta-output``), then renumbers the second segmentation (and any additional
+  labels such as cytosol) to match the overlapping label in the first, writing the result to ``--label-output``. This
+  matters most for cell segmentation algorithms (e.g. Cellpose) whose cell and nuclei labels don't already share IDs;
+  with watershed or propagation, where they already do, renumbering has no effect.
 
 .. argparse::
    :module: scallops.__main__

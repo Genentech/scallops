@@ -201,8 +201,11 @@ def label_features(
 
     :param objects_df: Data frame containing labeled regions from `find_objects`.
     :param label_image: Labeled regions.
-    :param intensity_image: Intensity image with dimensions (y, x, c) or zarr array(s)
-        with dimensions with leading dimensions unrolled to channel dimension
+    :param intensity_image: Either a single dask/numpy array with dimensions (y, x, c), where
+        ``shape[:-1]`` must equal `label_image`'s shape; or a zarr array, or sequence of zarr
+        arrays, each with trailing dimensions (y, x) matching `label_image`'s shape and any number
+        of leading dimensions, which are flattened and summed across all arrays in the sequence to
+        give the total channel count.
     :param features: Features to extract.
     :param channel_names: Dictionary mapping channel index to channel names.
     :param normalize: Whether to normalize image.
@@ -213,7 +216,8 @@ def label_features(
         `label_image`. Used only by `puncta`, to anchor its spatial features on
         each ROI's nucleus. A zarr or numpy array is recommended: a dask array
         works, but its chunks are recomputed by every block that reads them.
-    :return: DataFrame with extracted features.
+    :return: A dask DataFrame, unless `label_image` is a plain numpy array, in which case the
+        result is computed and returned as a pandas DataFrame.
     """
     is_numpy = False
     if isinstance(label_image, np.ndarray):

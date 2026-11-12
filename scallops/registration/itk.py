@@ -1003,7 +1003,7 @@ def itk_align(
     :param additional_moving_image: Optional labels for registration
     :param initial_transform: Optional path to initial transformation
     :param landmarks: Optional landmarks dictionary with keys 'fixed_x', 'fixed_y', 'moving_x', and
-        'moving_y' used to compute intial affine tranformation.
+        'moving_y' used to compute initial affine transformation.
     :return: An ITK ElastixRegistrationMethod object representing the registration.
     """
     if fixed_image_spacing is None:
