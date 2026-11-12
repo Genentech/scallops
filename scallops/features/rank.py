@@ -38,7 +38,7 @@ def _rank_single(
     min_labels: int | None,
     group_name: str | None,
     method: Literal["welch_t", "student_t", "mannwhitney"],
-    reference_value: str | None,
+    reference_value: str,
     features: list[str],
     iqr_multiplier: float | None,
 ):
@@ -76,7 +76,7 @@ def _rank_single(
 def rank_features(
     data: anndata.AnnData,
     perturbation_column: str,
-    reference_value: str | None,
+    reference_value: str,
     by: Sequence[str] | str | None = None,
     method: Literal["welch_t", "student_t", "mannwhitney"] = "welch_t",
     min_labels: int | None = None,
@@ -87,8 +87,7 @@ def rank_features(
     :param data: Annotated data matrix.
     :param perturbation_column: Column in `data.obs` containing perturbation.
     :param reference_value: Reference value (e.g. NTC) to compare every other value of
-        `perturbation_column` against. Despite the ``str | None`` type, ``None`` is not actually
-        supported and raises an error; a real value present in `perturbation_column` is required.
+        `perturbation_column` against.
     :param method: Statistical method to use.
     :param by: Column(s) in `data.obs` to stratify by.
     :param min_labels: Include perturbations with at least this many observations.
@@ -137,7 +136,7 @@ def _diff_exp(
     values: NDArray,
     indices: Mapping[str, NDArray],
     method: Literal["welch_t", "student_t", "mannwhitney"],
-    reference_value: str | None,
+    reference_value: str,
     feature: str,
     group_name: str | None,
     iqr_multiplier: float | None,
