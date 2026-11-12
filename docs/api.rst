@@ -169,7 +169,6 @@ Cell Segmentation
         :toctree:
 
         scallops.segmentation.cellpose.segment_cells_cellpose
-        scallops.segmentation.cyto_channel_summary
         scallops.segmentation.propagation.segment_cells_propagation
         scallops.segmentation.watershed.segment_cells_watershed
 
