@@ -429,24 +429,96 @@ def barcode_n_unique_bases(barcodes: Sequence[str]) -> NDArray:
     return _n_unique_per_row(_encode_barcodes(barcodes))
 
 
+def _longest_run_per_row(codes: NDArray) -> NDArray:
+    """Length of the longest run of identical consecutive values in each row.
+
+    :param codes: Array (rows, values).
+    :return: Longest run for each row (0 if there are no values).
+    """
+    n_rows, n_values = codes.shape
+    if n_values == 0:
+        return np.zeros(n_rows, dtype=np.int64)
+    same = codes[:, 1:] == codes[:, :-1]
+    cur = np.ones(n_rows, dtype=np.int64)
+    best = cur.copy()
+    for j in range(same.shape[1]):
+        cur = np.where(same[:, j], cur + 1, 1)
+        np.maximum(best, cur, out=best)
+    return best
+
+
+def longest_homopolymer_run(bases_array: xr.DataArray) -> NDArray:
+    """Longest run of the same called base in consecutive cycles for each read.
+
+    :param bases_array: Intensities with dimensions (read, t, c).
+    :return: Array with the longest homopolymer run for each read.
+
+    :example:
+
+        .. code-block:: python
+
+            from scallops.reads import longest_homopolymer_run
+
+            runs = longest_homopolymer_run(bases_array)
+    """
+    data = bases_array.transpose("read", "t", "c").data
+    if isinstance(data, da.Array):
+        data = data.rechunk({1: -1, 2: -1})
+        return data.map_blocks(
+            _longest_run_chunk, drop_axis=[1, 2], dtype=np.int64
+        ).compute()
+    return _longest_run_chunk(data)
+
+
+def _longest_run_chunk(x: NDArray) -> NDArray:
+    return _longest_run_per_row(x.argmax(axis=2))
+
+
+def _keep_chunk(x: NDArray, min_unique_bases: int, max_homopolymer_run: int | None):
+    codes = x.argmax(axis=2)  # calls (read, t)
+    keep = np.ones(codes.shape[0], dtype=bool)
+    if min_unique_bases > 1:
+        keep &= _n_unique_per_row(codes) >= min_unique_bases
+    if max_homopolymer_run is not None:
+        keep &= _longest_run_per_row(codes) <= max_homopolymer_run
+    return keep
+
+
 def filter_low_complexity_reads(
-    bases_array: xr.DataArray, min_unique_bases: int = 2
+    bases_array: xr.DataArray,
+    min_unique_bases: int = 2,
+    max_homopolymer_run: int | None = None,
 ) -> xr.DataArray:
-    """Remove reads whose called bases take fewer than `min_unique_bases` distinct values
-    across cycles.
+    """Remove low complexity reads.
 
     Reads with the same brightest channel in every cycle are typically
     autofluorescence, debris, or other false positive spots rather than sequencing
     reads.
 
     :param bases_array: Intensities with dimensions (read, t, c).
-    :param min_unique_bases: Minimum number of distinct bases. Use 2 to remove reads
-        with the same base in every cycle.
+    :param min_unique_bases: Minimum number of distinct bases called across cycles. Use
+        2 to remove reads with the same base in every cycle, or 1 to disable.
+    :param max_homopolymer_run: Maximum allowed run of the same called base in
+        consecutive cycles. Reads with a longer run are removed. By default
+        (`None`), no filtering on run length is done.
     :return: The filtered array.
     """
-    if min_unique_bases <= 1:
+    if max_homopolymer_run is not None and max_homopolymer_run < 1:
+        raise ValueError("max_homopolymer_run must be at least 1")
+    if min_unique_bases <= 1 and max_homopolymer_run is None:
         return bases_array
-    keep = n_unique_bases(bases_array) >= min_unique_bases
+    data = bases_array.transpose("read", "t", "c").data
+    if isinstance(data, da.Array):
+        data = data.rechunk({1: -1, 2: -1})
+        keep = data.map_blocks(
+            _keep_chunk,
+            min_unique_bases=min_unique_bases,
+            max_homopolymer_run=max_homopolymer_run,
+            drop_axis=[1, 2],
+            dtype=bool,
+        ).compute()
+    else:
+        keep = _keep_chunk(data, min_unique_bases, max_homopolymer_run)
     return bases_array.isel(read=keep)
 
 

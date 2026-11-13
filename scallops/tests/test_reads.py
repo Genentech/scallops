@@ -997,7 +997,11 @@ def test_channel_crosstalk_matrix_median_dask_exact(by_t, dtype):
 def test_filter_low_complexity_reads(use_dask):
     import xarray as xr
 
-    from scallops.reads import filter_low_complexity_reads, n_unique_bases
+    from scallops.reads import (
+        filter_low_complexity_reads,
+        longest_homopolymer_run,
+        n_unique_bases,
+    )
 
     # brightest channel per cycle for each read
     calls = np.array(
@@ -1025,6 +1029,17 @@ def test_filter_low_complexity_reads(use_dask):
         filter_low_complexity_reads(a, 3)["peak"].values, [2.0]
     )
     assert filter_low_complexity_reads(a, 1) is a
+    np.testing.assert_array_equal(longest_homopolymer_run(a), [3, 2, 1, 3, 1])
+    np.testing.assert_array_equal(
+        filter_low_complexity_reads(a, 1, max_homopolymer_run=2)["read"].values,
+        [1, 2, 4],
+    )
+    np.testing.assert_array_equal(
+        filter_low_complexity_reads(a, 2, max_homopolymer_run=1)["read"].values,
+        [2, 4],
+    )
+    with pytest.raises(ValueError):
+        filter_low_complexity_reads(a, 2, max_homopolymer_run=0)
 
 
 def _label_columns_meta() -> dict[str, str]:
