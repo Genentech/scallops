@@ -1634,6 +1634,79 @@ def _em_posterior_signal(
     return post, u
 
 
+def _em_prepare(
+    x: NDArray,
+    E: NDArray,
+    phi: NDArray,
+    xtalk_tol: float | None,
+    min_snr: float,
+    min_gap: float,
+) -> tuple[NDArray, NDArray | None, NDArray, NDArray, NDArray, NDArray, NDArray]:
+    """Crosstalk, per-cycle gain, global scale and initial levels of the fit reads.
+
+    :param x: ``(read, t, c)`` raw intensities of the fit reads.
+    :param phi: Fraction of bases that fire each channel.
+    :return: ``(x, xtalk, gain, S, k_low, b0, s0)``: the intensities corrected for
+        crosstalk (``xtalk``, ``None`` if not corrected) and gain, the global scale,
+        the number of low cycles per channel used for the background, and the
+        initial per-read background and bright levels.
+    """
+    T, n_c = x.shape[1], x.shape[2]
+    xtalk = None
+    orthogonal = (E.sum(axis=1) <= 1).all() and (E.sum(axis=0) == 1).all()
+    if xtalk_tol is not None and orthogonal and n_c > 1:
+        w = _correct_channel_crosstalk_median(x.reshape(-1, n_c))
+        resid = np.abs(w / np.diag(w)[:, np.newaxis] - np.eye(n_c)).max()
+        if resid > xtalk_tol:
+            logger.info(f"Correcting residual crosstalk ({resid:.2f}) in the spots")
+            xtalk = w
+            x = x @ w.T
+    gain = _em_cycle_gain(x)
+    x = x / gain[np.newaxis]
+    S = _em_global_scale(x, min_snr)
+    # background from about half the cycles the encoding expects to be off
+    k_low = np.maximum(1, np.floor(T * (1 - phi) / 2)).astype(int)
+    b0, s0 = _em_initial_levels(x, S, min_snr, min_gap, k_low)
+    return x, xtalk, gain, S, k_low, b0, s0
+
+
+def _em_dominant_fraction(u: NDArray, E: NDArray) -> NDArray:
+    """Fraction of cycles taken by each read's most common preliminary call.
+
+    Each cycle is called as the encoding row nearest its normalized signal ``u``
+    (``(read, t, c)``, off near 0 and on near 1), which needs no model, handles dark
+    bases and bases that fire several channels, and is enough to tell reads with one
+    base in nearly every cycle.
+
+    :return: ``(read,)`` fraction of cycles.
+    """
+    # one base at a time, so no (read, t, base, c) array is held
+    d = np.stack([((u - e) ** 2).sum(axis=-1) for e in E], axis=-1)  # (read, t, b)
+    calls = d.argmin(axis=-1)  # (read, t)
+    counts = (calls[..., np.newaxis] == np.arange(len(E))).sum(axis=1)
+    return counts.max(axis=1) / u.shape[1]
+
+
+_EM_DOMINANT_ALPHA = 0.01  # chance a random barcode is dropped as low complexity
+
+
+def _em_min_dominant_count(n_t: int, n_bases: int) -> int:
+    """Fewest cycles of one base that a random barcode reaches with probability at
+    most :data:`_EM_DOMINANT_ALPHA`.
+
+    Bases are taken as uniform and independent across cycles, and the chance that
+    any base reaches ``k`` cycles is bounded by ``n_bases`` times the binomial tail.
+    For 4 bases this is 9 of 12 cycles and 6 of 6; with 4 cycles none (one base in
+    all 4 has probability 1.6 %), so ``n_t + 1`` is returned.
+    """
+    from scipy.stats import binom
+
+    k = np.arange(1, n_t + 1)
+    tail = n_bases * binom.sf(k - 1, n_t, 1.0 / n_bases)  # P(some base >= k cycles)
+    ok = k[tail <= _EM_DOMINANT_ALPHA]
+    return int(ok[0]) if len(ok) else n_t + 1
+
+
 def fit_base_mixture(
     spots: xr.DataArray,
     encoding: NDArray | None = None,
@@ -1641,6 +1714,7 @@ def fit_base_mixture(
     dark_bases: list[str] | None = None,
     n_reads: int = 500_000,
     fit_peak_quantile: float | None = 0.5,
+    fit_max_base_fraction: float | None = 0.7,
     n_iter: int = 200,
     n_restarts: int = 4,
     n_rescale: int = 3,
@@ -1699,6 +1773,16 @@ def fit_base_mixture(
     * **Fit reads**: a random sample of up to ``n_reads`` reads, restricted to reads
       with ``peak`` at or above the ``fit_peak_quantile`` quantile when ``spots``
       has a ``peak`` coordinate, since low-peak spots are mostly not real reads.
+    * **Low-complexity reads** (``fit_max_base_fraction``): fit reads whose most
+      common preliminary call (the encoding row nearest each cycle's normalized
+      signal) takes more than this fraction of cycles are dropped, and the
+      crosstalk, gain and levels below are estimated again without them.  Bright
+      spots that show the same base in nearly every cycle (debris, or dye that
+      builds up over cycles) are not reads, but can outnumber reads among bright
+      spots and pull the base states toward themselves: in a sparse PERISCOPE
+      crop, 63 % of the spots in the top tenth by peak were called C in most
+      cycles, and the model merged A into C (in denser crops of other wells, 2 to
+      4 %).
     * **Crosstalk** (``xtalk_tol``): for orthogonal encodings (each channel fired
       by exactly one base, as in 4-color or 3-color with a dark base), the
       crosstalk matrix of :func:`channel_crosstalk_matrix` (median method) is
@@ -1745,6 +1829,13 @@ def fit_base_mixture(
     :param n_reads: Number of reads sampled to fit the model.
     :param fit_peak_quantile: Fit only on reads whose ``peak`` is at or above this
         quantile (``None`` to use all reads).
+    :param fit_max_base_fraction: Drop fit reads whose most common preliminary call
+        takes more than this fraction of cycles (``None`` to keep them).  The
+        default, 0.7, drops reads with one base in 9 or more of 12 cycles.  Reads
+        are dropped only if a uniformly random barcode has that many cycles of
+        one base with probability at most 1 %, so with few cycles the cutoff is
+        higher than this fraction (with 4 bases: all 6 of 6 cycles, and with 4 or
+        fewer cycles none are dropped).  Calls are of all reads, whatever this is.
     :param n_iter: Maximum EM iterations per fit.
     :param n_restarts: Number of starting points for the tied model (at least the
         mixture and quantile starts; the rest are jittered copies).  The restarts
@@ -1799,6 +1890,11 @@ def fit_base_mixture(
     B, n_c = E.shape
     phi = E.sum(axis=0) / B
 
+    if isinstance(fit_peak_quantile, str):
+        raise ValueError(
+            f"fit_peak_quantile={fit_peak_quantile!r} is only supported by decode_em, "
+            "which has the barcodes to choose it with"
+        )
     candidates = np.arange(spots.sizes["read"])
     if fit_peak_quantile is not None and "peak" in spots.coords:
         peak = np.asarray(spots["peak"].values)
@@ -1812,22 +1908,30 @@ def fit_base_mixture(
     # noise, and clipping them would pile them into a spike the off state collapses on
     x = np.asarray(sp, dtype=float)
     T = x.shape[1]
-    xtalk = None
-    orthogonal = (E.sum(axis=1) <= 1).all() and (E.sum(axis=0) == 1).all()
-    if xtalk_tol is not None and orthogonal and n_c > 1:
-        w = _correct_channel_crosstalk_median(x.reshape(-1, n_c))
-        resid = np.abs(w / np.diag(w)[:, np.newaxis] - np.eye(n_c)).max()
-        if resid > xtalk_tol:
-            logger.info(f"Correcting residual crosstalk ({resid:.2f}) in the spots")
-            xtalk = w
-            x = x @ w.T
-    gain = _em_cycle_gain(x)
-    x = x / gain[np.newaxis]
-
-    S = _em_global_scale(x, min_snr)
-    # background from about half the cycles the encoding expects to be off
-    k_low = np.maximum(1, np.floor(T * (1 - phi) / 2)).astype(int)
-    b0, s0 = _em_initial_levels(x, S, min_snr, min_gap, k_low)
+    x, xtalk, gain, S, k_low, b0, s0 = _em_prepare(
+        x, E, phi, xtalk_tol, min_snr, min_gap
+    )
+    if fit_max_base_fraction is not None:
+        dominant = _em_dominant_fraction(_em_signal(x, b0, s0), E)
+        # with few cycles a fixed fraction would drop many real reads, so a read
+        # is dropped only when random barcodes rarely have that many of one base
+        min_count = _em_min_dominant_count(T, B)
+        keep = (dominant <= fit_max_base_fraction) | (np.rint(dominant * T) < min_count)
+        n_drop = int((~keep).sum())
+        if n_drop and keep.sum() >= max(10 * B, 100):
+            logger.info(
+                f"Dropping {n_drop:,} of {len(keep):,} fit reads with one base in "
+                f"more than {fit_max_base_fraction:.0%} of cycles"
+            )
+            x, xtalk, gain, S, k_low, b0, s0 = _em_prepare(
+                np.asarray(sp, dtype=float)[keep], E, phi, xtalk_tol, min_snr, min_gap
+            )
+        elif n_drop:
+            logger.warning(
+                f"{n_drop:,} of {len(keep):,} fit reads have one base in more than "
+                f"{fit_max_base_fraction:.0%} of cycles; too few would be left, so "
+                "they are kept"
+            )
     s = s0
     u = _em_signal(x, b0, s)
 
@@ -2018,6 +2122,122 @@ def _decode_em_chunk(
     return df
 
 
+_AUTO_FIT_QUANTILES = (0.5, 0.75, 0.9, 0.95, 0.98, 0.99)
+_AUTO_FIT_READS = 50_000  # fit reads per candidate quantile
+_AUTO_SCORE_READS = 100_000  # reads called to score each candidate
+_AUTO_PATIENCE = 2  # lower quantiles in a row without improvement before stopping
+_AUTO_Z = 2.0  # improvement needed, in standard errors of the score
+
+
+def _select_fit_peak_quantile(
+    spots: xr.DataArray,
+    whitelist: Sequence[str],
+    encoding_kwargs: dict,
+    fit_kwargs: dict,
+) -> tuple[float, dict[float, float]]:
+    """Pick ``fit_peak_quantile`` by the estimated number of real reads it calls.
+
+    Fits a quick model (at most :data:`_AUTO_FIT_READS` fit reads, no whitelist
+    refits) at each of :data:`_AUTO_FIT_QUANTILES`, from the highest
+    down, calls the same sample of up to :data:`_AUTO_SCORE_READS` reads from all
+    spots with each, and scores it by its whitelist matches minus its matches to as
+    many decoy barcodes (:func:`make_decoy_barcodes`), which estimates its correct
+    whitelist matches.  The whitelist only picks the quantile; it does not shape
+    the states.
+
+    High quantiles are tried first because their fits are fast (few fit reads) and
+    are often enough: the search stops once :data:`_AUTO_PATIENCE` lower quantiles
+    score no better than the best since the last clear gain.  A clear gain beats
+    the score of the last clear gain by :data:`_AUTO_Z` standard errors of their
+    difference (the match counts taken as Poisson); it resets the count, a gain
+    within noise neither resets nor adds to it, so a run of small gains is not cut
+    short and the bar does not drift up with noise.  The fit and score reads of
+    every quantile are gathered from ``spots`` in one pass.  On a sparse
+    PERISCOPE crop this skipped the three slowest fits (0.9 and below), cutting the
+    search from 18 to 3 minutes; on data where lower quantiles keep improving, every
+    quantile is tried.
+
+    :return: The chosen quantile (the best score among those tried) and the score
+        of every quantile tried.
+    """
+    seed = fit_kwargs.get("seed", 0)
+    targets = np.unique(np.asarray(whitelist, dtype=object))
+    decoys = make_decoy_barcodes(targets, seed=seed, match_density=False)
+    tset, dset = set(targets), set(decoys)
+    ratio = len(targets) / max(len(decoys), 1)
+
+    quick = {
+        k: v
+        for k, v in fit_kwargs.items()
+        if k not in ("fit_peak_quantile", "whitelist")
+    }
+    n_fit = min(quick.get("n_reads", 500_000), _AUTO_FIT_READS)
+    quick["n_reads"] = n_fit
+    quantiles = sorted(_AUTO_FIT_QUANTILES, reverse=True)
+
+    # Every read used below (the fit reads of each quantile and the score reads)
+    # is gathered in one pass, and peak is read once, rather than once per
+    # candidate fit.  Scored on reads from all spots, not only high peaks: a model
+    # fit on brighter reads can call them better but dimmer real reads worse.
+    rng = np.random.default_rng(seed)
+    n_spots = spots.sizes["read"]
+    score_idx = np.sort(rng.choice(n_spots, min(n_spots, _AUTO_SCORE_READS), False))
+    peak = np.asarray(spots["peak"].values) if "peak" in spots.coords else None
+    # one random priority per read, so the samples of nested candidate sets overlap
+    priority = rng.random(n_spots)
+    fit_idx = {}
+    for q in quantiles:
+        cand = (
+            np.flatnonzero(peak >= np.quantile(peak, q))
+            if peak is not None
+            else np.arange(n_spots)
+        )
+        if len(cand) > n_fit:
+            cand = cand[np.argpartition(priority[cand], n_fit - 1)[:n_fit]]
+        fit_idx[q] = np.sort(cand)
+    used = np.unique(np.concatenate([score_idx, *fit_idx.values()]))
+    gathered = spots.isel(read=used)
+    if isinstance(gathered.data, da.Array):
+        gathered = gathered.compute()
+    score_spots = gathered.isel(read=np.searchsorted(used, score_idx))
+
+    scores: dict[float, float] = {}
+    # replaced by the first quantile tried, whose score is finite
+    q_best, best = quantiles[0], -np.inf
+    # the reference score to beat: the last clear gain, not a best that drifted up
+    # within noise, so that a run of small gains adds up to a clear one
+    ref, ref_var, misses = -np.inf, 0.0, 0
+    for q in quantiles:
+        m = fit_base_mixture(
+            gathered.isel(read=np.searchsorted(used, fit_idx[q])),
+            fit_peak_quantile=None,
+            **encoding_kwargs,
+            **quick,
+        )
+        calls = decode_em(score_spots, model=m)["barcode"]
+        n_t, n_d = int(calls.isin(tset).sum()), int(calls.isin(dset).sum())
+        scores[q] = n_t - ratio * n_d
+        logger.info(
+            f"fit_peak_quantile={q}: {n_t:,} whitelist and {n_d:,} decoy matches "
+            f"of {len(score_idx):,} reads"
+        )
+        var = n_t + ratio**2 * n_d
+        if scores[q] > best:
+            q_best, best = q, scores[q]
+        if q_best == q and scores[q] > ref + _AUTO_Z * np.sqrt(var + ref_var):
+            ref, ref_var, misses = scores[q], var, 0  # clear gain
+        elif q_best != q:  # no gain at all
+            misses += 1
+            if misses >= _AUTO_PATIENCE:
+                logger.info(
+                    f"No clear gain from the last {misses} quantiles; stopping at {q}"
+                )
+                break
+        # a gain within noise neither resets nor adds to the count
+    logger.info(f"Selected fit_peak_quantile={q_best}")
+    return q_best, scores
+
+
 def decode_em(
     spots: xr.DataArray,
     barcodes: pd.DataFrame | None = None,
@@ -2088,8 +2308,21 @@ def decode_em(
     **Q.** The phred score of each call's posterior probability given the read's
     signal, ``-10 log10(1 - P(base | signal))``, capped at 60.
 
+    **Choosing the fit reads** (``fit_peak_quantile="auto"``, with ``barcodes``):
+    the default of fitting on the higher-peak half suits data where about half the
+    spots are reads, but not data where they are a few percent: in a sparse
+    PERISCOPE crop, the bottom 90 % of spots by peak matched decoys at least as
+    often as targets, and fitting on the higher-peak half gave about as many decoy
+    as whitelist matches (``"auto"`` chose 0.99).  In denser crops of other wells
+    the default worked, and ``"auto"`` (0.95) added 4 to 15 % more correct reads.
+    With ``"auto"``, a quick model is fit at each of several quantiles, 0.5 to
+    0.99, and the one whose calls give the most whitelist matches beyond the decoy
+    matches is used (see :func:`_select_fit_peak_quantile`).  It costs a quick fit
+    per quantile.  The choice and every candidate's score are in the model as
+    ``fit_peak_quantile`` and ``fit_peak_quantile_scores``.
+
     Useful ``fit_kwargs``: ``fit_peak_quantile``, ``n_reads`` (reads sampled to fit,
-    default 50 000), ``covariance`` (``"full"`` or ``"diag"``), ``t_dof``,
+    default 500 000), ``covariance`` (``"full"`` or ``"diag"``), ``t_dof``,
     ``read_scale``, ``xtalk_tol`` and ``seed``.  To call several datasets with one
     model, or to inspect it, fit it once with :func:`fit_base_mixture` and pass it
     as ``model``; ``encoding``, ``base_labels``, ``dark_bases``, ``use_whitelist``
@@ -2137,7 +2370,9 @@ def decode_em(
     :param use_whitelist: When fitting, also refit the model on reads whose calls
         match ``barcodes``.  Off by default, so calls need no whitelist.  Ignored
         without ``barcodes`` or with ``model``.
-    :param fit_kwargs: Passed to :func:`fit_base_mixture`.
+    :param fit_kwargs: Passed to :func:`fit_base_mixture`, except that
+        ``fit_peak_quantile`` may also be ``"auto"`` (see **Choosing the fit
+        reads**).
     :return: DataFrame (Dask DataFrame for Dask-backed ``spots``) with the read
         metadata and columns ``barcode``, ``Q`` (per-cycle quality scores),
         ``Q_mean``, ``Q_min``, and ``barcode_match`` when ``barcodes`` is given.
@@ -2145,6 +2380,23 @@ def decode_em(
     if model is None:
         if use_whitelist and barcodes is not None:
             fit_kwargs.setdefault("whitelist", barcodes["barcode"].values)
+        scores = None
+        if isinstance(fit_kwargs.get("fit_peak_quantile"), str):
+            if fit_kwargs["fit_peak_quantile"] != "auto":
+                raise ValueError(
+                    "fit_peak_quantile must be a number, None or 'auto', got "
+                    f"{fit_kwargs['fit_peak_quantile']!r}"
+                )
+            if barcodes is None:
+                raise ValueError("fit_peak_quantile='auto' needs barcodes")
+            if "peak" not in spots.coords:
+                raise ValueError("fit_peak_quantile='auto' needs a 'peak' coordinate")
+            fit_kwargs["fit_peak_quantile"], scores = _select_fit_peak_quantile(
+                spots,
+                barcodes["barcode"].values,
+                dict(encoding=encoding, base_labels=base_labels, dark_bases=dark_bases),
+                fit_kwargs,
+            )
         model = fit_base_mixture(
             spots,
             encoding=encoding,
@@ -2152,6 +2404,9 @@ def decode_em(
             dark_bases=dark_bases,
             **fit_kwargs,
         )
+        if scores is not None:
+            model["fit_peak_quantile"] = fit_kwargs["fit_peak_quantile"]
+            model["fit_peak_quantile_scores"] = scores
     return _decode(spots=spots, barcodes=barcodes, f=_decode_em_chunk, model=model)
 
 

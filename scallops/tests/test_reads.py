@@ -1364,3 +1364,244 @@ def test_draw_never_zero_weight():
     rng = np.random.default_rng(0)
     picks = np.stack([_draw(weights, rng) for _ in range(300)])
     assert set(picks[:, 0]) == {1, 3} and set(picks[:, 1]) == {0}
+
+
+def _simulate_noisy_library(
+    n_real=500, n_noise=2000, n_empty=800, n_lib=1500, T=8, seed=0
+):
+    """3-color dark-G spots: real reads from a barcode library, noise spots with
+    unstructured, dimmer signal whose peaks overlap the real reads', and empty spots
+    (background only, lowest peaks), the most common false positive in the NIS-seq
+    test data.
+    """
+    rng = np.random.default_rng(seed)
+    labels = np.array(list("ATCG"))
+    E = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]], dtype=float)
+    library = np.unique(["".join(rng.choice(labels, T)) for _ in range(n_lib)])
+    lib_idx = np.array([["ATCG".index(ch) for ch in bc] for bc in library])
+    truth = lib_idx[rng.integers(0, len(library), n_real)]
+    amp = rng.lognormal(0, 0.4, (n_real, 1, 1))
+    signal = E[truth] * amp * 0.97 ** np.arange(T)[np.newaxis, :, np.newaxis]
+    real = (
+        0.2 * rng.uniform(0.5, 1.5, (n_real, 1, 3))
+        + signal
+        + rng.normal(0, 0.05, (n_real, T, 3)) * (1 + 0.5 * signal)
+    )
+    noise_amp = rng.lognormal(-0.7, 0.4, (n_noise, 1, 1))
+    noise = 0.2 * rng.uniform(0.5, 1.5, (n_noise, 1, 3)) + noise_amp * rng.exponential(
+        0.5, (n_noise, T, 3)
+    )
+    empty = 0.2 * rng.uniform(0.5, 1.5, (n_empty, 1, 3)) + rng.normal(
+        0, 0.01, (n_empty, T, 3)
+    )
+    x = np.concatenate([real, noise, empty])
+    peak = np.concatenate(
+        [amp.ravel(), 1.5 * noise_amp.ravel(), rng.uniform(0.05, 0.3, n_empty)]
+    )
+    spots = xr.DataArray(
+        x,
+        dims=("read", "t", "c"),
+        coords={"read": np.arange(len(x)), "peak": ("read", peak), "c": list("ATC")},
+    )
+    is_real = np.r_[np.ones(n_real, bool), np.zeros(n_noise + n_empty, bool)]
+    true_bc = np.r_[["".join(labels[r]) for r in truth], [""] * (n_noise + n_empty)]
+    return spots, is_real, true_bc, library
+
+
+@pytest.fixture(scope="module")
+def noisy_library():
+    return _simulate_noisy_library()
+
+
+@pytest.mark.basecalls
+def test_decode_em_auto_fit_peak_quantile(noisy_library, caplog):
+    """fit_peak_quantile='auto' picks a candidate quantile by whitelist matches
+    beyond decoy matches, and calls at least as many reads correctly as 0.5."""
+    from scallops.reads import _AUTO_FIT_QUANTILES
+
+    spots, is_real, true_bc, library = noisy_library
+    barcodes = pd.DataFrame({"barcode": library})
+    kw = dict(barcodes=barcodes, dark_bases=["G"], n_restarts=2)
+    with caplog.at_level("INFO", logger="scallops"):
+        auto = decode_em(spots, fit_peak_quantile="auto", **kw)
+    assert "Selected fit_peak_quantile" in caplog.text
+    fixed = decode_em(spots, **kw)
+    n_auto = (auto["barcode"].values[is_real] == true_bc[is_real]).sum()
+    n_fixed = (fixed["barcode"].values[is_real] == true_bc[is_real]).sum()
+    assert n_auto >= 0.98 * n_fixed
+
+    model = fit_base_mixture(spots, dark_bases=["G"], n_restarts=2)
+    assert "fit_peak_quantile_scores" not in model
+    with pytest.raises(ValueError, match="needs barcodes"):
+        decode_em(spots, dark_bases=["G"], fit_peak_quantile="auto")
+    with pytest.raises(ValueError, match="only supported by decode_em"):
+        fit_base_mixture(spots, dark_bases=["G"], fit_peak_quantile="auto")
+    with pytest.raises(ValueError, match="must be a number"):
+        decode_em(spots, fit_peak_quantile="best", **kw)
+    assert set(_AUTO_FIT_QUANTILES) >= {0.5}
+
+
+def _stub_auto_search(monkeypatch, n_matches, n_reads=3000, T=8, seed=0):
+    """Stub the fits and calls of _select_fit_peak_quantile: the i-th fit (from the
+    highest quantile down) calls ``n_matches[i]`` reads as a whitelist barcode.
+
+    :return: ``(spots, whitelist, fits)``: Dask-backed spots, the whitelist, and the
+        spots passed to each fit.
+    """
+    import scallops.reads as reads
+
+    rng = np.random.default_rng(seed)
+    whitelist = np.unique(["".join(rng.choice(list("ACGT"), T)) for _ in range(300)])
+    spots = xr.DataArray(
+        da.from_array(rng.random((n_reads, T, 4)), chunks=(500, -1, -1)),
+        dims=("read", "t", "c"),
+        coords={"read": np.arange(n_reads), "peak": ("read", rng.random(n_reads))},
+    )
+    fits = []
+
+    def fake_fit(sp, **kwargs):
+        assert kwargs["fit_peak_quantile"] is None
+        fits.append(sp)
+        return len(fits) - 1
+
+    def fake_decode(sp, model):
+        n_t = n_matches[model]
+        return pd.DataFrame(
+            {"barcode": [whitelist[0]] * n_t + ["N" * T] * (sp.sizes["read"] - n_t)}
+        )
+
+    monkeypatch.setattr(reads, "fit_base_mixture", fake_fit)
+    monkeypatch.setattr(reads, "decode_em", fake_decode)
+    return spots, whitelist, fits
+
+
+@pytest.mark.basecalls
+def test_select_fit_peak_quantile_loads_once(monkeypatch):
+    """The fit reads of every candidate and the score reads are loaded from Dask in
+    one compute, and each candidate fits only reads at or above its quantile."""
+    from dask.callbacks import Callback
+
+    from scallops.reads import (
+        _AUTO_FIT_QUANTILES,
+        _AUTO_FIT_READS,
+        _select_fit_peak_quantile,
+    )
+
+    quantiles = sorted(_AUTO_FIT_QUANTILES, reverse=True)
+    # rising scores (clear gains), so every quantile is tried
+    n_matches = [100 * (i + 1) for i in range(len(quantiles))]
+    spots, whitelist, fits = _stub_auto_search(monkeypatch, n_matches)
+    n_computes = []
+
+    class Count(Callback):
+        def _start(self, dsk):
+            n_computes.append(1)
+
+    # local callbacks do not see a distributed client (the module-scoped `client`
+    # fixture stays the default scheduler after the tests that use it)
+    with dask.config.set(scheduler="synchronous"), Count():
+        q, scores = _select_fit_peak_quantile(
+            spots, whitelist, {}, {"n_reads": 500, "seed": 0}
+        )
+    assert len(n_computes) == 1
+    assert q == quantiles[-1] and list(scores) == quantiles
+    assert len(fits) == len(quantiles)
+    peak = spots["peak"].values
+    for qq, sp in zip(quantiles, fits):
+        assert isinstance(sp.data, np.ndarray)  # already loaded
+        n_cand = (peak >= np.quantile(peak, qq)).sum()
+        assert sp.sizes["read"] == min(500, _AUTO_FIT_READS, n_cand)
+        assert (sp["peak"].values >= np.quantile(peak, qq)).all()
+        # the data of the same reads in spots
+        np.testing.assert_array_equal(
+            sp.values, spots.sel(read=sp["read"].values).values
+        )
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize(
+    "n_matches, n_tried, q_index",
+    [
+        # steady gains, each within noise of the last (~2 SE is ~89): all tried
+        ([1000, 1030, 1060, 1090, 1120, 1150], 6, 5),
+        # flat with noise: stops after two quantiles without a gain
+        ([1000, 990, 1005, 995, 1500, 1500], 4, 2),
+        # falling: stops after two
+        ([1000, 900, 800, 2000, 2000, 2000], 3, 0),
+        # a clear gain resets the count
+        ([1000, 990, 1200, 1190, 1180, 1500], 5, 2),
+    ],
+)
+def test_select_fit_peak_quantile_stopping(monkeypatch, n_matches, n_tried, q_index):
+    """The search stops after _AUTO_PATIENCE quantiles with no gain; gains within
+    noise neither reset nor add to the count, and are compared with the last
+    clear gain, so a run of small gains is not cut short."""
+    from scallops.reads import (
+        _AUTO_FIT_QUANTILES,
+        _AUTO_PATIENCE,
+        _select_fit_peak_quantile,
+    )
+
+    assert _AUTO_PATIENCE == 2 and len(_AUTO_FIT_QUANTILES) == len(n_matches)
+    quantiles = sorted(_AUTO_FIT_QUANTILES, reverse=True)
+    spots, whitelist, fits = _stub_auto_search(monkeypatch, n_matches)
+    q, scores = _select_fit_peak_quantile(spots, whitelist, {}, {"seed": 0})
+    assert len(scores) == n_tried
+    assert q == quantiles[q_index]
+    assert scores == {qq: float(n) for qq, n in zip(quantiles, n_matches[:n_tried])}
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("n_t", [3, 4, 5, 6, 8])
+def test_em_min_dominant_count(n_t):
+    """The cutoff is the fewest cycles of one base that uniformly random barcodes
+    reach with probability (union bound) at most _EM_DOMINANT_ALPHA; the exact
+    probability, by enumerating every barcode, is below the bound."""
+    from itertools import product
+
+    from scipy.stats import binom
+
+    from scallops.reads import _EM_DOMINANT_ALPHA, _em_min_dominant_count
+
+    n_bases = 4
+    k = _em_min_dominant_count(n_t, n_bases)
+    counts = np.array(
+        [np.bincount(b, minlength=n_bases).max() for b in product(range(4), repeat=n_t)]
+    )
+    bound = lambda k: n_bases * binom.sf(k - 1, n_t, 1 / n_bases)  # noqa: E731
+    if k <= n_t:
+        assert (counts >= k).mean() <= bound(k) <= _EM_DOMINANT_ALPHA
+    assert bound(k - 1) > _EM_DOMINANT_ALPHA
+    assert {4: 5, 6: 6}.get(n_t, k) == k  # none dropped with 4 cycles
+    assert _em_min_dominant_count(12, 4) == 9  # the documented 9 of 12
+
+
+@pytest.mark.basecalls
+@pytest.mark.parametrize("n_t, dropped", [(4, False), (8, True)])
+def test_fit_max_base_fraction_scales_with_cycles(caplog, n_t, dropped):
+    """Bright reads with one base in all but one cycle are dropped from the fit with
+    8 cycles (7 of 8), but not with 4 (3 of 4 is common in real barcodes)."""
+    spots, *_ = _simulate_noisy_library(
+        n_real=1000, n_noise=0, n_empty=0, n_lib=256, T=n_t
+    )
+    rng = np.random.default_rng(1)
+    # low-complexity reads: A in every cycle but one, which is T
+    n_low = 300
+    x = np.full((n_low, n_t, 3), 0.2) + rng.normal(0, 0.05, (n_low, n_t, 3))
+    x[:, :, 0] += 1.0
+    x[:, 0, 0] -= 1.0
+    x[:, 0, 1] += 1.0
+    low = xr.DataArray(
+        x,
+        dims=("read", "t", "c"),
+        coords={
+            "read": np.arange(len(spots), len(spots) + n_low),
+            "peak": ("read", np.full(n_low, 2.0)),
+            "c": list("ATC"),
+        },
+    )
+    spots = xr.concat([spots, low], dim="read")
+    with caplog.at_level("INFO", logger="scallops"):
+        fit_base_mixture(spots, dark_bases=["G"], n_restarts=2, n_iter=20)
+    assert ("Dropping" in caplog.text) == dropped
+    assert "too few would be left" not in caplog.text
