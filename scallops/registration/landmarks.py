@@ -315,7 +315,13 @@ def match_template(
     :param translation: Global translation between template and image in physical coordinates.
     :param image_spacing: Optional image spacing. If not provided, determined from metadata.
     :param template_spacing: Optional template spacing. If not provided, determined from metadata.
-    :return: Result dictionary or None.
+    :return: ``None`` if the template or image slice is blank, or has zero labels where labels are
+        given. Otherwise a dictionary with keys ``i``, ``j`` (best-match pixel offset in the
+        template), ``score`` and ``ratio`` (template-match quality), ``shift_microns_y``,
+        ``shift_microns_x`` (physical-space shift), ``template``, ``image`` (the matched array
+        slices), ``n_template_labels``, ``n_image_labels`` (unique nonzero label counts, if
+        `template_labels`/`image_labels` given), ``template_labels``, ``image_labels`` (echoed
+        back, possibly resized), and ``jaccard`` (overlap between them, if both given).
     """
     inputs = _match_template_physical_space_inputs(
         image=image,
@@ -465,7 +471,13 @@ def find_landmarks(
         computation.
     :param com_min_quantile: Include values >= specified quantile for center of mass
         computation.
-    :return: Delayed object that resolves to a data frame.
+    :return: Delayed object that resolves to a data frame with one row per grid point and columns
+        ``y_start_microns``, ``x_start_microns`` (grid point location), ``i``, ``j``, ``score``,
+        ``ratio``, ``shift_microns_y``, ``shift_microns_x``, ``n_template_labels``,
+        ``n_image_labels``, ``jaccard`` (per-point match results, as returned by
+        :func:`~scallops.registration.landmarks.match_template`), ``moving_y_microns``,
+        ``moving_x_microns`` (grid point shifted by the match), and ``inlier`` (whether RANSAC
+        considers the point's shift consistent with the others; always False with 1 or fewer rows).
     """
 
     image_spacing = (

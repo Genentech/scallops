@@ -7,76 +7,24 @@
 SCALLOPS
 ########
 
-.. raw:: html
+SCALLOPS (**Scal**\ able **L**\ ibrary for **O**\ ptical **P**\ ooled **S**\ creens) is a Python package
+for analyzing Optical Pooled Screens (OPS) imaging data at scale, built on xarray, dask, and zarr.
 
-    <p style="line-height: 1.6; margin-bottom: 1em;">
-      SCALLOPS (<b>Scal</b>able <b>L</b>ibrary for <b>O</b>ptical <b>P</b>ooled <b>S</b>creens) is a comprehensive Python
-      package designed to streamline and scale the analysis of Optical Pooled Screens (OPS) for biological data.
-      With a focus on handling large-scale, high-throughput screening data, SCALLOPS provides tools for efficiently
-      processing, analyzing, and interpreting OPS data, leveraging modern distributed computing frameworks like Dask.
-    </p>
-    <br>
-
-
-Main Focus Areas:
-------------------
-High-Throughput Data Processing: SCALLOPS is built to manage massive datasets typical of OPS experiments, allowing users
-to efficiently process and analyze data across multiple scales.
-
-Scalability and Performance: The package is optimized for both local and cloud-based distributed
-environments, making it ideal for scaling to large datasets without compromising performance.
-
-Modular Workflows:
-------------------
-SCALLOPS provides WDL workflows for stitching, OPS analysis, and perturbation map building that can be
-customized, allowing users to tailor analyses to their specific experimental needs.
-
-Key Features:
--------------
-Efficient Data Handling:
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-SCALLOPS utilizes advanced memory management and lazy evaluation techniques, which minimize resource usage
-while handling large datasets.
-
-Command-Line Interface:
-^^^^^^^^^^^^^^^^^^^^^^^
-A user-friendly command-line interface (CLI) enables automation and batch processing, making it easy to
-integrate SCALLOPS into larger pipelines.
-
-Standard Output Formats:
-^^^^^^^^^^^^^^^^^^^^^^^^
-Images are written as OME-Zarr, tables (reads, per-cell features) as Parquet, and aggregated results as
-AnnData, alongside plots and summary statistics, so results are easy to use in downstream analyses. See
-:ref:`outputs`.
-
-Notebook Examples:
-^^^^^^^^^^^^^^^^^^
-:doc:`Example Jupyter notebooks <example_notebooks>` walk users through typical workflows, making it easy to
-get started with real-world datasets.
-
-Custom Features:
-^^^^^^^^^^^^^^^^
-Advanced users can extend SCALLOPS with their own custom functions and workflows, ensuring the package can
-grow with the complexity of the data.
-
-Comprehensive API:
-^^^^^^^^^^^^^^^^^^
-SCALLOPS provides a rich API that exposes all the package functionalities, allowing users to integrate it
-directly into their own Python scripts and workflows. This makes SCALLOPS highly adaptable, enabling
-users to build fully customized data pipelines and analyses tailored to their unique experimental needs.
-
-Typical Use Cases:
-------------------
-Large-Scale Screening Projects:
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-SCALLOPS is designed for handling the immense data loads of genome-wide OPS projects, helping users to
-efficiently identify and quantify biological perturbations.
-
-Data-Driven Insights:
-^^^^^^^^^^^^^^^^^^^^^
-SCALLOPS facilitates the discovery of patterns and trends in OPS data, helping users extract and interpret
-complex biological systems data.
+Key Features
+------------
+* **Scales from a laptop to the cloud**: the same commands run locally or distributed via Dask, on AWS
+  HealthOmics, Google Cloud Batch, or Terra (see :doc:`workflows`).
+* **Command-line interface**: each pipeline stage (illumination correction, stitching, registration,
+  segmentation, feature extraction, barcode calling) is a ``scallops`` subcommand; see
+  :doc:`command_line`.
+* **WDL pipelines**: end-to-end stitching, OPS, and perturbation-map workflows that can be run as-is or
+  composed from their underlying tasks; see :doc:`workflows`.
+* **Standard output formats**: images as OME-Zarr, tables as Parquet, aggregated results as AnnData;
+  see :ref:`outputs`.
+* **Python API**: every pipeline step is also a documented function, for use outside the CLI; see
+  :doc:`api`.
+* **Notebook examples**: :doc:`example Jupyter notebooks <example_notebooks>` walk through real-world
+  datasets.
 
 
 .. toctree::

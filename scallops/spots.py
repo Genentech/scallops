@@ -67,7 +67,10 @@ def std(
     :param channel_agg_method: Method used to aggregate standard deviation across cycles
     :param data: LoG-ed image data, expected dimensions of (t, c, z, y, x) or (sigma, t, c, z, y,
         x).
-    :return: Standard deviation score for each pixel, dimensions of (y,x).
+    :return: Standard deviation score for each pixel. Reduces only `t` (and `c`, via
+        `channel_agg_method`, if present); any `z` or `sigma` dimension is first squeezed if it
+        has size 1, but otherwise remains in the output, so the result is `(y, x)` only when every
+        other dimension has size 1.
     """
     assert channel_agg_method in ["mean", "median", "sum"]
     data = data.squeeze()
@@ -105,8 +108,11 @@ def peak_thresholds_from_bases(
         bases across cycles (see
         :func:`~scallops.reads.filter_low_complexity_reads`). The default of 2 removes
         reads with the same base in every cycle.
-    :return: Result data frame. All thresholds and metrics are NaN if there are no
-        reads.
+    :return: One row per threshold quantile, with columns ``threshold``, ``quantile``,
+        ``precision``, ``recall``, ``f1``, ``f0.5``, ``accuracy``, ``tp``, ``fp``, ``tn``, and
+        ``fn``, sorted descending by ``f0.5`` (unlike :func:`peak_thresholds_from_reads`, which
+        sorts by ``f1``), then ``accuracy``, then ``threshold``. All thresholds and metrics are
+        NaN if there are no reads.
     """
 
     if n_reads is not None and 0 < n_reads < bases_array.sizes["read"]:
@@ -135,7 +141,10 @@ def peak_thresholds_from_reads(
 
     :param df_reads: Data frame containing reads.
     :param Q_cutoff: Threshold for binarization of reads.
-    :return: Result data frame.
+    :return: One row per threshold quantile, with columns ``threshold``, ``quantile``,
+        ``precision``, ``recall``, ``f1``, ``f0.5``, ``accuracy``, ``tp``, ``fp``, ``tn``, and
+        ``fn``, sorted descending by ``f1`` (unlike :func:`peak_thresholds_from_bases`, which sorts
+        by ``f0.5``), then ``accuracy``, then ``threshold``.
     """
     return _peak_thresholds_from_reads(df_reads, Q_cutoff).sort_values(
         ["f1", "accuracy", "threshold"], ascending=False
@@ -499,7 +508,8 @@ def transform_log(
     :param sigma: Size or list of sizes of gaussian kernel used in Laplacian-of-Gaussian filter
     :param truncate: Truncate the filter at this many standard deviations
     :param kwargs: Keyword arguments to gaussian_laplace
-    :return: LoG-ed data with dimensions (sigma, t, c, y, x).
+    :return: LoG-ed data with a leading `sigma` dimension prepended to `data`'s dimensions, i.e.
+        (sigma, t, c, y, x) or (sigma, c, y, x) depending on whether `data` has a `t` dimension.
     """
 
     assert data.dims == ("t", "c", "y", "x") or data.dims == ("c", "y", "x"), data.dims

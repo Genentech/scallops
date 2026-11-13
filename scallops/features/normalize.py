@@ -132,8 +132,10 @@ def normalize_features(
     :param reference_query: Query to extract reference observations
         (e.g. "gene_symbol=='NTC'")
     :param by: Column(s) in `data.obs` to stratify by.
-    :param normalize: Normalization method to use where `local` uses nearest neighbors by location.
-    :param n_neighbors: Number of neighbors for local and nearest neighbor zscore.
+    :param normalize: Normalization method to use: `zscore` normalizes over the whole group, while
+        `local-zscore` normalizes each observation using its nearest neighbors by location.
+    :param n_neighbors: Number of neighbors to use when `normalize` is `local-zscore`. Ignored for
+        `zscore`.
     :param neighbors_metric: Nearest neighbor metric to use when normalize is
         `local-zscore`.
     :param robust: Use robust statistics.

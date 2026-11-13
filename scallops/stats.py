@@ -451,7 +451,8 @@ def fisher_combined_pvalue(p_values: Sequence[float]) -> float:
     # Calculate degrees of freedom
     degrees_of_freedom = 2 * len(p_values)
     # Calculate combined p-value
-    combined_p_value = 1 - chi2.cdf(chi_squared_stats, degrees_of_freedom)
+    # sf instead of 1 - cdf, which rounds small p-values to 0
+    combined_p_value = chi2.sf(chi_squared_stats, degrees_of_freedom)
     return combined_p_value
 
 

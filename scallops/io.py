@@ -705,7 +705,7 @@ def _save_ome_tiff(
 
 def read_barcodes(
     barcodes_path: str,
-    barcode_indices: None | Sequence[int],
+    barcode_indices: Sequence[int] | None,
     barcode_column: str = "barcode",
 ) -> pd.DataFrame:
     """Load barcodes from a CSV file.
@@ -729,7 +729,7 @@ def read_barcodes(
         barcodes_path = "path/to/barcodes.csv"
 
         # Load barcodes without selecting specific indices
-        barcodes_df = scallops.io.read_barcodes(barcodes_path)
+        barcodes_df = scallops.io.read_barcodes(barcodes_path, barcode_indices=None)
         print(barcodes_df.head())
 
         # Load barcodes and select specific indices
@@ -862,7 +862,9 @@ def get_pixel_positions(path: str) -> NDArray:
     It returns an array with the pixel positions assuming that the image file contains said metadata.
 
     :param path: Path to the image file.
-    :return: Array with pixel positions.
+    :return: ``[y, x]`` pixel position of the first plane, computed from the raw stage position in
+        microns with Y negated (so that it increases downward, matching image pixel coordinates,
+        instead of the stage's raw convention) and divided by the physical pixel size.
 
     :example:
 
@@ -1289,7 +1291,9 @@ def get_image_spacing(attrs: dict) -> tuple[float, float] | None:
 
     :param attrs: Dictionary containing image attributes.
     :return: A tuple containing the spacing along the y and x dimensions in micrometers (µm).
-             Returns None if the spacing cannot be determined.
+             Returns None if no spacing information is present at all. If ``attrs["src_metadata"]``
+             lists multiple sources and their spacings disagree, returns the first source's spacing
+             rather than None.
 
     Example:
 
@@ -2638,7 +2642,8 @@ def create_multiscene_hyperstack(
     :param uri: URI to save the multi-scene hyperstack image.
     :param images: Dictionary containing image scenes, where keys are scene names and values are xarray DataArrays.
     :param output_order: Order of dimensions in the output hyperstack. Defaults to 'ctzyx'.
-                         Supported dimensions are 's', 'c', 't', 'z', 'y', and 'x'.
+                         Supported dimensions are 'c', 't', 'z', 'y', and 'x' — the dimensions each
+                         scene is normalized to before being transposed to this order.
     :param kwargs: Additional arguments to pass to OmeTiffWriter.save().
 
     Example:
@@ -2667,8 +2672,8 @@ def create_multiscene_hyperstack(
         scallops.io.create_multiscene_hyperstack(output_uri, images)
     """
 
-    assert set(output_order) <= set("sctzyx"), (
-        "output_order can only contain s, c, t, z, y, and x"
+    assert set(output_order) <= set("ctzyx"), (
+        "output_order can only contain c, t, z, y, and x"
     )
 
     names, data = zip(

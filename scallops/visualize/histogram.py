@@ -38,7 +38,7 @@ def channel_hist_plot(
     :param aspect:
         Aspect ratio of each facet, so that aspect * height gives the width of each facet in inches
     :param image:
-        XArray with the dimensions (t,c,z,y,c) or (i,t,c,z,y,c)
+        XArray with the dimensions (t,c,z,y,x) or (i,t,c,z,y,x)
     :param binrange:
         Lowest and highest value for bin edges. Defaults to data extremes.
     :param bins: Generic bin parameter that can be the name of a reference rule, the number of bins, or the breaks of

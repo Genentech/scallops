@@ -116,13 +116,13 @@ def segment_nuclei_watershed(
         Image with the dimensions (t, c, z, y, x)
     :param nuclei_channel:
         Index of nuclei channel (typically DAPI)
-    :param area_min:
-        Minimum area to be considered a nuclei
     :param threshold:
         Foreground regions with mean DAPI intensity greater than `threshold` are labeled as nuclei.
-    :param area_min, area_max:
-        After individual nuclei are segmented from foreground using watershed algorithm, nuclei with
-        `area_min` < area < `area_max` are retained.
+    :param area_min:
+        Minimum size of foreground objects kept before watershed, and minimum area for individual
+        nuclei to be retained after watershed (nuclei with `area_min` < area < `area_max` are kept).
+    :param area_max:
+        Maximum area for individual nuclei to be retained after watershed.
     :param smooth:
         Size of gaussian kernel used to smooth the distance map to foreground prior to watershed.
     :param radius:
@@ -242,13 +242,14 @@ def segment_cells_watershed(
     :param cyto_channel: Index or list of indices for cyto channel(s) used for splitting cells (and for the
         cell mask if `mask_channel` is not specified). If not provided, all channels except for `nuclei_channel` are used.
     :param threshold:
-        One of `Li`, `Otsu`, `quantile`, or float value
+        One of `Li`, `Otsu`, `quantile`, `Local`, or a fixed numeric threshold.
         If `Li`, use Li’s iterative Minimum Cross Entropy method :func:`~skimage.filters.thresholding.threshold_li`.
         If `Otsu`, use Otsu’s method :func:`~skimage.filters.thresholding.threshold_otsu`.
         If `quantile`, use :func:`~scallops.segmentation.util.threshold_quantile`
+        If `Local`, compute mask using `image > smoothed * threshold_correction_factor`.
+        Otherwise, the value is used directly as the threshold.
     :param threshold_correction_factor: Factor to adjust the computed threshold by.
     :param quantile_threshold: Quantile when threshold is 'quantile`
-    :param threshold: Threshold to apply to cell mask.
     :param nuclei_channel: DAPI channel index
     :param rm_small_std: If specified, remove objects smaller than specified number of standard deviations of identified nuclei
     :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction to mask prior to calculating threshold

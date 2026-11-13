@@ -79,11 +79,12 @@ def segment_cells_propagation(
         cell mask if `mask_channel` is not specified). If not provided, all channels except for
         `nuclei_channel` are used.
     :param threshold:
-        One of `Li`, `Otsu`,  or float value
+        One of `Li`, `Otsu`, `Local`, or a fixed numeric threshold.
         If `Li`, use Li’s iterative Minimum Cross Entropy method :func:`~skimage.filters.thresholding.threshold_li`.
         If `Otsu`, use Otsu’s method :func:`~skimage.filters.thresholding.threshold_otsu`.
+        If `Local`, compute mask using `image > smoothed * threshold_correction_factor`.
+        Otherwise, the value is used directly as the threshold.
     :param threshold_correction_factor: Factor to adjust the computed threshold by.
-    :param threshold: Threshold to apply to cell mask.
     :param nuclei_channel: DAPI channel index
     :param rm_small_std: If specified, remove objects smaller than specified number of standard deviations of identified
         nuclei

@@ -199,12 +199,13 @@ def image2mask(
 
     :param image: Image with the dimensions (t, c, y, x)
     :param threshold:
-        One of `Li`, `Otsu`, `Local`
+        One of `Li`, `Otsu`, `Local`, or a fixed numeric threshold (a float, or an array of
+        per-pixel thresholds).
         If `Li`, use Li’s iterative Minimum Cross Entropy method :func:`~skimage.filters.thresholding.threshold_li`.
         If `Otsu`, use Otsu’s method :func:`~skimage.filters.thresholding.threshold_otsu`.
         If 'Local', compute mask using `image > smoothed * threshold_correction_factor`
+        Otherwise, the value is used directly as the threshold.
     :param threshold_correction_factor: Factor to adjust the computed threshold by.
-    :param threshold: Threshold to apply to mask.
     :param rolling_ball: If true, apply skimage.restoration.rolling_ball subtraction to mask prior to calculating threshold
     :param sigma: sigma (optional) gaussian filter sigma to smooth the image prior to computing threshold
     :param depth: The number of elements that each block should share with its neighbors when using dask
@@ -359,7 +360,8 @@ def cyto_channel_summary(image: xr.DataArray) -> xr.DataArray:
     ... )  # doctest: +SKIP
 
     :param image: Image with dimensions (t, c, z, y, x)
-    :return: The cell mask
+    :return: A single-channel intensity image (not a label mask) summarizing the cytoplasmic
+        channels, for use as the input to thresholding/segmentation.
     """
     if "c" not in image.dims:
         return image.isel(t=0, missing_dims="ignore").squeeze()
