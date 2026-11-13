@@ -18,6 +18,7 @@ from functools import cache
 from itertools import product
 from typing import Literal, Tuple
 
+import dask
 import dask.array as da
 import dask.dataframe as dd
 import numpy as np
@@ -1295,7 +1296,36 @@ def _em_values(u: NDArray, E: NDArray) -> tuple[NDArray, NDArray]:
     return val, valid
 
 
-def _em_channel_logpdf(u: NDArray, model: dict) -> tuple[NDArray, NDArray]:
+def _em_robust_logpdf(
+    val: NDArray,
+    valid: NDArray,
+    mu: NDArray,
+    sd: NDArray,
+    jac: NDArray | float,
+    eps: float,
+) -> tuple[NDArray, NDArray]:
+    """Elementwise robust log density ``(1 - eps) * f + eps * U`` and inlier weight.
+
+    ``f`` is a Gaussian in ``val`` with mean ``mu`` and standard deviation ``sd``
+    (minus the Jacobian ``jac``, ``val`` for lognormal on states), and ``U`` is
+    uniform on :data:`_EM_U_RANGE`.  Values outside a state's support (``~valid``)
+    get density ``eps * U`` and inlier weight 0.
+    """
+    lo, hi = _EM_U_RANGE
+    const = np.log1p(-eps) - np.log(sd) - 0.5 * np.log(2 * np.pi)
+    log_in = const - 0.5 * ((val - mu) / sd) ** 2 - jac
+    log_in = np.where(valid, log_in, -np.inf)
+    log_out = np.log(eps) - np.log(hi - lo) if eps > 0 else -np.inf
+    log_p = np.logaddexp(log_in, log_out)
+    return log_p, np.exp(log_in - log_p)
+
+
+def _em_channel_logpdf(
+    u: NDArray,
+    model: dict,
+    val: NDArray | None = None,
+    valid: NDArray | None = None,
+) -> tuple[NDArray, NDArray]:
     """Robust per-channel log densities ``(read, t, base, c)`` and inlier weights.
 
     Each channel's density is ``(1 - eps) * f + eps * U``, with ``f`` a Gaussian in
@@ -1303,22 +1333,97 @@ def _em_channel_logpdf(u: NDArray, model: dict) -> tuple[NDArray, NDArray]:
     ``U`` uniform on :data:`_EM_U_RANGE`, so a few outlying values (saturated
     pixels, misestimated read levels) cannot dominate the fit.  The inlier weight is
     the posterior probability of ``f``.
+
+    :param val: ``val, valid`` from :func:`_em_values`, if already computed.
+    """
+    E = model["encoding"]
+    if val is None or valid is None:
+        val, valid = _em_values(u, E)
+    jac = np.where(E > 0, val, 0.0)  # Jacobian of log u for on states
+    return _em_robust_logpdf(
+        val, valid, model["mu"], model["sd"], jac, model["outlier"]
+    )
+
+
+def _em_tied_values(u: NDArray) -> tuple[NDArray, NDArray, NDArray]:
+    """Modelled values of the on and off states per channel, ``(read, t, c)``.
+
+    The same values as :func:`_em_values`, without the base axis: ``log u`` for on
+    states and ``u`` for off states, ``u`` clipped to :data:`_EM_U_RANGE`.
+
+    :return: ``(val_on, valid_on, val_off)``.
     """
     lo, hi = _EM_U_RANGE
-    eps = model["outlier"]
+    uc = np.clip(u, lo, hi)
+    pos = uc > 0
+    return np.log(np.where(pos, uc, 1.0)), pos, uc
+
+
+def _em_tied_params(model: dict) -> tuple[NDArray, NDArray, NDArray, NDArray]:
+    """Per-channel on and off ``(mu, sd)`` of a tied model, each ``(c,)``.
+
+    Channels without an on (or off) base get the values of the other state; they
+    receive no weight.
+    """
+    on = model["encoding"] > 0
+    mu, sd = model["mu"], model["sd"]
+    first_on = np.where(on.any(axis=0), on.argmax(axis=0), 0)
+    first_off = np.where((~on).any(axis=0), (~on).argmax(axis=0), 0)
+    cols = np.arange(on.shape[1])
+    return (
+        mu[first_on, cols],
+        sd[first_on, cols],
+        mu[first_off, cols],
+        sd[first_off, cols],
+    )
+
+
+def _em_is_tied(model: dict) -> bool:
+    """Whether every base shares one on and one off state per channel."""
+    if "cov" in model:
+        return False
+    on = model["encoding"] > 0
+    mu_on, sd_on, mu_off, sd_off = _em_tied_params(model)
+    return bool(
+        np.array_equal(model["mu"], np.where(on, mu_on, mu_off))
+        and np.array_equal(model["sd"], np.where(on, sd_on, sd_off))
+    )
+
+
+def _em_tied_logpdf(
+    u: NDArray, model: dict, vals: tuple[NDArray, NDArray, NDArray] | None = None
+) -> tuple[NDArray, NDArray, NDArray]:
+    """:func:`_em_channel_logpdf` for a tied model, computed per state not per base.
+
+    A tied model has one on and one off state per channel, so the densities are
+    computed once per state on ``(read, t, c)`` arrays, a factor ``n_bases / 2``
+    less work, and summed over channels with the encoding.
+
+    :param vals: Output of :func:`_em_tied_values`, if already computed.
+    :return: ``(log_p, inl_on, inl_off)``: ``(read, t, base)`` log densities summed
+        over channels and the ``(read, t, c)`` inlier weights of each state.
+    """
     E = model["encoding"]
-    val, valid = _em_values(u, E)
-    mu, sd = model["mu"], model["sd"]  # (base, c); on states in log space
-    log_f = -0.5 * ((val - mu) / sd) ** 2 - np.log(sd) - 0.5 * np.log(2 * np.pi)
-    log_f = log_f - np.where(E > 0, val, 0.0)  # Jacobian of log u for on states
-    log_f = np.where(valid, log_f, -np.inf)
-    log_in = np.log1p(-eps) + log_f
-    log_out = np.log(eps) - np.log(hi - lo) if eps > 0 else -np.inf
-    log_p = np.logaddexp(log_in, log_out)
-    return log_p, np.exp(log_in - log_p)
+    eps = model["outlier"]
+    val_on, valid_on, val_off = _em_tied_values(u) if vals is None else vals
+    mu_on, sd_on, mu_off, sd_off = _em_tied_params(model)
+    lp_on, inl_on = _em_robust_logpdf(val_on, valid_on, mu_on, sd_on, val_on, eps)
+    lp_off, inl_off = _em_robust_logpdf(val_off, True, mu_off, sd_off, 0.0, eps)
+    if eps > 0:  # finite densities
+        log_p = lp_on @ E.T + lp_off @ (1 - E).T
+    else:  # avoid 0 * -inf
+        on = E > 0
+        log_p = np.where(on, lp_on[..., np.newaxis, :], lp_off[..., np.newaxis, :])
+        log_p = log_p.sum(axis=-1)
+    return log_p, inl_on, inl_off
 
 
-def _em_joint_logpdf(u: NDArray, model: dict) -> tuple[NDArray, NDArray]:
+def _em_joint_logpdf(
+    u: NDArray,
+    model: dict,
+    val: NDArray | None = None,
+    valid: NDArray | None = None,
+) -> tuple[NDArray, NDArray]:
     """Robust joint log densities ``(read, t, base)`` and inlier weights.
 
     Like :func:`_em_channel_logpdf` but with a full covariance ``cov[b]`` across
@@ -1330,6 +1435,7 @@ def _em_joint_logpdf(u: NDArray, model: dict) -> tuple[NDArray, NDArray]:
     component alone would make the call uninformative.  The uniform outlier
     component, per cycle, remains for values outside a state's support.
 
+    :param val: ``val, valid`` from :func:`_em_values`, if already computed.
     :return: ``(log_p, weight)``: log densities and M-step weights (inlier
         probability times the t-distribution weight).
     """
@@ -1339,11 +1445,15 @@ def _em_joint_logpdf(u: NDArray, model: dict) -> tuple[NDArray, NDArray]:
     eps = model["outlier"]
     nu = model.get("t_dof")
     E = model["encoding"]
-    val, valid = _em_values(u, E)  # (read, t, base, c)
+    if val is None or valid is None:
+        val, valid = _em_values(u, E)  # (read, t, base, c)
     C = val.shape[-1]
     chol = np.linalg.cholesky(model["cov"])  # (base, c, c)
+    # whiten with the inverse factor of each base: one small inverse per base
+    # instead of a batched solve per value
+    chol_inv = np.linalg.inv(chol)
     diff = val - model["mu"]
-    z = np.linalg.solve(chol, diff[..., np.newaxis])[..., 0]  # (read, t, base, c)
+    z = np.einsum("bcd,ntbd->ntbc", chol_inv, diff, optimize=True)
     q = (z**2).sum(axis=-1)  # squared Mahalanobis distance
     logdet = 2 * np.log(np.diagonal(chol, axis1=-2, axis2=-1)).sum(axis=-1)  # (base,)
     if nu is None:
@@ -1374,7 +1484,19 @@ def _em_loglik(u: NDArray, model: dict) -> NDArray:
     """
     if "cov" in model:
         return _em_joint_logpdf(u, model)[0]
+    if _em_is_tied(model):
+        return _em_tied_logpdf(u, model)[0]
     return _em_channel_logpdf(u, model)[0].sum(axis=-1)
+
+
+def _em_logsumexp_softmax(L: NDArray) -> tuple[NDArray, NDArray]:
+    """``logsumexp`` and ``softmax`` of ``L`` over the last axis, in one pass."""
+    m = L.max(axis=-1, keepdims=True)
+    m = np.where(np.isfinite(m), m, 0.0)
+    e = np.exp(L - m)
+    s = e.sum(axis=-1, keepdims=True)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return (np.log(s) + m)[..., 0], e / s
 
 
 def _em_run(
@@ -1404,24 +1526,42 @@ def _em_run(
         for k, v in model.items()
     }
     model["encoding"] = E
-    val, _ = _em_values(u, E)
     on = E > 0
+    tied = tied and not full
+    if tied:
+        # one on and one off state per channel: work on (read, t, c) arrays
+        vals = _em_tied_values(u)
+        mu_on, sd_on, mu_off, sd_off = _em_tied_params(model)
+        model["mu"] = np.where(on, mu_on, mu_off)
+        model["sd"] = np.where(on, sd_on, sd_off)
+    else:
+        val, valid = _em_values(u, E)
     n_anneal = max(1, n_iter // 4) if anneal else 0
     prev = -np.inf
     ll = -np.inf
     for it in range(n_iter):
         beta = min(1.0, 0.5 + 0.5 * it / n_anneal) if n_anneal else 1.0
-        if full:
-            log_p, inlier = _em_joint_logpdf(u, model)
-            L = log_p + np.log(model["pi"])[np.newaxis]
+        if tied:
+            log_p, inl_on, inl_off = _em_tied_logpdf(u, model, vals)
+        elif full:
+            log_p, inlier = _em_joint_logpdf(u, model, val, valid)
         else:
-            log_p, inlier = _em_channel_logpdf(u, model)
-            L = log_p.sum(axis=-1) + np.log(model["pi"])[np.newaxis]
-        ll = float(np.logaddexp.reduce(L, axis=-1).mean())
+            log_p, inlier = _em_channel_logpdf(u, model, val, valid)
+            log_p = log_p.sum(axis=-1)
+        L = log_p + np.log(model["pi"])[np.newaxis]
+        lse, post = _em_logsumexp_softmax(L)
+        ll = float(lse.mean())
         if beta == 1.0 and abs(ll - prev) < tol * max(1.0, abs(prev)):
             break
         prev = ll if beta == 1.0 else -np.inf
-        w = softmax(beta * L, axis=-1) if fixed_w is None else fixed_w
+        if fixed_w is not None:
+            w = fixed_w
+        elif beta == 1.0:
+            w = post
+        else:
+            w = softmax(beta * L, axis=-1)
+        pi = w.mean(axis=0) + 1e-6
+        model["pi"] = pi / pi.sum(axis=1, keepdims=True)
         if full:
             wb = w * inlier  # (read, t, base): includes the t weight
             tot = wb.sum(axis=(0, 1)) + 1e-12
@@ -1432,29 +1572,30 @@ def _em_run(
             cov += var_floor * np.eye(val.shape[-1])
             model["mu"], model["cov"] = mu, cov
             model["sd"] = np.sqrt(np.diagonal(cov, axis1=-2, axis2=-1))
-            pi = w.mean(axis=0) + 1e-6
-            model["pi"] = pi / pi.sum(axis=1, keepdims=True)
             continue
-        wc = w[..., np.newaxis] * inlier  # (read, t, base, c)
-        sw = wc.sum(axis=(0, 1))  # (base, c)
-        sx = np.einsum("ntbc,ntbc->bc", wc, val)
-        sxx = np.einsum("ntbc,ntbc->bc", wc, val**2)
         if tied:  # pool on states and off states across bases, per channel
-            mu = np.zeros_like(sw)
-            var = np.zeros_like(sw)
-            for state in (on, ~on):
-                n_s = (sw * state).sum(axis=0) + 1e-12
-                m_s = (sx * state).sum(axis=0) / n_s
-                v_s = (sxx * state).sum(axis=0) / n_s - m_s**2
+            val_on, _, val_off = vals
+            mu = np.zeros(E.shape)
+            var = np.zeros(E.shape)
+            for state, w_s, v_s, inl in (
+                (on, w @ E, val_on, inl_on),
+                (~on, w @ (1 - E), val_off, inl_off),
+            ):
+                wc = w_s * inl  # (read, t, c)
+                n_s = wc.sum(axis=(0, 1)) + 1e-12
+                m_s = (wc * v_s).sum(axis=(0, 1)) / n_s
+                var_s = (wc * v_s**2).sum(axis=(0, 1)) / n_s - m_s**2
                 mu = np.where(state, m_s, mu)
-                var = np.where(state, v_s, var)
+                var = np.where(state, var_s, var)
         else:
+            wc = w[..., np.newaxis] * inlier  # (read, t, base, c)
+            sw = wc.sum(axis=(0, 1))  # (base, c)
+            sx = np.einsum("ntbc,ntbc->bc", wc, val)
+            sxx = np.einsum("ntbc,ntbc->bc", wc, val**2)
             mu = sx / (sw + 1e-12)
             var = sxx / (sw + 1e-12) - mu**2
         model["mu"] = mu
         model["sd"] = np.sqrt(np.maximum(var, var_floor))
-        pi = w.mean(axis=0) + 1e-6
-        model["pi"] = pi / pi.sum(axis=1, keepdims=True)
     return model, ll
 
 
@@ -1606,7 +1747,9 @@ def fit_base_mixture(
         quantile (``None`` to use all reads).
     :param n_iter: Maximum EM iterations per fit.
     :param n_restarts: Number of starting points for the tied model (at least the
-        mixture and quantile starts; the rest are jittered copies).
+        mixture and quantile starts; the rest are jittered copies).  The restarts
+        run in parallel as tasks on the current Dask scheduler, so peak memory grows
+        with the number running at once.
     :param n_rescale: Rounds of per-read level refinement, in fitting and calling.
     :param tied: Keep one on and one off state per channel shared across bases
         instead of releasing to per-base parameters.
@@ -1733,15 +1876,26 @@ def fit_base_mixture(
             "encoding": E,
         }
 
-    best: dict | None = None
-    best_ll = -np.inf
-    for p in starts[: max(n_restarts, 2)]:
-        model, ll = _em_run(
-            u, E, tied_model(p), n_iter, tol, var_floor, tied=True, anneal=True
-        )
-        if ll > best_ll:
-            best, best_ll = model, ll
-    assert best is not None
+    # the restarts are independent: run them as tasks on the current dask
+    # scheduler, keeping the first with the highest log-likelihood
+    from distributed import get_client
+
+    try:  # send u to the workers once, rather than in the graph
+        u_task = get_client().scatter(u, broadcast=True, hash=False)
+    except ValueError:  # no distributed client
+        u_task = delayed(u)  # one graph node shared by every restart
+    em_run = delayed(_em_run, pure=True)
+    fits = dask.compute(
+        *[
+            em_run(
+                u_task, E, tied_model(p), n_iter, tol, var_floor, tied=True, anneal=True
+            )
+            for p in starts[: max(n_restarts, 2)]
+        ]
+    )
+    best, best_ll = max(
+        fits, key=lambda fit: fit[1] if np.isfinite(fit[1]) else -np.inf
+    )
     best.update(
         encoding=E,
         S=S,
