@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -8,8 +6,6 @@ from distributed import Client, LocalCluster
 from scallops.datasets._registry import cache_dir
 from scallops.io import read_experiment, read_image
 
-__root__ = Path(__file__).parent
-
 __data_dir__ = cache_dir()
 
 __experimentc_dir__ = __data_dir__.joinpath("experimentC")
@@ -17,8 +13,7 @@ __pheno_dir__ = __experimentc_dir__.joinpath("10X_c0-DAPI-p65ab")
 
 __processfig4_dir__ = __data_dir__.joinpath("process_fig4")
 
-# NIS-seq test data is not yet in the GitHub release assets; it is tracked in the repo.
-__nisseq_dir__ = __root__.joinpath("data", "nis-seq")
+__nisseq_dir__ = __data_dir__.joinpath("nis-seq")
 __nisseq_tile__ = __nisseq_dir__.joinpath("Fig1E_NIS_HeLa_tile40")
 
 
