@@ -112,10 +112,10 @@ Example::
 Register Phenotype Images
 =========================
 
-Create a single image stack registered to the IF DAPI channel. The `unroll-channels`
-option stacks all the phenotypic channels into the c dimension of the resulting image. The `time` option
-selects the reference round to align to. Note that the order of cycles is preserved (FISH, IF), hence
-the registered image has the FISH channels followed by the IF channels.
+Create a single image stack registered to the IF DAPI channel. ``--unroll-channels`` stacks the
+channels of every phenotype round into the ``c`` dimension of the registered image, and ``--time`` selects
+the reference round to align to. Rounds keep their input order (FISH, then IF), so the registered image
+has the FISH channels followed by the IF channels.
 
 Example::
 
@@ -190,8 +190,9 @@ Example::
 Spot Detection
 ===============
 
-Find spots by taking standard deviation over cycles, followed by mean across channels or if only 1 cycle is
-present, computing standard deviation across channels.
+Each ISS channel is filtered with a Laplacian of Gaussian (LoG). Candidate spots are the peaks of the
+standard deviation of the LoG images over cycles, averaged across channels. If there is only one cycle, the
+standard deviation across channels is used instead. ``--channel`` selects the ISS channels (one per base).
 
 
 Example::
@@ -206,7 +207,11 @@ Example::
 
 Read calling
 ============
-Assign bases at each cycle to the base with maximum intensity after correcting for channel crosstalk.
+Call a read at each candidate spot: at every cycle, the base is the channel with the highest intensity
+after correcting for crosstalk between channels. Reads are assigned to the label that contains them
+(``--label-name cell`` uses the ``-cell`` labels in ``--labels``, which here are the segmentation labels
+transferred to ISS coordinates) and matched against the barcodes CSV. Channels map to bases in the order
+given by ``--bases`` (default ``GTAC``). See :ref:`outputs` for the tables that are written.
 
 Example crosstalk before correction:
 
@@ -387,7 +392,11 @@ Compute correlation in nuclei bounding boxes between IF DAPI channel and FISH DA
 
 Merge
 ======
-Merge the phenotype features, ISS barcode assignments, and QC info.
+Join the barcode assignments of each cell (``reads/labels``, written by the read calling step) with the
+phenotype tables from the steps above: object locations (``objects-*``), features (``features-*``),
+stitching-boundary flags (``intersects-boundary*``) and registration QC (``*-qc``). The barcodes CSV
+adds the library annotations (for example the gene symbol) for each cell's barcodes. The result is one
+table per well, indexed by cell label.
 
 Example::
 
@@ -411,6 +420,13 @@ Example::
 
 Rank Features
 ===============
+Compare cells of each perturbation with non-targeting control cells. ``--reference`` is a value of the
+``--perturbation`` column, which defaults to ``gene_symbol`` (from the barcodes CSV), so ``--reference NTC``
+uses cells whose ``gene_symbol`` is ``NTC`` as the reference. ``--feature-filter`` selects the features to
+test, and ``--label-filter`` keeps only cells that pass QC. In this example, a cell is kept if all of its
+reads have the same barcode, its nuclei correlate well between ISS and phenotype images and between
+phenotype rounds, and it doesn't touch a stitching boundary.
+
 Example::
 
     scallops pert-map rank \
@@ -425,7 +441,9 @@ Example::
     --output s3://xxx/ops/rank-features/A-3.parquet
 
 
-Volcano Plot:
+Volcano Plot. ``fold_change`` is the ratio of the treatment mean to the reference mean, so this example
+highlights features on ``log2FoldChange`` to catch both increases and decreases.
+:func:`scallops.visualize.distribution.volcano_plot` provides a ready-made version of this plot.
 
 
 .. code-block:: python
@@ -440,13 +458,13 @@ Volcano Plot:
     feature = 'Nuclei_Intensity_MedianIntensity_Channel5'
     fig, ax = plt.subplots()
     ax.set_title(feature)
-    df = rank_features_df.query(f"feature=='{feature}'")
+    df = rank_features_df.query(f"feature=='{feature}'").copy()
     df["-log10FDR"] = np.minimum(10, -np.log10(df["FDR"]))
-    highlight_df = df.query("abs(fold_change)>2 & FDR<0.05")
-    sns.scatterplot(df, x="fold_change", y="-log10FDR", ax=ax)
+    highlight_df = df.query("abs(log2FoldChange)>1 & FDR<0.05")
+    sns.scatterplot(df, x="log2FoldChange", y="-log10FDR", ax=ax)
     texts = [
         ax.text(
-            x=r["fold_change"],
+            x=r["log2FoldChange"],
             y=r["-log10FDR"],
             s=r["perturbation"],
         )
@@ -456,7 +474,7 @@ Volcano Plot:
         texts,
         arrowprops=dict(arrowstyle="->", color="Grey"),
         ax=ax,
-        x=highlight_df["fold_change"],
+        x=highlight_df["log2FoldChange"],
         y=highlight_df["-log10FDR"],
         expand_axes=True
     );

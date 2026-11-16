@@ -458,6 +458,28 @@ def _write_zarr_labels(
     )
 
 
+def _ome_attrs(attrs: Mapping) -> Mapping:
+    """Return the OME-Zarr attributes of a group, unwrapping the ``"ome"`` key that
+    OME-Zarr 0.5 nests them under.
+
+    :param attrs: Zarr group attributes.
+    :return: The OME-Zarr attributes (``multiscales``, ``omero``, ...).
+    """
+    return attrs["ome"] if "ome" in attrs else attrs
+
+
+def _update_zarr_attrs(grp: zarr.Group, zarr_attrs: dict) -> None:
+    """Update group attributes, merging into an existing OME-Zarr 0.5 ``"ome"`` entry
+    instead of replacing it.
+
+    :param grp: Zarr group to update.
+    :param zarr_attrs: Attributes to write, for example from ``_create_zarr_attrs``.
+    """
+    if "ome" in zarr_attrs and isinstance(grp.attrs.get("ome"), Mapping):
+        zarr_attrs = {**zarr_attrs, "ome": {**grp.attrs["ome"], **zarr_attrs["ome"]}}
+    grp.attrs.update(zarr_attrs)
+
+
 def _create_zarr_attrs(fmt, grp, dims, image_attrs, axes, scale_dict):
     datasets = [{"path": "s0"}]
     if scale_dict is None:
@@ -480,16 +502,12 @@ def _create_zarr_attrs(fmt, grp, dims, image_attrs, axes, scale_dict):
     if axes is not None:
         multiscales[0]["axes"] = axes
 
-    if fmt.version in fmt.version in ("0.5"):
-        omero = zarr_attrs["ome"].get("omero", {})
-        omero.update(image_attrs.pop("omero", {}))
-        zarr_attrs["ome"]["omero"] = omero
-        zarr_attrs = {"ome": zarr_attrs}
-    else:
-        omero = zarr_attrs.get("omero", {})
-        omero.update(image_attrs.pop("omero", {}))
-        zarr_attrs["omero"] = omero
+    zarr_attrs["omero"] = dict(image_attrs.pop("omero", {}))
     multiscales[0]["metadata"] = image_attrs
+    if fmt.version == "0.5":
+        # OME-Zarr 0.5 nests the metadata under "ome", which holds the version.
+        del multiscales[0]["version"]
+        zarr_attrs = {"ome": {"version": fmt.version, **zarr_attrs}}
     return zarr_attrs
 
 
@@ -592,13 +610,13 @@ def write_zarr(
 
             @dask.delayed
             def _write_metadata_delayed(grp, d):
-                grp.attrs.update(d)
+                _update_zarr_attrs(grp, d)
 
             return dask_delayed + [
                 bind(_write_metadata_delayed, dask_delayed)(grp, zarr_attrs)
             ]
         else:
-            grp.attrs.update(zarr_attrs)
+            _update_zarr_attrs(grp, zarr_attrs)
             return dask_delayed
     else:
         image_attrs = {"metadata": image_attrs}
@@ -681,9 +699,7 @@ def _read_zarr_attrs(attrs) -> tuple[dict | None, dict, list[str] | None]:
     # omero for channel metadata
     # multiscales[0]/metadata for other metadata
 
-    if "ome" in attrs:
-        attrs = attrs["ome"]
-
+    attrs = _ome_attrs(attrs)
     multiscales = attrs["multiscales"]
 
     if len(multiscales) > 0:
@@ -738,11 +754,7 @@ def _read_ome_zarr_array(
     if "ome" in node.attrs or "multiscales" in node.attrs:
         coords, attrs, dims = _read_zarr_attrs(node.attrs)
 
-        multiscales = (
-            node.attrs["multiscales"]
-            if "multiscales" in node.attrs
-            else node.attrs["ome"]["multiscales"]
-        )
+        multiscales = _ome_attrs(node.attrs)["multiscales"]
         key = "0"
 
         if len(multiscales) > 0:

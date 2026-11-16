@@ -14,6 +14,7 @@ import skimage
 import xarray as xr
 import zarr
 from dask import delayed
+from ome_zarr.format import FormatV04, FormatV05
 from zarr.core.group import AsyncGroup
 from zarr.errors import ContainsGroupError
 
@@ -1029,3 +1030,53 @@ def test_set_up_experiment_filter_matches(tmp_path):
     assert group == ("A1", "cell")
     assert len(file_list) == 1
     assert np.unique(read_ome_zarr_array(file_list[0])) == [2]
+
+
+@pytest.mark.parametrize("fmt", [FormatV04(), FormatV05()], ids=lambda f: f.version)
+def test_zarr_attrs_round_trip(fmt):
+    from types import SimpleNamespace
+
+    from scallops.stitch.utils import get_tile_position
+
+    axes = [{"name": "c", "type": "channel"}, {"name": "y"}, {"name": "x"}]
+    image_attrs = {
+        "omero": {"channels": [{"label": "DAPI"}, {"label": "FITC"}]},
+        "position_y": 10.0,
+        "position_x": 20.0,
+        "position_y_unit": "µm",
+        "position_x_unit": "µm",
+    }
+    attrs = zarr_io._create_zarr_attrs(
+        fmt, SimpleNamespace(name="A-3"), ["c", "y", "x"], image_attrs, axes, None
+    )
+    if fmt.version == "0.5":
+        assert set(attrs) == {"ome"}
+        assert attrs["ome"]["version"] == "0.5"
+        assert "version" not in attrs["ome"]["multiscales"][0]
+    else:
+        assert attrs["multiscales"][0]["version"] == "0.4"
+
+    coords, metadata, dims = zarr_io._read_zarr_attrs(attrs)
+    assert dims == ["c", "y", "x"]
+    assert coords["c"] == ["DAPI", "FITC"]
+    assert metadata["position_y"] == 10.0
+    assert metadata["position_x"] == 20.0
+
+    image = SimpleNamespace(
+        ome_metadata=None, metadata=SimpleNamespace(attributes=attrs)
+    )
+    np.testing.assert_array_equal(get_tile_position(image), [10.0, 20.0])
+
+
+def test_update_zarr_attrs_merges_ome():
+    grp = zarr.open_group(zarr.storage.MemoryStore(), mode="w")
+    grp.attrs.update({"ome": {"version": "0.5", "labels": ["A-3-cell"]}, "other": 1})
+    zarr_io._update_zarr_attrs(
+        grp, {"ome": {"version": "0.5", "multiscales": [{"name": "A-3"}]}}
+    )
+    assert grp.attrs["ome"] == {
+        "version": "0.5",
+        "labels": ["A-3-cell"],
+        "multiscales": [{"name": "A-3"}],
+    }
+    assert grp.attrs["other"] == 1

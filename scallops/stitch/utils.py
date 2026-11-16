@@ -5,7 +5,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import bioio
 import dask
@@ -33,6 +33,7 @@ from scallops.io import (
 )
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import _zncc
+from scallops.zarr_io import _ome_attrs
 
 ureg = UnitRegistry()
 logger = logging.getLogger("scallops")
@@ -396,16 +397,16 @@ def get_tile_position(
             ]
             physical_size_y_unit = img.pixels.planes[0].position_y_unit.value
             physical_size_x_unit = img.pixels.planes[0].position_x_unit.value
-    if (
-        values is None
-        and hasattr(image.metadata, "attributes")
-        and isinstance(image.metadata.attributes, Mapping)
-        and "multiscales" in image.metadata.attributes
-    ):
-        metadata = image.metadata.attributes["multiscales"][0]["metadata"]
+    # stage positions written by scallops to OME-Zarr multiscales metadata
+    metadata: Mapping[str, Any] = {}
+    zarr_attrs = getattr(image.metadata, "attributes", None)
+    if isinstance(zarr_attrs, Mapping):
+        multiscales = _ome_attrs(zarr_attrs).get("multiscales") or [{}]
+        metadata = multiscales[0].get("metadata") or {}
+    if values is None and "position_y" in metadata and "position_x" in metadata:
         values = [metadata["position_y"], metadata["position_x"]]
-        physical_size_y_unit = metadata["position_y_unit"]
-        physical_size_x_unit = metadata["position_x_unit"]
+        physical_size_y_unit = metadata.get("position_y_unit")
+        physical_size_x_unit = metadata.get("position_x_unit")
     elif values is None:
         attrs = image.xarray_dask_data.attrs
         if isinstance(attrs, Mapping) and "unprocessed" in attrs:

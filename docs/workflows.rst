@@ -14,12 +14,12 @@ Stitching Workflow
 ==================
 **File:** ``stitch_workflow.wdl``
 
-This workflow performs illumination correction (flatfield estimation) followed by image stitching. It takes raw microscopy images (e.g., `.nd2`, `.tiff`) and converts them into OME-Zarr format.
+This workflow performs illumination correction (flatfield estimation) followed by image stitching. It takes raw microscopy images (e.g., ``.nd2``, ``.tiff``) and converts them into OME-Zarr format.
 
 Workflow Steps
 --------------
 
-1.  **Grouping**: The workflow scans the input directories (`urls`) using the `image_pattern`. It groups images based on the `groupby` parameter (default: plate, well, timepoint).
+1.  **Grouping**: The workflow scans the input directories (``urls``) using the ``image_pattern``. It groups images based on the ``groupby`` parameter (default: plate, well, timepoint).
 2.  **Illumination Correction**: (Optional) For each group, it calculates a flatfield image (mean or median projection). This step is parallelized across groups.
 3.  **Stitching**:
 
@@ -34,7 +34,9 @@ Inputs
 Minimal Configuration (Required)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-These are the parameters needed to run the stitching workflow.
+These are the parameters needed to run the stitching workflow. ``image_pattern`` is optional, but
+without it no metadata (plate, well, timepoint) is parsed from file names, so it is needed whenever
+images are grouped by those fields.
 
 .. list-table::
    :widths: 20 15 65
@@ -47,8 +49,8 @@ These are the parameters needed to run the stitching workflow.
      - Array[String]
      - List of directories containing raw images (e.g S3 URLs).
    * - **image_pattern**
-     - String (optional)
-     - Pattern with ``{field}`` placeholders used to parse metadata from file paths (e.g.,
+     - String
+     - Optional. Pattern with ``{field}`` placeholders used to parse metadata from file paths (e.g.,
        ``"Well{well}_Point{point}.nd2"``). Only ``groupby`` fields that appear in the pattern are used.
    * - **output_directory**
      - String
@@ -87,25 +89,29 @@ Below is the complete list of exposed options, including optional settings for g
      - Filter to process only specific groups (e.g., ``["A-1", "B-2"]``).
    * - **z_index**
      - String
-     - Specific Z-plane to stitch, or ``"focus"`` for auto-focus.
+     - Z-plane to stitch: a 0-based index, ``"max"`` for a maximum projection (the default), or
+       ``"focus"`` to select the sharpest plane of each tile.
    * - **stitch_channel**
      - Int
      - The reference channel index used for calculating stitching offsets. Default: ``0``.
    * - **stitch_radial_correction_k**
      - String
-     - Coefficient for barrel distortion correction.
+     - Coefficient for radial (barrel) distortion correction. Default ``"auto"`` estimates it;
+       ``"none"`` disables automatic estimation.
    * - **stitch_max_shift**
      - Float
-     - Maximum allowed shift between tiles.
+     - Maximum allowed shift of a tile from its stage position, in microns.
    * - **stitch_blend**
      - String
-     - Blending method for overlapping regions.
+     - Blending of overlapping regions: ``"none"`` (the default; use the tile closest to the well
+       center) or ``"linear"``.
    * - **stitch_crop_y**, **stitch_crop_x**
      - Int
      - Pixels to crop from tile edges in y and x before stitching.
    * - **stitch_min_overlap_fraction**
      - Float
-     - Minimum overlap required between tiles.
+     - Minimum overlap fraction for two tiles to be aligned to each other. Determined automatically
+       if not given.
    * - **run_illumination_correction**
      - Boolean
      - Default ``true``. Set to ``false`` if images are pre-corrected.
@@ -114,7 +120,7 @@ Below is the complete list of exposed options, including optional settings for g
      - Method for flatfield calculation. Default: ``"mean"``.
    * - **expected_images**
      - Int
-     - Expected number of images per group (useful for QC).
+     - Expected number of images per group; the workflow fails if a group has a different number.
    * - **rename**
      - String
      - Path to a 2-column CSV mapping image IDs to new IDs.
@@ -128,7 +134,7 @@ Below is the complete list of exposed options, including optional settings for g
 Outputs
 -------
 
-The workflow generates the following directory structure in `output_directory`:
+The workflow generates the following directory structure in ``output_directory``:
 
 * ``illumination_correction/``: Contains calculated flatfield images in OME-TIFF format.
 * ``stitch/``: Contains the stitched images in OME-Zarr format.
@@ -139,7 +145,7 @@ OPS Workflow
 ============
 **File:** ``ops_workflow.wdl``
 
-The Optical Pooled Screens (OPS) workflow is a comprehensive pipeline that integrates Phenotypic imaging (IF) with In-Situ Sequencing (ISS).
+The Optical Pooled Screens (OPS) workflow combines phenotype imaging (IF) with in situ sequencing (ISS): it segments cells in the phenotype images, reads each cell's barcode from the ISS images, and joins the two into one table per well.
 
 Workflow Steps
 --------------
@@ -164,7 +170,9 @@ Inputs
 Minimal Configuration (Required)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-These are the parameters needed to run the OPS workflow.
+These are the parameters needed to run the OPS workflow. ``phenotype_dapi_channel``,
+``phenotype_cyto_channel`` and ``reads_labels`` must be given even when only the ISS or only the
+phenotype analysis is run.
 
 .. list-table::
    :widths: 20 15 65
@@ -184,10 +192,11 @@ These are the parameters needed to run the OPS workflow.
      - Path to stitched Phenotype Zarr (Required if running Phenotype analysis).
    * - **phenotype_dapi_channel**
      - Int
-     - Channel index for DAPI in phenotype images.
+     - Channel index (0-based) of DAPI in the registered phenotype images, used for nuclei
+       segmentation and phenotype-to-ISS registration.
    * - **phenotype_cyto_channel**
      - Array[Int]
-     - Channel indices for Cytoplasm segmentation.
+     - Channel indices (0-based) in the registered phenotype images used for cell segmentation.
    * - **reads_labels**
      - String
      - Which segmentation label to assign reads to (e.g., ``"cell"`` or ``"nuclei"``).
@@ -224,16 +233,18 @@ Below is the complete list of exposed options covering registration, feature ext
      - Description
    * - **iss_image_pattern**
      - String
-     - Default: ``"{plate}-{well}-{t}"``.
+     - Pattern of the image names in ``iss_url``. Default: ``"{plate}-{well}-{t}"``, the names written
+       by the stitching workflow.
    * - **phenotype_image_pattern**
      - String
-     - Default: ``"{plate}-{well}-{t}"``.
+     - Pattern of the image names in ``phenotype_url``. Default: ``"{plate}-{well}-{t}"``.
    * - **groupby**
      - Array[String]
-     - Default: ``["plate", "well"]``.
+     - Fields that identify one group (normally one well). Default: ``["plate", "well"]``.
    * - **subset**
      - Array[String]
-     - Filter specific wells/plates.
+     - Groups to process, as ``groupby`` values joined by ``-`` (e.g., ``["A-1", "A-2"]``). Default:
+       all groups.
 
 **Segmentation & Registration**
 
@@ -246,25 +257,23 @@ Below is the complete list of exposed options covering registration, feature ext
      - Description
    * - **reference_phenotype_time**
      - String
-     - Timepoint to use as reference (e.g., ``"IF"``).
+     - Phenotype round (``t`` value) that the other phenotype rounds are registered to (e.g., ``"IF"``).
    * - **phenotype_dapi_channel_before_registration**
      - Int
      - DAPI index before registration (for pheno-pheno alignment).
    * - **iss_dapi_channel**
      - Int
-     - DAPI index in ISS images.
+     - DAPI index in ISS images, used for ISS and phenotype-to-ISS registration. Default: ``0``.
    * - **nuclei_segmentation**
      - String
-     - Method (e.g., ``"stardist"``, ``"cellpose"``).
+     - Nuclei segmentation method: ``"stardist"`` (default) or ``"cellpose"``.
    * - **cell_segmentation_method**
      - String
-     - Method (e.g., ``"watershed"``).
+     - Cell segmentation method: ``"propagation"`` (default), ``"watershed"``,
+       ``"watershed-intensity"`` or ``"cellpose"``.
    * - **cell_segmentation_extra_arguments**
      - String
-     - Extra flags (e.g., ``"--closing-radius 5"``).
-   * - **register_across_channels**
-     - Boolean
-     - Enable cross-channel registration logic.
+     - Extra arguments passed to ``scallops segment cell`` (e.g., ``"--closing-radius 5"``).
 
 **Feature Extraction**
 
@@ -277,19 +286,20 @@ Below is the complete list of exposed options covering registration, feature ext
      - Description
    * - **phenotype_nuclei_features**
      - Array[String]
-     - List of features (e.g., ``["intensity_*"]``).
+     - Features to compute for nuclei (e.g., ``["intensity_*", "sizeshape"]``). See
+       :ref:`shortcuts` for the syntax.
    * - **phenotype_cell_features**
      - Array[String]
-     - List of features.
+     - Features to compute for cells.
    * - **phenotype_cytosol_features**
      - Array[String]
-     - List of features.
+     - Features to compute for the cytosol.
    * - **features_cell_min_area**
      - Int
-     - Minimum area filter for cells.
+     - Cells smaller than this area (in pixels) are left out of the feature tables.
    * - **features_nuclei_min_area**
      - Int
-     - Minimum area filter for nuclei.
+     - Nuclei smaller than this area (in pixels) are left out of the feature tables.
 
 **Sequencing (ISS)**
 
@@ -305,19 +315,20 @@ Below is the complete list of exposed options covering registration, feature ext
      - Path to CSV containing the library design.
    * - **barcode_column**
      - String
-     - Column name in the barcode CSV.
+     - Name of the column in ``barcodes`` that contains the barcode sequences.
    * - **iss_expected_cycles**
      - Int
-     - Number of sequencing cycles.
+     - Number of sequencing cycles expected in each ISS image.
    * - **iss_channels**
      - Array[Int]
      - Channels to use for spot detection. Default: ``[1,2,3,4]``.
    * - **reads_bases**
      - String
-     - Bases order (e.g., ``"GTAC"``).
+     - Base read in each of ``iss_channels``, in the same order. Default: ``"GTAC"``.
    * - **spot_detection_sigma_log**
      - Array[Float]
-     - Sigma for Laplacian of Gaussian spot detection.
+     - Sigma values (in pixels) of the Laplacian of Gaussian filter used for spot detection.
+       Default: ``[1]``.
 
 **Additional Parameters**
 
@@ -347,7 +358,7 @@ Below is the complete list of exposed options covering registration, feature ext
 Outputs
 -------
 
-The `output_directory` will contain subdirectories for every major step:
+The ``output_directory`` will contain subdirectories for every major step:
 
 * ``pheno-registered.zarr``: Phenotype rounds registered to the reference timepoint.
 * ``segment.zarr``: Nuclei, cell and cytosol labels.
@@ -384,7 +395,7 @@ The required inputs are ``inputs`` (one or more Zarr, h5ad or Parquet paths or g
 Running on AWS HealthOmics
 ==========================
 
-AWS HealthOmics provides a managed service for running bioinformatics workflows at scale. SCALLOPS workflows (WDL) are fully compatible with HealthOmics. We recommend using the `miniwdl-omics-run` tool to simplify the submission process.
+AWS HealthOmics provides a managed service for running bioinformatics workflows at scale. SCALLOPS workflows (WDL) are fully compatible with HealthOmics. We recommend using the ``miniwdl-omics-run`` tool to simplify the submission process.
 
 Prerequisites
 -------------
@@ -434,7 +445,7 @@ Create a JSON file (e.g., ``ops_input.json``) defining your inputs. Below is a m
 
 Step 2: Run with miniwdl-omics-run
 ----------------------------------
-Use the `miniwdl-omics-run` utility to submit the workflow. This tool zips your local WDL files, uploads them to S3, and triggers the HealthOmics run.
+Use the ``miniwdl-omics-run`` utility to submit the workflow. This tool zips your local WDL files, uploads them to S3, and triggers the HealthOmics run.
 
 .. code-block:: bash
 
@@ -450,7 +461,7 @@ Arguments Explained:
 * **Workflow File**: Points to the local main WDL file (e.g., ``wdl/ops_workflow.wdl``). It will automatically bundle dependencies like ``ops_tasks.wdl``.
 * **-i**: The input JSON file you created in Step 1.
 * **--role-arn**: The AWS IAM role ARN that HealthOmics assumes to access S3 and CloudWatch.
-* **--output-uri**: The S3 location where HealthOmics will store execution logs (different from the workflow `output_directory`).
+* **--output-uri**: The S3 location where HealthOmics will store execution logs (different from the workflow ``output_directory``).
 * **--name**: A custom name for the run to identify it in the AWS Console.
 
 --------------------------------------------------------------------------------

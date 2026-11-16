@@ -41,7 +41,6 @@ workflow ops_workflow {
         String? iss_registration_extra_arguments # Extra arguments in scallops registration elastix cli for ISS
         String? pheno_to_iss_registration_extra_arguments
         String? pheno_registration_extra_arguments
-        Boolean? register_across_channels
 
         # spot detect
         Int? iss_expected_cycles
@@ -263,7 +262,6 @@ workflow ops_workflow {
                         reference_time=reference_phenotype_time,
                         extra_arguments=pheno_registration_extra_arguments,
                         unroll_channels=true,
-                        register_across_channels=register_across_channels,
                         groupby=groupby,
                         moving_output_directory=register_pheno_to_pheno_directory,
                         label_output_directory=register_pheno_to_pheno_directory,
@@ -456,7 +454,6 @@ workflow ops_workflow {
                     groupby=groupby,
                     moving_output_directory=register_iss_t0_directory,
                     transform_output_directory=register_iss_t0_transforms_directory,
-                    register_across_channels=register_across_channels,
                     extra_arguments=iss_registration_extra_arguments,
                     subset = group,
                     force = force_register_iss,
@@ -505,7 +502,6 @@ workflow ops_workflow {
                     fixed_image_pattern=iss_image_pattern,
                     moving_channel=phenotype_dapi_channel,
                     output_aligned_channels_only=true,
-                    register_across_channels=register_across_channels,
                     moving_output_directory=register_pheno_to_iss_directory,
                     label_output_directory=register_pheno_to_iss_directory,
                     transform_output_directory=register_pheno_to_iss_transforms_directory,

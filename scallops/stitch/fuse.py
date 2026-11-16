@@ -30,6 +30,7 @@ from scallops.zarr_io import (
     _create_array_kwargs,
     _create_zarr_attrs,
     _current_format,
+    _update_zarr_attrs,
 )
 
 logger = logging.getLogger("scallops")
@@ -328,7 +329,7 @@ def _fuse(
     zarr_attrs = _create_zarr_attrs(
         fmt, group, ["c", "y", "x"], image_attrs, axes, scale_dict
     )
-    group.attrs.update(zarr_attrs)
+    _update_zarr_attrs(group, zarr_attrs)
 
 
 def _register_across_channels(
