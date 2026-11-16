@@ -51,6 +51,7 @@ from scallops.zarr_io import (
     _create_zarr_attrs,
     _current_format,
     _require_group,
+    _update_zarr_attrs,
     is_ome_zarr_array,
 )
 
@@ -699,7 +700,7 @@ def _write_arrays(
         zarr_attrs = _create_zarr_attrs(
             fmt, group, ["y", "x"], image_attrs, axes, scale_dict
         )
-        group.attrs.update(zarr_attrs)
+        _update_zarr_attrs(group, zarr_attrs)
 
         if blend == "none":
             group = labels_group.create_group(image_key + "-tile", overwrite=True)
@@ -717,7 +718,7 @@ def _write_arrays(
             zarr_attrs = _create_zarr_attrs(
                 fmt, group, ["y", "x"], image_attrs, axes, scale_dict
             )
-            group.attrs.update(zarr_attrs)
+            _update_zarr_attrs(group, zarr_attrs)
     cleanup_paths = []
     if not no_save_image:
         group = _require_group(image_output_root, "images").require_group(

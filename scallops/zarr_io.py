@@ -460,12 +460,16 @@ def _write_zarr_labels(
 
 def _ome_attrs(attrs: Mapping) -> Mapping:
     """Return the OME-Zarr attributes of a group, unwrapping the ``"ome"`` key that
-    OME-Zarr 0.5 nests them under.
+    OME-Zarr 0.5 nests them under. ``"ome"`` is only unwrapped when it contains
+    ``multiscales``.
 
     :param attrs: Zarr group attributes.
     :return: The OME-Zarr attributes (``multiscales``, ``omero``, ...).
     """
-    return attrs["ome"] if "ome" in attrs else attrs
+    ome = attrs.get("ome")
+    if isinstance(ome, Mapping) and "multiscales" in ome:
+        return ome
+    return attrs
 
 
 def _update_zarr_attrs(grp: zarr.Group, zarr_attrs: dict) -> None:

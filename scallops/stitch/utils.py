@@ -397,17 +397,18 @@ def get_tile_position(
             ]
             physical_size_y_unit = img.pixels.planes[0].position_y_unit.value
             physical_size_x_unit = img.pixels.planes[0].position_x_unit.value
-    # stage positions written by scallops to OME-Zarr multiscales metadata
-    metadata: Mapping[str, Any] = {}
-    zarr_attrs = getattr(image.metadata, "attributes", None)
-    if isinstance(zarr_attrs, Mapping):
-        multiscales = _ome_attrs(zarr_attrs).get("multiscales") or [{}]
-        metadata = multiscales[0].get("metadata") or {}
-    if values is None and "position_y" in metadata and "position_x" in metadata:
-        values = [metadata["position_y"], metadata["position_x"]]
-        physical_size_y_unit = metadata.get("position_y_unit")
-        physical_size_x_unit = metadata.get("position_x_unit")
-    elif values is None:
+    if values is None:
+        # stage positions written by scallops to OME-Zarr multiscales metadata
+        metadata: Mapping[str, Any] = {}
+        zarr_attrs = getattr(image.metadata, "attributes", None)
+        if isinstance(zarr_attrs, Mapping):
+            multiscales = _ome_attrs(zarr_attrs).get("multiscales") or [{}]
+            metadata = multiscales[0].get("metadata") or {}
+        if "position_y" in metadata and "position_x" in metadata:
+            values = [metadata["position_y"], metadata["position_x"]]
+            physical_size_y_unit = metadata.get("position_y_unit")
+            physical_size_x_unit = metadata.get("position_x_unit")
+    if values is None:
         attrs = image.xarray_dask_data.attrs
         if isinstance(attrs, Mapping) and "unprocessed" in attrs:
             if 51123 in attrs["unprocessed"]:
