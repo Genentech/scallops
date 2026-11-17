@@ -48,6 +48,7 @@ CellProfiler Features
 
     #. c1: First channel index.
     #. c2: Second channel index.
+    #. costes: Whether to compute Costes features (default True)
 
 
 
