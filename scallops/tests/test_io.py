@@ -1323,21 +1323,22 @@ def test_physical_pixel_size_prefers_metadata():
 @pytest.mark.parametrize("fmt", [FormatV04, FormatV05], ids=["0.4", "0.5"])
 def test_scallops_created_arrays_validate(monkeypatch, tmp_path, fmt):
     # arrays created by scallops (not write_multiscale) need dimension_names for 0.5
-    import importlib
 
-    pytest.importorskip("ome_zarr_models")
+    from ome_zarr_models.v04.image import Image as ImageV04
+    from ome_zarr_models.v05.image import Image as ImageV05
+
     from scallops.stitch import fuse as fuse_mod
     from scallops.tests.test_stitch import _write_fuse_tiles
 
     monkeypatch.setattr(zarr_io, "_current_format", fmt)
     monkeypatch.setattr(fuse_mod, "_current_format", fmt)
     version = fmt().version
-    models = importlib.import_module(f"ome_zarr_models.v0{version[-1]}")
+
     root = zarr_io.open_ome_zarr(str(tmp_path / "a.zarr"), mode="w")
     df, _, _ = _write_fuse_tiles(tmp_path)
     group = _require_group(root, "images").create_group("fused")
     fuse_mod._fuse(df, group=group, blend="linear", z_index=0, chunk_size=None)
-    models.Image.from_zarr(group)
+    ImageV05.from_zarr(group) if version == "0.5" else ImageV04.from_zarr(group)
     assert zarr_io.read_ome_zarr_array(group).dims == ("c", "y", "x")
     if version == "0.5":
         assert list(group["s0"].metadata.dimension_names) == ["c", "y", "x"]
