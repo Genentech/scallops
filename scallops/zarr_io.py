@@ -392,26 +392,6 @@ def _group_name(name: str) -> str:
     return name.replace("/", "_")
 
 
-def _add_label_names(
-    labels_grp: zarr.Group, names: Sequence[str], fmt: Format | None = None
-) -> None:
-    """Add label images to the ``labels`` list of a ``labels`` group.
-
-    OME-Zarr requires the ``labels`` group to list the label images it contains;
-    readers such as ome-zarr-py and napari-ome-zarr find labels through it. Names
-    already listed are kept, so labels written by earlier commands stay listed.
-
-    :param labels_grp: The ``labels`` group.
-    :param names: Label image names, as passed to the writers (not yet sanitized
-        with :func:`_group_name`).
-    :param fmt: OME-Zarr format. Defaults to the current format.
-    """
-    existing = list(_ome_attrs(labels_grp.attrs.asdict()).get("labels") or [])
-    new = [n for n in dict.fromkeys(map(_group_name, names)) if n not in existing]
-    if new:
-        _add_metadata(labels_grp, {"labels": existing + new}, fmt)
-
-
 def _write_zarr_image(
     name: str | None,
     root: zarr.Group | str | Path,
@@ -448,8 +428,7 @@ def _write_zarr_image(
         dest_grp = images_grp.create_group(_group_name(name), overwrite=True)
         if group_metadata is not None:
             _add_metadata(dest_grp, group_metadata)
-        if group == "labels":
-            _add_label_names(images_grp, [name])
+
     image_attrs = None
     coords: Mapping[Hashable, Any] | None = None
     dims: Sequence[Hashable] | None = None
