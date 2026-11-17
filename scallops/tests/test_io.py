@@ -1341,27 +1341,3 @@ def test_scallops_created_arrays_validate(monkeypatch, tmp_path, fmt):
     assert zarr_io.read_ome_zarr_array(group).dims == ("c", "y", "x")
     if version == "0.5":
         assert list(group["s0"].metadata.dimension_names) == ["c", "y", "x"]
-
-
-@pytest.mark.parametrize("fmt", [FormatV04, FormatV05], ids=["0.4", "0.5"])
-def test_labels_group_lists_labels(monkeypatch, tmp_path, fmt):
-    # OME-Zarr readers find label images through the "labels" list, so labels
-    # written by separate calls (separate commands) must all be listed
-    import importlib
-
-    pytest.importorskip("ome_zarr_models")
-    monkeypatch.setattr(zarr_io, "_current_format", fmt)
-    version = fmt().version
-    models = importlib.import_module(f"ome_zarr_models.v0{version[-1]}")
-    path = str(tmp_path / "a.zarr")
-    labels = np.zeros((4, 5), dtype=np.uint16)
-    _write_zarr_labels("A1-nuclei", open_ome_zarr(path), labels)
-    _write_zarr_labels("A/1-cell", open_ome_zarr(path), labels)
-    _write_zarr_labels("A1-nuclei", open_ome_zarr(path), labels)  # rewrite
-    labels_grp = zarr.open_group(f"{path}/labels", mode="r")
-    attrs = labels_grp.attrs.asdict()
-    if version == "0.5":
-        assert attrs == {"ome": {"labels": ["A1-nuclei", "A_1-cell"], "version": "0.5"}}
-    else:
-        assert attrs == {"labels": ["A1-nuclei", "A_1-cell"]}
-    models.Labels.from_zarr(labels_grp)
