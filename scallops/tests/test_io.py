@@ -1323,9 +1323,7 @@ def test_physical_pixel_size_prefers_metadata():
 @pytest.mark.parametrize("fmt", [FormatV04, FormatV05], ids=["0.4", "0.5"])
 def test_scallops_created_arrays_validate(monkeypatch, tmp_path, fmt):
     # arrays created by scallops (not write_multiscale) need dimension_names for 0.5
-
-    from ome_zarr_models.v04.image import Image as ImageV04
-    from ome_zarr_models.v05.image import Image as ImageV05
+    from ome_zarr import OMEZarrMultiscale
 
     from scallops.stitch import fuse as fuse_mod
     from scallops.tests.test_stitch import _write_fuse_tiles
@@ -1338,7 +1336,7 @@ def test_scallops_created_arrays_validate(monkeypatch, tmp_path, fmt):
     df, _, _ = _write_fuse_tiles(tmp_path)
     group = _require_group(root, "images").create_group("fused")
     fuse_mod._fuse(df, group=group, blend="linear", z_index=0, chunk_size=None)
-    ImageV05.from_zarr(group) if version == "0.5" else ImageV04.from_zarr(group)
+    assert len(OMEZarrMultiscale.from_ome_zarr(group).images) == 1
     assert zarr_io.read_ome_zarr_array(group).dims == ("c", "y", "x")
     if version == "0.5":
         assert list(group["s0"].metadata.dimension_names) == ["c", "y", "x"]
