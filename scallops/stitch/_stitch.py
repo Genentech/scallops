@@ -46,6 +46,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.zarr_io import (
+    _add_label_names,
     _add_metadata,
     _attrs_axes_scales,
     _create_array_kwargs,
@@ -682,6 +683,11 @@ def _write_arrays(
     fmt = _current_format()
     if not no_save_labels:
         labels_group = _require_group(image_output_root, "labels")
+        _add_label_names(
+            labels_group,
+            [image_key + "-mask"] + ([image_key + "-tile"] if blend == "none" else []),
+            fmt,
+        )
         group = labels_group.create_group(image_key + "-mask", overwrite=True)
         group.create_array(
             name="s0",
