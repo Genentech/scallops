@@ -25,7 +25,6 @@ import dask.array as da
 import dask.dataframe as dd
 import numpy as np
 import pandas as pd
-import skimage
 from dask.array.overlap import ensure_minimum_chunksize
 from dask.system import CPU_COUNT
 from decorator import decorator
@@ -360,37 +359,6 @@ def _dask_total_threads() -> int:
 
 def is_dask_distributed():
     return "distributed" in dask.config.config
-
-
-def high_pass_filter(image: NDArray, sigma: float) -> NDArray:
-    """High pass filter typically used to remove background.
-
-    :param image: Input image to filter.
-    :param sigma: Standard deviation for Gaussian kernel.
-    :return: Filtered image.
-    """
-    lowpass = skimage.filters.gaussian(image, sigma=sigma, preserve_range=True)
-    highpass = image - lowpass
-    highpass[lowpass > image] = 0
-    return highpass
-
-
-def gaussian_kernel(size: tuple[int, ...] = (3, 3), sigma: float = 0.5) -> NDArray:
-    """Returns a gaussian kernel of specified size and standard deviation.
-
-    The kernel is normalized to one.
-    :param size: Kernel size
-    :param sigma: Standard deviation
-    :return: Gaussian kernel
-    """
-    m, n = [(ss - 1.0) / 2.0 for ss in size]
-    y, x = np.ogrid[-m : m + 1, -n : n + 1]
-    h = np.exp(-(x * x + y * y) / (2.0 * sigma * sigma))
-    h[h < np.finfo(h.dtype).eps * h.max()] = 0
-    sumh = h.sum()
-    if sumh != 0:
-        h /= sumh
-    return h
 
 
 @decorator
