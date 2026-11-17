@@ -41,14 +41,15 @@ from scallops.utils import _fix_json
 
 logger = logging.getLogger("scallops")
 
+_ome_version = environ.get("SCALLOPS_OME_ZARR_VERSION", "0.4")
+
 
 def _current_format() -> Format:
-    version = environ.get("SCALLOPS_OME_ZARR_VERSION", "0.4")
-    if version == "0.4":
+    if _ome_version == "0.4":
         return FormatV04()
-    elif version == "0.5":
+    elif _ome_version == "0.5":
         return FormatV05()
-    raise ValueError(f"Unrecognized version: {version}")
+    raise ValueError(f"Unrecognized version: {_ome_version}")
 
 
 def _tolerate_concurrent_create(
