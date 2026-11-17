@@ -45,6 +45,8 @@ from scallops.io import (
     write_anndata_zarr,
 )
 from scallops.zarr_io import (
+    _add_metadata,
+    _physical_pixel_size,
     _require_group,
     _write_zarr_image,
     _write_zarr_labels,
@@ -1036,7 +1038,7 @@ def test_set_up_experiment_filter_matches(tmp_path):
 def test_zarr_attrs_round_trip(fmt):
     from types import SimpleNamespace
 
-    from scallops.stitch.utils import get_tile_position
+    from scallops.stitch.utils import _pixel_size_from_image, get_tile_position
 
     axes = [{"name": "c", "type": "channel"}, {"name": "y"}, {"name": "x"}]
     image_attrs = {
@@ -1045,10 +1047,20 @@ def test_zarr_attrs_round_trip(fmt):
         "position_x": 20.0,
         "position_y_unit": "µm",
         "position_x_unit": "µm",
+        "physical_size_y": 0.5,
+        "physical_size_x": 0.25,
+        "physical_size_y_unit": "µm",
+        "physical_size_x_unit": "µm",
     }
-    attrs = zarr_io._create_zarr_attrs(
+    grp = zarr.open_group(
+        zarr.storage.MemoryStore(), mode="w", zarr_format=fmt.zarr_format
+    )
+    zarr_attrs = zarr_io._create_zarr_attrs(
         fmt, SimpleNamespace(name="A-3"), ["c", "y", "x"], image_attrs, axes, None
     )
+    assert "omero" in image_attrs  # input is not mutated
+    _add_metadata(grp, zarr_attrs, fmt)
+    attrs = grp.attrs.asdict()
     if fmt.version == "0.5":
         assert set(attrs) == {"ome"}
         assert attrs["ome"]["version"] == "0.5"
@@ -1066,17 +1078,261 @@ def test_zarr_attrs_round_trip(fmt):
         ome_metadata=None, metadata=SimpleNamespace(attributes=attrs)
     )
     np.testing.assert_array_equal(get_tile_position(image), [10.0, 20.0])
+    np.testing.assert_array_equal(_pixel_size_from_image(image), [0.5, 0.25])
+    assert zarr_io._has_multiscales(attrs)
 
 
-def test_update_zarr_attrs_merges_ome():
-    grp = zarr.open_group(zarr.storage.MemoryStore(), mode="w")
-    grp.attrs.update({"ome": {"version": "0.5", "labels": ["A-3-cell"]}, "other": 1})
-    zarr_io._update_zarr_attrs(
-        grp, {"ome": {"version": "0.5", "multiscales": [{"name": "A-3"}]}}
+def test_read_ome_zarr_root_without_multiscales(monkeypatch):
+    # an OME-Zarr 0.5 root holds only a version; its image is under images/
+    monkeypatch.setattr(zarr_io, "_current_format", FormatV05)
+    root = zarr.open_group(zarr.storage.MemoryStore(), mode="w", zarr_format=3)
+    root.attrs["ome"] = {"version": "0.5"}
+    data = np.arange(12, dtype=np.uint16).reshape(3, 4)
+    zarr_io._write_zarr_image("A-3", root, data)
+    assert not zarr_io.is_ome_zarr_array(root)
+    assert zarr_io.is_ome_zarr_array(root["images/A-3"])
+    np.testing.assert_array_equal(zarr_io.read_ome_zarr_array(root).values, data)
+
+
+@pytest.mark.parametrize("fmt", [FormatV04(), FormatV05()], ids=lambda f: f.version)
+def test_physical_pixel_size_from_scale(fmt):
+    # scallops' writer stores the pixel size in the scale transformation and axis
+    # units, not in multiscales metadata
+    from types import SimpleNamespace
+
+    from scallops.stitch.utils import _pixel_size_from_image
+
+    image_attrs = {
+        "physical_pixel_sizes": (0.5, 0.25),
+        "physical_pixel_units": ("micrometer", "nanometer"),
+    }
+    image_attrs, axes, scale_dict = zarr_io._attrs_axes_scales(
+        image_attrs, None, ["c", "y", "x"], np.dtype("uint16")
     )
+    attrs = zarr_io._create_zarr_attrs(
+        fmt, SimpleNamespace(name="A-3"), ["c", "y", "x"], image_attrs, axes, scale_dict
+    )
+    assert zarr_io._physical_pixel_size(attrs) == (
+        [0.5, 0.25],
+        "micrometer",
+        "nanometer",
+    )
+    assert zarr_io._dataset_path(attrs) == "s0"
+    image = SimpleNamespace(
+        ome_metadata=None, metadata=SimpleNamespace(attributes=attrs)
+    )
+    np.testing.assert_allclose(_pixel_size_from_image(image), [0.5, 0.25e-3])
+
+
+def test_physical_pixel_size_without_units():
+    attrs = {
+        "multiscales": [
+            {
+                "axes": [{"name": "y"}, {"name": "x"}],
+                "datasets": [
+                    {
+                        "path": "s0",
+                        "coordinateTransformations": [
+                            {"type": "scale", "scale": [1.0, 1.0]}
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    assert zarr_io._physical_pixel_size(attrs) is None
+    assert zarr_io._dataset_path(attrs) == "s0"
+    assert zarr_io._dataset_path({}) == "0"
+
+
+def test_add_metadata_merges_ome():
+    grp = zarr.open_group(zarr.storage.MemoryStore(), mode="w", zarr_format=3)
+    grp.attrs.update({"ome": {"version": "0.5", "labels": ["A-3-cell"]}, "other": 1})
+    _add_metadata(grp, {"multiscales": [{"name": "A-3"}]}, FormatV05())
     assert grp.attrs["ome"] == {
         "version": "0.5",
         "labels": ["A-3-cell"],
         "multiscales": [{"name": "A-3"}],
     }
     assert grp.attrs["other"] == 1
+
+
+@pytest.mark.parametrize("fmt", [FormatV04, FormatV05], ids=["0.4", "0.5"])
+def test_write_labels_image_label_nesting(monkeypatch, fmt):
+    # OME-Zarr 0.5 nests image-label under "ome" alongside multiscales
+    monkeypatch.setattr(zarr_io, "_current_format", fmt)
+    root = zarr.open_group(
+        zarr.storage.MemoryStore(),
+        mode="w",
+        zarr_format=3 if fmt().version == "0.5" else 2,
+    )
+    data = np.arange(12, dtype=np.uint32).reshape(3, 4)
+    image_label = {"source": {"image": "../../images/A-3"}}
+    zarr_io._write_zarr_labels(
+        "A-3", root, data, group_metadata={"image-label": image_label}
+    )
+    attrs = root["labels/A-3"].attrs.asdict()
+    if fmt().version == "0.5":
+        assert "image-label" not in attrs and "multiscales" not in attrs
+        attrs = attrs["ome"]
+        assert attrs["version"] == "0.5"
+    assert attrs["image-label"] == image_label
+    assert "multiscales" in attrs
+    np.testing.assert_array_equal(
+        zarr_io.read_ome_zarr_array(root["labels/A-3"]).values, data
+    )
+
+
+@pytest.mark.parametrize("fmt", [FormatV04(), FormatV05()], ids=lambda f: f.version)
+def test_create_zarr_attrs_image_label_and_empty_omero(fmt):
+    from types import SimpleNamespace
+
+    axes = [{"name": "y"}, {"name": "x"}]
+    attrs = zarr_io._create_zarr_attrs(
+        fmt, SimpleNamespace(name="A-3"), ["y", "x"], {}, axes, None, image_label={}
+    )
+    assert attrs["image-label"] == {}
+    assert "omero" not in attrs  # no channel metadata, so no empty omero
+
+
+@pytest.mark.parametrize("fmt", [FormatV04, FormatV05], ids=["0.4", "0.5"])
+def test_write_image_group_metadata_not_double_nested(monkeypatch, fmt):
+    monkeypatch.setattr(zarr_io, "_current_format", fmt)
+    version = fmt().version
+    root = zarr.open_group(
+        zarr.storage.MemoryStore(), mode="w", zarr_format=3 if version == "0.5" else 2
+    )
+    data = np.zeros((3, 4), dtype=np.uint8)
+    zarr_io._write_zarr_image(
+        "a", root, data, group_metadata={"ome": {"version": version, "foo": 1}}
+    )
+    attrs = root["images/a"].attrs.asdict()
+    assert attrs["ome"]["foo"] == 1 and "ome" not in attrs["ome"]
+
+    zarr_io._write_zarr_image(
+        "b",
+        root,
+        np.zeros((2, 3, 4), dtype=np.uint8),
+        zarr_format="zarr",
+        group_metadata={"foo": 1},
+    )
+    attrs = root["images/b"].attrs.asdict()
+    assert attrs["foo"] == 1
+    assert "version" not in attrs.get("ome", {})
+
+
+def test_pixel_size_parsers_agree_with_translation_first():
+    # both parsers use the first transformation of type "scale"
+    attrs = {
+        "multiscales": [
+            {
+                "axes": [
+                    {"name": "y", "unit": "micrometer"},
+                    {"name": "x", "unit": "micrometer"},
+                ],
+                "datasets": [
+                    {
+                        "path": "s0",
+                        "coordinateTransformations": [
+                            {"type": "translation", "translation": [5.0, 6.0]},
+                            {"type": "scale", "scale": [0.5, 0.25]},
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    _, metadata, _ = zarr_io._read_zarr_attrs(attrs)
+    assert metadata["physical_pixel_sizes"] == (0.5, 0.25)
+    assert zarr_io._physical_pixel_size(attrs) == (
+        [0.5, 0.25],
+        "micrometer",
+        "micrometer",
+    )
+
+
+@pytest.mark.io
+@pytest.mark.parametrize("fmt", [FormatV04(), FormatV05()], ids=lambda f: f.version)
+def test_add_metadata_layout(fmt):
+    attrs = {"image-label": {}, "custom": 1}
+    grp = zarr.open_group(
+        zarr.storage.MemoryStore(), mode="w", zarr_format=fmt.zarr_format
+    )
+    _add_metadata(grp, attrs, fmt)
+    if fmt.version == "0.5":
+        assert grp.attrs.asdict() == {
+            "custom": 1,
+            "ome": {"version": "0.5", "image-label": {}},
+        }
+        # an "ome" entry in attrs is merged, not nested
+        _add_metadata(grp, {"ome": {"multiscales": []}, "omero": {}}, fmt)
+        assert grp.attrs["ome"] == {
+            "version": "0.5",
+            "image-label": {},
+            "multiscales": [],
+            "omero": {},
+        }
+    else:
+        assert grp.attrs.asdict() == attrs
+
+
+@pytest.mark.io
+def test_ome_attrs_unwraps_any_ome_entry():
+    # a 0.5 labels group holds only "labels" under "ome"
+    attrs = {"ome": {"version": "0.5", "labels": ["A-3"]}, "other": 1}
+    assert zarr_io._ome_attrs(attrs)["labels"] == ["A-3"]
+    # top-level keys are kept, keys under "ome" take precedence
+    attrs = {"labels": ["old"], "omero": {}, "ome": {"labels": ["new"]}}
+    ome = zarr_io._ome_attrs(attrs)
+    assert ome["labels"] == ["new"] and "omero" in ome
+    assert zarr_io._ome_attrs({"labels": ["A-3"]}) == {"labels": ["A-3"]}
+
+
+@pytest.mark.io
+def test_physical_pixel_size_prefers_metadata():
+    multiscale0 = {
+        "axes": [
+            {"name": "y", "type": "space", "unit": "micrometer"},
+            {"name": "x", "type": "space", "unit": "micrometer"},
+        ],
+        "datasets": [
+            {
+                "path": "s0",
+                "coordinateTransformations": [{"type": "scale", "scale": [1.3, 1.3]}],
+            }
+        ],
+        "metadata": {
+            "physical_size_y": 0.65,
+            "physical_size_x": 0.65,
+            "physical_size_y_unit": "micrometer",
+            "physical_size_x_unit": "micrometer",
+        },
+    }
+    attrs = {"multiscales": [multiscale0]}
+    assert _physical_pixel_size(attrs) == ([0.65, 0.65], "micrometer", "micrometer")
+    # falls back to the scale when the metadata has no pixel size
+    multiscale0["metadata"] = {}
+    assert _physical_pixel_size(attrs) == ([1.3, 1.3], "micrometer", "micrometer")
+
+
+@pytest.mark.parametrize("fmt", [FormatV04, FormatV05], ids=["0.4", "0.5"])
+def test_scallops_created_arrays_validate(monkeypatch, tmp_path, fmt):
+    # arrays created by scallops (not write_multiscale) need dimension_names for 0.5
+    import importlib
+
+    pytest.importorskip("ome_zarr_models")
+    from scallops.stitch import fuse as fuse_mod
+    from scallops.tests.test_stitch import _write_fuse_tiles
+
+    monkeypatch.setattr(zarr_io, "_current_format", fmt)
+    monkeypatch.setattr(fuse_mod, "_current_format", fmt)
+    version = fmt().version
+    models = importlib.import_module(f"ome_zarr_models.v0{version[-1]}")
+    root = zarr_io.open_ome_zarr(str(tmp_path / "a.zarr"), mode="w")
+    df, _, _ = _write_fuse_tiles(tmp_path)
+    group = _require_group(root, "images").create_group("fused")
+    fuse_mod._fuse(df, group=group, blend="linear", z_index=0, chunk_size=None)
+    models.Image.from_zarr(group)
+    assert zarr_io.read_ome_zarr_array(group).dims == ("c", "y", "x")
+    if version == "0.5":
+        assert list(group["s0"].metadata.dimension_names) == ["c", "y", "x"]

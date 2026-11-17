@@ -156,10 +156,6 @@ class Experiment:
                 metadata=labels.attrs if isinstance(labels, xr.DataArray) else None,
                 labels=labels,
             )
-        if len(self._labels) > 0:
-            assert root is not None
-            labels_grp = root["labels"]
-            labels_grp.attrs["labels"] = list(self._labels.keys())
 
     def __repr__(self):
         """Return a string representation of the experiment.
