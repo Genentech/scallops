@@ -60,10 +60,11 @@ def cp_granularity(
 def cp_colocalization(
     c1: int,
     c2: int,
-    channel_names: Sequence[str],
-    unique_labels: NDArray,
-    label_image: NDArray,
-    intensity_image: NDArray,
+    costes: bool = True,
+    channel_names: Sequence[str] | None = None,
+    unique_labels: NDArray | None = None,
+    label_image: NDArray | None = None,
+    intensity_image: NDArray | None = None,
 ) -> dict[str, Any]:
     raise NotImplementedError()
 
@@ -74,6 +75,7 @@ def _cp_colocalization_pairs(
     label_image: NDArray,
     intensity_image: NDArray,
     intensity_image_original_dtype: np.dtype,
+    costes: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
     all_results = {}
@@ -89,9 +91,10 @@ def _cp_colocalization_pairs(
         img2 = intensity_image[..., c_pair[1]]
         channel_name1 = channel_names[c_pair[0]]
         channel_name2 = channel_names[c_pair[1]]
-        results.update(
-            get_correlation_costes(img1, img2, label_image, scale_max=scale_max)
-        )
+        if costes:
+            results.update(
+                get_correlation_costes(img1, img2, label_image, scale_max=scale_max)
+            )
         results.update(get_correlation_manders_fold(img1, img2, label_image))
         results.update(get_correlation_overlap(img1, img2, label_image))
         results.update(get_correlation_pearson(img1, img2, label_image))
