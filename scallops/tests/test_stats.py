@@ -147,3 +147,30 @@ def test_random_effects_meta_analysis_mannwhitneyu():
     assert result.combined_effect == expected_effect
     assert result.combined_variance == expected_variance
     np.testing.assert_allclose(result.pvalue, expected_pvalue, rtol=1e-12)
+
+
+def test_local_zscore_ntcs_reference():
+    from sklearn.neighbors import NearestNeighbors
+
+    from scallops.stats import local_zscore
+
+    rng = np.random.default_rng(0)
+    n = 20
+    df = pd.DataFrame(
+        {
+            "Nuclei_AreaShape_Center_X": rng.random(n),
+            "Nuclei_AreaShape_Center_Y": rng.random(n),
+            "f": rng.random(n),
+            "type": ["ntc", "gene"] * (n // 2),
+        }
+    )
+    result = local_zscore(df, ["f"], reference="ntcs", n_neighbors=3)
+    assert len(result) == n
+
+    # every cell is scored against its 3 nearest ntc cells
+    xy = df[["Nuclei_AreaShape_Center_X", "Nuclei_AreaShape_Center_Y"]].values
+    ntc = df["type"].values == "ntc"
+    nbrs = NearestNeighbors(n_neighbors=3).fit(xy[ntc])
+    neighbors = df["f"].values[ntc][nbrs.kneighbors(xy, return_distance=False)]
+    expected = (df["f"].values - neighbors.mean(axis=1)) / neighbors.std(axis=1)
+    np.testing.assert_allclose(result["f_clzs"].values, expected)

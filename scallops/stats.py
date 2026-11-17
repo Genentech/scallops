@@ -1133,14 +1133,19 @@ def _local_z_score_indices(
     assert (centroid_column_names[0] in df.columns) and (
         centroid_column_names[1] in df.columns
     ), "centroid_column_names not found."
+    coordinates = df[list(centroid_column_names)].values
     if reference == "all":
-        coordinates = df[[centroid_column_names[0], centroid_column_names[1]]].values
+        reference_rows = np.arange(len(df))
     elif reference == "ntcs":
-        coordinates = df.query(ntc_query)[centroid_column_names].values
+        # positions of the ntc rows, so neighbor indices can point back into df
+        reference_rows = np.flatnonzero(df.eval(ntc_query).values)
     else:
         raise ValueError(f"{reference} is not a valid reference")
-    nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm="auto").fit(coordinates)
-    return nbrs.kneighbors(coordinates, return_distance=False)
+    nbrs = NearestNeighbors(n_neighbors=n_neighbors, algorithm="auto").fit(
+        coordinates[reference_rows]
+    )
+    # every cell gets neighbors, only drawn from the reference cells
+    return reference_rows[nbrs.kneighbors(coordinates, return_distance=False)]
 
 
 def local_zscore(
