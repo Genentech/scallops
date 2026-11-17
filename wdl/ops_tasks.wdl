@@ -187,7 +187,6 @@ task register_elastix {
         String? fixed
         String? reference_time
         Int? fixed_channel
-        Boolean? register_across_channels
         String transform_output_directory
         String? label_output_directory
         String? moving_output_directory
@@ -228,7 +227,6 @@ task register_elastix {
         ~{true="--unroll-channels" false="" unroll_channels} \
         ~{if defined(reference_time) then '--time "' + reference_time + '"' else ''} \
         ~{true="--force" false="" force} \
-        ~{true="--align-across-channels" false="" register_across_channels} \
         ~{true="--output-aligned-channels-only" false="" output_aligned_channels_only} \
         ~{if defined(extra_arguments) then extra_arguments else ''}
     >>>

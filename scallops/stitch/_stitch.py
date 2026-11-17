@@ -46,6 +46,7 @@ from scallops.stitch.utils import (
     tile_source_labels,
 )
 from scallops.zarr_io import (
+    _add_metadata,
     _attrs_axes_scales,
     _create_array_kwargs,
     _create_zarr_attrs,
@@ -691,15 +692,15 @@ def _write_arrays(
             ),
             chunks=chunk_size,
             overwrite=True,
-            **_create_array_kwargs(fmt=fmt),
+            **_create_array_kwargs(fmt, ["y", "x"]),
         )
         image_attrs, axes, scale_dict = _attrs_axes_scales(
             metadata, None, ["y", "x"], np.uint8
         )
         zarr_attrs = _create_zarr_attrs(
-            fmt, group, ["y", "x"], image_attrs, axes, scale_dict
+            fmt, group, ["y", "x"], image_attrs, axes, scale_dict, image_label={}
         )
-        group.attrs.update(zarr_attrs)
+        _add_metadata(group, zarr_attrs, fmt)
 
         if blend == "none":
             group = labels_group.create_group(image_key + "-tile", overwrite=True)
@@ -708,16 +709,22 @@ def _write_arrays(
                 data=tile_source_labels(stitch_positions_df, fused_tile_shape),
                 chunks=chunk_size,
                 overwrite=True,
-                **_create_array_kwargs(fmt=fmt),
+                **_create_array_kwargs(fmt, ["y", "x"]),
             )
 
             image_attrs, axes, scale_dict = _attrs_axes_scales(
                 metadata, None, ["y", "x"], np.uint16
             )
             zarr_attrs = _create_zarr_attrs(
-                fmt, group, ["y", "x"], image_attrs, axes, scale_dict
+                fmt,
+                group,
+                ["y", "x"],
+                image_attrs,
+                axes,
+                scale_dict,
+                image_label={},
             )
-            group.attrs.update(zarr_attrs)
+            _add_metadata(group, zarr_attrs, fmt)
     cleanup_paths = []
     if not no_save_image:
         group = _require_group(image_output_root, "images").require_group(

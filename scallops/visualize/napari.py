@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     import napari
 from scallops.stitch._radial import radial_correct
 from scallops.utils import forceTCZYX
+from scallops.zarr_io import _dataset_path, _ome_attrs, _read_zarr_attrs
 
 
 def add_bases(
@@ -148,20 +149,18 @@ def pooled_iss(
             node_name = image_keys[i]
             grp = zarr.open(url + fs.sep + "images" + fs.sep + node_name, mode="r")
 
-            channel_axis = None
-            ch_types = [axis["type"] for axis in grp.attrs["multiscales"][0]["axes"]]
+            attrs = _ome_attrs(grp.attrs.asdict())
+            coords, _, dims = _read_zarr_attrs(attrs)
+            channel_axis = dims.index("c") if dims and "c" in dims else None
+            channel_names = (
+                (coords or {}).get("c") if channel_axis is not None else None
+            )
             image_name = node_name
-
             if node_name != name and image_name.startswith(
                 name
             ):  # keep only the suffix
                 image_name = image_name[len(name) + 1 :]
-            if "channel" in ch_types:
-                channel_axis = ch_types.index("channel")
-            if "omero" in grp.attrs:
-                channel_names = [
-                    channel["label"] for channel in grp.attrs["omero"]["channels"]
-                ]
+            if channel_names:
                 image_name = [
                     image_name + "-" + channel_name for channel_name in channel_names
                 ]
@@ -169,24 +168,20 @@ def pooled_iss(
                 channel_axis=channel_axis, metadata=None, name=image_name, visible=False
             )
             if node_name == name:
-                visible = []
-                found = False
-                for _image_name in image_name:
-                    if (
-                        _image_name.find("_A") != -1
-                        or _image_name.find("_C") != -1
-                        or _image_name.find("_T") != -1
-                        or _image_name.find("_G") != -1
-                    ):
-                        visible.append(True)
-                        found = True
-                    else:
-                        visible.append(False)
-                params["visible"] = visible if found else True
+                # show the primary image; if it has channels, show only the
+                # SBS base channels when present
+                params["visible"] = True
+                if isinstance(image_name, list):
+                    visible = [
+                        any(base in n for base in ("_A", "_C", "_T", "_G"))
+                        for n in image_name
+                    ]
+                    if any(visible):
+                        params["visible"] = visible
             if node_name.endswith("-std") or node_name.endswith("-peaks"):
                 params["contrast_limits"] = (0, 200)
             viewer.add_image(
-                da.array(grp["0"]),
+                da.array(grp[_dataset_path(attrs)]),
                 **params,
             )
 
@@ -197,7 +192,7 @@ def pooled_iss(
         for label_key in label_keys:
             label_suffix = label_key.split("-")[-1]
             grp = zarr.open(url + fs.sep + "labels" + fs.sep + label_key, mode="r")
-            label_data = grp["0"]
+            label_data = grp[_dataset_path(grp.attrs)]
             params = dict(name=label_key, opacity=0.5, visible=label_suffix in visible)
             if label_suffix == "spots":  # view spots as points
                 label_data = label_data[...]

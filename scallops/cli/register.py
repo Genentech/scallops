@@ -49,7 +49,7 @@ from scallops.zarr_io import (
     _get_fs,
     _get_store_path,
     _require_group,
-    _write_zarr_image,
+    _write_zarr_labels,
     is_ome_zarr_array,
     open_ome_zarr,
     read_ome_zarr_array,
@@ -656,11 +656,10 @@ def _transform_labels(
         )
         del array
         # match chunk size of fixed image
-        _write_zarr_image(
+        _write_zarr_labels(
             name=output_names[i],
             root=output_root,
-            image=transformed_array,
-            group="labels",
+            labels=transformed_array,
             storage_options=dict(chunks=chunksize) if chunksize is not None else None,
         )
 

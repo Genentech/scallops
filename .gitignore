@@ -214,3 +214,6 @@ scallops/segmentation/_*.cpp
 
 # Former location of test data (now downloaded to the scallops cache directory)
 scallops/tests/data/
+
+# Sphinx autosummary stubs
+docs/generated/

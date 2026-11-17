@@ -123,19 +123,32 @@ Other Features
 
 .. _shortcuts:
 
-Shortcuts
-^^^^^^^^^^^
+Feature Name Syntax
+^^^^^^^^^^^^^^^^^^^
 
-Use `*` for all channels. Example: `intensity_*`, `colocalization_*_*`.
+A feature is written as its name followed by its parameters, separated by underscores and given in
+the order listed above: ``name_param1_param2``. For example, ``intensity_0`` measures intensity in
+channel 0, and ``colocalization_0_1`` measures colocalization between channels 0 and 1. Features
+without parameters, such as ``sizeshape``, are written as the name alone.
 
-Include a comma separated list of channel indices (0-based) to include. Example: `intensity_0,1,2,6`.
+Trailing parameters can be left out to use their defaults. For example, ``intensitydistribution_0``
+uses 4 bins and ``intensitydistribution_0_8`` uses 8; ``puncta_3`` uses the default sigma, alpha,
+minimum size, peak distance and anchor, while ``puncta_3_5_2`` sets sigma to 5 and alpha to 2. A
+parameter can only be set if every parameter before it is also given.
 
-Specify a range of channel indices using start:stop:step. Example: *colocalization_0_1:10:2*.
+Channel parameters are 0-based and accept several shortcuts:
 
-Notes
-^^^^^^
-Feature names are case insensitive (intensity == Intensity) and hyphens in feature names are
-ignored (intensitydistribution == intensity-distribution)
+* All channels: ``*``, for example ``intensity_*`` or ``colocalization_*_*``.
+* A list of channels: comma-separated, for example ``intensity_0,1,2,6``.
+* A range: ``start:stop:step`` (``stop`` is excluded), for example ``colocalization_0_1:10:2``.
+
+When ``--stack-images`` is given, prefix a channel index with ``s`` to refer to a channel of the
+stacked image instead of the primary image, for example ``correlationpearsonbox_0_s0`` (channel 0
+of ``--images`` against channel 0 of ``--stack-images``). The ``s`` prefix takes a single channel
+index, not a list or range.
+
+Feature names are case insensitive (``intensity`` is the same as ``Intensity``), and hyphens in
+feature names are ignored (``intensitydistribution`` is the same as ``intensity-distribution``).
 
 
 .. _U-FISH:  https://u-fish.readthedocs.io/en/latest/index.html

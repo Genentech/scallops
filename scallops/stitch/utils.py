@@ -33,6 +33,7 @@ from scallops.io import (
 )
 from scallops.stitch._radial import radial_correct
 from scallops.stitch.shift_utils import _zncc
+from scallops.zarr_io import _multiscales_metadata, _physical_pixel_size
 
 ureg = UnitRegistry()
 logger = logging.getLogger("scallops")
@@ -396,17 +397,14 @@ def get_tile_position(
             ]
             physical_size_y_unit = img.pixels.planes[0].position_y_unit.value
             physical_size_x_unit = img.pixels.planes[0].position_x_unit.value
-    if (
-        values is None
-        and hasattr(image.metadata, "attributes")
-        and isinstance(image.metadata.attributes, Mapping)
-        and "multiscales" in image.metadata.attributes
-    ):
-        metadata = image.metadata.attributes["multiscales"][0]["metadata"]
-        values = [metadata["position_y"], metadata["position_x"]]
-        physical_size_y_unit = metadata["position_y_unit"]
-        physical_size_x_unit = metadata["position_x_unit"]
-    elif values is None:
+    if values is None:
+        # stage positions written by scallops to OME-Zarr multiscales metadata
+        metadata = _multiscales_metadata(getattr(image.metadata, "attributes", None))
+        if "position_y" in metadata and "position_x" in metadata:
+            values = [metadata["position_y"], metadata["position_x"]]
+            physical_size_y_unit = metadata.get("position_y_unit")
+            physical_size_x_unit = metadata.get("position_x_unit")
+    if values is None:
         attrs = image.xarray_dask_data.attrs
         if isinstance(attrs, Mapping) and "unprocessed" in attrs:
             if 51123 in attrs["unprocessed"]:
@@ -485,14 +483,11 @@ def _pixel_size_from_image(image: bioio.BioImage) -> np.array:
         physical_size_y_unit = ome_metadata.images[0].pixels.physical_size_y_unit.value
         physical_size_x_unit = ome_metadata.images[0].pixels.physical_size_x_unit.value
     elif (
-        hasattr(image.metadata, "attributes")
-        and isinstance(image.metadata.attributes, Mapping)
-        and "multiscales" in image.metadata.attributes
-    ):
-        metadata = image.metadata.attributes["multiscales"][0]["metadata"]
-        values = [metadata["physical_size_y"], metadata["physical_size_x"]]
-        physical_size_y_unit = metadata["physical_size_y_unit"]
-        physical_size_x_unit = metadata["physical_size_x_unit"]
+        zarr_pixel_size := _physical_pixel_size(
+            getattr(image.metadata, "attributes", None)
+        )
+    ) is not None:
+        values, physical_size_y_unit, physical_size_x_unit = zarr_pixel_size
     else:
         attrs = image.xarray_dask_data.attrs
         if isinstance(attrs, Mapping) and "unprocessed" in attrs:

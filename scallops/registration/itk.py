@@ -35,6 +35,7 @@ from scallops.registration.landmarks import _get_translation, find_landmarks
 from scallops.xr import _get_dims
 from scallops.zarr_io import (
     _create_array_kwargs,
+    _group_name,
     _require_group,
     open_ome_zarr,
     write_zarr,
@@ -339,9 +340,7 @@ def _itk_align_reference_time_zarr(
         group = None
         if image_root is not None:
             images_group = _require_group(image_root, "images")
-            group = images_group.create_group(
-                image_name.replace("/", "_"), overwrite=True
-            )
+            group = images_group.create_group(_group_name(image_name), overwrite=True)
             zarr_array = group.create_array(
                 "s0",
                 shape=shape,
@@ -350,7 +349,7 @@ def _itk_align_reference_time_zarr(
                 # padded channels are never written, so they read as fill_value
                 fill_value=0,
                 overwrite=True,
-                **_create_array_kwargs(),
+                **_create_array_kwargs(dims=dims),
             )
 
         return {
@@ -1265,19 +1264,22 @@ def _itk_transform_image_zarr(
 
     output_size = _get_transform_size(transform_parameter_object)
     transform_dims = _get_dims(image, ["t", "c", "z"])
+    # write slices in the same (t, c, z, y, x) order as the output array
+    image = image.transpose(*transform_dims, "y", "x")
     dim_sizes = tuple([image.sizes[d] for d in transform_dims])
 
     group = _require_group(image_root, "images").require_group(
-        image_name.replace("/", "_"), overwrite=True
+        _group_name(image_name), overwrite=True
     )
     chunks = (1,) * len(transform_dims) + (chunksize or (1024, 1024))
+    shape = dim_sizes + output_size
     data = group.create_array(
         "s0",
-        shape=dim_sizes + output_size,
+        shape=shape,
         chunks=chunks,
         dtype=image.dtype,
         overwrite=True,
-        **_create_array_kwargs(),
+        **_create_array_kwargs(dims=image.dims),
     )
 
     _itk_transform_image(

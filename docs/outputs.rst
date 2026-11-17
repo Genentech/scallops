@@ -3,15 +3,15 @@
 Outputs
 =======
 
-This section describes the files written by the main SCALLOPS commands. Examples are
-from processing a single image group, ``A1-102`` (well ``A1``, tile ``102``).
+This section describes the files written by the main SCALLOPS commands. As in
+:doc:`example_commands`, the examples are from processing a single image group, ``A-3``.
 
-Each image group is identified by a key built from the ``--groupby`` fields (for
-example ``A1-102`` for ``--groupby well tile``). Most commands write one output per
+Each image group is identified by a key built from the ``--groupby`` fields joined by
+``-`` (for example ``A-3`` for ``--groupby plate well``, with plate ``A`` and well ``3``). Most commands write one output per
 key, so they can be run on many groups in parallel and skip groups that already have
 output unless ``--force`` is given.
 
-Tables are written as Parquet. A path such as ``A1-102.parquet`` may be a directory of
+Tables are written as Parquet. A path such as ``A-3.parquet`` may be a directory of
 Parquet part files; read it with ``pandas.read_parquet`` or ``dask.dataframe.read_parquet``.
 
 Images and labels
@@ -26,15 +26,15 @@ or ``-cell``:
 
    segment.zarr/
    ├── images/
-   │   └── A1-102/
+   │   └── A-3/
    │       ├── .zattrs        # OME-Zarr multiscales metadata
    │       └── s0/            # full-resolution array
    └── labels/
-       ├── A1-102-nuclei/
+       ├── A-3-nuclei/
        │   └── s0/
-       ├── A1-102-cell/
+       ├── A-3-cell/
        │   └── s0/
-       └── A1-102-cytosol/
+       └── A-3-cytosol/
            └── s0/
 
 Read them with :func:`scallops.io.read_experiment`, or open a single array with
@@ -70,11 +70,11 @@ Writes a Zarr store containing candidate spots and intermediate images:
 
    spot-detect.zarr/
    ├── images/
-   │   ├── A1-102-max/        # max filter of the LoG image, used for read calling
-   │   ├── A1-102-log/        # Laplacian of Gaussian filtered image (--save log)
-   │   └── A1-102-std/        # standard deviation over cycles (--save std)
+   │   ├── A-3-max/        # max filter of the LoG image, used for read calling
+   │   ├── A-3-log/        # Laplacian of Gaussian filtered image (--save log)
+   │   └── A-3-std/        # standard deviation over cycles (--save std)
    └── points/
-       └── A1-102-peaks.parquet
+       └── A-3-peaks.parquet
 
 ``points/{key}-peaks.parquet`` has one row per candidate spot:
 
@@ -94,10 +94,10 @@ Writes a directory with one subdirectory per output type:
 .. code:: text
 
    reads/
-   ├── reads/A1-102.parquet       # one row per spot
-   ├── labels/A1-102.parquet      # one row per cell (barcode assignment)
-   ├── bases/A1-102.parquet       # one row per spot, cycle and base (--save-bases)
-   ├── crosstalk/A1-102-w.zarr    # crosstalk correction matrix
+   ├── reads/A-3.parquet       # one row per spot
+   ├── labels/A-3.parquet      # one row per cell (barcode assignment)
+   ├── bases/A-3.parquet       # one row per spot, cycle and base (--save-bases)
+   ├── crosstalk/A-3-w.zarr    # crosstalk correction matrix
    └── spots/                     # computed peak thresholds
 
 The crosstalk matrix is written unless ``--crosstalk-correction-method none`` is used.
@@ -168,11 +168,11 @@ objects table for each image key:
 
    features/
    ├── cell/
-   │   ├── A1-102.parquet          # requested features
-   │   └── A1-102-objects.parquet  # bounding box, centroid and area
+   │   ├── A-3.parquet          # requested features
+   │   └── A-3-objects.parquet  # bounding box, centroid and area
    └── nuclei/
-       ├── A1-102.parquet
-       └── A1-102-objects.parquet
+       ├── A-3.parquet
+       └── A-3-objects.parquet
 
 Rows are labels, indexed by label ID. Columns follow CellProfiler naming,
 ``{Compartment}_{Category}_{Feature}_{Channel}``, for example

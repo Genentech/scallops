@@ -54,7 +54,8 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     labels_arg(required)
 
     generic_features_help = (
-        "A space-separated list of features to extract (e.g., 'area intensity_0 corr_0_1').\n"
+        "A space-separated list of features to extract "
+        "(e.g., 'sizeshape intensity_0 colocalization_0_1').\n"
         "Channels are 0-indexed. Use shortcuts for efficiency:\n\n"
         "- For specific channels: 'intensity_0,1,2'\n"
         "- For all channels (wildcard): 'intensity_*'\n"
@@ -92,7 +93,7 @@ def _create_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser.add_argument(
         "--stack-images",
         help="Path to additional images to stack with `images`. Add `s` prefix to refer"
-        " to stack image channel index (e.g. corr_0_s0).",
+        " to stack image channel index (e.g. correlationpearsonbox_0_s0).",
         nargs="*",
     )
     required.add_argument(

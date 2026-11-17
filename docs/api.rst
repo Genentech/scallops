@@ -10,7 +10,7 @@ Experiment Data Structure
 The core data structure used to organize and handle experiments.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.experiment.elements.Experiment
 
@@ -20,7 +20,7 @@ Reading
 Modules for reading and handling input data, including image data, barcode data, and spatial information.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.io.get_image_spacing
     scallops.io.get_pixel_positions
@@ -37,7 +37,7 @@ Writing
 Functions for saving images and metadata in various formats.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.experiment.elements.Experiment.save
     scallops.io.create_multiscene_hyperstack
@@ -52,7 +52,7 @@ Features
 Tools to extract and analyze features from regions of interest, such as nuclei .
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.features.find_objects.find_objects
     scallops.features.generate.label_features
@@ -71,7 +71,7 @@ Cross-Correlation
     Alignment based on `SKimage' phase cross correlation`_
 
         .. autosummary::
-            :toctree: .
+            :toctree: generated
 
             scallops.registration.crosscorrelation.align_image
             scallops.registration.crosscorrelation.align_images
@@ -82,7 +82,7 @@ ITK
     Alignment based on ITK_
 
         .. autosummary::
-            :toctree: .
+            :toctree: generated
 
             scallops.registration.itk.itk_align
             scallops.registration.itk.itk_align_to_reference_time
@@ -95,7 +95,7 @@ Landmarks
     Find matching landmarks between two images
 
         .. autosummary::
-            :toctree: .
+            :toctree: generated
 
             scallops.registration.landmarks.find_landmarks
             scallops.registration.landmarks.match_template
@@ -106,7 +106,7 @@ Pixel-Based Decoding
 Functions for decoding images at the pixel level using codebooks.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.codebook.decode_metric
     scallops.codebook.estimate_scale_factors
@@ -118,7 +118,7 @@ Spot-Based Decoding
 Tools for decoding sequencing spots and assigning them to barcodes and labels.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
 
     scallops.reads.apply_channel_crosstalk_matrix
@@ -154,7 +154,7 @@ Nuclei Segmentation
     Segmentation tools for identifying nuclei in images, using popular algorithms such as Stardist.
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.segmentation.cellpose.segment_nuclei_cellpose
         scallops.segmentation.stardist.segment_nuclei_stardist
@@ -166,7 +166,7 @@ Cell Segmentation
     Tools for segmenting cells, using various algorithms, including watershed and propagation methods.
 
     .. autosummary::
-        :toctree:
+        :toctree: generated
 
         scallops.segmentation.cellpose.segment_cells_cellpose
         scallops.segmentation.propagation.segment_cells_propagation
@@ -177,7 +177,7 @@ Utilities
     Segmentation utility functions.
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
 
         scallops.segmentation.util.close_labels
@@ -200,7 +200,7 @@ Xarray/Experiment Custom Operations
 Custom operations for working with Xarray and experiments.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.xr.apply_data_array
     scallops.xr.iter_data_array
@@ -216,7 +216,7 @@ Composites
 -----------
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.visualize.composite.experiment_composite
         scallops.visualize.composite.imcomposite
@@ -227,7 +227,7 @@ Cross-talk
 -----------
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.visualize.crosstalk.pairwise_channel_scatter_plot
 
@@ -235,7 +235,7 @@ Distributions
 -------------
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.visualize.distribution.cdf_plot
         scallops.visualize.distribution.comparative_effect_scatter
@@ -246,7 +246,7 @@ Heatmaps
 -----------
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.visualize.heatmap.base_call_mismatches_heatmap
         scallops.visualize.heatmap.in_situ_identity_matrix_plot
@@ -257,7 +257,7 @@ Histograms
 -----------
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.visualize.histogram.channel_hist_plot
         scallops.visualize.histogram.in_situ_barcode_hist_plot
@@ -266,7 +266,7 @@ Imshow
 ------
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.visualize.imshow.plot_percentile_montage
         scallops.visualize.imshow.plot_plate
@@ -276,7 +276,7 @@ Napari
 -----------
 
     .. autosummary::
-        :toctree: .
+        :toctree: generated
 
         scallops.visualize.napari.imnapari
         scallops.visualize.napari.experiment_napari
@@ -290,7 +290,7 @@ Visualization Utilities
 Additional utilities for visualizing multicolor labels and channels.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.visualize.utils.channel_thresholds
     scallops.visualize.utils.multicolor_labels
@@ -301,7 +301,7 @@ Stitching Utilities
 Utilities specifically for stitching operations.
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.stitch.utils.tile_overlap_mask
 
@@ -311,7 +311,7 @@ Datasets
 Builtin datasets for testing
 
 .. autosummary::
-    :toctree: .
+    :toctree: generated
 
     scallops.datasets.example_feature_summary_stats
     scallops.datasets.feldman_2019_small

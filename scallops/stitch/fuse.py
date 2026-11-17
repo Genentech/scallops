@@ -26,6 +26,7 @@ from scallops.stitch.utils import (
     dtype_convert,
 )
 from scallops.zarr_io import (
+    _add_metadata,
     _attrs_axes_scales,
     _create_array_kwargs,
     _create_zarr_attrs,
@@ -181,7 +182,7 @@ def _fuse(
         chunks=(1,) + chunk_size,
         name="s0",
         overwrite=True,
-        **_create_array_kwargs(fmt),
+        **_create_array_kwargs(fmt, ["c", "y", "x"]),
     )
 
     coords = None
@@ -328,7 +329,7 @@ def _fuse(
     zarr_attrs = _create_zarr_attrs(
         fmt, group, ["c", "y", "x"], image_attrs, axes, scale_dict
     )
-    group.attrs.update(zarr_attrs)
+    _add_metadata(group, zarr_attrs, fmt)
 
 
 def _register_across_channels(

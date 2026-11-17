@@ -1,31 +1,24 @@
 Command Line
 ***************
 
-SCALLOPS provides a powerful command-line interface (CLI) to automate various workflows and tasks related
-to Optical Pooled Screens (OPS). Each command supports multiple arguments and options, allowing users to
-customize their workflows.
+Each step of an Optical Pooled Screen (OPS) analysis is a ``scallops`` command. This page lists every
+command and its options; see :doc:`example_commands` for the commands in pipeline order and
+:ref:`outputs` for the files they write.
 
 scallops dialout
 ================
 
-The `scallops dialout` command is designed for the analysis and reporting of pooled dialout
-library sequencing data. It allows users to run the dialout pipeline to analyze sequencing data,
-generate counts, align reads to a reference genome, and produce detailed reports. It provides
-two subcommands:
+The ``scallops dialout`` command analyzes sequencing data from pooled dial-out libraries: it counts
+guides, aligns reads to a reference, and reports the results. It has two subcommands:
 
 analysis:
-    The `analysis` subcommand is responsible for running the main dialout library sequencing data
-    analysis pipeline. It processes sequencing reads from FASTQ files, performs alignment to a
-    reference genome using BWA, computes Hamming distances between sequences, and generates output
-    files such as mapped counts, dropout data, and unaligned sequences. This subcommand is essential
-    for the initial data processing of a pooled dialout experiment.
+    Reads FASTQ files, aligns reads to the reference with BWA, matches sequences to the library
+    design by Hamming distance, and writes per-pool counts, dropouts, summary statistics and
+    (optionally) unaligned reads.
 
 report:
-    The `report` subcommand generates a comprehensive report based on the analysis pipeline’s
-    output. It creates visual summaries, scatter plots, and statistics from the dialout analysis
-    data, helping researchers interpret sequencing results. The report can include analysis of
-    guide RNA sequences, mismatches, and dropout rates, providing valuable insights into the
-    sequencing performance and accuracy.
+    Combines the ``analysis`` results of several pools into plots of summary statistics, matches,
+    mismatches and guide ranks, written to a PDF or to PNG files.
 
 .. argparse::
    :module: scallops.__main__
@@ -37,7 +30,7 @@ report:
 scallops extract-crops
 ======================
 
-The `scallops extract-crops` command extracts image crops from labeled images.
+The ``scallops extract-crops`` command extracts image crops from labeled images.
 
 .. argparse::
    :module: scallops.__main__
@@ -48,7 +41,7 @@ The `scallops extract-crops` command extracts image crops from labeled images.
 scallops find-objects
 ======================
 
-The `scallops find-objects` command finds objects in label images output from segmentation.
+The ``scallops find-objects`` command finds objects in label images output from segmentation.
 
 .. argparse::
    :module: scallops.__main__
@@ -60,7 +53,7 @@ The `scallops find-objects` command finds objects in label images output from se
 scallops features
 =================
 
-The `scallops features` command is used to compute various features from labeled images, producing output
+The ``scallops features`` command is used to compute various features from labeled images, producing output
 in Parquet format. Each feature is indexed by the label in the corresponding image. This command allows
 users to extract multiple types of features, including geometric, texture, and intensity-based features,
 for each region of interest, such as nuclei, cells, or cytosol.
@@ -88,18 +81,11 @@ Key Features:
 scallops illum-corr
 ====================
 
-The `scallops illum-corr` command is used for performing illumination correction on images, a crucial
-preprocessing step in biomedical image analysis. Uneven illumination can introduce artifacts that affect
-the accuracy of downstream analysis tasks like segmentation and feature extraction.
-SCALLOPS provides an aggregation method for illumination correction with three aggregators: mean, median and min.
-
-Key Features:
-
-* This method computes illumination correction by aggregating images using mean, median or min, followed by
-  a median filter (radius set with ``--smooth``; ``0`` disables it) and optional rescaling. It offers a simple and effective approach for addressing
-  illumination variations. The output can be saved as Zarr or TIFF images.
-* This method is designed to improve image uniformity, thereby enhancing the reliability of image analysis
-  workflows, particularly in the context of high-throughput biomedical imaging data.
+The ``scallops illum-corr agg`` command computes a flat-field image that corrects uneven illumination,
+which would otherwise bias segmentation and intensity features. Tiles are aggregated with the mean,
+median or min (``--agg-method``), smoothed with a median filter (radius set with ``--smooth``; ``0``
+disables it) and optionally rescaled. The output is written as OME-TIFF or OME-Zarr. ``scallops stitch``
+applies the flat-field with ``--ffp``.
 
 .. argparse::
    :module: scallops.__main__
@@ -111,9 +97,8 @@ Key Features:
 scallops pooled-sbs
 ===================
 
-The `scallops pooled-sbs` command is designed for processing images from pooled in-situ sequencing (SBS)
-experiments. This pipeline includes spot detection, read calling, and merging of in situ sequencing reads
-with phenotype data.
+The ``scallops pooled-sbs`` command processes in situ sequencing-by-synthesis (SBS) images: it detects
+spots, calls reads and assigns barcodes to cells, and merges the barcodes with phenotype data.
 
 Key Features:
 
@@ -136,7 +121,7 @@ Key Features:
 scallops pert-map
 ===================
 
-The `scallops pert-map` command builds and evaluates perturbation maps from per-cell features (for
+The ``scallops pert-map`` command builds and evaluates perturbation maps from per-cell features (for
 example the ``merge-features`` output of the OPS workflow). It replaces the older ``norm-features``
 and ``rank-features`` commands. Each subcommand reads one or more Zarr, h5ad or Parquet inputs and
 writes to Zarr, h5ad or Parquet.
@@ -175,7 +160,7 @@ pipeline, and :ref:`example_commands:Rank Features` for a worked CLI example.
 scallops registration
 ======================
 
-The `scallops registration` command provides functionality for performing image registration.
+The ``scallops registration`` command provides functionality for performing image registration.
 This includes image alignment using elastix (ITK) and applying precomputed transformations to images or labels.
 
 Key Features:
@@ -183,7 +168,7 @@ Key Features:
 * **ITK Registration**: The elastix subcommand performs registration of moving images to fixed images or across timepoints
   using elastix (ITK). It supports the use of pre-configured ITK parameters and outputs transformed images and/or
   labels in Zarr format.
-* **Transform Application**: The `transformix` subcommand applies previously computed ITK transformations to images or labels,
+* **Transform Application**: The ``transformix`` subcommand applies previously computed ITK transformations to images or labels,
   storing the results in a Zarr output directory.
 
 .. argparse::
@@ -197,17 +182,17 @@ Key Features:
 scallops segment
 ================
 
-The `scallops segment` command provides a command-line interface (CLI) for performing nuclei and cell
+The ``scallops segment`` command provides a command-line interface (CLI) for performing nuclei and cell
 segmentation. It supports various segmentation algorithms and outputs segmented labels in Zarr format.
 
 Key Features:
 
-* **Nuclei Segmentation**: The `nuclei` subcommand performs nuclei segmentation using StarDist (default) or Cellpose, with
+* **Nuclei Segmentation**: The ``nuclei`` subcommand performs nuclei segmentation using StarDist (default) or Cellpose, with
   optional filtering based on area and intensity.
-* **Cell Segmentation**: The `cell` subcommand performs cell segmentation using propagation (default), watershed,
+* **Cell Segmentation**: The ``cell`` subcommand performs cell segmentation using propagation (default), watershed,
   watershed-intensity, or Cellpose. It also supports various cytoplasmic channels, thresholding, and post-segmentation
   filtering.
-* **Overlap**: The `overlap` subcommand finds the fraction of each label in one segmentation that is contained within
+* **Overlap**: The ``overlap`` subcommand finds the fraction of each label in one segmentation that is contained within
   labels of another segmentation (``--meta-output``), then renumbers the second segmentation (and any additional
   labels such as cytosol) to match the overlapping label in the first, writing the result to ``--label-output``. This
   matters most for cell segmentation algorithms (e.g. Cellpose) whose cell and nuclei labels don't already share IDs;
@@ -223,7 +208,7 @@ Key Features:
 scallops stitch
 ================
 
-The `scallops stitch` command provides a command-line interface (CLI) for performing stitching of
+The ``scallops stitch`` command provides a command-line interface (CLI) for performing stitching of
 microscopy images.
 
 Key Features:
@@ -231,7 +216,7 @@ Key Features:
 * **Performance**: Utilize dask for parallel processing.
 * **Cross-correlation**: Use both phase and no normalization in cross-correlation computations, automatically choosing
   the one that gives the best result.
-* **Stage Position Handling**: Read stage positions directly from Bioformats-supported images, such as `.nd2` files,
+* **Stage Position Handling**: Read stage positions directly from Bioformats-supported images, such as ``.nd2`` files,
   or from a CSV file.
 * **Comprehensive Output**: Outputs stitched image in OME-ZARR format, stitched positions in Parquet format,
   PDF report, tile boundary mask, and tile source labels in OME-ZARR format.
@@ -251,15 +236,64 @@ Key Features:
    :path: stitch
 
 
+.. _channel_alignment:
+
+Channel alignment correction
+----------------------------
+
+Chromatic aberration can make each channel slightly magnified and shifted relative to the others. Use
+``--alignment-correction-channels`` to align channels to the reference channel (``--align-channel``) when writing
+the stitched image, and ``--alignment-correction-channel-order`` to name every input channel, in input order (use
+``-`` for a channel without values). Names are matched to the parameter file as text, ignoring case.
+
+Values are read from a JSON parameter file (``--alignment-correction-params``), usually one per microscope.
+``m`` is the magnification about the tile centre and ``ty``, ``tx`` the translation in pixels, such that
+``corrected(y, x) = raw(c + (1 + m) * ((y, x) - c) + (ty, tx))`` with ``c`` the tile centre. ``same_as`` reuses the
+values of another channel.
+
+Example::
+
+    {
+      "format": "scallops-channel-alignment",
+      "version": 1,
+      "tile_shape": [2304, 2304],
+      "reference_channel": "DAPI",
+      "channels": {
+        "FITC": {"m": 0.000751, "ty": 0.341, "tx": -0.162},
+        "CY7": {"m": -0.001493, "ty": 0.950, "tx": 0.300}
+      }
+    }
+
+Channels without values (or all channels, if no parameter file is given) are estimated from up to 100 interior
+tiles of each well, using the nuclei of the reference channel, which must be a nuclear stain such as DAPI. If an
+estimate fails its quality checks, stitching stops with an error; give values for that channel in the parameter
+file or leave it out of ``--alignment-correction-channels``. The values applied to each image are saved to
+``<image>-channel-alignment.json`` in the report output and to the stitched image metadata.
+
+When channel alignment is requested, every output channel is resampled once with a quintic B-spline (alignment and
+radial correction combined) instead of the bilinear radial correction, to keep fine detail.
+``--alignment-correction-channels`` cannot be combined with ``--channel-reference``.
+
+Correcting a channel's shift leaves a band of missing pixels along some tile edges (pixels that would come from
+outside the tile). The radial correction leaves such a band in every channel on its own; only bands wider than
+that count. The crop SCALLOPS applies when writing the stitched image removes bands up to its width. A wider band
+would need a larger crop, which could open gaps between tiles, so stitching stops with an error: leave that
+channel out of ``--alignment-correction-channels`` or give smaller parameters for it (which may correct it only
+partly). Along an axis without neighbouring tiles (e.g. a single tile), the crop is widened to remove the band
+instead. If the tiles could not be aligned and were placed at their
+stage positions, nothing is cropped, so stitching stops with an error naming the channels that would leave a band;
+leave those out of ``--alignment-correction-channels``. The crop used is saved in the per-image record
+(``fusion_crop``).
+
 .. _bioformats: https://www.openmicroscopy.org/bio-formats/
 .. _OME-ZARR: https://github.com/ome/ome-zarr-py
 .. _skimage: https://scikit-image.org/
 
 
-stitch-preview
-==============
+scallops stitch-preview
+=======================
 
-The `stitch-preview` command provides a quick preview of stitched multi-tile microscopy images, allowing
+The ``scallops stitch-preview`` command provides a quick preview of stitched multi-tile microscopy images, allowing
 users to visualize the result before performing full stitching. It uses the stage positions for stitching
 and saves the resulting image.
 
