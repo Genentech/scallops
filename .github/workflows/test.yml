@@ -17,15 +17,15 @@ jobs:
       matrix:
         python-version: ["3.13"]
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7.0.1
     - name: Cache test data
-      uses: actions/cache@v4
+      uses: actions/cache@v6.1.0
       with:
         path: ${{ env.SCALLOPS_CACHE_DIR }}
         key: test-data-${{ hashFiles('scallops/datasets/registry.txt') }}
         restore-keys: test-data-
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7.1.0
       with:
         python-version: ${{ matrix.python-version }}
         cache: 'pip'
