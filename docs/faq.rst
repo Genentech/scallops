@@ -5,7 +5,8 @@ FAQ
 
 #. How do I stitch images stored as separate files for each channel or z-index?
     Use "c" and "z" to indicate where in the file name the channel and z-index are located. Note that
-    "tile" is also included in the image pattern in order to distinguish each individual image tile.
+    "tile" is also included in the image pattern in order to distinguish each individual image tile, and is
+    left out of ``--groupby`` so that all tiles of a well are stitched together.
 
     Example::
 
@@ -60,7 +61,9 @@ FAQ
 #. Why are my channels not aligned with each other in the stitched image?
     Chromatic aberration can make each channel slightly magnified and shifted relative to the others. Use
     ``--alignment-correction-channels`` to align channels to the reference channel when stitching. See
-    :ref:`channel_alignment` for the parameter file format and how missing values are estimated.
+    :ref:`channel_alignment` for the parameter file format and how missing values are estimated. If the offset
+    between channels varies from tile to tile instead, use ``--channel-reference``, which estimates a translation
+    separately in each tile. The two options cannot be combined.
 
 .. _fsspec: https://filesystem-spec.readthedocs.io/
 .. _`fsspec configuration documentation`: https://filesystem-spec.readthedocs.io/en/latest/features.html#configuration

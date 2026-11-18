@@ -713,7 +713,7 @@ def _write_arrays(
             )
 
             image_attrs, axes, scale_dict = _attrs_axes_scales(
-                metadata, None, ["y", "x"], np.uint16
+                metadata, None, ["y", "x"], np.int32
             )
             zarr_attrs = _create_zarr_attrs(
                 fmt,

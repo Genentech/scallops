@@ -297,16 +297,10 @@ def run_stitch(args: argparse.Namespace) -> None:
     stage_positions_path = args.stage_positions
     dfp = args.dfp
     ffp = args.ffp
-    flip_y_axis = args.flip_y_axis
-    flip_x_axis = args.flip_x_axis
+    # stitching uses -1 to flip an axis and 1 to keep it
+    flip_y_axis = None if args.flip_y_axis is None else (-1 if args.flip_y_axis else 1)
+    flip_x_axis = None if args.flip_x_axis is None else (-1 if args.flip_x_axis else 1)
     swap_axes = args.swap_axes
-    if flip_y_axis is not None:
-        flip_y_axis = 1 if flip_y_axis == 0 else -1
-    if flip_x_axis is not None:
-        flip_x_axis = 1 if flip_x_axis == 0 else -1
-
-    if swap_axes is not None:
-        swap_axes = bool(swap_axes)
     radial_correction_k = args.radial_correction_k
     if radial_correction_k is not None:
         if radial_correction_k not in ("auto", "none"):
@@ -317,7 +311,8 @@ def run_stitch(args: argparse.Namespace) -> None:
     evaluate = not args.no_evaluate
     rename = args.rename
     if rename is not None:
-        rename = pd.read_csv(rename, header=None, index_col=0).to_dict()[1]
+        # read as str so that keys such as 001 match image keys
+        rename = pd.read_csv(rename, header=None, index_col=0, dtype=str).to_dict()[1]
     no_version = args.no_version
     stitch_alpha = args.stitch_alpha
 

@@ -7,6 +7,7 @@ from argparse import (
 from scallops.cli.args import (
     SubParsers,
     add_command,
+    bool_arg,
     dask_client_arg,
     dask_cluster_arg,
     expected_images_arg,
@@ -66,7 +67,8 @@ def _create_stitch_preview_parser(
         "--downsample",
         type=float,
         default=20,
-        help="Downsample image resolution.",
+        help="Downsampling factor for the preview image (e.g. 20 gives 1/20 of the "
+        "full resolution).",
     )
 
     parser.add_argument(
@@ -79,9 +81,9 @@ def _create_stitch_preview_parser(
     parser.add_argument(
         "--stage-positions",
         help=(
-            "Optional CSV file containing stage positions. Use when image metadata "
-            "is missing stage positions. Expected columns `name`, `y`, "
-            "and `x`, where name is the full image path."
+            "Optional CSV or Parquet file containing stage positions. Use when image "
+            "metadata is missing stage positions. Expected columns `name`, `y`, "
+            "and `x`, where name is the full image path and `y`, `x` are in microns."
         ),
     )
     z_index_tile_arg(parser)
@@ -96,24 +98,31 @@ def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> Argumen
         "stitch",
         default_help,
         help="Stitch images",
-        description="Stitch microscopy images",
+        description="Align image tiles starting from their stage positions, write the "
+        "stitched positions and a QC report, and optionally write the fused image and "
+        "tile label masks to OME-Zarr.",
     )
     required = parser.add_argument_group("required arguments")
     images_arg(required)
     required.add_argument(
         "--report-output",
         required=True,
-        help="Output directory for stitched positions and QC report.",
+        help="Output directory for the stitched tile positions, overlap evaluation "
+        "table, and PDF QC report (and the channel alignment record when "
+        "--alignment-correction-channels is given).",
     )
 
     parser.add_argument(
         "--image-output",
-        help="Output zarr directory for stitched images and masks.",
+        help="Output Zarr directory for the stitched image and tile label masks. "
+        "Required unless both --no-save-image and --no-save-labels are given.",
     )
     parser.add_argument(
         "--channel-name",
         nargs="*",
-        help="Channel names to save in output image. If specified, must equal the number of channels in input tiles.",
+        help="Channel names for the output image, one per input channel (not per "
+        "--output-channels entry); only the names of output channels are used. "
+        "Defaults to the channel names in the image metadata.",
     )
 
     image_pattern_arg(parser)
@@ -124,21 +133,25 @@ def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> Argumen
         "--align-channel",
         type=int,
         default=0,
-        help="Channel index (0-based) to use for alignment.",
+        help="Channel index (0-based) used to align tiles. Also the reference channel "
+        "for --alignment-correction-channels.",
     )
     parser.add_argument(
         "--radial-correction-k",
         type=str,
         default="auto",
-        help="K to correct for radial distortion. Use `auto` to automatically determine "
-        "k and `none` to disable auto determination.",
+        help="Radial distortion coefficient k: a number, `auto` to estimate k "
+        "automatically, or `none` to disable radial correction.",
     )
 
     parser.add_argument(
         "--stitch-alpha",
         type=float,
         default=0.001,
-        help="Significance level for alignment error quantification.",
+        help="Significance level for accepting a pairwise tile alignment: its "
+        "correlation is compared with a null distribution from non-overlapping tile "
+        "pairs. Lower values are stricter. If no alignment is accepted, tiles are "
+        "placed at their stage positions.",
     )
 
     parser.add_argument(
@@ -146,7 +159,10 @@ def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> Argumen
         type=float,
         default=[50, 100, 150],
         nargs="+",
-        help="Maximum allowed per-tile shift in microns",
+        help="Maximum allowed difference, in microns along y or x, between a pairwise "
+        "tile alignment and the offset expected from the stage positions; alignments "
+        "beyond it are rejected. If several values are given, they are tried in order "
+        "until the stage layout (axis flips and swap) can be determined.",
     )
 
     parser.add_argument(
@@ -162,139 +178,188 @@ def _create_stitch_parser(subparsers: SubParsers, default_help: bool) -> Argumen
     parser.add_argument(
         "--no-evaluate",
         action="store_true",
-        help="Do not evaluate stitching quality.",
+        help="Do not compute the correlation (ZNCC) of each tile overlap after "
+        "stitching, which is used to evaluate stitching quality.",
     )
-    parser.add_argument("--ffp", help="Path for flat-field correction profile image.")
-    parser.add_argument("--dfp", help="Path for dark-field correction profile image.")
+    parser.add_argument(
+        "--ffp",
+        help="Path to the flat-field profile (FFP) image used for illumination "
+        "correction.",
+    )
+    parser.add_argument(
+        "--dfp",
+        help="Path to the dark-field profile (DFP) image used for illumination "
+        "correction.",
+    )
 
     parser.add_argument(
         "--blend",
         choices=["linear", "none"],
         default="none",
-        help="Blending method for stitched images",
+        help="Blending of overlapping tiles: `none` uses the tile closest to the "
+        "well center, `linear` blends overlapping tiles.",
     )
 
     parser.add_argument(
         "--output-channels",
         nargs="*",
         type=int,
-        help="Output channels to save in stitched image.",
+        help="Channel indices (0-based) to save in the stitched image. All channels "
+        "if not provided.",
     )
 
     parser.add_argument(
         "--crop-y",
         type=int,
         default=None,
-        help="Crop tiles by `crop` pixels along y dimension when aligning tiles. Set"
-        "automatically when radial correction is enabled.",
+        help="Pixels to crop from each edge of a tile along y. Applied when aligning "
+        "tiles, and added to the crop applied when writing the stitched image. Set automatically when radial correction is enabled.",
     )
     parser.add_argument(
         "--crop-x",
         type=int,
         default=None,
-        help="Crop tiles by `crop` pixels along x dimension when aligning tiles. Set"
-        "automatically when radial correction is enabled.",
+        help="Pixels to crop from each edge of a tile along x. Applied when aligning "
+        "tiles, and added to the crop applied when writing the stitched image. Set automatically when radial correction is enabled.",
     )
     parser.add_argument(
         "--stage-positions",
         help=(
-            "Optional CSV or Parquet file containing stage positions. Use when image metadata "
-            "is missing stage positions. Expected columns `name`, `y`, "
-            "and `x`, where name is the full image path."
+            "Optional CSV or Parquet file containing stage positions. Use when image "
+            "metadata is missing stage positions. Expected columns `name`, `y`, "
+            "and `x`, where name is the full image path and `y`, `x` are in microns."
         ),
     )
     parser.add_argument(
         "--image-spacing",
         type=image_spacing_arg,
-        help="Physical size y, x if image metadata does not contain this information",
+        help="Pixel size in microns as `Y,X` (e.g. `0.65,0.65`). Overrides the "
+        "pixel size in the image metadata; required if the metadata lacks it.",
     )
     parser.add_argument(
         "--min-overlap-fraction",
         type=float,
-        help="Minimum tile overlap fraction to include edge in graph. Determined "
-        "automatically if not provided.",
+        help="Minimum overlap, as a fraction of tile area, for two tiles to be aligned "
+        "to each other. Defaults to one third of the overlap measured by aligning a "
+        "few neighboring tiles while detecting the stage layout (0.033 if the layout "
+        "can't be detected).",
     )
     parser.add_argument(
         "--random-seed",
         type=int,
         default=239753,
-        help="Random seed for reproducibility.",
+        help="Random seed for sampling tile pairs (automatic radial correction k and "
+        "the null distribution for --stitch-alpha) and tiles (channel alignment "
+        "estimation).",
     )
+
     parser.add_argument(
         "--cross-correlation-upsample",
         type=int,
         default=1,
-        help="Upsampling factor for registration precision.",
+        help="Upsampling factor for subpixel tile alignment: shifts are estimated to "
+        "1/N of a pixel. 1 aligns to the nearest whole pixel.",
     )
     parser.add_argument(
         "--rename",
-        help="CSV file mapping old image IDs to new IDs for output file names.",
+        help="Headerless two-column CSV file mapping image keys (see --groupby; first "
+        "column) to new keys (second column) for output file names.",
     )
     parser.add_argument(
         "--flip-y-axis",
-        type=int,
-        choices=[1, 0],
-        help="Whether to flip tile y axis. Determined automatically if not provided.",
-    )
-    parser.add_argument(
-        "--flip-x-axis",
-        type=int,
-        choices=[1, 0],
-        help="Whether to flip tile x axis. Determined automatically if not provided.",
-    )
-    parser.add_argument(
-        "--swap-axes",
-        type=int,
-        choices=[1, 0],
-        help="Whether to swap tile y and x axes. Determined automatically if not "
+        type=bool_arg,
+        metavar="{1,0,true,false,yes,no}",
+        help="Flip the tile y axis (1, true, or yes) or not (0, false, or no), "
+        "overriding automatic detection. Determined automatically if not "
         "provided.",
     )
     parser.add_argument(
-        "--channel-reference",
-        type=int,
-        help="If provided, perform alignment across channels within a tile using the specified reference channel (0-based).",
+        "--flip-x-axis",
+        type=bool_arg,
+        metavar="{1,0,true,false,yes,no}",
+        help="Flip the tile x axis (1, true, or yes) or not (0, false, or no), "
+        "overriding automatic detection. Determined automatically if not "
+        "provided.",
     )
     parser.add_argument(
+        "--swap-axes",
+        type=bool_arg,
+        metavar="{1,0,true,false,yes,no}",
+        help="Swap the tile y and x axes (1, true, or yes) or not (0, false, or no), "
+        "overriding automatic detection. Determined automatically if not "
+        "provided.",
+    )
+    channel_alignment_group = parser.add_argument_group(
+        title="Channel alignment",
+    )
+    channel_alignment_group.add_argument(
+        "--channel-reference",
+        type=int,
+        help="Reference channel index (0-based). If given, every other channel is "
+        "aligned to it by a translation estimated separately in each tile by "
+        "cross-correlation (tuned with --channel-cross-correlation-upsample, "
+        "--channel-window, and --channel-filter-min/max). Channels are not "
+        "aligned to each other if not provided. Use this when channel offsets "
+        "vary from tile to tile; use --alignment-correction-channels instead to "
+        "apply one magnification and translation per channel to all tiles in a "
+        "well. The two cannot be combined.",
+    )
+    channel_alignment_group.add_argument(
         "--channel-cross-correlation-upsample",
         type=int,
         default=2,
-        help="Upsampling factor for registration precision when aligning across channels.",
+        help="Upsampling factor for subpixel alignment across channels: shifts are "
+        "estimated to 1/N of a pixel. 1 aligns to the nearest whole pixel.",
     )
-    parser.add_argument(
+    channel_alignment_group.add_argument(
         "--channel-window",
         type=int,
         default=2,
-        help="Use a centered subset of a tile if greater than one when aligning across channels.",
+        help="When aligning across channels, use only the central 1/N of the tile "
+        "along each axis (e.g. 2 uses the central half). 1 uses the whole tile.",
     )
 
-    parser.add_argument(
+    channel_alignment_group.add_argument(
         "--channel-filter-min",
         type=float,
         default=0,
-        help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning across channels.",
+        help="Lower percentile of the intensity range used when aligning across "
+        "channels; values below it are replaced with uniform noise. Filtering is "
+        "disabled when this is <= 0 and --channel-filter-max is >= 100.",
     )
-    parser.add_argument(
+    channel_alignment_group.add_argument(
         "--channel-filter-max",
         type=float,
         default=90,
-        help="Replace data outside of specified percentile range [p1, p2] with uniform noise when aligning across channels.",
+        help="Upper percentile of the intensity range used when aligning across "
+        "channels; values above it are replaced with uniform noise.",
     )
-    parser.add_argument(
+    channel_correction_group = parser.add_argument_group(
+        title="Channel correction",
+    )
+    channel_correction_group.add_argument(
         "--alignment-correction-channels",
         nargs="+",
-        help="Channel indices (0-based) to align to the reference channel (--align-channel) when fusing, or `all` "
-        "(also `*` or `true`) for every channel except the reference. When given, every output channel is "
-        "resampled once with a quintic B-spline (alignment composed with the radial correction) instead of the "
-        "bilinear radial correction. Requires --alignment-correction-channel-order. Channels without values in "
-        "--alignment-correction-params are estimated from the images of each well.",
+        help="Channel indices (0-based) to align to the reference channel "
+        "(--align-channel) when fusing, or `all` (also `*` or `true`) for every "
+        "channel in --output-channels except the reference. Each channel gets one "
+        "magnification and translation, applied to all tiles of a stitched image "
+        "(e.g. a well). Values come from --alignment-correction-params; channels "
+        "it doesn't list are estimated from the image's tiles. Requires "
+        "--alignment-correction-channel-order. When given, each output channel is "
+        "resampled once with a quintic B-spline that combines this alignment with "
+        "the radial correction, instead of the default bilinear radial "
+        "correction. Cannot be combined with --channel-reference, which instead "
+        "estimates a translation separately in each tile.",
     )
-    parser.add_argument(
+    channel_correction_group.add_argument(
         "--alignment-correction-params",
-        help="JSON file with each channel's alignment to the reference channel (magnification m about the tile "
-        "centre and translation ty, tx in pixels), keyed by channel name (case-insensitive). Without it, or for "
-        "channels it doesn't list, the alignment is estimated from each well's tiles.",
+        help="JSON file with each channel's alignment to the reference channel "
+        "(magnification m about the tile center and translation ty, tx in pixels), "
+        "keyed by channel name (case-insensitive). Without it, or for channels it "
+        "doesn't list, the alignment is estimated from each well's tiles.",
     )
-    parser.add_argument(
+    channel_correction_group.add_argument(
         "--alignment-correction-channel-order",
         nargs="*",
         help="The --alignment-correction-params name of each input channel, in input order (e.g. DAPI FITC "
