@@ -19,7 +19,7 @@ import dask
 import dask.array as da
 import fsspec
 import numpy as np
-import ome_types
+import pydantic
 import xarray as xr
 import zarr
 from dask.array import from_zarr
@@ -261,14 +261,16 @@ def _create_omero_metadata(
     return None
 
 
-def _fix_attrs(d: dict) -> None:
-    """Recursively fix attributes for dictionary serialization.
+def _fix_attrs(value: Any) -> Any:
+    """Return a copy of ``value`` with objects that can't be written as JSON converted.
 
-    This function traverses a dictionary and modifies its values to ensure they are
-    serializable. It handles nested dictionaries, lists, and specific object types
-    such as `ome_types.OME` and `zarr.Group`.
+    Recurses into mappings, lists, and tuples (mappings become dicts and tuples become
+    lists). Pydantic models such as ``ome_types.OME`` become JSON-compatible dicts (or
+    ``None``, with a warning, if they contain bytes that are not valid UTF-8), and
+    ``zarr.Group`` becomes its string form. The input is not modified.
 
-    :param d: The dictionary containing attributes to be fixed.
+    :param value: Attribute value, typically an attrs dict.
+    :return: Converted copy of ``value``.
 
     :example:
 
@@ -285,30 +287,27 @@ def _fix_attrs(d: dict) -> None:
                 }
             }
 
-            # Fix attributes for JSON serialization
-            _fix_attrs(attrs)
-            print(attrs)
-            # Output: {'metadata': {'ome': {...}, 'group': '...', 'nested':
-                {'ome': {...}, 'list': [{...}, '...']}}}
+            fixed = _fix_attrs(attrs)
+            # fixed == {'metadata': {'ome': {...}, 'group': '<Group ...>', 'nested':
+            #     {'ome': {...}, 'list': [{...}, '<Group ...>']}}}
     """
-    for key in d:
-        value = d[key]
-        if isinstance(value, dict):
-            _fix_attrs(value)
-        elif isinstance(value, ome_types.OME):
-            # Hack to prevent OverflowError:
-            # Overlong 4 byte UTF-8 sequence detected when encoding string
-            d[key] = d[key].model_dump()
-        elif isinstance(value, zarr.Group):
-            d[key] = str(value)
-        elif isinstance(value, list):
-            for i in range(len(value)):
-                if isinstance(value[i], dict):
-                    _fix_attrs(value[i])
-                elif isinstance(value[i], ome_types.OME):
-                    value[i] = value[i].dict()
-                elif isinstance(value[i], zarr.Group):
-                    value[i] = str(value)
+    if isinstance(value, zarr.Group):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {k: _fix_attrs(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_fix_attrs(v) for v in value]
+    if isinstance(value, pydantic.BaseModel):
+        # e.g. ome_types.OME or ome_types.model.Pixels. mode="json" converts enums,
+        # colors, and datetimes to plain JSON values, so ujson doesn't have to
+        # introspect the model
+        try:
+            return value.model_dump(mode="json")
+        except UnicodeDecodeError:
+            # bytes fields (e.g. OME BinData) that are not valid UTF-8
+            logger.warning(f"Unable to serialize {type(value).__name__} to JSON")
+            return None
+    return value
 
 
 def _attrs_axes_scales(
@@ -378,8 +377,7 @@ def _attrs_axes_scales(
                 space_index = space_index + 1
             axes.append(axis)
 
-    _fix_attrs(image_attrs)
-    image_attrs = _fix_json(image_attrs)
+    image_attrs = _fix_json(_fix_attrs(image_attrs))
     return image_attrs, axes, scale_dict
 
 
@@ -793,11 +791,8 @@ def write_zarr(
         data = data.data
     if isinstance(data, da.Array):
         data = rechunk(data)
-    if image_attrs is None:
-        image_attrs = {}
-
-    if metadata is not None:
-        image_attrs.update(metadata)
+    # build a new dict so the caller's image_attrs is not modified
+    image_attrs = {**(image_attrs or {}), **(metadata or {})}
     image_attrs, axes, scale_dict = _attrs_axes_scales(
         image_attrs, coords, dims, data.dtype
     )
