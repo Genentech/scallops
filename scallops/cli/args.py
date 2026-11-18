@@ -118,10 +118,10 @@ def images_arg(parser: ArgContainer) -> None:
         "--images",
         nargs="+",
         required=True,
-        help="Paths to input images or CVS/Parquet with `image` column "
-        "containing full image path and additional columns "
-        "containing metadata such as `plate`, `well`, `t`, `c`, or `z`. Note that "
-        "image pattern is ignored when CSV/Parquet is used.",
+        help="Paths to input images, or a CSV/Parquet file with an `image` column "
+        "containing full image paths and additional metadata columns such as "
+        "`plate`, `well`, `t`, `c`, or `z`. When a CSV/Parquet file is used, "
+        "--image-pattern is ignored.",
     )
 
 
@@ -138,27 +138,42 @@ def no_version_arg(parser: ArgContainer) -> None:
 def image_pattern_arg(parser: ArgContainer) -> None:
     """Add the image pattern argument to a parser."""
     parser.add_argument(
-        "--image-pattern", help="Pattern to extract metadata from file names."
+        "--image-pattern",
+        help="Pattern with `{field}` placeholders to extract metadata fields from file paths, e.g. `{well}/Tile-{tile}_w{c}.tif`.",
     )
 
 
 def groupby_arg(parser: ArgContainer) -> None:
     """Add the groupby argument to a parser."""
-    parser.add_argument("-g", "--groupby", nargs="*", help="Keys to group images.")
+    parser.add_argument(
+        "-g",
+        "--groupby",
+        nargs="*",
+        help="Metadata fields to group images by, e.g. `plate well`. Each group is "
+        "processed as one image, keyed by its field values joined with `-` (e.g. `A-3` "
+        "for plate `A` and well `3`).",
+    )
 
 
 def expected_images_arg(parser: ArgContainer) -> None:
     parser.add_argument(
         "--expected-images",
         type=int,
-        help="Validate that the specified number of images are provided.",
+        help="Validate that the expected number of fields of view (tiles) per image key are found. Files that differ only in `c` or "
+        "`z` count as one field of view, and a multi-scene file counts as one.",
     )
 
 
 def subset_arg(parser: ArgContainer) -> None:
     """Add the subset argument to a parser."""
     parser.add_argument(
-        "-s", "--subset", nargs="*", help="Subset of images to include."
+        "-s",
+        "--subset",
+        nargs="*",
+        help="Image keys to include. A "
+        "value containing `*` is a case-insensitive regular expression in which `*` "
+        "matches any characters (e.g. `A2-*`); other values must match a key exactly. "
+        "All images are included if not provided.",
     )
 
 
@@ -170,7 +185,36 @@ def force_arg(parser: ArgContainer) -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite existing output",
+        help="Overwrite existing output.",
+    )
+
+
+_TRUE_VALUES = ("1", "true", "yes")
+_FALSE_VALUES = ("0", "false", "no")
+
+
+def bool_arg(s: str) -> bool:
+    """Parse a yes/no option value as a boolean.
+
+    Accepts ``1``/``0``, ``true``/``false`` and ``yes``/``no`` (case-insensitive), so
+    boolean values recorded in output metadata can be passed back as-is.
+
+    :param s: Option value.
+    :return: The parsed boolean.
+    :example:
+
+        .. code-block:: python
+
+            >>> bool_arg("true"), bool_arg("False"), bool_arg("1")
+            (True, False, True)
+    """
+    value = s.strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    raise argparse.ArgumentTypeError(
+        f"invalid value {s!r}: use 1, 0, true, false, yes or no"
     )
 
 
@@ -354,7 +398,9 @@ def dask_cluster_arg(parser: ArgContainer) -> None:
     parser.add_argument(
         "--dask-cluster",
         type=str,
-        help="JSON URL or inline JSON containing dask cluster parameters.",
+        help="Path or URL of a JSON file, or inline JSON, with keyword arguments for "
+        "the Dask client or local cluster, e.g. "
+        '`{"n_workers": 4, "threads_per_worker": 2}`.',
     )
 
 

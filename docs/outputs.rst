@@ -45,6 +45,73 @@ The stores can also be viewed in napari with the ``napari-ome-zarr`` plugin (ins
 Unless ``--no-version`` is given, commands store their command-line arguments and the
 SCALLOPS version in the output metadata.
 
+Stitching (stitch)
+------------------
+
+``scallops stitch`` writes one set of outputs per image key. With
+``--groupby plate well`` and the image key ``A-3``:
+
+.. code:: text
+
+   stitch.zarr/                  # --image-output
+   ├── images/
+   │   └── A-3/                  # fused image (c, y, x)
+   └── labels/
+       ├── A-3-mask/             # tile boundary or overlap mask
+       └── A-3-tile/             # tile source labels (only with --blend none)
+
+   report/                       # --report-output
+   ├── A-3-positions.parquet     # stitched tile positions
+   ├── A-3-eval.parquet          # overlaps between tiles after stitching
+   ├── A-3.pdf                   # QC report
+   └── A-3-channel-alignment.json  # only with --alignment-correction-channels
+
+``--no-save-image`` skips ``images/{key}`` and ``--no-save-labels`` skips both label
+arrays; ``--image-output`` is not needed when both are given.
+
+* ``images/{key}`` is the fused image with the channels selected by ``--output-channels``
+  and named by ``--channel-name`` (or the image metadata).
+* ``labels/{key}-mask`` is ``1`` everywhere except ``0`` at tile boundaries. With
+  ``--blend linear``, the regions where tiles overlap are ``0`` instead.
+* ``labels/{key}-tile`` gives, for each pixel, the ``tile`` number (see the positions table)
+  of the tile shown there; ``-1`` where there is no tile. Where tiles overlap, the tile
+  closest to the center of the well is shown.
+
+The positions table has one row per tile:
+
+====================== ==============================================================
+Column                 Description
+====================== ==============================================================
+y, x                   Top-left corner of the tile in the stitched image, in pixels
+original_y, original_x Stage position of the tile, in microns
+tile                   Tile number (0-based)
+source                 Path of the image file the tile was read from
+distance_to_center     Distance from the tile to the mean tile position, in pixels
+z_index                Z index used for the tile (when chosen per tile, e.g. with
+                       ``--z-index focus``)
+scene                  Scene of the tile (when tiles are scenes of one file)
+====================== ==============================================================
+
+Its Parquet metadata (key ``scallops``) records the stitching parameters that were used or
+determined automatically, for example ``radial_correction_k``, ``flip_y_axis``,
+``flip_x_axis``, ``swap_axes``, ``crop_width`` and ``fuse_crop_width``. ``flip_y_axis``,
+``flip_x_axis`` and ``swap_axes`` are stored as booleans and can be passed back as-is to
+``--flip-y-axis``, ``--flip-x-axis`` and ``--swap-axes``, which accept ``true``/``false`` as
+well as ``1``/``0``.
+
+The evaluation table has one row per pair of overlapping tiles after stitching: ``pair``
+(the two ``tile`` numbers), ``shift`` (offset between them, in pixels), ``fraction``
+(overlap as a fraction of tile area) and ``zncc`` (normalized cross-correlation of the
+overlap; empty with ``--no-evaluate``). It is not written when no tiles overlap enough to
+be aligned (e.g. an image with a single tile).
+
+The PDF report shows the overall ZNCC, the radial correction ``k`` (when it was estimated
+with ``--radial-correction-k auto``), the ZNCC of each overlap
+after stitching, the shift of each tile from its stage position, and the shift and
+correlation of each pairwise alignment, marking the ones that were rejected.
+
+The channel alignment record is described in :ref:`channel_alignment`.
+
 Segmentation (segment)
 ----------------------
 
