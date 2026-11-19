@@ -489,14 +489,7 @@ def single_registration(
             landmark_min_count=landmark_min_count,
             parameter_object_across_channels=parameter_object_across_channels,
         )
-        # alignment rewrote each non-reference t= directory; remove directories left
-        # over from a previous run for times that are no longer present
-        for stale_time in set(_transform_dir_times(transform_fs, transform_dest)) - set(
-            times
-        ):
-            transform_fs.rm(
-                f"{transform_dest}{transform_fs.sep}t={stale_time}", recursive=True
-            )
+
         moving_image_attrs = moving_image[0].attrs.copy()
         chunk_size = _get_chunk_size(moving_image[reference_timepoint])
         del moving_image
