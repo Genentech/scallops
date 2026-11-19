@@ -5,6 +5,7 @@ import pytest
 from scallops.stats import (
     auc_variance_exact,
     compute_area_between_cdfs,
+    estimate_reml,
     fisher_combined_pvalue,
     fixed_effects_meta_analysis_mannwhitneyu,
     generate_cdfs_with_area_difference,
@@ -147,3 +148,26 @@ def test_random_effects_meta_analysis_mannwhitneyu():
     assert result.combined_effect == expected_effect
     assert result.combined_variance == expected_variance
     np.testing.assert_allclose(result.pvalue, expected_pvalue, rtol=1e-12)
+
+
+@pytest.mark.stats
+def test_estimate_reml_shift_invariant():
+    effects = np.array([0.2, 0.5, 0.3, 0.9])
+    variances = np.array([0.01, 0.02, 0.015, 0.03])
+    tau_squared = estimate_reml(effects, variances)
+    # same answer as the matrix form of the reml likelihood
+    np.testing.assert_allclose(tau_squared, 0.0687223, rtol=1e-4)
+    # moving every effect by the same amount must not change tau squared
+    np.testing.assert_allclose(estimate_reml(effects + 10, variances), tau_squared)
+
+
+@pytest.mark.stats
+def test_random_effects_meta_analysis_mannwhitneyu_reml():
+    result = random_effects_meta_analysis_mannwhitneyu(
+        [120, 150, 180],
+        [(30, 30), (40, 40), (50, 50)],
+        [0.1, 0.05, 0.025],
+        estimation_method="reml",
+    )
+    assert result.tau_squared == 0
+    assert result.ci[0] < result.combined_effect < result.ci[1]
