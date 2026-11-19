@@ -1323,25 +1323,28 @@ def _em_update_amplitude(
     :param s0: ``(read, c)`` initial bright level, used for the initial amplitude.
     :return: ``(b, s)``, each ``(read, c)``.
     """
-    E, S = model["encoding"], model["S"]
-    w_on = post @ E
+    dt = x.dtype
+    E, S = model["encoding"].astype(dt), model["S"].astype(dt)
+    w_on = post.astype(dt, copy=False) @ E
     w_off = 1 - w_on
     b = ((w_off * x).sum(axis=1) + n0 * b0) / (w_off.sum(axis=1) + n0)
     log_a0 = np.median(np.log(s0 / S), axis=1)  # (read,)
     d = x - b[:, np.newaxis, :]
     pos = d > 0
     log_d = np.log(np.where(pos, d, 1.0))[..., np.newaxis, :]  # (read, t, 1, c)
-    mu_on = np.where(E > 0, model["mu"], 0.0)  # (base, c), log space
-    resid = log_d - np.log(S) - mu_on  # (read, t, base, c)
+    mu_on = np.where(E > 0, np.asarray(model["mu"], dtype=dt), 0.0)  # (base, c), log
+    resid = log_d - (np.log(S) + mu_on)  # (read, t, base, c)
     wt = post[..., np.newaxis] * (E > 0) * pos[..., np.newaxis, :]
-    log_a = ((wt * resid).sum(axis=(1, 2, 3)) + n0 * log_a0) / (
-        wt.sum(axis=(1, 2, 3)) + n0
+    log_a = ((wt * resid).sum(axis=(1, 2, 3), dtype=float) + n0 * log_a0) / (
+        wt.sum(axis=(1, 2, 3), dtype=float) + n0
     )
     return b, np.exp(log_a)[:, np.newaxis] * S
 
 
 def _em_signal(x: NDArray, b: NDArray, s: NDArray) -> NDArray:
     """Normalized signal ``(x - b) / s``: on near 1, off near 0."""
+    b = b.astype(x.dtype, copy=False)
+    s = s.astype(x.dtype, copy=False)
     return (x - b[:, np.newaxis, :]) / s[:, np.newaxis, :]
 
 
@@ -1384,10 +1387,17 @@ def _em_robust_logpdf(
     get density ``eps * U`` and inlier weight 0.
     """
     lo, hi = _EM_U_RANGE
-    const = np.log1p(-eps) - np.log(sd) - 0.5 * np.log(2 * np.pi)
-    log_in = const - 0.5 * ((val - mu) / sd) ** 2 - jac
-    log_in = np.where(valid, log_in, -np.inf)
-    log_out = np.log(eps) - np.log(hi - lo) if eps > 0 else -np.inf
+    dt = val.dtype
+    sd = np.asarray(sd, dtype=dt)  # keep float32 signals in float32
+    mu = np.asarray(mu, dtype=dt)
+    const = float(np.log1p(-eps)) - np.log(sd) - 0.5 * np.log(2 * np.pi, dtype=dt)
+    z = (val - mu) / sd
+    z *= z
+    z *= -0.5
+    z += const
+    z -= jac
+    log_in = np.where(valid, z, -np.inf)
+    log_out = float(np.log(eps) - np.log(hi - lo)) if eps > 0 else -np.inf
     log_p = np.logaddexp(log_in, log_out)
     return log_p, np.exp(log_in - log_p)
 
@@ -1482,7 +1492,8 @@ def _em_tied_logpdf(
     lp_on, inl_on = _em_robust_logpdf(val_on, valid_on, mu_on, sd_on, val_on, eps)
     lp_off, inl_off = _em_robust_logpdf(val_off, True, mu_off, sd_off, 0.0, eps)
     if eps > 0:  # finite densities
-        log_p = lp_on @ E.T + lp_off @ (1 - E).T
+        Ed = E.astype(lp_on.dtype)
+        log_p = lp_on @ Ed.T + lp_off @ (1 - Ed).T
     else:  # avoid 0 * -inf
         on = E > 0
         log_p = np.where(on, lp_on[..., np.newaxis, :], lp_off[..., np.newaxis, :])
@@ -1523,26 +1534,24 @@ def _em_joint_logpdf(
     chol = np.linalg.cholesky(model["cov"])  # (base, c, c)
     # whiten with the inverse factor of each base: one small inverse per base
     # instead of a batched solve per value
-    chol_inv = np.linalg.inv(chol)
-    diff = val - model["mu"]
+    chol_inv = np.linalg.inv(chol).astype(val.dtype)
+    diff = val - np.asarray(model["mu"], dtype=val.dtype)
     z = np.einsum("bcd,ntbd->ntbc", chol_inv, diff, optimize=True)
-    q = (z**2).sum(axis=-1)  # squared Mahalanobis distance
+    q = np.einsum("ntbc,ntbc->ntb", z, z)  # squared Mahalanobis distance
     logdet = 2 * np.log(np.diagonal(chol, axis1=-2, axis2=-1)).sum(axis=-1)  # (base,)
+    logdet = logdet.astype(val.dtype)
     if nu is None:
-        log_f = -0.5 * q - 0.5 * C * np.log(2 * np.pi)
+        log_f = -0.5 * q - float(0.5 * C * np.log(2 * np.pi))
         tau = np.ones_like(q)
     else:  # multivariate t
-        log_f = (
-            gammaln((nu + C) / 2)
-            - gammaln(nu / 2)
-            - 0.5 * C * np.log(nu * np.pi)
-            - 0.5 * (nu + C) * np.log1p(q / nu)
-        )
+        log_f = float(
+            gammaln((nu + C) / 2) - gammaln(nu / 2) - 0.5 * C * np.log(nu * np.pi)
+        ) - 0.5 * (nu + C) * np.log1p(q / nu)
         tau = (nu + C) / (nu + q)
     log_f = log_f - 0.5 * logdet - (np.where(E > 0, val, 0.0)).sum(axis=-1)
     log_f = np.where(valid.all(axis=-1), log_f, -np.inf)
-    log_in = np.log1p(-eps) + log_f
-    log_out = np.log(eps) - C * np.log(hi - lo) if eps > 0 else -np.inf
+    log_in = float(np.log1p(-eps)) + log_f
+    log_out = float(np.log(eps) - C * np.log(hi - lo)) if eps > 0 else -np.inf
     log_p = np.logaddexp(log_in, log_out)
     return log_p, np.exp(log_in - log_p) * tau
 
@@ -1559,6 +1568,12 @@ def _em_loglik(u: NDArray, model: dict) -> NDArray:
     if _em_is_tied(model):
         return _em_tied_logpdf(u, model)[0]
     return _em_channel_logpdf(u, model)[0].sum(axis=-1)
+
+
+def _em_log_posterior(u: NDArray, model: dict) -> NDArray:
+    """Unnormalized log posterior ``(read, t, base)``, in the dtype of ``u``."""
+    L = _em_loglik(u, model)
+    return L + np.log(model["pi"]).astype(L.dtype)[np.newaxis]
 
 
 def _em_logsumexp_softmax(L: NDArray) -> tuple[NDArray, NDArray]:
@@ -1620,9 +1635,9 @@ def _em_run(
         else:
             log_p, inlier = _em_channel_logpdf(u, model, val, valid)
             log_p = log_p.sum(axis=-1)
-        L = log_p + np.log(model["pi"])[np.newaxis]
+        L = log_p + np.log(model["pi"]).astype(log_p.dtype)[np.newaxis]
         lse, post = _em_logsumexp_softmax(L)
-        ll = float(lse.mean())
+        ll = float(lse.mean(dtype=float))
         if beta == 1.0 and abs(ll - prev) < tol * max(1.0, abs(prev)):
             break
         prev = ll if beta == 1.0 else -np.inf
@@ -1632,15 +1647,18 @@ def _em_run(
             w = post
         else:
             w = softmax(beta * L, axis=-1)
-        pi = w.mean(axis=0) + 1e-6
+        pi = w.mean(axis=0, dtype=float) + 1e-6
         model["pi"] = pi / pi.sum(axis=1, keepdims=True)
         if full:
             wb = w * inlier  # (read, t, base): includes the t weight
-            tot = wb.sum(axis=(0, 1)) + 1e-12
-            mu = np.einsum("ntb,ntbc->bc", wb, val) / tot[:, np.newaxis]
-            dv = val - mu
-            n_b = (w * (inlier > 0)).sum(axis=(0, 1)) + 1e-12
-            cov = np.einsum("ntb,ntbc,ntbd->bcd", wb, dv, dv) / n_b[:, None, None]
+            tot = wb.sum(axis=(0, 1), dtype=float) + 1e-12
+            mu = np.einsum("ntb,ntbc->bc", wb, val, dtype=float) / tot[:, np.newaxis]
+            dv = val - mu.astype(val.dtype)
+            n_b = (w * (inlier > 0)).sum(axis=(0, 1), dtype=float) + 1e-12
+            cov = (
+                np.einsum("ntb,ntbc,ntbd->bcd", wb, dv, dv, dtype=float, optimize=True)
+                / n_b[:, None, None]
+            )
             cov += var_floor * np.eye(val.shape[-1])
             model["mu"], model["cov"] = mu, cov
             model["sd"] = np.sqrt(np.diagonal(cov, axis1=-2, axis2=-1))
@@ -1654,16 +1672,17 @@ def _em_run(
                 (~on, w @ (1 - E), val_off, inl_off),
             ):
                 wc = w_s * inl  # (read, t, c)
-                n_s = wc.sum(axis=(0, 1)) + 1e-12
-                m_s = (wc * v_s).sum(axis=(0, 1)) / n_s
-                var_s = (wc * v_s**2).sum(axis=(0, 1)) / n_s - m_s**2
+                n_s = wc.sum(axis=(0, 1), dtype=float) + 1e-12
+                wv = wc * v_s
+                m_s = wv.sum(axis=(0, 1), dtype=float) / n_s
+                var_s = (wv * v_s).sum(axis=(0, 1), dtype=float) / n_s - m_s**2
                 mu = np.where(state, m_s, mu)
                 var = np.where(state, var_s, var)
         else:
             wc = w[..., np.newaxis] * inlier  # (read, t, base, c)
-            sw = wc.sum(axis=(0, 1))  # (base, c)
-            sx = np.einsum("ntbc,ntbc->bc", wc, val)
-            sxx = np.einsum("ntbc,ntbc->bc", wc, val**2)
+            sw = wc.sum(axis=(0, 1), dtype=float)  # (base, c)
+            sx = np.einsum("ntbc,ntbc->bc", wc, val, dtype=float)
+            sxx = np.einsum("ntbc,ntbc,ntbc->bc", wc, val, val, dtype=float)
             mu = sx / (sw + 1e-12)
             var = sxx / (sw + 1e-12) - mu**2
         model["mu"] = mu
@@ -1690,12 +1709,16 @@ def _em_posterior_signal(
     """
     E = model["encoding"]
     b0, s0 = _em_initial_levels(
-        x, model["S"], model["min_snr"], model["min_gap"], model["k_low"]
+        x.astype(float, copy=False),
+        model["S"],
+        model["min_snr"],
+        model["min_gap"],
+        model["k_low"],
     )
     b, s = b0, s0
     for it in range(n_rescale + 1):
         u = _em_signal(x, b, s)
-        post = softmax(_em_loglik(u, model) + np.log(model["pi"])[np.newaxis], axis=-1)
+        post = softmax(_em_log_posterior(u, model), axis=-1)
         if it < n_rescale:
             if model.get("read_scale", "channel") == "shared":
                 b, s = _em_update_amplitude(x, post, model, b0, s0, model["n0"])
@@ -2005,6 +2028,9 @@ def fit_base_mixture(
                 "they are kept"
             )
     s = s0
+    # float32 from here on: the EM works on (read, t, base, c) arrays, and halving
+    # them halves its memory and bandwidth; sums accumulate in float64
+    x = x.astype(np.float32)
     u = _em_signal(x, b0, s)
 
     # Starting points for the tied model, from the signal alone
@@ -2013,8 +2039,9 @@ def fit_base_mixture(
     gm = np.zeros((4, n_c))  # rows: m, z, s_on, s_off
     qt = np.zeros((4, n_c))
     for c in range(n_c):
-        v = u[..., c].ravel()
-        v_fit = rng.choice(v, size=min(len(v), 200_000), replace=False)[:, np.newaxis]
+        v = u[..., c].ravel().astype(float)
+        v_fit = rng.choice(v, size=min(len(v), 20_000), replace=False)
+        v_fit = v_fit.astype(float)[:, np.newaxis]
         g2 = GaussianMixture(2, random_state=seed).fit(v_fit)
         g1 = GaussianMixture(1, random_state=seed).fit(v_fit)
         if g2.bic(v_fit) >= g1.bic(v_fit):
@@ -2052,26 +2079,41 @@ def fit_base_mixture(
             "encoding": E,
         }
 
-    # the restarts are independent: run them as tasks on the current dask
-    # scheduler, keeping the first with the highest log-likelihood
+    # The restarts are independent.  Each is run briefly on a subsample as a task on
+    # the current dask scheduler, and only the best is continued on all fit reads,
+    # so the full-size arrays exist once instead of once per restart.
+    starts = starts[: max(n_restarts, 2)]
+    n_probe = min(len(u), _EM_PROBE_READS)
+    u_probe = u
+    if n_probe < len(u):
+        u_probe = u[np.sort(rng.choice(len(u), n_probe, replace=False))]
+    n_probe_iter = max(5, n_iter // 4)
     from distributed import get_client
 
-    try:  # send u to the workers once, rather than in the graph
-        u_task = get_client().scatter(u, broadcast=True, hash=False)
+    try:  # send the probe reads to the workers once, rather than in the graph
+        u_task = get_client().scatter(u_probe, broadcast=True, hash=False)
     except ValueError:  # no distributed client
-        u_task = delayed(u)  # one graph node shared by every restart
+        u_task = delayed(u_probe)  # one graph node shared by every restart
     em_run = delayed(_em_run, pure=True)
     fits = dask.compute(
         *[
             em_run(
-                u_task, E, tied_model(p), n_iter, tol, var_floor, tied=True, anneal=True
+                u_task,
+                E,
+                tied_model(p),
+                n_probe_iter,
+                tol,
+                var_floor,
+                tied=True,
+                anneal=True,
             )
-            for p in starts[: max(n_restarts, 2)]
+            for p in starts
         ]
     )
     best, best_ll = max(
         fits, key=lambda fit: fit[1] if np.isfinite(fit[1]) else -np.inf
     )
+    best, best_ll = _em_run(u, E, best, n_iter, tol, var_floor, tied=True, anneal=False)
     best.update(
         encoding=E,
         S=S,
@@ -2090,7 +2132,7 @@ def fit_base_mixture(
     b = b0
     for stage_tied in stages:
         u = _em_signal(x, b, s)
-        post = softmax(_em_loglik(u, best) + np.log(best["pi"])[np.newaxis], axis=-1)
+        post = softmax(_em_log_posterior(u, best), axis=-1)
         if read_scale == "shared":
             b, s = _em_update_amplitude(x, post, best, b0, s0, n0)
             # the overall scale is shared with the on-state means: pin its median
@@ -2130,7 +2172,7 @@ def fit_base_mixture(
         for _ in range(n_whitelist_rounds if wl else 0):
             post, u = _em_posterior_signal(x, best, n_rescale)
             idx = post.argmax(axis=-1)
-            matched = np.isin(["".join(r) for r in labels[idx]], list(wl))
+            matched = np.isin(_calls_to_strings(labels, idx), np.array(list(wl)))
             best["n_whitelist_matched"].append(int(matched.sum()))
             if matched.sum() < 10:
                 logger.warning("Too few whitelist matches to refit on; stopping")
@@ -2160,6 +2202,24 @@ def fit_base_mixture(
     return best
 
 
+def _calls_to_strings(labels: NDArray, calls: NDArray) -> NDArray:
+    """Join per-cycle base indices ``(read, t)`` into one string per read.
+
+    Single-character ASCII labels (the usual case) are joined by viewing the bytes of
+    each row as one fixed-width string, instead of a Python ``join`` per read.
+    """
+    labels = np.asarray(labels).astype(str)
+    if (
+        calls.ndim == 2
+        and calls.shape[1] > 0
+        and all(len(lab) == 1 and ord(lab) < 128 for lab in labels)
+    ):
+        codes = np.array([ord(lab) for lab in labels], dtype=np.uint8)
+        rows = np.ascontiguousarray(codes[calls])
+        return rows.view(f"S{calls.shape[1]}")[:, 0].astype(str)
+    return np.array(["".join(r) for r in labels[calls]], dtype=str)
+
+
 def _decode_em_chunk(
     spots: NDArray,
     model: dict,
@@ -2172,9 +2232,9 @@ def _decode_em_chunk(
     x = np.asarray(spots, dtype=float)
     if model.get("xtalk") is not None:
         x = x @ model["xtalk"].T
-    x = x / model["gain"][np.newaxis]
+    x = (x / model["gain"][np.newaxis]).astype(np.float32)
     post = _em_posterior(x, model, model["n_rescale"])
-    calls = model["base_labels"][post.argmax(axis=-1)]
+    calls = post.argmax(axis=-1)
     p_error = 1 - post.max(axis=-1)
     p_error[p_error < min_error] = min_error
     Q = -10 * np.log10(p_error)
@@ -2185,7 +2245,7 @@ def _decode_em_chunk(
         else meta_df.copy()
     )
     df.index.name = None
-    df["barcode"] = ["".join(x) for x in calls]
+    df["barcode"] = _calls_to_strings(model["base_labels"], calls).astype(object)
     df["Q"] = list(Q)
     df["Q_mean"] = Q.mean(axis=1)
     df["Q_min"] = Q.min(axis=1)
@@ -2194,6 +2254,7 @@ def _decode_em_chunk(
     return df
 
 
+_EM_PROBE_READS = 50_000  # reads each restart is first run on
 _AUTO_FIT_QUANTILES = (0.5, 0.75, 0.9, 0.95, 0.98, 0.99)
 _AUTO_FIT_READS = 50_000  # fit reads per candidate quantile
 _AUTO_SCORE_READS = 100_000  # reads called to score each candidate

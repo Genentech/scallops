@@ -1620,3 +1620,15 @@ def test_fit_max_base_fraction_scales_with_cycles(caplog, n_t, dropped):
         fit_base_mixture(spots, dark_bases=["G"], n_restarts=2, n_iter=20)
     assert ("Dropping" in caplog.text) == dropped
     assert "too few would be left" not in caplog.text
+
+
+@pytest.mark.basecalls
+def test_calls_to_strings():
+    """Byte-view joining matches a Python join, including multi-character labels."""
+    from scallops.reads import _calls_to_strings
+
+    rng = np.random.default_rng(0)
+    idx = rng.integers(0, 4, (50, 7))
+    for labels in (list("ACGT"), ["A", "CC", "G", "T"]):
+        expected = ["".join(np.asarray(labels)[r]) for r in idx]
+        assert list(_calls_to_strings(labels, idx)) == expected
