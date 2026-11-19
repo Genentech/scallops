@@ -479,7 +479,7 @@ task intersects_boundary {
         fi
 
         scallops features \
-        --features-~{label_type} "intersects-boundary_0" \
+        --features-~{label_type} "intersects-boundary_*" \
         --labels "~{labels}" \
         --groupby ~{sep=" " groupby} \
         --subset ~{subset} \

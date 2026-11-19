@@ -151,7 +151,8 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
     reference_t = 2
     test_t = 10
     experiment_c_A1_102_nuclei = experiment_c_A1_102_nuclei.squeeze()
-    exp.labels[f"A1-102-{reference_t}-mask"] = experiment_c_A1_102_nuclei
+    # label at a non-reference time, transformed with that time's transform
+    exp.labels[f"A1-102-{test_t}-mask"] = experiment_c_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
 
     cmd = [
@@ -196,7 +197,8 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
         .images["A1-102"]
         .squeeze()
     )
-    assert len(result_exp.labels.keys()) == 8
+    # the label keeps its name
+    assert list(result_exp.labels.keys()) == [f"A1-102-{test_t}-mask"]
     np.testing.assert_array_equal(transformed_image.t.values, original_image.t.values)
     np.testing.assert_array_equal(transformed_image.c.values, original_image.c.values)
     np.testing.assert_array_equal(

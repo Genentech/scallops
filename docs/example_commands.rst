@@ -324,10 +324,12 @@ IF (Reference Phenotype used for registration)::
     --objects s3://xxx/ops/objects-cell \
     --image-pattern '{plate}-{well}-IF-mask'
 
-FISH::
+Non-reference phenotype rounds (e.g. FISH). The transformed masks of all non-reference rounds
+are stacked as channels, so ``intersects-boundary_*`` adds one
+``Location_IntersectsBoundary_Channel{i}`` column per round::
 
     scallops features \
-    --features-cell intersects-boundary_0 \
+    --features-cell 'intersects-boundary_*' \
     --labels s3://xxx/ops/segment.zarr \
     --groupby plate well \
     --subset A-3 \
