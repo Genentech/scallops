@@ -1,3 +1,5 @@
+import time
+
 import dask.array as da
 import numpy as np
 import pytest
@@ -5,6 +7,10 @@ from cp_measure.core.measurecolocalization import (
     get_correlation_pearson,
 )
 from cp_measure.multimask.measureobjectneighbors import measureobjectneighbors
+from scallops.features.intensity_distribution import (
+    intensity_distribution_radial,
+    intensity_distribution_zernike,
+)
 
 from scallops.features.cp_measure_wrapper import (
     cp_intensity_distribution_radial,
@@ -14,10 +20,6 @@ from scallops.features.cp_measure_wrapper import (
 )
 from scallops.features.find_objects import find_objects
 from scallops.features.generate import label_features
-from scallops.features.intensity_distribution import (
-    intensity_distribution_radial,
-    intensity_distribution_zernike,
-)
 from scallops.features.neighbors import neighbors
 from scallops.features.texture import haralick
 from scallops.segmentation.util import relabel_sequential
@@ -94,7 +96,7 @@ def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_p
 
     c = [0, 1]
     channel_names = ["c0", "c1"]
-
+    start = time.time()
     features_cp = cp_intensity_distribution_radial(
         c=c,
         channel_names=channel_names,
@@ -102,7 +104,8 @@ def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_p
         label_image=label_image,
         intensity_image=intensity_image,
     )
-
+    print(time.time() - start)
+    start = time.time()
     features_cp.update(
         cp_intensity_distribution_zernike(
             c=c,
@@ -112,7 +115,8 @@ def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_p
             intensity_image=intensity_image,
         )
     )
-
+    print(time.time() - start)
+    start = time.time()
     features_scallops = intensity_distribution_radial(
         c=c,
         channel_names=channel_names,
@@ -120,6 +124,8 @@ def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_p
         label_image=label_image,
         intensity_image=intensity_image,
     )
+    print(time.time() - start)
+    start = time.time()
     features_scallops.update(
         intensity_distribution_zernike(
             c=c,
@@ -129,6 +135,7 @@ def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_p
             intensity_image=intensity_image,
         )
     )
+    print(time.time() - start)
 
     for key in features_cp:
         np.testing.assert_array_equal(
