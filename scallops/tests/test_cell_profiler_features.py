@@ -1,5 +1,3 @@
-import time
-
 import dask.array as da
 import numpy as np
 import pytest
@@ -7,14 +5,8 @@ from cp_measure.core.measurecolocalization import (
     get_correlation_pearson,
 )
 from cp_measure.multimask.measureobjectneighbors import measureobjectneighbors
-from scallops.features.intensity_distribution import (
-    intensity_distribution_radial,
-    intensity_distribution_zernike,
-)
 
 from scallops.features.cp_measure_wrapper import (
-    cp_intensity_distribution_radial,
-    cp_intensity_distribution_zernike,
     cp_size_shape,
     cp_texture,
 )
@@ -75,68 +67,6 @@ def test_haralick_features(experiment_c_A1_102_cells, experiment_c_A1_102_pheno)
         intensity_image=intensity_image,
     )
     assert len(features_cp) == len(features_scallops)
-    for key in features_cp:
-        np.testing.assert_array_equal(
-            features_cp[key],
-            features_scallops[key],
-            err_msg=key,
-        )
-
-
-@pytest.mark.features
-def test_intensity_distribution(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
-    label_image = experiment_c_A1_102_cells.squeeze().data
-
-    label_image = relabel_sequential(label_image)
-    unique_labels = np.unique(label_image)
-    unique_labels = unique_labels[unique_labels > 0]
-    intensity_image = (
-        experiment_c_A1_102_pheno.isel(t=0, z=0).transpose(*("y", "x", "c")).data
-    )
-
-    c = [0, 1]
-    channel_names = ["c0", "c1"]
-    start = time.time()
-    features_cp = cp_intensity_distribution_radial(
-        c=c,
-        channel_names=channel_names,
-        unique_labels=None,
-        label_image=label_image,
-        intensity_image=intensity_image,
-    )
-    print(time.time() - start)
-    start = time.time()
-    features_cp.update(
-        cp_intensity_distribution_zernike(
-            c=c,
-            channel_names=channel_names,
-            unique_labels=None,
-            label_image=label_image,
-            intensity_image=intensity_image,
-        )
-    )
-    print(time.time() - start)
-    start = time.time()
-    features_scallops = intensity_distribution_radial(
-        c=c,
-        channel_names=channel_names,
-        unique_labels=unique_labels,
-        label_image=label_image,
-        intensity_image=intensity_image,
-    )
-    print(time.time() - start)
-    start = time.time()
-    features_scallops.update(
-        intensity_distribution_zernike(
-            c=c,
-            channel_names=channel_names,
-            unique_labels=unique_labels,
-            label_image=label_image,
-            intensity_image=intensity_image,
-        )
-    )
-    print(time.time() - start)
-
     for key in features_cp:
         np.testing.assert_array_equal(
             features_cp[key],
