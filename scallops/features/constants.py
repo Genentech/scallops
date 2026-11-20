@@ -11,11 +11,9 @@ from scallops.features.cp_measure_wrapper import (
     cp_colocalization,
     cp_granularity,
     cp_intensity,
+    cp_intensity_distribution_radial,
+    cp_intensity_distribution_zernike,
     cp_size_shape,
-)
-from scallops.features.intensity_distribution import (
-    intensity_distribution_radial,
-    intensity_distribution_zernike,
 )
 from scallops.features.neighbors import neighbors
 from scallops.features.other import corr_region, intersects_boundary
@@ -31,8 +29,8 @@ _cp_features_mask: dict[str, Callable] = {
 _cp_features_single_channel: dict[str, Callable] = {
     "intensity": cp_intensity,
     "granularity": cp_granularity,
-    "intensitydistribution": intensity_distribution_radial,
-    "intensitydistributionzernike": intensity_distribution_zernike,
+    "intensitydistribution": cp_intensity_distribution_radial,
+    "intensitydistributionzernike": cp_intensity_distribution_zernike,
     "haralick": haralick,
     "pftas": pftas,
 }

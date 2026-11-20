@@ -21,6 +21,7 @@ CellProfiler Features
 
     #. c: Channel index.
     #. bins: Number of bins to measure the distribution (default 4)
+    #. maximum radius: Maximum radius for the unscaled bins (default 100)
 
 * `intensity-distribution-zernike <https://cellprofiler-manual.s3.amazonaws.com/CellProfiler-4.2.8/modules/measurement.html#measureobjectintensitydistribution>`_
     Measures zernike intensity features for identified objects. Parameters:

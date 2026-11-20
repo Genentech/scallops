@@ -114,6 +114,10 @@ def _cp_colocalization_pairs(
 
 def cp_intensity_distribution_radial(
     c: Sequence[int],
+    bin_count: int = 4,
+    maximum_radius: int = 100,
+    scaled: bool = True,
+    *,
     channel_names: Sequence[str],
     label_image: NDArray,
     intensity_image: NDArray,
@@ -121,7 +125,13 @@ def cp_intensity_distribution_radial(
 ) -> dict[str, Any]:
     results = {}
     for j in range(len(c)):
-        results_ = get_radial_distribution(label_image, intensity_image[..., c[j]])
+        results_ = get_radial_distribution(
+            label_image,
+            intensity_image[..., c[j]],
+            maximum_radius=maximum_radius,
+            bin_count=bin_count,
+            scaled=scaled,
+        )
         for key in results_:
             tokens = key.split("_")
             results[f"{tokens[0]}_{tokens[1]}_{channel_names[c[j]]}_{tokens[2]}"] = (
@@ -132,6 +142,8 @@ def cp_intensity_distribution_radial(
 
 def cp_intensity_distribution_zernike(
     c: Sequence[int],
+    zernike_degree: int = 9,
+    *,
     channel_names: Sequence[str],
     label_image: NDArray,
     intensity_image: NDArray,
@@ -139,7 +151,9 @@ def cp_intensity_distribution_zernike(
 ) -> dict[str, Any]:
     results = {}
     for j in range(len(c)):
-        results_ = get_radial_zernikes(label_image, intensity_image[..., c[j]])
+        results_ = get_radial_zernikes(
+            label_image, intensity_image[..., c[j]], zernike_degree=zernike_degree
+        )
         for key in results_:
             tokens = key.split("_")
             results[

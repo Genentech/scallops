@@ -2,6 +2,18 @@
 Release Notes
 *****************
 
+* v1.0.3, November 20, 2026
+    * When registering timepoints of the moving image to each other (no fixed image),
+      labels are matched to their timepoint by name (``{image_key}-{t}-...``) and each is
+      transformed to the reference timepoint. Labels at the reference timepoint or that
+      match no timepoint are skipped with a warning.
+    * The WDL ``intersects_boundary`` task uses ``intersects-boundary_*``, adding one
+      column per non-reference phenotype round instead of only the first.
+    * Add a ``costes`` option to the ``colocalization`` feature to skip the slow Costes
+      features.
+    * Fix runaway memory use when writing an image whose metadata lists several source
+      zarr groups.
+
 * v1.0.2, November 9, 2026
     * The ``norm-features`` and ``rank-features`` commands are replaced by the new ``pert-map``
       command, with subcommands ``normalize``, ``filter``, ``rank``, ``aggregate``, ``pca``,
