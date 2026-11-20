@@ -151,7 +151,8 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
     reference_t = 2
     test_t = 10
     experiment_c_A1_102_nuclei = experiment_c_A1_102_nuclei.squeeze()
-    exp.labels[f"A1-102-{reference_t}-mask"] = experiment_c_A1_102_nuclei
+    # label at a non-reference time, transformed with that time's transform
+    exp.labels[f"A1-102-{test_t}-mask"] = experiment_c_A1_102_nuclei
     exp.save(registration_input_moving_labels_path)
 
     cmd = [
@@ -196,7 +197,8 @@ def test_register_itk_cli_t_reference(tmp_path, experiment_c_A1_102_nuclei):
         .images["A1-102"]
         .squeeze()
     )
-    assert len(result_exp.labels.keys()) == 8
+    # the label keeps its name
+    assert list(result_exp.labels.keys()) == [f"A1-102-{test_t}-mask"]
     np.testing.assert_array_equal(transformed_image.t.values, original_image.t.values)
     np.testing.assert_array_equal(transformed_image.c.values, original_image.c.values)
     np.testing.assert_array_equal(
@@ -332,14 +334,17 @@ def test_register_transform_labels_moving_only(tmp_path):
     rng = np.random.default_rng(0)
 
     Experiment(
-        images={"plateA-A1-IF": img, "plateA-A1-FISH": img},
+        images={"plateA-A1-IF": img, "plateA-A1-FISH": img, "plateA-A1-IF2": img},
         labels={
-            "plateA-A1-IF-cell": np.zeros((img.sizes["y"], img.sizes["x"]), np.int32),
-        },
+            "plateA-A1-IF2-cell": np.zeros((img.sizes["y"], img.sizes["x"]), np.int32),
+        },  # cells below get priority
     ).save(input_zarr1)
     Experiment(
         labels={
-            "plateA-A1-IF-cell": rng.integers(
+            "plateA-A1-FISH-cell": rng.integers(
+                low=0, high=10, size=(img.sizes["y"], img.sizes["x"])
+            ),
+            "plateA-A1-IF2-cell": rng.integers(
                 low=0, high=10, size=(img.sizes["y"], img.sizes["x"])
             ),
         },
@@ -376,8 +381,12 @@ def test_register_transform_labels_moving_only(tmp_path):
     subprocess.check_call(cmd)
     transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-FISH-cell")
     assert transformed_labels.max() > 0
+
+    transformed_labels = read_image(output_zarr / "labels" / "plateA-A1-IF2-cell")
+    assert transformed_labels.max() > 0
+
     transformed_image = read_image(output_zarr / "images" / "plateA-A1")
-    assert transformed_image.shape[0] == 2
+    assert transformed_image.shape[0] == 3
     transformed_image.attrs["physical_pixel_sizes"] = (4.0, 3.0)
     transformed_image.attrs["physical_pixel_units"] = ("micrometer", "micrometer")
 

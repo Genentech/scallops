@@ -397,7 +397,7 @@ workflow ops_workflow {
                     String phenotype_url_stripped = if (pheno_url_supplied) then sub(select_first([phenotype_url]), "/+$", "")  else ""
                     call tasks.intersects_boundary as cell_intersects_boundary {
                         # reference time mask is not transformed
-                        # use mask from stitch output
+                        # use mask from stitch output for reference
                         input:
                             labels=segment_cell_url,
                             images=phenotype_url_stripped + '/labels/',
@@ -420,7 +420,7 @@ workflow ops_workflow {
                     if (length(times)>1) {
                         call tasks.intersects_boundary as cell_intersects_boundary_t {
                             # non-reference time masks are transformed
-                            # use masks from registration output
+                            # use transformed masks from registration output
                             input:
                                 labels= segment_cell_url,
                                 images=register_pheno_to_pheno.moving_output_url + '/labels/',

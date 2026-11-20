@@ -3,6 +3,7 @@ cross-correlation-based registration across different cycles."""
 
 import argparse
 import os
+import re
 from collections.abc import Iterable, Sequence
 from itertools import zip_longest
 from typing import Literal, cast
@@ -172,16 +173,48 @@ def single_registration(
         if len(moving_label_keys) == 0:
             logger.warning(f"No labels found for {image_key}")
 
+    moving_image = None
+    times: list[str] = []
+    reference_time: str | None = None
+    labels_by_time: dict[str, tuple[list[str], list[str]]] = {}
+    if register_self:
+        # times are needed to decide which labels to transform and whether to skip
+        moving_image = _images2fov(
+            moving_file_list,
+            moving_metadata,
+            dask=True,
+            concat_dims=("c",),
+        )
+        times = _image_times(moving_image)
+        if len(times) > 0:
+            reference_timepoint = _reference_time_index(times, reference_timepoint)
+            reference_time = times[reference_timepoint]
+            if len(moving_label_keys) > 0:
+                labels_by_time = _labels_to_transform_by_time(
+                    moving_label_keys, image_key, times, reference_time
+                )
+
     if not force:
         labels_exist = True
         if label_output_root is not None:
-            if not register_self:
-                for key in moving_label_keys:
-                    key = os.path.basename(key)
-                    if not is_ome_zarr_array(label_output_root.get(f"labels/{key}")):
-                        labels_exist = False
-                        break
-            # TODO check for transformed labels when register_self
+            if register_self:
+                expected_label_names = [
+                    name for _, names in labels_by_time.values() for name in names
+                ]
+            else:
+                expected_label_names = [os.path.basename(k) for k in moving_label_keys]
+            for key in expected_label_names:
+                if not is_ome_zarr_array(label_output_root.get(f"labels/{key}")):
+                    labels_exist = False
+                    break
+        transforms_exist = True
+        if register_self:
+            # a transform directory for every non-reference time
+            transforms_exist = len(times) > 0 and all(
+                transform_fs.isdir(f"{transform_dest}{transform_fs.sep}t={t}")
+                for t in times
+                if t != reference_time
+            )
 
         image_exists = True
         if image_output_root is not None:
@@ -189,12 +222,12 @@ def single_registration(
                 image_exists = False
         elif label_output_root is None:
             image_exists = False
-        if labels_exist and image_exists:
+        if labels_exist and image_exists and transforms_exist:
             logger.info(f"Skipping registration for {image_key}")
             return image_key
 
     if register_self:
-        logger.info(f"Running registration for {image_key} t={reference_timepoint}")
+        logger.info(f"Running registration for {image_key} t={reference_time}")
         logger.info(
             f"{len(moving_file_list):,} {pluralize('input', len(moving_file_list))}:"
             f" {', '.join([s.name.replace('/images/', '') if isinstance(s, zarr.Group) else str(s) for s in moving_file_list])}"
@@ -222,12 +255,13 @@ def single_registration(
             t=0, c=fixed_channel, missing_dims="ignore"
         )
 
-    moving_image = _images2fov(
-        moving_file_list,
-        moving_metadata,
-        dask=True,
-        concat_dims=("c",),
-    )
+    if moving_image is None:
+        moving_image = _images2fov(
+            moving_file_list,
+            moving_metadata,
+            dask=True,
+            concat_dims=("c",),
+        )
 
     parameter_object = _load_itk_parameters(itk_parameters)
     parameter_object_across_channels = (
@@ -409,17 +443,11 @@ def single_registration(
             )
 
     else:  # align to t=reference_timepoint
-        if isinstance(reference_timepoint, str):
-            reference_timepoint_found = False
-            for i in range(len(moving_image)):
-                if moving_image[i].coords["t"].values[0] == reference_timepoint:
-                    reference_timepoint = i
-                    reference_timepoint_found = True
-                    break
-            if not reference_timepoint_found:
-                raise ValueError(
-                    f"Reference timepoint not found: {reference_timepoint}."
-                )
+        if len(times) == 0:
+            raise ValueError(
+                f"No t coordinate found for {image_key}; registering across times "
+                "requires a {t} field in the moving image pattern."
+            )
         assert isinstance(reference_timepoint, int)
 
         set_automatic_transform_initialization(parameter_object, False)
@@ -461,15 +489,15 @@ def single_registration(
             landmark_min_count=landmark_min_count,
             parameter_object_across_channels=parameter_object_across_channels,
         )
+
         moving_image_attrs = moving_image[0].attrs.copy()
         chunk_size = _get_chunk_size(moving_image[reference_timepoint])
         del moving_image
-        if len(moving_label_keys) > 0:
+        if len(labels_by_time) > 0:
             _transform_labels_t(
-                image_key=image_key,
                 transform_fs=transform_fs,
                 transform_dest=transform_dest,
-                moving_label_keys=moving_label_keys,
+                labels_by_time=labels_by_time,
                 moving_image_attrs=moving_image_attrs,
                 moving_image_spacing=moving_image_spacing,
                 label_output_root=label_output_root,
@@ -479,49 +507,163 @@ def single_registration(
     return image_key
 
 
-def _transform_labels_t(
+def _transform_dir_times(transform_fs, transform_dest: str) -> list[str]:
+    """Return the times that have a ``t=`` transform directory in ``transform_dest``."""
+    if not transform_fs.isdir(transform_dest):
+        return []
+    times = []
+    for transform_file in transform_fs.ls(transform_dest, detail=True, refresh=True):
+        if transform_file["type"] == "directory":
+            basename = os.path.basename(transform_file["name"].rstrip("/"))
+            if basename.startswith("t="):
+                times.append(basename[2:])
+    return times
+
+
+def _image_times(moving_image: xr.DataArray | Sequence[xr.DataArray]) -> list[str]:
+    """Return the time values of an image as strings (as used in ``t=`` directories).
+
+    Returns an empty list when the image has no ``t`` coordinate.
+    """
+    if isinstance(moving_image, xr.DataArray):
+        if "t" not in moving_image.dims and "t" not in moving_image.coords:
+            return []
+        # a t dim without coordinate values gives the index
+        return [str(t) for t in np.atleast_1d(moving_image["t"].values)]
+    times = []
+    for img in moving_image:
+        if "t" not in img.dims and "t" not in img.coords:
+            return []
+        t = img["t"].values
+        if t.ndim > 0:
+            t = t[0]
+        times.append(str(t))
+    return times
+
+
+def _reference_time_index(times: Sequence[str], reference_timepoint: int | str) -> int:
+    """Return the index of the reference timepoint (given as an index or a time value)."""
+    if isinstance(reference_timepoint, str):
+        if reference_timepoint not in times:
+            raise ValueError(f"Reference timepoint not found: {reference_timepoint}.")
+        return list(times).index(reference_timepoint)
+    if not 0 <= reference_timepoint < len(times):
+        raise ValueError(f"Reference timepoint not found: {reference_timepoint}.")
+    return reference_timepoint
+
+
+def _moving_labels_by_time(
+    moving_label_keys: Sequence[str], image_key: str, times: Sequence[str]
+) -> tuple[dict[str, tuple[list[str], list[str]]], list[str]]:
+    """Group moving labels by the time they were acquired at.
+
+    Labels are assumed to be named ``{image_key}-{t}-{suffix}``. A label belongs to
+    time ``t`` if its name starts with ``{image_key}-{t}-``; when several times match
+    (e.g. ``IF`` and ``IF-1``), the longest one wins.
+
+    :param moving_label_keys: Paths to moving labels.
+    :param image_key: Image key the labels belong to.
+    :param times: All times of the image, including the reference time. Integer
+        times also match labels whose time has leading zeros.
+    :return: Dict mapping time to (label paths, output names), and the paths of
+        labels that match no time.
+    """
+    result: dict[str, tuple[list[str], list[str]]] = {}
+    unmatched = []
+    times_longest_first = sorted(times, key=len, reverse=True)
+    prefix = f"{image_key}-"
+    for moving_label_key in moving_label_keys:
+        basename = os.path.basename(moving_label_key.rstrip("/"))
+        rest = basename[len(prefix) :] if basename.startswith(prefix) else None
+        matched_time = None
+        if rest is not None:
+            for time in times_longest_first:
+                if rest.startswith(f"{time}-"):
+                    matched_time = time
+                    break
+            if matched_time is None:
+                # integer times lose leading zeros when read (01 -> 1)
+                digits = re.match(r"(\d+)-", rest)
+                if digits is not None:
+                    for time in times_longest_first:
+                        if time.isdecimal() and int(time) == int(digits[1]):
+                            matched_time = time
+                            break
+        if matched_time is None:
+            unmatched.append(moving_label_key)
+        else:
+            paths, names = result.setdefault(matched_time, ([], []))
+            paths.append(moving_label_key)
+            names.append(basename)
+    return result, unmatched
+
+
+def _labels_to_transform_by_time(
+    moving_label_keys: Sequence[str],
     image_key: str,
+    times: Sequence[str],
+    reference_time: str,
+) -> dict[str, tuple[list[str], list[str]]]:
+    """Return the labels to transform to the reference time, grouped by time.
+
+    Logs a warning for labels that are not transformed: labels at the reference time
+    and labels whose name doesn't start with ``{image_key}-{t}-`` for any time.
+    """
+    labels_by_time, unmatched = _moving_labels_by_time(
+        moving_label_keys, image_key, times
+    )
+    reference_labels = labels_by_time.pop(reference_time, ([], []))[1]
+    if len(reference_labels) > 0:
+        logger.warning(
+            f"Not transforming {', '.join(reference_labels)}: labels are at the "
+            f"reference time {reference_time}."
+        )
+    if len(unmatched) > 0:
+        logger.warning(
+            f"Not transforming {', '.join(os.path.basename(k) for k in unmatched)}: "
+            f"label names must start with {image_key}-{{t}}- for one of the times "
+            f"{', '.join(times)}."
+        )
+    return labels_by_time
+
+
+def _transform_labels_t(
     transform_fs,
     transform_dest: str,
-    moving_label_keys: Sequence[str],
+    labels_by_time: dict[str, tuple[list[str], list[str]]],
     moving_image_attrs,
     moving_image_spacing,
     label_output_root,
     chunksize: tuple[int, int] | None = (1024, 1024),
 ):
     # transform_dest structure is image_key/t=1
-    # assume labels are named image_key-t-suffix
-    for transform_file in transform_fs.ls(transform_dest, detail=True, refresh=True):
-        if transform_file["type"] == "directory":
-            transform_name = transform_file["name"]
-            basename = os.path.basename(transform_name)
-            if basename.startswith("t="):
-                time = basename[2:]
-                moving_label_keys_t = []
-                output_label_prefix = f"{image_key}-{time}"
-                output_names = []
-                # e.g. transform plateA-A1-IF-cell to plateA-A1-FISH-cell
-                for moving_label_key in moving_label_keys:
-                    moving_label_key_basename = os.path.basename(moving_label_key)
-                    output_label_suffix = "-" + moving_label_key_basename.split("-")[-1]
-                    output_name = f"{output_label_prefix}{output_label_suffix}"
-                    moving_label_keys_t.append(moving_label_key)
-                    output_names.append(output_name)
-
-                if len(moving_label_keys_t) > 0:
-                    transform_parameter_object = _load_itk_parameters_from_dir(
-                        transform_fs.unstrip_protocol(transform_name)
-                    )
-                    if transform_parameter_object.GetNumberOfParameterMaps() > 0:
-                        _transform_labels(
-                            transform_parameter_object=transform_parameter_object,
-                            attrs=moving_image_attrs,
-                            matching_keys=moving_label_keys_t,
-                            output_names=output_names,
-                            moving_image_spacing=moving_image_spacing,
-                            output_root=label_output_root,
-                            chunksize=chunksize,
-                        )
+    # dest labels keep the same name so that A1-IF1-nuclei and A1-IF2-nuclei can
+    # both be transformed to the reference t
+    for time, (moving_label_paths, output_names) in labels_by_time.items():
+        transform_dir = f"{transform_dest}{transform_fs.sep}t={time}"
+        transform_parameter_object = None
+        if transform_fs.isdir(transform_dir):
+            transform_parameter_object = _load_itk_parameters_from_dir(
+                transform_fs.unstrip_protocol(transform_dir)
+            )
+        if (
+            transform_parameter_object is None
+            or transform_parameter_object.GetNumberOfParameterMaps() == 0
+        ):
+            logger.warning(
+                f"Not transforming {', '.join(output_names)}: no transform found for "
+                f"t={time}."
+            )
+            continue
+        _transform_labels(
+            transform_parameter_object=transform_parameter_object,
+            attrs=moving_image_attrs,
+            matching_keys=moving_label_paths,
+            output_names=output_names,
+            moving_image_spacing=moving_image_spacing,
+            output_root=label_output_root,
+            chunksize=chunksize,
+        )
 
 
 def get_matching_names(
@@ -636,19 +778,17 @@ def _transform_labels(
     unique_outputs = set()
     for i in range(len(matching_keys) - 1, -1, -1):
         key = matching_keys[i]
-        name = os.path.basename(key)
+
         if output_names[i] in unique_outputs:
-            logger.info(f"Skipping transforming {key}")
+            logger.info(f"Skipping transforming {matching_keys[i]} labels.")
             continue
         unique_outputs.add(output_names[i])
         array = read_ome_zarr_array(key)
 
         if attrs is not None:
             array.attrs = attrs  # e.g. copy physical size
-        to = ""
-        if name != output_names[i]:
-            to = f" to {output_names[i]}"
-        logger.info(f"Running transformation for {name}{to}.")
+
+        logger.info(f"Transforming {matching_keys[i]} labels.")
         transformed_array = itk_transform_labels(
             image=_flip(array, flip_y, flip_x),
             transform_parameter_object=transform_parameter_object,
@@ -730,17 +870,13 @@ def single_transformix(
     else:
         # see if transform dir has subdirectory describing channel transformation
         transform_fs, _ = fsspec.url_to_fs(transform_dir)
-        channels_transform_parameter_objects = dict()
         for d in transform_fs.ls(transform_dir, detail=True, refresh=True):
             if d["type"] == "directory" and os.path.basename(
-                d["name"].startswith("c=")
-            ):
-                channel = int(os.path.basename(d["name"]).split("=")[1])
-                channels_transform_parameter_objects[channel] = (
-                    _load_itk_parameters_from_dir(d["name"])
+                d["name"].rstrip("/")
+            ).startswith("c="):
+                raise ValueError(
+                    f"Channel transformations not supported for {image_key}"
                 )
-        if len(channels_transform_parameter_objects) > 0:
-            raise ValueError(f"Channel transformations not supported for {image_key}")
         transform_all_images(
             image_key=image_key,
             transform_parameter_object=_load_itk_parameters_from_dir(transform_dir),
@@ -748,7 +884,6 @@ def single_transformix(
             output_root=output_root,
             moving_image_spacing=image_spacing,
             attrs=None,
-            channels_transform_parameter_objects=channels_transform_parameter_objects,
         )
 
 
