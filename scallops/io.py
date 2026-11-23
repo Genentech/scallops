@@ -14,9 +14,9 @@ import atexit
 import json
 import logging
 import math
+import numbers
 import os
 import re
-import struct
 import tempfile
 import warnings
 import weakref
@@ -59,7 +59,6 @@ from xarray.core.utils import equivalent
 from zarr.storage import StoreLike
 
 from scallops.experiment.elements import Experiment, _LazyLoadData
-from scallops.externals.tifffile2014 import imsave
 from scallops.utils import forceTCZYX
 from scallops.xr import _crop
 from scallops.zarr_io import _get_store_path, _read_zarr_experiment, read_ome_zarr_array
@@ -785,7 +784,7 @@ def to_image_montage(
     :param path: Path to the output TIFF file.
     :param crop: Pixel size for cropping each panel at the center (e.g., crop=300 means only show
                  a 300x300 area at the center) or tuple of (x, y, width, height).
-    :param kwargs: Additional arguments to pass to tifffile.imwrite. For example, imagej=True.
+    :param kwargs: Additional arguments to pass to tifffile.imwrite. For example, kind="imagej".
 
     :example:
 
@@ -2341,11 +2340,16 @@ def _single_contrast(data: NDArray, display_ranges: Any) -> tuple[float, float]:
         # Example usage of _single_contrast
         min_val, max_val = _single_contrast(image_data, display_ranges)
     """
+    lo = hi = None
     try:
-        min, max = np.array(display_ranges).flat[:2]
-    except ValueError:
-        min, max = data.min(), data.max()
-    return min, max
+        lo, hi = np.array(display_ranges, dtype=object).flat[:2]
+    except (TypeError, ValueError):
+        pass
+    if not isinstance(lo, numbers.Real):
+        lo = data.min()
+    if not isinstance(hi, numbers.Real):
+        hi = data.max()
+    return float(lo), float(hi)
 
 
 ramp = list(range(256))
@@ -2403,96 +2407,12 @@ def _infer_luts_display_ranges(
     return luts, display_ranges
 
 
-def _imagej_description(
-    leading_shape: tuple[int, ...],
-    leading_axes: str,
-    contrast: Sequence | None = None,
-    display_mode: str = "composite",
-) -> str:
-    """Generates an ImageJ description string based on the provided image properties.
-
-    :param leading_shape: tuple[int, ...]
-        The shape of the leading dimensions of the image.
-    :param leading_axes: str
-        The labels of the leading axes (e.g., "XYZCT").
-    :param contrast: Sequence | None, optional
-        The contrast settings for each channel (default is None).
-    :param display_mode: str, optional
-        The display mode for ImageJ (default is "composite").
-    :return: str
-        The generated ImageJ description string.
-
-    :example:
-    .. code-block:: python
-
-        # Example usage of _imagej_description
-        description = _imagej_description((512, 512, 3), "XYZ")
-    """
-    if len(leading_shape) != len(leading_axes):
-        error = "mismatched axes, shape is {} but axis labels are {}"
-        raise ValueError(error.format(leading_shape, leading_axes))
-
-    description = [f"ImageJ=1.49v\n{np.prod(leading_shape)}"]
-    sizes = {k: v for k, v in zip(leading_axes, leading_shape)}
-    if "C" in sizes:
-        description.append(f"channels={sizes['C']}\n")
-    if "Z" in sizes:
-        description.append(f"slices={sizes['Z']}\n")
-    if "T" in sizes:
-        description.append(f"frames={sizes['T']}\n")
-    if contrast is not None:
-        description.append("min={mini}\nmax={maxi}\n")
-    description.append(f"hyperstack=true\nmode={display_mode}\n")
-
-    return "".join(description)
-
-
-def _ij_tag_50838(nchannels):
-    """ImageJ uses tag 50838 to indicate size of metadata elements (e.g., 768 bytes per ROI)
-    Parameter `nchannels` must accurately describe the length of the display ranges and LUTs, or the
-    values imported into LUTs will be shifted in memory.
-
-    :param nchannels:
-    :return:
-    """
-    info_block = (20,)  # summary of metadata fields
-    display_block = (16 * nchannels,)  # display range block
-    luts_block = (256 * 3,) * nchannels  #
-    return info_block + display_block + luts_block
-
-
-def _ij_tag_50839(luts, display_ranges):
-    """ImageJ uses tag 50839 to store metadata.
-
-    Only range and luts are implemented here.
-    :param tuple luts: tuple of 256*3=768 8-bit ints specifying RGB, e.g., constants io.RED etc.
-    :param tuple display_ranges: tuple of (min, max) pairs for each channel
-    :return:
-    """
-    d = struct.pack(
-        "<" + "d" * len(display_ranges) * 2, *[y for x in display_ranges for y in x]
-    )
-    # insert display ranges
-    tag = (
-        "".join(
-            [
-                "JIJI",
-                "gnar\x01\x00\x00\x00",
-                "stul%s\x00\x00\x00" % chr(len(luts)),
-            ]
-        ).encode("ascii")
-        + d
-    )
-    tag = struct.unpack("<" + "B" * len(tag), tag)
-    return tag + tuple(sum([list(x) for x in luts], []))
-
-
 def save_stack_imagej(
     uri: str,
     data: NDArray,
     luts: Sequence[Sequence[int]] | None = None,
     display_ranges: Sequence[tuple[int, int] | None] | None = None,
-    resolution: float = 1.0,
+    resolution: float | None = None,
     compress: Literal[0, 1] = 0,
     dimensions: str | None = None,
     display_mode: Literal["composite", "color", "grayscale"] = "composite",
@@ -2506,9 +2426,12 @@ def save_stack_imagej(
     :param data: an array with 5, 4, 3, or 2 dimensions [TxZxCxYxX]
     :param luts:  ImageJ lookup table for each channel (e.g, scallops.io.GRAY, scallops.io.GREEN, etc)
     :param display_ranges: The display range can be set with a list of (min, max) pairs for each channel.
-    :param resolution: Resolution of the image in microns per pixel
+    :param resolution: Resolution of the image in microns per pixel. If None, the image
+        is saved uncalibrated (in pixels).
     :param compress: Compress the image. Setting to 1 saves a lot of space for integer masks
-    :param dimensions: Dimensionality of the data. Leading dimenstions in order (i.e. TCZ, TC, CT)
+    :param dimensions: Labels of the leading (non-YX) dimensions of `data`, in order, drawn
+        from T, Z, and C (e.g. TCZ, TC, CT). Data is transposed to ImageJ's TZC order before
+        writing. Defaults to the trailing dimensions of TZC.
     :param display_mode: Sets the display mode, where mode is "composite", "color" or "grayscale"
 
     >>> random_data = np.random.randint(0, 2**16, size=(3, 100, 100), dtype=np.uint16)
@@ -2519,9 +2442,13 @@ def save_stack_imagej(
     >>> BLUE = ZERO + ZERO + ramp
     >>> luts = GREEN, RED, BLUE
     >>> display_ranges = (0, 60000), (0, 40000), (0, 20000)
-    >>> save_stack_imagej(
-    ...     "random_image.tiff", random_data, luts=luts, display_ranges=display_ranges
-    ... )
+    >>> with tempfile.TemporaryDirectory() as tmpdir:
+    ...     save_stack_imagej(
+    ...         os.path.join(tmpdir, "random_image.tiff"),
+    ...         random_data,
+    ...         luts=luts,
+    ...         display_ranges=display_ranges,
+    ...     )
 
     Compatible array data types are:
         bool (converted to uint8 0, 255)
@@ -2530,24 +2457,15 @@ def save_stack_imagej(
         float32
         float64 (converted to float32)
     """
-    fs, _ = fsspec.core.url_to_fs(uri)
-    name = uri
+    if not uri.lower().endswith((".tif", ".tiff")):
+        raise ValueError("Only tif formats (.tif, .tiff) are implemented")
 
-    if _get_fs_protocol(fs) != "file":
-        # can not write non-local tiff files
-        fd, name = tempfile.mkstemp(suffix=".tiff")
-        os.close(fd)
-
-    assert name.endswith((".tif", ".tiff")), (
-        "Only tif formats (.tif, .tiff) are implemented"
-    )
-
-    if isinstance(data, list):
-        data = np.array(data)
-
-    assert 2 <= data.ndim <= 5, (
-        "Input has shape {}, but number of dimensions must be in range [2, 5]"
-    )
+    data = np.asarray(data)
+    if not 2 <= data.ndim <= 5:
+        raise ValueError(
+            f"Input has shape {data.shape}, but number of dimensions must be in "
+            "range [2, 5]"
+        )
 
     if data.dtype in (np.int32, np.int64):
         if (data.min() >= 0) and (data.max() < 2**16):
@@ -2560,69 +2478,90 @@ def save_stack_imagej(
         data = 255 * data.astype(np.uint8)
 
     if data.dtype not in (np.uint8, np.uint16, np.float32):
-        raise ValueError("Cannot save data of type %s" % data.dtype)
+        raise ValueError(f"Cannot save data of type {data.dtype}")
 
-    resolution_xy = (1.0 / resolution,) * 2
-
-    if data.ndim == 2:
-        # simple description
-        mini, maxi = _single_contrast(data, display_ranges)
-        description = f"ImageJ=1.49v\nimages=1\nmin={mini}\nmax={maxi}"
-        imsave(
-            name,
-            data,
-            photometric="minisblack",
-            description=description,
-            resolution=resolution_xy,
-            compress=compress,
+    if dimensions is None:
+        dimensions = "TZC"[3 - (data.ndim - 2) :]
+    dimensions = dimensions.upper()
+    if (
+        len(dimensions) != data.ndim - 2
+        or len(set(dimensions)) != len(dimensions)
+        or not set(dimensions) <= set("TZC")
+    ):
+        raise ValueError(
+            f"dimensions must be {data.ndim - 2} unique labels from T, Z, C for data "
+            f"with shape {data.shape}, got {dimensions!r}"
         )
-    else:
-        # hyperstack description
-        nchannels = data.shape[-3]
+    # ImageJ hyperstacks are stored in TZCYX order
+    ij_axes = "".join(a for a in "TZC" if a in dimensions)
+    data = np.transpose(
+        data, [dimensions.index(a) for a in ij_axes] + [data.ndim - 2, data.ndim - 1]
+    )
+
+    metadata: dict[str, Any] = {"axes": ij_axes + "YX"}
+    if resolution is not None:
+        # tifffile writes ResolutionUnit=NONE for ImageJ files; "unit" sets the
+        # calibration
+        metadata["unit"] = "micron"
+    if "C" in ij_axes:
         luts, display_ranges = _infer_luts_display_ranges(data, luts, display_ranges)
-
-        leading_shape = data.shape[:-2]
-        if dimensions is None:
-            dimensions = "TZC"[::-1][: len(leading_shape)][::-1]
-
-        if "C" not in dimensions:
-            contrast = _single_contrast(data, display_ranges)
-            description = _imagej_description(
-                leading_shape, dimensions, contrast=contrast
+        metadata["LUTs"] = [
+            np.asarray(lut, dtype=np.uint8).reshape(3, 256) for lut in luts
+        ]
+        if len(display_ranges) == 1:
+            # tifffile squeezes a length-1 C axis, so ImageJ opens a single-channel
+            # (non-composite) image, which reads its display range from min/max
+            metadata["mode"] = (
+                "grayscale" if display_mode == "composite" else display_mode
             )
-            imsave(
-                name,
-                data,
-                photometric="minisblack",
-                description=description,
-                resolution=resolution_xy,
-                compress=compress,
-            )
+            metadata["min"], metadata["max"] = (float(v) for v in display_ranges[0])
         else:
-            # the full monty
-            description = _imagej_description(
-                leading_shape, dimensions, display_mode=display_mode
-            )
-            # metadata encoding LUTs and display ranges
-            # see http://rsb.info.nih.gov/ij/developer/source/ij/io/TiffEncoder.java.html
-            tag_50838 = _ij_tag_50838(nchannels)
-            tag_50839 = _ij_tag_50839(luts, display_ranges)
+            metadata["mode"] = display_mode
+            metadata["Ranges"] = tuple(float(v) for r in display_ranges for v in r)
+    else:
+        mini, maxi = _single_contrast(data, display_ranges)
+        metadata["min"] = float(mini)
+        metadata["max"] = float(maxi)
 
-            imsave(
+    fs, path = fsspec.core.url_to_fs(uri)
+    local = _get_fs_protocol(fs) == "file"
+    name = path  # local path without any file:// prefix
+    if not local:
+        # tifffile can only write local files
+        fd, name = tempfile.mkstemp(suffix=".tiff")
+        os.close(fd)
+    # Classic TIFF offsets are 32-bit. Uncompressed ImageJ stacks over 4 GB are
+    # written by tifffile as "truncated" ImageJ files (as ImageJ itself does), but
+    # compressed pages each need an offset, so use BigTIFF when the output might
+    # exceed 4 GB (zlib can slightly expand incompressible data, hence the margin).
+    # ImageJ can't open compressed stacks natively anyway (Fiji uses Bio-Formats).
+    bigtiff = bool(compress) and data.nbytes > 2**32 - 2**26
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*writing nonconformant BigTIFF ImageJ"
+            )
+            tifffile.imwrite(
                 name,
                 data,
+                kind="imagej",
+                bigtiff=bigtiff,
                 photometric="minisblack",
-                description=description,
-                resolution=resolution_xy,
-                compress=compress,
-                extratags=[
-                    (50838, "I", len(tag_50838), tag_50838, True),
-                    (50839, "B", len(tag_50839), tag_50839, True),
-                ],
+                resolution=None
+                if resolution is None
+                else (1.0 / resolution, 1.0 / resolution),
+                compression="zlib" if compress else None,
+                metadata=metadata,
             )
-
-        if _get_fs_protocol(fs) != "file":
+        if not local:
             fs.put(name, uri)
+    except BaseException:
+        if local and os.path.exists(name):
+            # don't leave a partially written file behind
+            os.remove(name)
+        raise
+    finally:
+        if not local:
             os.remove(name)
 
 

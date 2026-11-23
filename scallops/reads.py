@@ -28,11 +28,9 @@ from numpy import ndarray
 from numpy.typing import NDArray
 from scipy.special import softmax
 from skimage.segmentation import expand_labels
-from skimage.util import img_as_float
 from sklearn.linear_model import QuantileRegressor
 from sklearn.neighbors import NearestNeighbors
 
-from scallops.io import CYAN, GRAY, GREEN, MAGENTA, RED, save_stack_imagej
 from scallops.utils import _dask_total_threads
 
 logger = logging.getLogger("scallops")
@@ -1210,40 +1208,6 @@ def peaks_to_spot_labels(
     spots_labels = np.zeros(shape, dtype=int)
     spots_labels[peaks["y"], peaks["x"]] = np.arange(1, len(peaks) + 1)
     return spots_labels
-
-
-def _save_annotated_spots(df_reads, maxed, bases, output_annotated_spots):
-    """Save annotated spots as an image stack with color-coded bases.
-
-    :param df_reads: DataFrame containing read data.
-    :param maxed: Max-filtered image.
-    :param bases: List of bases.
-    :param output_annotated_spots: Tuple with output filename and expansion width.
-    """
-    outfn, width = output_annotated_spots
-    ann = annotated_spots(
-        df_reads, shape=maxed.shape, bases_order=bases, expand_width=int(width)
-    )
-    dim_order = "".join([x.upper() for x in maxed.dims])[:-2]
-    # DAPI(gray), G(green), T(red), A(magenta), C(cyan)
-    LUTS = {"G": GREEN, "T": RED, "A": MAGENTA, "C": CYAN}
-    luts = (GRAY,)
-    for base in bases:
-        luts += (LUTS[base.upper()],)
-    dims = [x for x in maxed.dims if x != "c"]
-    maxs = maxed.max(dim=dims).values
-    mins = maxed.min(dim=dims).values
-    display_ranges = tuple()
-    for i in range(maxed.c.size):
-        display_ranges += ((mins[i], maxs[i]),)
-    save_stack_imagej(
-        outfn,
-        img_as_float(ann),
-        luts=luts,
-        display_ranges=display_ranges,
-        dimensions=dim_order,
-        compress=1,
-    )
 
 
 def annotated_spots(reads_df, shape, bases_order, expand_width=3):

@@ -41,7 +41,7 @@ dependencies = [
     "bioio-ome-zarr",
     "bioio-tifffile",
     "centrosome",
-    "cp-measure>=0.2.0",
+    "cp-measure>=0.4.1",
     "dask-image",
     "dask",
     "decorator",
@@ -73,7 +73,7 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile",
+    "tifffile>=2026.5.2",
     "xarray",
     "zarr>=3"
 ]
@@ -110,7 +110,7 @@ doc = [
     "sphinx-copybutton",
     "sphinx",
     "sphinx_argparse",
-    "sphinx_rtd_theme",
+    "furo",
 ]
 
 [project.entry-points."miniwdl.plugin.container_backend"]
