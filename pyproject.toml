@@ -73,7 +73,7 @@ dependencies = [
     "stardist",
     "statsmodels",
     "tensorflow",
-    "tifffile",
+    "tifffile>=2026.5.2",
     "xarray",
     "zarr>=3"
 ]

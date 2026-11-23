@@ -784,7 +784,7 @@ def to_image_montage(
     :param path: Path to the output TIFF file.
     :param crop: Pixel size for cropping each panel at the center (e.g., crop=300 means only show
                  a 300x300 area at the center) or tuple of (x, y, width, height).
-    :param kwargs: Additional arguments to pass to tifffile.imwrite. For example, imagej=True.
+    :param kwargs: Additional arguments to pass to tifffile.imwrite. For example, kind="imagej".
 
     :example:
 
@@ -2412,7 +2412,7 @@ def save_stack_imagej(
     data: NDArray,
     luts: Sequence[Sequence[int]] | None = None,
     display_ranges: Sequence[tuple[int, int] | None] | None = None,
-    resolution: float = 1.0,
+    resolution: float | None = None,
     compress: Literal[0, 1] = 0,
     dimensions: str | None = None,
     display_mode: Literal["composite", "color", "grayscale"] = "composite",
@@ -2426,7 +2426,8 @@ def save_stack_imagej(
     :param data: an array with 5, 4, 3, or 2 dimensions [TxZxCxYxX]
     :param luts:  ImageJ lookup table for each channel (e.g, scallops.io.GRAY, scallops.io.GREEN, etc)
     :param display_ranges: The display range can be set with a list of (min, max) pairs for each channel.
-    :param resolution: Resolution of the image in microns per pixel
+    :param resolution: Resolution of the image in microns per pixel. If None, the image
+        is saved uncalibrated (in pixels).
     :param compress: Compress the image. Setting to 1 saves a lot of space for integer masks
     :param dimensions: Labels of the leading (non-YX) dimensions of `data`, in order, drawn
         from T, Z, and C (e.g. TCZ, TC, CT). Data is transposed to ImageJ's TZC order before
@@ -2497,8 +2498,11 @@ def save_stack_imagej(
         data, [dimensions.index(a) for a in ij_axes] + [data.ndim - 2, data.ndim - 1]
     )
 
-    # tifffile writes ResolutionUnit=NONE for ImageJ files; "unit" sets the calibration
-    metadata: dict[str, Any] = {"axes": ij_axes + "YX", "unit": "micron"}
+    metadata: dict[str, Any] = {"axes": ij_axes + "YX"}
+    if resolution is not None:
+        # tifffile writes ResolutionUnit=NONE for ImageJ files; "unit" sets the
+        # calibration
+        metadata["unit"] = "micron"
     if "C" in ij_axes:
         luts, display_ranges = _infer_luts_display_ranges(data, luts, display_ranges)
         metadata["LUTs"] = [
@@ -2526,18 +2530,36 @@ def save_stack_imagej(
         # tifffile can only write local files
         fd, name = tempfile.mkstemp(suffix=".tiff")
         os.close(fd)
+    # Classic TIFF offsets are 32-bit. Uncompressed ImageJ stacks over 4 GB are
+    # written by tifffile as "truncated" ImageJ files (as ImageJ itself does), but
+    # compressed pages each need an offset, so use BigTIFF when the output might
+    # exceed 4 GB (zlib can slightly expand incompressible data, hence the margin).
+    # ImageJ can't open compressed stacks natively anyway (Fiji uses Bio-Formats).
+    bigtiff = bool(compress) and data.nbytes > 2**32 - 2**26
     try:
-        tifffile.imwrite(
-            name,
-            data,
-            imagej=True,
-            photometric="minisblack",
-            resolution=(1.0 / resolution, 1.0 / resolution),
-            compression="zlib" if compress else None,
-            metadata=metadata,
-        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*writing nonconformant BigTIFF ImageJ"
+            )
+            tifffile.imwrite(
+                name,
+                data,
+                kind="imagej",
+                bigtiff=bigtiff,
+                photometric="minisblack",
+                resolution=None
+                if resolution is None
+                else (1.0 / resolution, 1.0 / resolution),
+                compression="zlib" if compress else None,
+                metadata=metadata,
+            )
         if not local:
             fs.put(name, uri)
+    except BaseException:
+        if local and os.path.exists(name):
+            # don't leave a partially written file behind
+            os.remove(name)
+        raise
     finally:
         if not local:
             os.remove(name)
