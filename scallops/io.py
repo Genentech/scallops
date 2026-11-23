@@ -14,6 +14,7 @@ import atexit
 import json
 import logging
 import math
+import numbers
 import os
 import re
 import tempfile
@@ -2339,11 +2340,16 @@ def _single_contrast(data: NDArray, display_ranges: Any) -> tuple[float, float]:
         # Example usage of _single_contrast
         min_val, max_val = _single_contrast(image_data, display_ranges)
     """
+    lo = hi = None
     try:
-        min, max = np.array(display_ranges).flat[:2]
-    except ValueError:
-        min, max = data.min(), data.max()
-    return min, max
+        lo, hi = np.array(display_ranges, dtype=object).flat[:2]
+    except (TypeError, ValueError):
+        pass
+    if not isinstance(lo, numbers.Real):
+        lo = data.min()
+    if not isinstance(hi, numbers.Real):
+        hi = data.max()
+    return float(lo), float(hi)
 
 
 ramp = list(range(256))
@@ -2435,9 +2441,13 @@ def save_stack_imagej(
     >>> BLUE = ZERO + ZERO + ramp
     >>> luts = GREEN, RED, BLUE
     >>> display_ranges = (0, 60000), (0, 40000), (0, 20000)
-    >>> save_stack_imagej(
-    ...     "random_image.tiff", random_data, luts=luts, display_ranges=display_ranges
-    ... )
+    >>> with tempfile.TemporaryDirectory() as tmpdir:
+    ...     save_stack_imagej(
+    ...         os.path.join(tmpdir, "random_image.tiff"),
+    ...         random_data,
+    ...         luts=luts,
+    ...         display_ranges=display_ranges,
+    ...     )
 
     Compatible array data types are:
         bool (converted to uint8 0, 255)
@@ -2446,7 +2456,7 @@ def save_stack_imagej(
         float32
         float64 (converted to float32)
     """
-    if not uri.endswith((".tif", ".tiff")):
+    if not uri.lower().endswith((".tif", ".tiff")):
         raise ValueError("Only tif formats (.tif, .tiff) are implemented")
 
     data = np.asarray(data)
@@ -2487,22 +2497,31 @@ def save_stack_imagej(
         data, [dimensions.index(a) for a in ij_axes] + [data.ndim - 2, data.ndim - 1]
     )
 
-    metadata: dict[str, Any] = {"axes": ij_axes + "YX"}
+    # tifffile writes ResolutionUnit=NONE for ImageJ files; "unit" sets the calibration
+    metadata: dict[str, Any] = {"axes": ij_axes + "YX", "unit": "micron"}
     if "C" in ij_axes:
         luts, display_ranges = _infer_luts_display_ranges(data, luts, display_ranges)
-        metadata["mode"] = display_mode
         metadata["LUTs"] = [
             np.asarray(lut, dtype=np.uint8).reshape(3, 256) for lut in luts
         ]
-        metadata["Ranges"] = tuple(float(v) for r in display_ranges for v in r)
+        if len(display_ranges) == 1:
+            # tifffile squeezes a length-1 C axis, so ImageJ opens a single-channel
+            # (non-composite) image, which reads its display range from min/max
+            metadata["mode"] = (
+                "grayscale" if display_mode == "composite" else display_mode
+            )
+            metadata["min"], metadata["max"] = (float(v) for v in display_ranges[0])
+        else:
+            metadata["mode"] = display_mode
+            metadata["Ranges"] = tuple(float(v) for r in display_ranges for v in r)
     else:
         mini, maxi = _single_contrast(data, display_ranges)
         metadata["min"] = float(mini)
         metadata["max"] = float(maxi)
 
-    fs, _ = fsspec.core.url_to_fs(uri)
+    fs, path = fsspec.core.url_to_fs(uri)
     local = _get_fs_protocol(fs) == "file"
-    name = uri
+    name = path  # local path without any file:// prefix
     if not local:
         # tifffile can only write local files
         fd, name = tempfile.mkstemp(suffix=".tiff")
