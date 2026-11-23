@@ -110,7 +110,7 @@ doc = [
     "sphinx-copybutton",
     "sphinx",
     "sphinx_argparse",
-    "sphinx_rtd_theme",
+    "furo",
 ]
 
 [project.entry-points."miniwdl.plugin.container_backend"]
