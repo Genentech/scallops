@@ -86,16 +86,39 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser.add_argument(
         "--moving-channel",
         type=int,
-        default=0,
-        help="Moving channel index (0-based) to use for alignment. When timepoints have "
+        nargs="+",
+        default=[0],
+        help="Moving channel index (0-based) to use for alignment. Several indices are "
+        "combined into one image (see --combine-channels). When timepoints have "
         "different numbers of channels and --unroll-channels is not specified, the index "
         "refers to the channels after padding with leading empty channels",
     )
     parser.add_argument(
         "--fixed-channel",
         type=int,
-        default=0,
-        help="Fixed channel index (0-based) to use for alignment",
+        nargs="+",
+        default=[0],
+        help="Fixed channel index (0-based) to use for alignment. Several indices are "
+        "combined into one image (see --combine-channels)",
+    )
+    parser.add_argument(
+        "--combine-channels",
+        choices=["median", "mean"],
+        default="median",
+        help="How several --moving-channel (or --fixed-channel) channels are combined into "
+        "the image used for alignment",
+    )
+    parser.add_argument(
+        "--channel-weights",
+        type=float,
+        nargs="+",
+        help="Weight of each --moving-channel for --combine-channels mean (equal weights if not given)",
+    )
+    parser.add_argument(
+        "--equalize-channels",
+        action="store_true",
+        help="Scale each channel to a common range (median to 99.5th percentile) before "
+        "combining them, so that bright channels do not dominate",
     )
     parser.add_argument(
         "--transform-output",

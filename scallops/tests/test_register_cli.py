@@ -588,3 +588,100 @@ def test_register_itk_cli(tmp_path, experiment_c_A1_102_nuclei):
     assert len(df) == 441
     n_inliers = len(df.query("inlier"))
     assert abs(364 - n_inliers) < 5, f"# of inliers: {n_inliers}"
+
+
+@pytest.mark.registration
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        [],  # median of the channels (default)
+        ["--equalize-channels"],
+        [
+            "--combine-channels",
+            "mean",
+            "--channel-weights",
+            "1",
+            "2",
+            "1",
+            "1",
+            "--equalize-channels",
+        ],
+    ],
+    ids=["median", "median-equalized", "weighted-mean-equalized"],
+)
+def test_register_itk_cli_combined_channels(tmp_path, extra_args):
+    # real SBS cycle (DAPI + 4 base channels) and a copy shifted by a known amount
+    image = read_image(
+        f"{DATA_DIR}/experimentC/input/10X_c1-SBS-1/10X_c1-SBS-1_A1_Tile-102.sbs.tif"
+    ).squeeze()
+    st = SimilarityTransform(translation=(-9, 6))
+    shifted = apply_data_array(
+        image, ["c"], lambda img: warp(img.values, st, order=1, preserve_range=True)
+    )
+    data = xr.DataArray(
+        np.stack([image.values, shifted.values]).astype(np.float32),
+        dims=["t", "c", "y", "x"],
+    )
+    data.attrs["processed"] = dict(
+        images=[dict(pixels=dict(physical_size_x=1, physical_size_y=1))]
+    )
+    data_path = tmp_path / "test.zarr"
+    exp = Experiment()
+    exp.images["test"] = data
+    exp.save(data_path)
+
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--time",
+        "0",
+        "--moving",
+        str(data_path),
+        "--no-landmarks",
+        "--itk-parameters",
+        create_itk_param_file(tmp_path),
+        # the four base channels, not the DAPI channel
+        "--moving-channel",
+        "1",
+        "2",
+        "3",
+        "4",
+        *extra_args,
+        "--moving-output",
+        str(tmp_path / "moving.zarr"),
+        "--transform-output",
+        str(tmp_path / "transforms"),
+    ]
+    subprocess.check_call(cmd)
+    transformed = read_experiment(tmp_path / "moving.zarr").images["test"]
+    assert transformed.sizes == data.sizes
+    # the reference timepoint is unchanged and the shifted one is registered to it
+    np.testing.assert_array_equal(transformed.isel(t=0), data.isel(t=0))
+    interior = (slice(40, -40), slice(40, -40))
+    for c in range(1, 5):
+        reference = image.values[c][interior].ravel()
+        before = np.corrcoef(shifted.values[c][interior].ravel(), reference)[0, 1]
+        after = np.corrcoef(
+            transformed.isel(t=1, c=c).values[interior].ravel(), reference
+        )[0, 1]
+        assert after > 0.95 > before
+
+
+def test_register_itk_cli_channel_weights_need_mean(tmp_path):
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--moving",
+        str(tmp_path / "missing.zarr"),
+        "--moving-channel",
+        "0",
+        "1",
+        "--channel-weights",
+        "1",
+        "1",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "--combine-channels mean" in result.stderr

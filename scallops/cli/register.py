@@ -33,6 +33,7 @@ from scallops.io import (
     pluralize,
 )
 from scallops.registration.itk import (
+    _combine_channels,
     _get_chunk_size,
     _itk_align_reference_time_zarr,
     _itk_transform_image_zarr,
@@ -84,8 +85,8 @@ def _flip(image: xr.DataArray, flip_y: bool, flip_x: bool) -> xr.DataArray:
 def single_registration(
     fixed_tuple: ImageTuple | None,
     moving_tuple: ImageTuple,
-    moving_channel: int,
-    fixed_channel: int | None,
+    moving_channel: int | Sequence[int],
+    fixed_channel: int | Sequence[int] | None,
     label_output_root: zarr.Group | None,
     image_output_root: zarr.Group | None,
     transform_output_dir: str,
@@ -113,6 +114,9 @@ def single_registration(
     flip_moving_y: bool = False,
     flip_moving_x: bool = False,
     no_version: bool = False,
+    channel_combine: Literal["median", "mean"] = "median",
+    channel_weights: Sequence[float] | None = None,
+    equalize_channels: bool = False,
 ) -> str:
     """Perform single registration between fixed and moving images.
 
@@ -122,8 +126,13 @@ def single_registration(
 
     :param fixed_tuple: Tuple containing fixed image information.
     :param moving_tuple: Tuple containing moving image information.
-    :param moving_channel: Index of the moving image channel.
-    :param fixed_channel: Index of the fixed image channel.
+    :param moving_channel: Index (or indices) of the moving image channel(s). Several channels
+        are combined with ``channel_combine``.
+    :param fixed_channel: Index (or indices) of the fixed image channel(s).
+    :param channel_combine: How several moving (or fixed) channels are combined into the image
+        used for registration: the pixelwise ``median`` or ``mean``.
+    :param channel_weights: Weight of each moving channel for the ``mean`` (default: equal).
+    :param equalize_channels: Scale every channel to a common range before combining.
     :param label_output_root: Root for output labels.
     :param image_output_root: Root for output images.
     :param z_index: Either 'max' or z-index
@@ -295,11 +304,12 @@ def single_registration(
         moving_image_align = _z_projection(moving_image, z_index).isel(
             t=0, c=moving_channel, missing_dims="ignore"
         )
-        if "c" in moving_image_align.dims and moving_image_align.sizes["c"] > 1:
-            moving_image_align = moving_image_align.median(dim="c", keep_attrs=True)
-
-        if "c" in fixed_image.dims and fixed_image.sizes["c"] > 1:
-            fixed_image = fixed_image.median(dim="c", keep_attrs=True)
+        moving_image_align = _combine_channels(
+            moving_image_align, channel_combine, channel_weights, equalize_channels
+        )
+        fixed_image = _combine_channels(
+            fixed_image, channel_combine, None, equalize_channels
+        )
         if np.issubdtype(fixed_image.dtype, np.floating) and not np.issubdtype(
             moving_image_align.dtype, np.floating
         ):
@@ -463,8 +473,9 @@ def single_registration(
                     nchannels=img.sizes["c"],
                     t=img.coords["t"].values.ravel()[0],
                 )
-                new_moving_image.append(img.isel(c=[c]))
-            moving_channel = 0
+                new_moving_image.append(img.isel(c=np.atleast_1d(c).tolist()))
+            n_moving = len(np.atleast_1d(moving_channel))
+            moving_channel = 0 if n_moving == 1 else list(range(n_moving))
             moving_image = new_moving_image
         if not no_version:
             moving_image[reference_timepoint].attrs.update(cli_metadata())
@@ -488,6 +499,9 @@ def single_registration(
             landmark_translations=landmark_initializations,
             landmark_min_count=landmark_min_count,
             parameter_object_across_channels=parameter_object_across_channels,
+            channel_combine=channel_combine,
+            channel_weights=channel_weights,
+            equalize_channels=equalize_channels,
         )
 
         moving_image_attrs = moving_image[0].attrs.copy()
@@ -944,6 +958,13 @@ def run_itk_transform(arguments: argparse.Namespace) -> None:
             )
 
 
+def _channel_arg(channel: int | Sequence[int]) -> int | list[int]:
+    """Single channel index as an int, several as a list (``--moving-channel 1 2 3 4``)."""
+    if isinstance(channel, int):
+        return channel
+    return channel[0] if len(channel) == 1 else list(channel)
+
+
 def run_itk_registration(arguments: argparse.Namespace) -> None:
     """Perform image registration using ITK.
 
@@ -992,10 +1013,15 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     unroll_channels = arguments.unroll_channels
     transform_output_dir = arguments.transform_output_dir
     subset = arguments.subset
-    moving_channel = arguments.moving_channel
+    moving_channel = _channel_arg(arguments.moving_channel)
     label_output_dir = arguments.label_output_dir
     moving_output_dir = arguments.moving_output_dir
-    fixed_channel = arguments.fixed_channel
+    fixed_channel = _channel_arg(arguments.fixed_channel)
+    channel_combine = arguments.combine_channels
+    channel_weights = arguments.channel_weights
+    equalize_channels = arguments.equalize_channels
+    if channel_weights is not None and channel_combine != "mean":
+        raise ValueError("--channel-weights requires --combine-channels mean.")
     itk_parameters = arguments.itk_parameters
     moving_labels = arguments.moving_label
     no_version = arguments.no_version
@@ -1114,4 +1140,7 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
                 flip_moving_y=flip_moving_y,
                 flip_moving_x=flip_moving_x,
                 itk_channel_parameters=itk_channel_parameters,
+                channel_combine=channel_combine,
+                channel_weights=channel_weights,
+                equalize_channels=equalize_channels,
             )

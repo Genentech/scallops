@@ -2,6 +2,16 @@
 Release Notes
 *****************
 
+* Unreleased
+    * ``scallops registration elastix`` can align on several channels at once:
+      ``--moving-channel`` and ``--fixed-channel`` accept more than one index, combined with
+      ``--combine-channels median`` (default, as before) or ``mean``. The mean can be weighted
+      (``--channel-weights``) and each channel can be scaled to a common range first
+      (``--equalize-channels``). The same options are available in ``itk_align_to_reference_time``
+      (``channel_combine``, ``channel_weights``, ``equalize_channels``). With in situ sequencing
+      cycles that have no DAPI, aligning on the four base channels is a way to register the cycles
+      without a nuclear channel.
+
 * v1.0.3, November 20, 2026
     * When registering timepoints of the moving image to each other (no fixed image),
       labels are matched to their timepoint by name (``{image_key}-{t}-...``) and each is
