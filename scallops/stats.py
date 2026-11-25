@@ -927,7 +927,7 @@ def random_effects_meta_analysis_mannwhitneyu(
         )
         combined_effect, combined_variance, tau_squared, ci = (
             res.mean_effect_re,
-            np.sqrt(res.var_eff_w_re),
+            res.var_eff_w_re,
             res.tau2,
             res.conf_int(alpha)[1],
         )

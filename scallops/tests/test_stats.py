@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.stats import norm
 
 from scallops.stats import (
     auc_variance_exact,
@@ -138,7 +139,7 @@ def test_random_effects_meta_analysis_mannwhitneyu():
     sample_sizes_example = [(30, 30), (40, 40), (50, 50)]
     individual_p_values = [0.1, 0.05, 0.025]
     expected_effect = 0.0945203394988672
-    expected_variance = 0.037499873194929825
+    expected_variance = 0.0014062404896358165
     expected_pvalue = 0.006296506270915048
 
     result = random_effects_meta_analysis_mannwhitneyu(
@@ -147,3 +148,25 @@ def test_random_effects_meta_analysis_mannwhitneyu():
     assert result.combined_effect == expected_effect
     assert result.combined_variance == expected_variance
     np.testing.assert_allclose(result.pvalue, expected_pvalue, rtol=1e-12)
+
+
+@pytest.mark.stats
+@pytest.mark.parametrize("estimation_method", ["pm", "dl"])
+def test_random_effects_meta_analysis_mannwhitneyu_variance_scale(estimation_method):
+    # combined_variance is a variance, so the ci half-width is z * sqrt(variance)
+    result = random_effects_meta_analysis_mannwhitneyu(
+        [200, 450, 700, 380],
+        [(30, 30), (30, 30), (30, 30), (40, 40)],
+        [0.1, 0.05, 0.025, 0.2],
+        estimation_method=estimation_method,
+    )
+    # heterogeneous effects, so the values are finite and tau squared is positive
+    assert result.tau_squared > 0
+    assert np.isfinite(result.combined_variance)
+    assert np.all(np.isfinite(result.ci))
+    z = norm.ppf(0.975)
+    np.testing.assert_allclose(
+        result.ci[1] - result.combined_effect,
+        z * np.sqrt(result.combined_variance),
+        rtol=1e-10,
+    )
