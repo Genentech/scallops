@@ -916,7 +916,7 @@ def random_effects_meta_analysis_mannwhitneyu(
         combined_effect, combined_variance, tau_squared = combine_effects_reml(
             cles, variances
         )
-        tts = stats.t.ppf(1 - (alpha / 2), len(combined_effect) - 1) * combined_variance
+        tts = stats.t.ppf(1 - (alpha / 2), len(cles) - 1) * np.sqrt(combined_variance)
         ci = (combined_effect - tts, combined_effect + tts)
     else:
         res = combine_effects(
@@ -969,12 +969,13 @@ def reml_likelihood(tau_squared: float, effects: NDArray, variances: NDArray) ->
     # Compute total variance
     total_variance = variances + tau_squared
 
-    # Compute weighted effects
-    weighted_effects = effects / total_variance
-
-    # Compute negative log-likelihood
+    # REML log-likelihood, with the effects centered on their weighted mean
+    weights = 1 / total_variance
+    mean_effect = np.sum(weights * effects) / np.sum(weights)
     likelihood = -0.5 * (
-        np.sum(np.log(total_variance)) + np.sum(effects * weighted_effects)
+        np.sum(np.log(total_variance))
+        + np.log(np.sum(weights))
+        + np.sum(weights * (effects - mean_effect) ** 2)
     )
 
     return -likelihood
