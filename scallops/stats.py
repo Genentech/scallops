@@ -503,8 +503,12 @@ def fixed_effects_meta_analysis_mannwhitneyu(
     combined_effect_size = np.sum(np.multiply(weights, U_statistics)) / np.sum(weights)
     # Calculate combined standard error
     combined_std_error = np.sqrt(1 / np.sum(weights))
-    # Calculate Z-score
-    z_score = combined_effect_size / combined_std_error
+    # Center each U on its null mean n1 * n2 / 2 before building the Z-score
+    null_means = [(n1 * n2) / 2 for n1, n2 in sample_sizes]
+    centered = np.subtract(U_statistics, null_means)
+    z_score = (np.sum(np.multiply(weights, centered)) / np.sum(weights)) / (
+        combined_std_error
+    )
     return 2 * norm.cdf(-abs(z_score)), combined_effect_size  # two-tailed p-value
 
 

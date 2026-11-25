@@ -90,10 +90,25 @@ def test_meta_analysis_mannwhitneyu():
     combined_p_value, combined_effect_size = fixed_effects_meta_analysis_mannwhitneyu(
         U_statistics, sample_sizes
     )
-    # Check  combined p-value
-    np.testing.assert_almost_equal(combined_p_value, 0.82222508)
+    # U values far below n1 * n2 / 2 are a strong signal
+    assert combined_p_value < 1e-50
     # Check combined effect size
     np.testing.assert_almost_equal(combined_effect_size, 23.36891079)
+
+
+@pytest.mark.stats
+def test_meta_analysis_mannwhitneyu_null():
+    sample_sizes = [(50, 50), (60, 60), (70, 70)]
+    # every U sits exactly on its null mean, so there is no effect
+    combined_p_value, _ = fixed_effects_meta_analysis_mannwhitneyu(
+        [1250, 1800, 2450], sample_sizes
+    )
+    np.testing.assert_almost_equal(combined_p_value, 1.0)
+    # small shifts above the null mean should not be significant
+    combined_p_value, _ = fixed_effects_meta_analysis_mannwhitneyu(
+        [1300, 1900, 2600], sample_sizes
+    )
+    np.testing.assert_allclose(combined_p_value, 0.42102630, rtol=1e-6)
 
 
 @pytest.mark.stats
