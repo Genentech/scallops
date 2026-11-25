@@ -537,8 +537,61 @@ def _padded_to_local_channel(
     return local if isinstance(channel, (list, tuple, np.ndarray)) else local[0]
 
 
-_EQUALIZE_PERCENTILES = (50.0, 99.5)  # background level and bright-signal level (%)
-_EQUALIZE_SUBSAMPLE = 8  # percentiles are estimated on every 8th pixel in y and x
+_EQUALIZE_MAX_SAMPLE = 10_000_000  # percentiles use about this many pixels per channel
+
+
+def _equalize_step(n_pixels: int) -> int:
+    """Stride in y and x so that a channel of ``n_pixels`` pixels is subsampled to about
+    ``_EQUALIZE_MAX_SAMPLE`` pixels (1, i.e. every pixel, for smaller images)."""
+    return max(1, int(np.ceil(np.sqrt(n_pixels / _EQUALIZE_MAX_SAMPLE))))
+
+
+def _channel_percentiles(block: np.ndarray, percentiles=(50.0, 99.5)) -> np.ndarray:
+    """
+    :param block: array
+    :param percentiles: background level and bright-signal level (%)
+    :return:
+    """
+    return np.percentile(
+        block.reshape(block.shape[0], -1), percentiles, axis=1
+    ).T.astype(np.float64)
+
+
+def _equalize_stats(image: xr.DataArray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Background level, bright-signal level and maximum of every channel of ``image``.
+
+    The levels are the exact 50th and 99.5th percentiles of every pixel, or of a regular
+    subsample of about ``_EQUALIZE_MAX_SAMPLE`` pixels per channel for larger images (to bound
+    memory); the maximum always uses every pixel. The subsample keeps the image's dtype.
+    For dask-backed images every statistic is computed in a single pass over the image,
+    without loading it into memory: only one channel's subsample is held at a time.
+
+    :param image: Image with dimensions ``c``, ``y`` and ``x``.
+    :return: Arrays ``low``, ``high`` and ``maximum`` (float64), one value per channel.
+    """
+    image = image.transpose("c", ...)
+    step = _equalize_step(image.isel(c=0).size)
+    sample = image.isel(y=slice(None, None, step), x=slice(None, None, step)).data
+    other_axes = tuple(range(1, image.ndim))
+    maximum = image.data.max(axis=other_axes)
+    if isinstance(image.data, da.Array):
+        # exact percentiles of each channel's subsample, gathered into one chunk
+        # (da.percentile merges per-chunk percentiles, which is inaccurate in the tail).
+        # Kept as a dask array computation so that it shares chunk reads with the maximum.
+        percentiles = sample.rechunk((1,) + (-1,) * (sample.ndim - 1)).map_blocks(
+            _channel_percentiles,
+            drop_axis=list(range(2, sample.ndim)),
+            chunks=((1,) * image.sizes["c"], (2,)),
+            dtype=np.float64,
+        )
+        percentiles, maximum = dask.compute(percentiles, maximum)
+    else:
+        percentiles = _channel_percentiles(np.asarray(sample))
+    return (
+        percentiles[:, 0].astype(np.float64),
+        percentiles[:, 1].astype(np.float64),
+        np.asarray(maximum, dtype=np.float64),
+    )
 
 
 def _equalize_channels(image: xr.DataArray) -> xr.DataArray:
@@ -547,23 +600,44 @@ def _equalize_channels(image: xr.DataArray) -> xr.DataArray:
     Each channel is shifted by its background level (median) and divided by the spread between
     that level and its bright signal (99.5th percentile), so that channels with different
     brightness contribute equally when they are combined. Percentiles are estimated on a
-    subsample of the pixels.
+    subsample of the pixels (see :func:`_equalize_stats`). When the 99.5th percentile equals
+    the median (sparse signal), the spread up to the channel's maximum is used instead, so
+    that a few bright pixels are not amplified enormously.
 
     :param image: Image with dimensions ``c``, ``y`` and ``x``.
     :return: Equalized (float32) image.
     """
-    step = _EQUALIZE_SUBSAMPLE
-    sample = image.isel(y=slice(None, None, step), x=slice(None, None, step))
-    low, high = np.percentile(
-        sample.transpose("c", ...).values.reshape(image.sizes["c"], -1),
-        _EQUALIZE_PERCENTILES,
-        axis=1,
-    )
+    low, high, maximum = _equalize_stats(image)
+    scale = high - low
+    tiny = scale <= np.finfo(np.float32).eps * np.maximum(np.abs(low), 1)
+    scale[tiny] = maximum[tiny] - low[tiny]
     # constant channels (no signal) are left at zero instead of dividing by zero
-    scale = np.maximum(high - low, np.finfo(np.float32).eps)
+    scale[scale <= 0] = 1.0
     low = xr.DataArray(low.astype(np.float32), dims="c")
     scale = xr.DataArray(scale.astype(np.float32), dims="c")
     return ((image.astype(np.float32) - low) / scale).assign_attrs(image.attrs)
+
+
+def _check_combine_channels(
+    method: str, weights: Sequence[float] | None, nchannels: int
+) -> None:
+    """Check the arguments of :func:`_combine_channels` for ``nchannels`` channels.
+
+    :raises ValueError: If ``method`` is unknown, or ``weights`` is not used with
+        ``method="mean"``, does not have one value per channel, or has negative or only zero
+        values.
+    """
+    if method not in ("median", "mean"):
+        raise ValueError(f"Unknown channel combination method: {method!r}.")
+    if weights is not None:
+        if method != "mean":
+            raise ValueError("Channel weights require the 'mean' combination method.")
+        if len(weights) != nchannels:
+            raise ValueError(
+                f"Expected {nchannels} channel weights, got {len(weights)}."
+            )
+        if np.any(np.asarray(weights) < 0) or not np.sum(weights) > 0:
+            raise ValueError("Channel weights must be non-negative and not all zero.")
 
 
 def _combine_channels(
@@ -586,29 +660,21 @@ def _combine_channels(
     :raises ValueError: If ``weights`` is not used with ``method="mean"`` or does not have
         one value per channel.
     """
+    _check_combine_channels(method, weights, image.sizes.get("c", 1))
     if "c" not in image.dims or image.sizes["c"] == 1:
         return image
-    if method not in ("median", "mean"):
-        raise ValueError(f"Unknown channel combination method: {method!r}.")
-    if weights is not None:
-        if method != "mean":
-            raise ValueError("Channel weights require the 'mean' combination method.")
-        if len(weights) != image.sizes["c"]:
-            raise ValueError(
-                f"Expected {image.sizes['c']} channel weights, got {len(weights)}."
-            )
-        if np.any(np.asarray(weights) < 0) or not np.sum(weights) > 0:
-            raise ValueError("Channel weights must be non-negative and not all zero.")
     if equalize:
         image = _equalize_channels(image)
     if method == "median":
-        return image.median(dim="c", keep_attrs=True)
+        # elastix computes in float32; the median of integer channels is float64
+        return image.median(dim="c", keep_attrs=True).astype(np.float32)
     w = xr.DataArray(
         np.ones(image.sizes["c"]) if weights is None else np.asarray(weights, float),
         dims="c",
     )
-    combined = (image * w).sum(dim="c", keep_attrs=True) / w.sum()
-    return combined.astype(np.float32)
+    combined = (image * w).sum(dim="c") / w.sum()
+    # older xarray versions drop attrs in arithmetic
+    return combined.astype(np.float32).assign_attrs(image.attrs)
 
 
 def _read_itk_point_set(path: str) -> tuple[list[float], list[float]]:
@@ -725,6 +791,9 @@ def _itk_align_reference_time(
         percentile) before combining, so that bright channels do not dominate.
     :return: The aligned DataArray.
     """
+    _check_combine_channels(
+        channel_combine, channel_weights, len(np.atleast_1d(moving_channel))
+    )
     if write_callback is None:
 
         def _write_value(x, idx, val):
@@ -855,7 +924,10 @@ def _itk_align_reference_time(
             chunk_size=_get_chunk_size(moving_image_reference_t_moving_c),
             shape=result_image_shape,
             attrs=result_image_attrs,
-            dtype=moving_image_reference_t_moving_c.dtype,
+            # the raw channels are written, not the image combined for registration
+            dtype=moving_image.dtype
+            if isinstance(moving_image, xr.DataArray)
+            else np.result_type(*[img.dtype for img in moving_image]),
         )
     )
 
@@ -1001,14 +1073,22 @@ def _itk_align_reference_time(
                         output_fs.rm(dest_channel, recursive=True)
                     output_fs.makedirs(dest_channel, exist_ok=True)
 
+                fixed_c = moving_image_ti_moving_c
+                moving_c = image_i_j
+                if fixed_c.dtype != moving_c.dtype:
+                    # elastix needs both images of the same pixel type; the
+                    # combined reference channel can be float while channels are int
+                    fixed_c = fixed_c.astype(np.float32)
+                    moving_c = moving_c.astype(np.float32)
                 elastix_object_across_channels = itk_align(
-                    fixed_image=moving_image_ti_moving_c,
-                    moving_image=image_i_j,
+                    fixed_image=fixed_c,
+                    moving_image=moving_c,
                     parameter_object=parameter_object_across_channels,
                     fixed_image_spacing=moving_image_spacing,
                     moving_image_spacing=moving_image_spacing,
                     output_directory=dest_channel,
                 )
+                del fixed_c, moving_c
                 transform_parameter_object_across_channels = (
                     _get_transform_parameter_object(elastix_object_across_channels)
                 )

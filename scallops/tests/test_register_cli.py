@@ -510,6 +510,56 @@ def test_register_itk_cli(tmp_path, experiment_c_A1_102_nuclei):
         == 2  # landmarks + params
     )
 
+    # aligned channels only: the raw selected channels are written, not the combined image
+    aligned_only_dir = os.path.join(tmp_path, "aligned-only.zarr")
+    subprocess.check_call(
+        cmd[: cmd.index("--moving-label")]
+        + cmd[cmd.index("--moving-label") + 2 : cmd.index("--label-output")]
+        + [
+            "--moving-output",
+            aligned_only_dir,
+            "--landmark-step-size",
+            "50",
+            "--transform-output",
+            os.path.join(tmp_path, "transform-aligned-only"),
+            "--output-aligned-channels-only",
+            # align on DAPI (as the fixed image) but write DAPI and the next channel
+            "--moving-channel",
+            "0",
+            "1",
+            "--combine-channels",
+            "mean",
+            "--channel-weights",
+            "1",
+            "0",
+            "--equalize-channels",
+        ]
+    )
+    aligned_only = read_ome_zarr_array(os.path.join(aligned_only_dir, "images/1"))
+    assert aligned_only.sizes["c"] == 2
+    assert aligned_only.coords["c"].values.tolist() == ["a", "b"]
+    # same as applying the transform to the raw moving channels
+    transformix_aligned_only = os.path.join(tmp_path, "transformix-aligned-only.zarr")
+    subprocess.check_call(
+        [
+            "scallops",
+            "registration",
+            "transformix",
+            "--images",
+            registration_input_zarr_path,
+            "--type",
+            "images",
+            "--output",
+            transformix_aligned_only,
+            "--transform",
+            os.path.join(tmp_path, "transform-aligned-only"),
+        ]
+    )
+    np.testing.assert_array_equal(
+        aligned_only.values,
+        read_experiment(transformix_aligned_only).images["1"].isel(c=[0, 1]).values,
+    )
+
     # verify we can the same results using transformix command
     transformix_output = os.path.join(tmp_path, "transformix.zarr")
     cmd = [
@@ -668,6 +718,59 @@ def test_register_itk_cli_combined_channels(tmp_path, extra_args):
         assert after > 0.95 > before
 
 
+@pytest.mark.registration
+def test_register_itk_cli_t_reference_aligned_channels_only(tmp_path):
+    # the moving image is one DataArray with a t dimension, not a list of timepoints
+    from scipy.ndimage import gaussian_filter, shift
+
+    rng = np.random.default_rng(0)
+    channels = []
+    for _ in range(3):
+        a = gaussian_filter(rng.random((256, 256)), 4)
+        channels.append((a - a.min()) / (a.max() - a.min()) * 4000)
+    t0 = np.stack(channels)
+    t1 = np.stack([shift(c, (4, -6), order=1, mode="nearest") for c in channels])
+    data = xr.DataArray(np.stack([t0, t1]).astype(np.uint16), dims=["t", "c", "y", "x"])
+    data.attrs["processed"] = dict(
+        images=[dict(pixels=dict(physical_size_x=1, physical_size_y=1))]
+    )
+    data_path = tmp_path / "test.zarr"
+    exp = Experiment()
+    exp.images["test"] = data
+    exp.save(data_path)
+
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--time",
+        "0",
+        "--moving",
+        str(data_path),
+        "--no-landmarks",
+        "--itk-parameters",
+        create_itk_param_file(tmp_path),
+        "--moving-channel",
+        "1",
+        "2",
+        "--output-aligned-channels-only",
+        "--moving-output",
+        str(tmp_path / "moving.zarr"),
+        "--transform-output",
+        str(tmp_path / "transforms"),
+    ]
+    subprocess.check_call(cmd)
+    transformed = read_experiment(tmp_path / "moving.zarr").images["test"]
+    assert transformed.sizes["t"] == 2
+    assert transformed.sizes["c"] == 2
+    np.testing.assert_array_equal(transformed.isel(t=0), data.isel(t=0, c=[1, 2]))
+    interior = (slice(20, -20), slice(20, -20))
+    for c in range(2):
+        reference = t0[c + 1][interior].ravel()
+        after = transformed.isel(t=1, c=c).values[interior].astype(float).ravel()
+        assert np.corrcoef(after, reference)[0, 1] > 0.98
+
+
 def test_register_itk_cli_channel_weights_need_mean(tmp_path):
     cmd = [
         "scallops",
@@ -685,3 +788,142 @@ def test_register_itk_cli_channel_weights_need_mean(tmp_path):
     result = subprocess.run(cmd, capture_output=True, text=True)
     assert result.returncode != 0
     assert "--combine-channels mean" in result.stderr
+
+
+def test_register_itk_cli_fixed_channel_count(tmp_path):
+    # caught before any image is read, also without --fixed-image-pattern
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--fixed",
+        str(tmp_path / "missing-fixed.zarr"),
+        "--moving",
+        str(tmp_path / "missing.zarr"),
+        "--moving-channel",
+        "0",
+        "1",
+        "--fixed-channel",
+        "0",
+        "1",
+        "2",
+        "--combine-channels",
+        "mean",
+        "--channel-weights",
+        "1",
+        "1",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "give one --fixed-channel or 2 (got 3)" in result.stderr
+
+
+@pytest.mark.parametrize("flip", ["--flip-moving-x", "--flip-moving-y"])
+def test_register_itk_cli_flip_needs_fixed(tmp_path, flip):
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--moving",
+        str(tmp_path / "missing.zarr"),
+        flip,
+    ]
+    message = "Flipping moving image only supported when fixed image is provided"
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode != 0 and message in result.stderr
+    # with a fixed image the flip is accepted (the run then fails on the missing input)
+    result = subprocess.run(
+        cmd + ["--fixed", str(tmp_path / "missing-fixed.zarr")],
+        capture_output=True,
+        text=True,
+    )
+    assert message not in result.stderr
+
+
+@pytest.mark.registration
+@pytest.mark.parametrize("flip", ["x", "y"])
+def test_register_itk_cli_flip_moving(tmp_path, flip):
+    # the moving image is the fixed image mirrored and shifted; with the flip option
+    # it registers back onto the fixed image
+    from scipy.ndimage import gaussian_filter, shift
+
+    rng = np.random.default_rng(0)
+    fixed = []
+    for _ in range(2):
+        a = gaussian_filter(rng.random((256, 256)), 4)
+        fixed.append((a - a.min()) / (a.max() - a.min()) * 4000)
+    fixed = np.stack(fixed).astype(np.uint16)
+    axis = -1 if flip == "x" else -2
+    moving = np.stack(
+        [shift(np.flip(c, axis=axis), (4, -6), order=1, mode="nearest") for c in fixed]
+    ).astype(np.uint16)
+
+    # t and z dimensions make the moving image 5-D
+    moving_image = xr.DataArray(
+        moving[np.newaxis, :, np.newaxis], dims=["t", "c", "z", "y", "x"]
+    )
+    moving_image.attrs["physical_pixel_sizes"] = (1, 1)
+    moving_image.attrs["physical_pixel_units"] = ("micrometer", "micrometer")
+    exp = Experiment()
+    exp.images["1"] = moving_image
+    moving_path = str(tmp_path / "moving-input.zarr")
+    exp.save(moving_path)
+    fixed_img_path = tmp_path / "fixed" / "1.ome.tif"
+    os.makedirs(fixed_img_path.parent)
+    save_ome_tiff(fixed, uri=str(fixed_img_path))
+    add_physical_size(str(fixed_img_path), 1)
+
+    output = str(tmp_path / "output.zarr")
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--fixed",
+        str(fixed_img_path.parent),
+        "--moving",
+        moving_path,
+        "--moving-image-pattern",
+        "{well}",
+        "--fixed-image-pattern",
+        "{well}.ome.tif",
+        "--groupby",
+        "well",
+        "--no-landmarks",
+        "--itk-parameters",
+        create_itk_param_file(tmp_path),
+        f"--flip-moving-{flip}",
+        "--moving-output",
+        output,
+        "--transform-output",
+        str(tmp_path / "transforms"),
+    ]
+    subprocess.check_call(cmd)
+    transformed = read_ome_zarr_array(os.path.join(output, "images/1")).squeeze()
+    assert transformed.sizes["c"] == 2
+    interior = (slice(20, -20), slice(20, -20))
+    for c in range(2):
+        reference = fixed[c][interior].astype(float).ravel()
+        after = transformed.isel(c=c).values[interior].astype(float).ravel()
+        assert np.corrcoef(after, reference)[0, 1] > 0.98
+
+
+def test_register_itk_cli_channel_weights_count(tmp_path):
+    cmd = [
+        "scallops",
+        "registration",
+        "elastix",
+        "--moving",
+        str(tmp_path / "missing.zarr"),
+        "--moving-channel",
+        "0",
+        "--combine-channels",
+        "mean",
+        "--channel-weights",
+        "1",
+        "2",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "--channel-weights has 2 values but 1 --moving-channel index" in (
+        result.stderr
+    )

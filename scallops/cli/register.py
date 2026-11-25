@@ -61,25 +61,24 @@ logger = _get_cli_logger()
 
 
 def _flip(image: xr.DataArray, flip_y: bool, flip_x: bool) -> xr.DataArray:
-    if flip_x or flip_y:
-        if image.data.ndim not in (2, 3):
-            raise ValueError(
-                "Flip operation only implemented for 2 or 3 dimensional images."
-            )
-        xp = get_namespace(image.data)
-        if flip_x:
-            if image.data.ndim == 2:
-                image.data = xp.fliplr(image.data)
-            elif image.data.ndim == 3:
-                for i in range(image.data.shape[0]):
-                    image.data[i] = xp.fliplr(image.data[i])
-        if flip_y:
-            if image.data.ndim == 2:
-                image.data = xp.flipud(image.data)
-            else:
-                for i in range(image.data.shape[0]):
-                    image.data[i] = xp.flipud(image.data[i])
-    return image
+    """Flip the y and/or x axes of an image with any number of dimensions.
+
+    The axes are found by the ``y`` and ``x`` dimension names, defaulting to the last two
+    axes.
+    """
+    if not (flip_x or flip_y):
+        return image
+
+    def _axis(name: str, default: int) -> int:
+        return image.dims.index(name) if name in image.dims else image.ndim + default
+
+    axes = []
+    if flip_y:
+        axes.append(_axis("y", -2))
+    if flip_x:
+        axes.append(_axis("x", -1))
+    xp = get_namespace(image.data)
+    return image.copy(data=xp.flip(image.data, axis=tuple(axes)))
 
 
 def single_registration(
@@ -304,20 +303,33 @@ def single_registration(
         moving_image_align = _z_projection(moving_image, z_index).isel(
             t=0, c=moving_channel, missing_dims="ignore"
         )
+        if output_aligned_channels_only:
+            # write the raw selected channels, not the combined registration image
+            moving_image_out = _z_projection(moving_image, z_index).isel(
+                t=0,
+                c=np.atleast_1d(moving_channel).tolist(),
+                missing_dims="ignore",
+            )
+            if "c" not in moving_image_out.dims:
+                moving_image_out = moving_image_out.expand_dims({"c": 1}, axis=0)
+        else:
+            moving_image_out = moving_image
         moving_image_align = _combine_channels(
             moving_image_align, channel_combine, channel_weights, equalize_channels
         )
         fixed_image = _combine_channels(
-            fixed_image, channel_combine, None, equalize_channels
+            fixed_image,
+            channel_combine,
+            _fixed_channel_weights(fixed_image, channel_weights),
+            equalize_channels,
         )
-        if np.issubdtype(fixed_image.dtype, np.floating) and not np.issubdtype(
-            moving_image_align.dtype, np.floating
+        if fixed_image.dtype != moving_image_align.dtype and (
+            np.issubdtype(fixed_image.dtype, np.floating)
+            or np.issubdtype(moving_image_align.dtype, np.floating)
         ):
-            moving_image_align = moving_image_align.astype(fixed_image.dtype)
-        if np.issubdtype(moving_image_align.dtype, np.floating) and not np.issubdtype(
-            fixed_image.dtype, np.floating
-        ):
-            fixed_image = fixed_image.astype(moving_image_align.dtype)
+            # elastix needs both images of the same pixel type and computes in float32
+            fixed_image = fixed_image.astype(np.float32)
+            moving_image_align = moving_image_align.astype(np.float32)
         fixed_image = fixed_image.squeeze()
         moving_image_align = moving_image_align.squeeze()
         chunksize = fixed_image.data.chunksize[-2:]
@@ -423,13 +435,10 @@ def single_registration(
         )
 
         del fixed_image
-        if not output_aligned_channels_only:
-            del moving_image_align
+        del moving_image_align
         if image_output_root is not None:  # save moving image
             _itk_transform_image_zarr(
-                image=_flip(moving_image, flip_moving_y, flip_moving_x)
-                if not output_aligned_channels_only
-                else moving_image_align.expand_dims({"c": 1}, axis=0),
+                image=_flip(moving_image_out, flip_moving_y, flip_moving_x),
                 transform_parameter_object=elastix_object.GetTransformParameterObject(),
                 image_attrs=image_attrs,
                 image_spacing=moving_image_spacing,
@@ -437,8 +446,7 @@ def single_registration(
                 image_root=image_output_root,
                 chunksize=chunksize,
             )
-        if output_aligned_channels_only:
-            del moving_image_align
+        del moving_image_out
         if moving_labels is not None:
             _transform_labels(
                 transform_parameter_object=elastix_object.GetTransformParameterObject(),
@@ -461,7 +469,11 @@ def single_registration(
         assert isinstance(reference_timepoint, int)
 
         set_automatic_transform_initialization(parameter_object, False)
-        if output_aligned_channels_only and not isinstance(moving_image, xr.DataArray):
+        if output_aligned_channels_only and isinstance(moving_image, xr.DataArray):
+            moving_image = moving_image.isel(c=np.atleast_1d(moving_channel).tolist())
+            n_moving = len(np.atleast_1d(moving_channel))
+            moving_channel = 0 if n_moving == 1 else list(range(n_moving))
+        elif output_aligned_channels_only:
             new_moving_image = []
             max_nchannels = max(img.sizes["c"] for img in moving_image)
             for img in moving_image:
@@ -958,6 +970,27 @@ def run_itk_transform(arguments: argparse.Namespace) -> None:
             )
 
 
+def _fixed_channel_weights(
+    fixed_image: xr.DataArray, channel_weights: Sequence[float] | None
+) -> Sequence[float] | None:
+    """Weights to combine the fixed channels: the moving weights, used channel for channel.
+
+    :raises ValueError: If weights are given and the fixed image has several channels but not
+        one per weight.
+    """
+    if channel_weights is None or "c" not in fixed_image.dims:
+        return None
+    n_fixed = fixed_image.sizes["c"]
+    if n_fixed == 1:
+        return None
+    if n_fixed != len(channel_weights):
+        raise ValueError(
+            f"--channel-weights has {len(channel_weights)} values but {n_fixed} fixed "
+            "channels are selected; select one fixed channel or as many as moving channels."
+        )
+    return channel_weights
+
+
 def _channel_arg(channel: int | Sequence[int]) -> int | list[int]:
     """Single channel index as an int, several as a list (``--moving-channel 1 2 3 4``)."""
     if isinstance(channel, int):
@@ -996,7 +1029,7 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     flip_moving_y = arguments.flip_moving_y
     flip_moving_x = arguments.flip_moving_x
 
-    if fixed_image_path is None and flip_moving_y or flip_moving_x:
+    if fixed_image_path is None and (flip_moving_y or flip_moving_x):
         raise ValueError(
             "Flipping moving image only supported when fixed image is provided."
         )
@@ -1020,8 +1053,21 @@ def run_itk_registration(arguments: argparse.Namespace) -> None:
     channel_combine = arguments.combine_channels
     channel_weights = arguments.channel_weights
     equalize_channels = arguments.equalize_channels
-    if channel_weights is not None and channel_combine != "mean":
-        raise ValueError("--channel-weights requires --combine-channels mean.")
+    if channel_weights is not None:
+        if channel_combine != "mean":
+            raise ValueError("--channel-weights requires --combine-channels mean.")
+        n_moving = len(np.atleast_1d(moving_channel))
+        if len(channel_weights) != n_moving:
+            raise ValueError(
+                f"--channel-weights has {len(channel_weights)} values but "
+                f"{n_moving} --moving-channel {'index' if n_moving == 1 else 'indices'} given."
+            )
+        n_fixed = len(np.atleast_1d(fixed_channel))
+        if fixed_image_path is not None and n_fixed not in (1, n_moving):
+            raise ValueError(
+                f"--channel-weights is used for the fixed channels too, so give one "
+                f"--fixed-channel or {n_moving} (got {n_fixed})."
+            )
     itk_parameters = arguments.itk_parameters
     moving_labels = arguments.moving_label
     no_version = arguments.no_version
