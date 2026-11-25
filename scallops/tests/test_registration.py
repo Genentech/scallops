@@ -200,6 +200,51 @@ def test_itk_align_across_channels():
 
 
 @pytest.mark.registration
+@pytest.mark.parametrize("channel_combine", ["median", "mean"])
+def test_itk_align_across_channels_combined_int_channels(channel_combine):
+    # the combined reference channel is float while the other channels are uint16;
+    # elastix needs both images of the same pixel type
+    import itk
+    from scipy.ndimage import gaussian_filter, shift
+
+    from scallops.registration.itk import (
+        itk_align_to_reference_time,
+        set_automatic_transform_initialization,
+    )
+
+    rng = np.random.default_rng(0)
+    base = gaussian_filter(rng.random((256, 256)), 4)
+    base = (base - base.min()) / (base.max() - base.min())
+    moving = shift(base, (4, -6), order=1, mode="nearest")
+    image = xr.DataArray(
+        (np.stack([base, base, moving]) * 4000).astype(np.uint16)[np.newaxis],
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[0], c=["a", "b", "c"]),
+    )
+    parameter_object_across_channels = itk.ParameterObject.New()
+    parameter_object_across_channels.AddParameterMap(
+        parameter_object_across_channels.GetDefaultParameterMap("translation")
+    )
+    set_automatic_transform_initialization(parameter_object_across_channels, False)
+
+    result = itk_align_to_reference_time(
+        moving_image=image,
+        moving_channel=[0, 1],
+        parameter_object=itk.ParameterObject.New(),
+        moving_image_spacing=(1.0, 1.0),
+        parameter_object_across_channels=parameter_object_across_channels,
+        channel_combine=channel_combine,
+        equalize_channels=channel_combine == "mean",
+    )
+    np.testing.assert_array_equal(result.isel(t=0, c=0).values, image.values[0, 0])
+    interior = (slice(20, -20), slice(20, -20))
+    aligned = result.isel(t=0, c=2).values[interior].astype(float)
+    expected = base[interior]
+    assert np.corrcoef(aligned.ravel(), expected.ravel())[0, 1] > 0.99
+    assert np.corrcoef(moving[interior].ravel(), expected.ravel())[0, 1] < 0.9
+
+
+@pytest.mark.registration
 @pytest.mark.parametrize("unroll_channels", [False, True])
 def test_itk_align_reference_time_different_nchannels(tmp_path, unroll_channels):
     import itk
@@ -296,3 +341,250 @@ def test_itk_align_reference_time_padded_moving_channel():
     interior = (slice(20, -20), slice(20, -20))
     aligned = result.isel(t=1, c=1).values[interior]
     assert np.corrcoef(aligned.ravel(), base[interior].ravel())[0, 1] > 0.99
+
+
+def test_combine_channels():
+    from scallops.registration.itk import _combine_channels
+
+    rng = np.random.default_rng(0)
+    scales = np.array([1.0, 10.0, 100.0])[:, None, None]
+    image = xr.DataArray(
+        rng.random((3, 32, 32)) * scales, dims=["c", "y", "x"], attrs={"a": 1}
+    )
+
+    median = _combine_channels(image)
+    np.testing.assert_allclose(
+        median.values, np.median(image.values, axis=0), rtol=1e-6
+    )
+    assert median.dims == ("y", "x") and median.attrs == {"a": 1}
+    # both methods give float32, also for integer channels
+    assert median.dtype == np.float32
+    assert _combine_channels(image.astype(np.uint16)).dtype == np.float32
+
+    mean = _combine_channels(image, "mean")
+    assert mean.dtype == np.float32 and mean.attrs == {"a": 1}
+    # attrs are kept even where xarray drops them in arithmetic (older versions)
+    with xr.set_options(keep_attrs=False):
+        assert _combine_channels(image, "mean", weights=[1, 2, 1]).attrs == {"a": 1}
+    np.testing.assert_allclose(mean.values, image.values.mean(axis=0), rtol=1e-5)
+    weighted = _combine_channels(image, "mean", weights=[1, 3, 0])
+    np.testing.assert_allclose(
+        weighted.values,
+        (image.values[0] + 3 * image.values[1]) / 4,
+        rtol=1e-5,
+    )
+
+    # equalizing makes every channel contribute on a common scale
+    equalized = _combine_channels(image, "mean", equalize=True)
+    shares = [
+        np.corrcoef(equalized.values.ravel(), image.values[c].ravel())[0, 1]
+        for c in range(3)
+    ]
+    assert min(shares) > 0.4
+    raw_shares = [
+        np.corrcoef(mean.values.ravel(), image.values[c].ravel())[0, 1]
+        for c in range(3)
+    ]
+    assert raw_shares[2] > 0.99 > 0.4 > raw_shares[0]
+    # the channel order does not matter
+    np.testing.assert_allclose(
+        _combine_channels(image.transpose("y", "x", "c"), "mean", equalize=True)
+        .transpose("y", "x")
+        .values,
+        equalized.values,
+        rtol=1e-5,
+    )
+    # a single channel is returned as it is
+    single = image.isel(c=[0])
+    assert _combine_channels(single, "mean", equalize=True) is single
+
+
+def test_equalize_channels_sparse_signal():
+    from scallops.registration.itk import _equalize_channels
+
+    image = np.zeros((2, 64, 64), np.float32)
+    image[0] = np.random.default_rng(0).random((64, 64)) * 1000
+    image[1, 8, 8] = 50  # a few bright pixels: 99.5th percentile == median
+    image[1, 40, 16] = 50
+    equalized = _equalize_channels(xr.DataArray(image, dims=["c", "y", "x"]))
+    assert float(equalized.isel(c=1).max()) == pytest.approx(1.0)
+    assert float(np.abs(equalized.isel(c=0)).max()) < 10
+
+
+def test_equalize_channels_dask_matches_numpy():
+    import dask.array as da
+
+    from scallops.registration.itk import _equalize_channels
+
+    rng = np.random.default_rng(0)
+    # skewed, camera-like intensities: the bright-signal percentile is in a long tail
+    values = rng.gamma(1.5, 200, (2, 256, 256)).astype(np.uint16)
+    values[1] *= 10
+    image = xr.DataArray(values, dims=["c", "y", "x"])
+    for chunks in [(1, 32, 32), (2, 100, 33)]:
+        lazy = image.copy(data=da.from_array(values, chunks=chunks))
+        equalized = _equalize_channels(lazy)
+        assert isinstance(equalized.data, da.Array)
+        np.testing.assert_allclose(
+            equalized.values, _equalize_channels(image).values, rtol=1e-6
+        )
+
+
+def test_equalize_step():
+    from scallops.registration.itk import (
+        _EQUALIZE_MAX_SAMPLE,
+        _equalize_stats,
+        _equalize_step,
+    )
+
+    # every pixel up to the sample size, then a stride that keeps it about that size
+    assert _equalize_step(1024 * 1024) == 1
+    assert _equalize_step(_EQUALIZE_MAX_SAMPLE) == 1
+    for n in [_EQUALIZE_MAX_SAMPLE + 1, 50_000**2]:
+        step = _equalize_step(n)
+        assert step > 1 and n / step**2 <= _EQUALIZE_MAX_SAMPLE < n / (step - 1) ** 2
+
+    # small images get the exact percentiles of every pixel
+    values = np.random.default_rng(0).gamma(1.5, 200, (2, 300, 200)).astype(np.uint16)
+    low, high, maximum = _equalize_stats(xr.DataArray(values, dims=["c", "y", "x"]))
+    expected = np.percentile(values.reshape(2, -1), [50, 99.5], axis=1)
+    np.testing.assert_array_equal(low, expected[0])
+    np.testing.assert_array_equal(high, expected[1])
+    np.testing.assert_array_equal(maximum, values.max(axis=(1, 2)))
+
+
+def test_fixed_channel_weights():
+    from scallops.cli.register import _fixed_channel_weights
+
+    image = xr.DataArray(np.ones((3, 4, 4)), dims=["c", "y", "x"])
+    assert _fixed_channel_weights(image, None) is None
+    assert _fixed_channel_weights(image, [1, 2, 3]) == [1, 2, 3]
+    assert _fixed_channel_weights(image.isel(c=[0]), [1, 2, 3]) is None
+    assert _fixed_channel_weights(image.isel(c=0), [1, 2, 3]) is None
+    with pytest.raises(ValueError, match="3 fixed channels"):
+        _fixed_channel_weights(image, [1, 2])
+
+
+def test_combine_channels_errors():
+    from scallops.registration.itk import _combine_channels
+
+    image = xr.DataArray(np.ones((3, 8, 8)), dims=["c", "y", "x"])
+    with pytest.raises(ValueError, match="require the 'mean'"):
+        _combine_channels(image, "median", weights=[1, 1, 1])
+    with pytest.raises(ValueError, match="Expected 3 channel weights"):
+        _combine_channels(image, "mean", weights=[1, 1])
+    with pytest.raises(ValueError, match="non-negative"):
+        _combine_channels(image, "mean", weights=[0, 0, 0])
+    with pytest.raises(ValueError, match="Unknown"):
+        _combine_channels(image, "max")
+    # also checked for a single channel, which is otherwise returned as it is
+    with pytest.raises(ValueError, match="require the 'mean'"):
+        _combine_channels(image.isel(c=[0]), "median", weights=[1])
+    with pytest.raises(ValueError, match="Expected 1 channel weights"):
+        _combine_channels(image.isel(c=0), "mean", weights=[1, 2, 3])
+
+
+def test_itk_align_reference_time_checks_channel_weights():
+    import itk
+
+    from scallops.registration.itk import itk_align_to_reference_time
+
+    image = xr.DataArray(
+        np.ones((2, 3, 8, 8)), dims=["t", "c", "y", "x"], coords=dict(t=[0, 1])
+    )
+    with pytest.raises(ValueError, match="Expected 1 channel weights"):
+        itk_align_to_reference_time(
+            moving_image=image,
+            moving_channel=0,
+            parameter_object=itk.ParameterObject.New(),
+            moving_image_spacing=(1.0, 1.0),
+            channel_combine="mean",
+            channel_weights=[1, 2, 3],
+        )
+
+
+@pytest.mark.registration
+@pytest.mark.parametrize("channel_combine", ["median", "mean"])
+def test_itk_align_reference_time_combined_channels_keep_dtype(channel_combine):
+    import itk
+    from scipy.ndimage import gaussian_filter, shift
+
+    from scallops.registration.itk import (
+        itk_align_to_reference_time,
+        set_automatic_transform_initialization,
+    )
+
+    rng = np.random.default_rng(0)
+    base = np.stack([gaussian_filter(rng.random((128, 128)), 4) for _ in range(2)])
+    base = ((base - base.min()) / (base.max() - base.min()) * 4000).astype(np.uint16)
+    shifted = np.stack([shift(c, (3, -2), order=0, mode="nearest") for c in base])
+    image = xr.DataArray(
+        np.stack([base, shifted]), dims=["t", "c", "y", "x"], coords=dict(t=[0, 1])
+    )
+    parameter_object = itk.ParameterObject.New()
+    parameter_object.AddParameterMap(
+        parameter_object.GetDefaultParameterMap("translation")
+    )
+    set_automatic_transform_initialization(parameter_object, False)
+    result = itk_align_to_reference_time(
+        moving_image=image,
+        moving_channel=[0, 1],
+        parameter_object=parameter_object,
+        moving_image_spacing=(1.0, 1.0),
+        channel_combine=channel_combine,
+        equalize_channels=channel_combine == "mean",
+    )
+    # the raw channels are written, not the (float) image combined for registration
+    assert result.dtype == np.uint16
+    np.testing.assert_array_equal(result.isel(t=0).values, base)
+
+
+@pytest.mark.registration
+@pytest.mark.parametrize("equalize", [False, True])
+def test_itk_align_reference_time_combined_moving_channels(equalize):
+    import itk
+    from scipy.ndimage import gaussian_filter, shift
+
+    from scallops.registration.itk import (
+        itk_align_to_reference_time,
+        set_automatic_transform_initialization,
+    )
+
+    rng = np.random.default_rng(0)
+
+    def texture():
+        a = gaussian_filter(rng.random((256, 256)), 4).astype(np.float32)
+        return (a - a.min()) / (a.max() - a.min())
+
+    # three channels with different structure and very different brightness; the
+    # leading padded channel of t1 is empty
+    channels = [texture() * 1000, texture() * 10, texture()]
+    t0 = xr.DataArray(
+        np.stack([texture(), *channels])[np.newaxis],
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[0], c=["dapi", "a", "b", "c"]),
+    )
+    t1 = xr.DataArray(
+        np.stack([shift(c, (4, -6), order=1, mode="nearest") for c in channels])[
+            np.newaxis
+        ],
+        dims=["t", "c", "y", "x"],
+        coords=dict(t=[1], c=["a", "b", "c"]),
+    )
+    parameter_object = itk.ParameterObject.New()
+    parameter_object.AddParameterMap(
+        parameter_object.GetDefaultParameterMap("translation")
+    )
+    set_automatic_transform_initialization(parameter_object, False)
+    result = itk_align_to_reference_time(
+        moving_image=[t0, t1],
+        moving_channel=[1, 2, 3],
+        parameter_object=parameter_object,
+        moving_image_spacing=(1.0, 1.0),
+        channel_combine="mean",
+        equalize_channels=equalize,
+    )
+    interior = (slice(20, -20), slice(20, -20))
+    for c, original in zip((1, 2, 3), channels):
+        aligned = result.isel(t=1, c=c).values[interior]
+        assert np.corrcoef(aligned.ravel(), original[interior].ravel())[0, 1] > 0.98

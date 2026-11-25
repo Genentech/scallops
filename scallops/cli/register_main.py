@@ -86,17 +86,22 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser.add_argument(
         "--moving-channel",
         type=int,
-        default=0,
-        help="Moving channel index (0-based) to use for alignment. When timepoints have "
+        nargs="+",
+        default=[0],
+        help="Moving channel index (0-based) to use for alignment. Several indices are "
+        "combined into one image (see --combine-channels). When timepoints have "
         "different numbers of channels and --unroll-channels is not specified, the index "
         "refers to the channels after padding with leading empty channels",
     )
     parser.add_argument(
         "--fixed-channel",
         type=int,
-        default=0,
-        help="Fixed channel index (0-based) to use for alignment",
+        nargs="+",
+        default=[0],
+        help="Fixed channel index (0-based) to use for alignment. Several indices are "
+        "combined into one image (see --combine-channels)",
     )
+
     parser.add_argument(
         "--transform-output",
         dest="transform_output_dir",
@@ -207,7 +212,7 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
     parser.add_argument(
         "--output-aligned-channels-only",
         action="store_true",
-        help="Whether to output aligned channels only",
+        help="Output only the --moving-channel channels (transformed, not combined)",
     )
     parser.add_argument(
         "--itk-channels",
@@ -224,6 +229,33 @@ def _create_elastix_parser(subparsers: SubParsers, default_help: bool) -> None:
         "--flip-moving-x",
         action="store_true",
         help="Flip moving image along x axis",
+    )
+    parser.add_argument(
+        "--combine-channels",
+        choices=["median", "mean"],
+        default="median",
+        help="How several --moving-channel (or --fixed-channel) channels are combined into "
+        "the image used for alignment",
+    )
+    parser.add_argument(
+        "--channel-weights",
+        type=float,
+        nargs="+",
+        help="Weight of each --moving-channel for --combine-channels mean (equal weights if "
+        "not given). With a fixed image the weights are also used for --fixed-channel, which "
+        "must then be one index or as many as --moving-channel",
+    )
+    parser.add_argument(
+        "--equalize-channels",
+        action="store_true",
+        help="Before several --moving-channel (or --fixed-channel) channels are combined, "
+        "scale each one to a common range so that bright channels do not dominate: "
+        "subtract its median and divide by the spread up to its 99.5th percentile "
+        "(or up to its maximum if the 99.5th percentile equals the median, as happens "
+        "with very sparse signal). "
+        "The percentiles use every pixel, or a regular subsample of about 10 million "
+        "pixels per channel for larger images. A single "
+        "selected channel is used as is",
     )
 
     z_index_arg(parser)
