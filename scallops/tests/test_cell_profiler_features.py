@@ -128,7 +128,7 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
     ]
 
     tolerance = {
-        "AreaShape_Zernike": (0.02403081, 1e-7),
+        "AreaShape_Zernike": (1e-10, 1e-7),
         "AreaShape_CentralMoment": (2.16004992e-12, 1e-7),
     }
 

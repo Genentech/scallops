@@ -273,23 +273,18 @@ def test_features_dask(experiment_c_A1_102_cells, experiment_c_A1_102_pheno):
         cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
         assert cor > 0.98, f"{col}, {cor}"
 
-    for col in zernike_cols:
-        cor = np.corrcoef(test_df[col], test_df_no_chunking[col])[0, 1]
-        assert cor > 0.88, f"{col}, {cor}"
-        diff = np.max(np.abs(test_df[col] - test_df_no_chunking[col]))
-        assert diff < 0.025, f"{col}, {diff}"
-
-    for col in radial_dist_zernike_cols:
-        val1 = test_df[col]
-        val2 = test_df_no_chunking[col]
-        keep = ~np.isnan(val1) & ~np.isnan(val2)
-        val1 = val1[keep]
-        val2 = val2[keep]
-        cor = np.corrcoef(val1, val2)[0, 1]
-        if not np.isnan(cor):  # no variance
-            assert cor > 0.85, f"{col}, {cor}"
-        else:
-            np.testing.assert_array_equal(val1, val2)
+    # Zernike features depend only on each object's pixels, so chunking must not
+    # change them beyond floating-point rounding
+    assert len(zernike_cols) > 0 and len(radial_dist_zernike_cols) > 0
+    for col in zernike_cols + radial_dist_zernike_cols:
+        np.testing.assert_allclose(
+            test_df[col],
+            test_df_no_chunking[col],
+            rtol=1e-7,
+            atol=1e-10,
+            equal_nan=True,
+            err_msg=col,
+        )
 
     granularity_corr = {
         "Granularity_1_Channel0": 0.7669707263790531,
