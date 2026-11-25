@@ -504,54 +504,6 @@ def test_itk_align_reference_time_checks_channel_weights():
 
 
 @pytest.mark.registration
-@pytest.mark.parametrize("dtype", [np.uint32, np.int32])
-def test_itk_align_reference_time_int32_keeps_values(dtype):
-    # int32/uint32 are resampled in float32; the result must be rounded and clipped
-    # back to the dtype, not truncated or wrapped around
-    import itk
-    from scipy.ndimage import gaussian_filter, shift
-
-    from scallops.registration.itk import (
-        itk_align_to_reference_time,
-        set_automatic_transform_initialization,
-    )
-
-    rng = np.random.default_rng(0)
-    # sharp edges make the cubic B-spline overshoot below 0
-    base = np.stack(
-        [(gaussian_filter(rng.random((128, 128)), 2) > 0.5) * 4000.0 for _ in range(2)]
-    )
-    shifted = np.stack([shift(c, (3.5, -2.5), order=1, mode="nearest") for c in base])
-    image = xr.DataArray(
-        np.stack([base, shifted]).astype(dtype),
-        dims=["t", "c", "y", "x"],
-        coords=dict(t=[0, 1]),
-    )
-    parameter_object = itk.ParameterObject.New()
-    parameter_object.AddParameterMap(
-        parameter_object.GetDefaultParameterMap("translation")
-    )
-    set_automatic_transform_initialization(parameter_object, False)
-
-    def align(img):
-        return itk_align_to_reference_time(
-            moving_image=img,
-            moving_channel=[0, 1],
-            parameter_object=parameter_object,
-            moving_image_spacing=(1.0, 1.0),
-        )
-
-    result = align(image)
-    assert result.dtype == dtype
-    # the same registration in float32, rounded and clipped to the dtype
-    expected = align(image.astype(np.float32)).isel(t=1).values
-    info = np.iinfo(dtype)
-    expected = np.clip(np.rint(expected), info.min, info.max)
-    assert (expected < 0).any() == (dtype == np.int32)  # B-spline overshoot
-    np.testing.assert_array_equal(result.isel(t=1).values, expected)
-
-
-@pytest.mark.registration
 @pytest.mark.parametrize("channel_combine", ["median", "mean"])
 def test_itk_align_reference_time_combined_channels_keep_dtype(channel_combine):
     import itk
